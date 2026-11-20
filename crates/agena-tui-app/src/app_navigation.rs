@@ -333,9 +333,22 @@ impl App {
             // an error so model switching works before a session exists.
             return true;
         };
-        let options = self.run_options.model_stack_request();
+        // Dispatch is concurrent. Keep writes for one session ordered so an
+        // older snapshot cannot reach storage after a later mode selection.
+        if self
+            .pending_session_model_write
+            .is_some_and(|(pending, _)| pending == session_id)
+        {
+            self.flash_warning(self.i18n.text("queue-saving"));
+            return false;
+        }
+        let Some(options) = self.run_options.model_stack_request() else {
+            self.flash_warning(self.i18n.text("settings-model-source-needs-model"));
+            return false;
+        };
         self.session_selection_revision = self.session_selection_revision.wrapping_add(1);
         let revision = self.session_selection_revision;
+        self.pending_session_model_write = Some((session_id, revision));
         self.dispatch_backend_operation(
             move |application| async move {
                 application
@@ -344,12 +357,25 @@ impl App {
             },
             move |app, result| match result {
                 Ok(execution) => {
-                    if app.transcript.session_id == Some(session_id) {
-                        let _ = app.apply_transcript_execution(execution);
+                    if app.pending_session_model_write == Some((session_id, revision)) {
+                        app.pending_session_model_write = None;
+                    }
+                    if app.transcript.session_id == Some(session_id)
+                        && app.session_selection_revision == revision {
+                        if !app.apply_transcript_execution(execution) {
+                            app.sync_run_model_stack_from_execution();
+                        }
+                        if matches!(&app.current_route, Route::SessionModelChooser(dialog)
+                            if dialog.meta.purpose == crate::SessionModelChooserPurpose::RuntimeOverride) {
+                            app.open_session_model_chooser();
+                        }
                     }
                     app.request_sessions(false);
                 }
                 Err(error) => {
+                    if app.pending_session_model_write == Some((session_id, revision)) {
+                        app.pending_session_model_write = None;
+                    }
                     if app.transcript.session_id == Some(session_id)
                         && app.session_selection_revision == revision
                     {
@@ -362,10 +388,28 @@ impl App {
         true
     }
 
-    pub(crate) fn apply_model_override(&mut self, model: ModelRef) -> bool {
+    pub(crate) fn apply_model_override_from_source(
+        &mut self,
+        model: ModelRef,
+        explicit_local: bool,
+    ) -> bool {
+        if !self.settings_model_editable(
+            agena_tui::model_chooser::SessionModelChooserPurpose::RuntimeOverride,
+            explicit_local,
+        ) {
+            self.flash_warning(crate::settings_inherited_locked_message(&self.i18n, true));
+            return false;
+        }
         let previous = self.run_options.clone();
-        self.run_options
-            .replace_model_stack(Some(model.clone()), None, None, None, None);
+        let raw = self.current_raw_model_selection();
+        let same_model = self.current_session_model_ref().as_ref() == Some(&model);
+        self.run_options.replace_model_stack(
+            Some(model.clone()),
+            same_model.then_some(raw.thinking_mode).flatten(),
+            same_model.then_some(raw.speed_mode).flatten(),
+            same_model.then_some(raw.verbosity).flatten(),
+            raw.parallel_tool_calls,
+        );
         if !self.persist_current_session_model_stack(previous.clone()) {
             self.run_options = previous;
             return false;
@@ -604,6 +648,15 @@ impl App {
             ),
             ConfirmAction::Clear { session_id, mode } => {
                 self.request_session_clear(session_id, mode)
+            }
+            ConfirmAction::SettingsRestoreDefault { field } => {
+                self.persist_settings_field_value(field, None);
+            }
+            ConfirmAction::PermissionStudioRestoreDefault { target } => {
+                self.commit_permission_studio_source(target, "inherit");
+            }
+            ConfirmAction::PermissionStudioRestoreNetworkList { deny } => {
+                self.commit_permission_studio_network_list_source(deny, "inherit");
             }
             ConfirmAction::PermissionStudioDeletePathRule { pattern } => {
                 self.delete_permission_studio_path_rule(pattern.as_str())

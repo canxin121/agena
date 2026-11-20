@@ -66,6 +66,7 @@ impl App {
             settings_session_permission: None,
             permission_studio_load_request: None,
             session_selection_revision: 0,
+            pending_session_model_write: None,
             launch: launch.clone(),
             math_renderer: launch
                 .math_graphics

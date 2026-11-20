@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     ApprovalModelSelection, NetworkPermissionConfig, PathAccessModes, PathPermissionConfig,
-    PathPermissionMode, PermissionMode, ToolPermissionConfig, ToolPermissionRules,
+    PathPermissionMode, PermissionMode, SHELL_COMMAND_RULE_GROUP, ToolPermissionConfig,
+    ToolPermissionRules,
 };
 
 /// Stable, serializable permission configuration independent of policy
@@ -44,7 +45,7 @@ where
     if let Some(tools) = &tools {
         tools.validate_aliases().map_err(serde::de::Error::custom)?;
     }
-    Ok(tools.map(ToolPermissionConfig::with_canonical_tool_names))
+    Ok(tools.map(ToolPermissionConfig::normalized))
 }
 
 /// The selected instance's managed directory for the current workspace.
@@ -55,8 +56,7 @@ pub const RUNTIME_STATE_PATH: &str = "<state>";
 /// Public concrete directory rules already include all descendants.
 pub const RUNTIME_STATE_PATH_GLOB: &str = "<state>/**";
 
-/// The command-class keywords a `tools.rules.<tool>` entry may use instead of a
-/// command pattern.
+/// Class keywords in the shared shell rule group.
 pub const COMMAND_CLASS_NO_OP: &str = "no-op";
 pub const COMMAND_CLASS_ROUTINE: &str = "routine";
 pub const COMMAND_CLASS_DANGEROUS: &str = "dangerous";
@@ -102,6 +102,31 @@ impl PathClassPromptFlags {
 }
 
 impl PermissionConfig {
+    /// A complete named policy owns its defaults and all of its rule tables.
+    pub fn standalone(&self) -> Self {
+        let mut result = self.clone();
+        let paths = result
+            .path
+            .get_or_insert_with(PathPermissionConfig::default);
+        let deny = PathAccessModes::from_mode(PathPermissionMode::Deny);
+        paths.workspace.get_or_insert_with(|| deny.clone());
+        paths.external.get_or_insert(deny);
+        result.network = Some(
+            result
+                .network
+                .as_ref()
+                .cloned()
+                .unwrap_or_default()
+                .resolved(),
+        );
+        result
+            .tools
+            .get_or_insert_with(ToolPermissionConfig::default)
+            .default
+            .get_or_insert(PermissionMode::Deny);
+        result
+    }
+
     /// The shipped configuration: what a user gets when their file says nothing
     /// about permissions.
     ///
@@ -147,43 +172,12 @@ impl PermissionConfig {
                 ]),
                 rules: BTreeMap::from([
                     (
-                        "agena.shell.exec".to_string(),
+                        SHELL_COMMAND_RULE_GROUP.to_string(),
                         ToolPermissionRules::Ordered(IndexMap::from([
                             (COMMAND_CLASS_NO_OP.to_string(), allow),
                             (COMMAND_CLASS_ROUTINE.to_string(), allow),
                             (COMMAND_CLASS_DANGEROUS.to_string(), deny),
                         ])),
-                    ),
-                    (
-                        "agena.shell.spawn".to_string(),
-                        ToolPermissionRules::Ordered(IndexMap::from([
-                            (COMMAND_CLASS_NO_OP.to_string(), allow),
-                            (COMMAND_CLASS_ROUTINE.to_string(), allow),
-                            (COMMAND_CLASS_DANGEROUS.to_string(), deny),
-                        ])),
-                    ),
-                    (
-                        "agena.shell.watch".to_string(),
-                        ToolPermissionRules::Ordered(IndexMap::from([
-                            (COMMAND_CLASS_NO_OP.to_string(), allow),
-                            (COMMAND_CLASS_ROUTINE.to_string(), allow),
-                            (COMMAND_CLASS_DANGEROUS.to_string(), deny),
-                        ])),
-                    ),
-                    (
-                        "agena.shell.open".to_string(),
-                        ToolPermissionRules::Ordered(IndexMap::from([
-                            (COMMAND_CLASS_NO_OP.to_string(), allow),
-                            (COMMAND_CLASS_ROUTINE.to_string(), allow),
-                            (COMMAND_CLASS_DANGEROUS.to_string(), deny),
-                        ])),
-                    ),
-                    (
-                        "agena.shell.write".to_string(),
-                        ToolPermissionRules::Ordered(IndexMap::from([(
-                            COMMAND_CLASS_DANGEROUS.to_string(),
-                            deny,
-                        )])),
                     ),
                     // Tools whose contract is read-only, and neither shell nor
                     // interactive. Reading cannot change anything.
@@ -205,7 +199,10 @@ impl PermissionConfig {
         self.path
             .as_ref()
             .is_none_or(PathPermissionConfig::is_empty)
-            && self.network.is_none()
+            && self
+                .network
+                .as_ref()
+                .is_none_or(NetworkPermissionConfig::is_empty)
             && self
                 .tools
                 .as_ref()
@@ -244,8 +241,10 @@ fn merge_network_section(
     current: &mut Option<NetworkPermissionConfig>,
     overlay: Option<NetworkPermissionConfig>,
 ) {
-    if let Some(overlay) = overlay {
-        *current = Some(overlay);
+    match (current.as_mut(), overlay) {
+        (Some(current), Some(overlay)) => current.merge_from(overlay),
+        (None, Some(overlay)) => *current = Some(overlay),
+        (_, None) => {}
     }
 }
 
@@ -273,20 +272,15 @@ mod tests {
         assert_eq!(value["path"]["workspace"], "readwrite");
         assert_eq!(value["path"]["external"], "deny");
         assert_eq!(value["path"]["rules"][RUNTIME_STATE_PATH], "readwrite");
-        assert_eq!(value["network"], json!({"default":"allow"}));
+        assert_eq!(
+            value["network"],
+            json!({"version":2,"default":"allow","allow":[],"deny":[],"inbound":"deny","hostLoopback":"deny"})
+        );
         assert_eq!(value["tools"]["default"], "allow");
-        for tool in [
-            "agena.shell.exec",
-            "agena.shell.spawn",
-            "agena.shell.watch",
-            "agena.shell.open",
-            "agena.shell.write",
-        ] {
-            assert_eq!(
-                value["tools"]["rules"][tool][COMMAND_CLASS_DANGEROUS],
-                "deny"
-            );
-        }
+        assert_eq!(
+            value["tools"]["rules"][SHELL_COMMAND_RULE_GROUP],
+            json!({"no-op": "allow", "routine": "allow", "dangerous": "deny"})
+        );
         let network = config.network.unwrap();
         for platform in ["linux", "macos", "windows"] {
             network.validate_for_platform(platform).unwrap();

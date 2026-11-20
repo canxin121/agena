@@ -227,6 +227,9 @@ impl App {
             Overlay::SettingsValueEdit(dialog) => {
                 self.handle_settings_value_edit_overlay_key(key, dialog)
             }
+            Overlay::PermissionRawEdit(dialog) => {
+                self.handle_permission_raw_editor_key(key, dialog)
+            }
             Overlay::SessionPromptEdit(dialog) => self.handle_prompt_studio_key(key, dialog),
             Overlay::QueueEditor(dialog) => self.handle_queue_editor_key(key, dialog),
             Overlay::Choice(dialog) => self.handle_choice_overlay_key(key, dialog),

@@ -229,6 +229,7 @@ fn declarations() -> impl Iterator<Item = String> {
         .chain(GLOBAL_TABLES.iter().map(|s| (*s).to_owned()))
         .chain(BOT_LOCAL_SESSION_EXTENSION.iter().map(|s| (*s).to_owned()))
         .chain(BOT_AVATAR_EXTENSION.iter().map(|s| (*s).to_owned()))
+        .chain(BOT_PROMPTS_EXTENSION.iter().map(|s| (*s).to_owned()))
 }
 
 /// Compatible additive migration 2026-11-14. The mapping is deliberately
@@ -242,6 +243,10 @@ const BOT_LOCAL_SESSION_EXTENSION: &[&str] = &[
 /// Keeping this additive preserves the exact preceding baseline declarations.
 const BOT_AVATAR_EXTENSION: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS agena_bot_avatars (bot_id TEXT PRIMARY KEY REFERENCES agena_bots(id) ON DELETE CASCADE, avatar TEXT NOT NULL CHECK(length(CAST(avatar AS BLOB)) BETWEEN 23 AND 262144 AND substr(avatar,1,22)='data:image/png;base64,')) WITHOUT ROWID",
+];
+
+const BOT_PROMPTS_EXTENSION: &[&str] = &[
+    "CREATE TABLE IF NOT EXISTS agena_bot_prompts (bot_id TEXT PRIMARY KEY REFERENCES agena_bots(id) ON DELETE CASCADE, ids_json TEXT NOT NULL CHECK(json_valid(ids_json) AND json_type(ids_json)='array'), publish_to_channels INTEGER NOT NULL CHECK(publish_to_channels IN (0,1))) WITHOUT ROWID",
 ];
 
 const ADOPT_LOCAL_BOT_SESSIONS: &str = "INSERT INTO agena_bot_local_sessions (bot_id,session_id) SELECT b.id,(SELECT s.id FROM agena_sessions s WHERE s.owner_bot_id=b.id AND s.owner_surface='local' AND s.parent_session_id IS NULL AND s.workspace_id IS NULL AND s.deleted_at_ms IS NULL ORDER BY s.updated_at_ms DESC,s.id DESC LIMIT 1) FROM agena_bots b WHERE EXISTS(SELECT 1 FROM agena_sessions s WHERE s.owner_bot_id=b.id AND s.owner_surface='local' AND s.parent_session_id IS NULL AND s.workspace_id IS NULL AND s.deleted_at_ms IS NULL)";
@@ -286,6 +291,7 @@ fn incompatible_database(reason: &str) -> DbErr {
 struct MissingExtensions {
     local_sessions: bool,
     avatars: bool,
+    prompts: bool,
 }
 
 async fn validate_objects(
@@ -297,15 +303,20 @@ async fn validate_objects(
     let mut expected = object_map(declarations())?;
     let local_sessions = ("table".into(), "agena_bot_local_sessions".into());
     let avatars = ("table".into(), "agena_bot_avatars".into());
+    let prompts = ("table".into(), "agena_bot_prompts".into());
     let missing = MissingExtensions {
         local_sessions: !actual.contains_key(&local_sessions),
         avatars: !actual.contains_key(&avatars),
+        prompts: !actual.contains_key(&prompts),
     };
     if missing.local_sessions {
         expected.remove(&local_sessions);
     }
     if missing.avatars {
         expected.remove(&avatars);
+    }
+    if missing.prompts {
+        expected.remove(&prompts);
     }
     if expected != actual {
         return Err(incompatible_database(
@@ -330,7 +341,7 @@ pub(crate) async fn initialize(database: &DatabaseConnection) -> Result<(), DbEr
     let actual = schema_objects(database).await?;
     if !actual.is_empty() {
         let missing = validate_objects(database, actual).await?;
-        if missing.local_sessions || missing.avatars {
+        if missing.local_sessions || missing.avatars || missing.prompts {
             // Only exact known predecessors reach this path. Install missing
             // extensions atomically, and adopt history only for a new mapping.
             let transaction = database.begin().await?;
@@ -347,6 +358,16 @@ pub(crate) async fn initialize(database: &DatabaseConnection) -> Result<(), DbEr
             }
             if missing.avatars {
                 for sql in BOT_AVATAR_EXTENSION {
+                    transaction
+                        .execute(Statement::from_string(
+                            database.get_database_backend(),
+                            *sql,
+                        ))
+                        .await?;
+                }
+            }
+            if missing.prompts {
+                for sql in BOT_PROMPTS_EXTENSION {
                     transaction
                         .execute(Statement::from_string(
                             database.get_database_backend(),
@@ -461,6 +482,7 @@ mod nullable_tests {
         let bot = uuid::Uuid::new_v4();
         let old_config = serde_json::json!({"owner":{"bot":bot,"surface":"local"}}).to_string();
         exec(&*database.writer, "DROP TABLE agena_bot_local_sessions").await;
+        exec(&*database.writer, "DROP TABLE agena_bot_prompts").await;
         exec(&*database.writer, &format!("INSERT INTO agena_bots(id,name,name_folded,revision,created_at_ms,updated_at_ms) VALUES('{bot}','Legacy','legacy',1,1,1)")).await;
         for (id, updated, deleted) in [(1, 10, "NULL"), (2, 20, "NULL"), (3, 30, "30")] {
             exec(&*database.writer, &format!("INSERT INTO agena_sessions(id,title,configuration_json,created_at_ms,updated_at_ms,deleted_at_ms) VALUES({id},'history-{id}','{old_config}',1,{updated},{deleted})")).await;
@@ -472,6 +494,14 @@ mod nullable_tests {
         // The production open path performs the compatible migration itself.
         let database = crate::connection::KernelDatabase::open(&url).await.unwrap();
         assert_eq!(instance_id(&database.writer).await.unwrap(), identity);
+        assert_eq!(
+            scalar(
+                &*database.writer,
+                "SELECT count(*) AS n FROM agena_bot_prompts"
+            )
+            .await,
+            0
+        );
         assert_eq!(
             scalar(
                 &*database.writer,

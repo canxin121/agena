@@ -192,6 +192,9 @@ impl App {
             }
             Overlay::HubProject(dialog) => self.help_for_editor(dialog.editor.title.clone(), false),
             Overlay::SettingsValueEdit(dialog) => self.help_for_editor(dialog.title.clone(), false),
+            Overlay::PermissionRawEdit(dialog) => {
+                self.help_for_editor(dialog.editor.title.clone(), true)
+            }
             Overlay::SessionPromptEdit(dialog) => match dialog.editor.as_ref() {
                 Some(editor) => self.help_for_editor(editor.title.clone(), editor.multiline),
                 None => self.help_for(HelpPreset::BasicList, "Prompt layers".to_owned()),

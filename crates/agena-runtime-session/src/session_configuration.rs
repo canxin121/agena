@@ -1,4 +1,7 @@
-use agena_domain::{ExecutionSelection, PermissionConfig, SessionAutoCompactionConfig};
+use agena_domain::{
+    ExecutionSelection, PermissionConfig, SessionAutoCompactionConfig, SessionRelationKind,
+};
+use agena_storage::kernel::SessionConfiguration;
 
 /// Configuration consumed by the concrete session manager.
 #[derive(Debug, Clone)]
@@ -10,6 +13,7 @@ pub struct RuntimeSessionManagerConfig {
     pub prompts: agena_runtime_config::PromptLayersConfig,
     pub profiles: std::collections::BTreeMap<String, agena_runtime_config::AgentProfileConfig>,
     pub default_profile: Option<String>,
+    pub default_subagent_profile: Option<String>,
     pub auto_title: agena_runtime_config::SessionAutoTitleConfig,
     pub permission: PermissionConfig,
     pub access_control: agena_domain::AccessControlConfig,
@@ -29,8 +33,9 @@ impl Default for RuntimeSessionManagerConfig {
             default_selection: Default::default(),
             auxiliary_selection: Default::default(),
             prompts: Default::default(),
-            profiles: Default::default(),
-            default_profile: None,
+            profiles: agena_runtime_config::builtin_agent_profiles(),
+            default_profile: Some(agena_runtime_config::MAIN_AGENT_PROFILE.into()),
+            default_subagent_profile: Some(agena_runtime_config::DEFAULT_SUBAGENT_PROFILE.into()),
             auto_title: Default::default(),
             permission: Default::default(),
             access_control: Default::default(),
@@ -49,29 +54,104 @@ impl RuntimeSessionManagerConfig {
         &self,
         name: Option<&str>,
     ) -> Result<Option<agena_runtime_config::ResolvedAgentProfile>, String> {
-        name.map(|name| agena_runtime_config::resolve_agent_profile(&self.profiles, name))
-            .transpose()
+        name.map(|name| {
+            agena_runtime_config::resolve_agent_profile(&self.profiles, name)?
+                .with_permission_profile(&self.access_control)
+        })
+        .transpose()
     }
 
-    pub fn inherited_permission(&self, profile: Option<&str>) -> Result<PermissionConfig, String> {
-        Ok(self.resolve_profile(profile)?.map_or_else(
-            || self.permission.clone(),
-            |profile| self.permission.merged_with(&profile.permission),
-        ))
+    pub fn effective_profile_name<'a>(
+        &self,
+        profile: Option<&'a str>,
+        relation: SessionRelationKind,
+    ) -> &'a str {
+        profile.unwrap_or(if relation.is_subagent() {
+            agena_runtime_config::DEFAULT_SUBAGENT_PROFILE
+        } else {
+            agena_runtime_config::MAIN_AGENT_PROFILE
+        })
+    }
+
+    pub fn resolve_session_profile(
+        &self,
+        profile: Option<&str>,
+        relation: SessionRelationKind,
+    ) -> Result<agena_runtime_config::ResolvedAgentProfile, String> {
+        let name = self.effective_profile_name(profile, relation);
+        agena_runtime_config::resolve_agent_profile(&self.profiles, name)?
+            .with_permission_profile(&self.access_control)
+    }
+
+    /// Mode controls new explicit selections, not already saved identities.
+    /// Forks and restored sessions retain their selected role after branching.
+    pub fn validate_session_profile(
+        &self,
+        profile: Option<&str>,
+        relation: SessionRelationKind,
+    ) -> Result<agena_runtime_config::ResolvedAgentProfile, String> {
+        let name = self.effective_profile_name(profile, relation);
+        let resolved = self.resolve_session_profile(profile, relation)?;
+        let allowed = if relation.is_subagent() {
+            resolved.mode.allows_subagent()
+        } else {
+            resolved.mode.allows_primary()
+        };
+        if !allowed {
+            return Err(format!(
+                "agent profile `{name}` cannot be used for a {} session",
+                if relation.is_subagent() {
+                    "subagent"
+                } else {
+                    "primary"
+                },
+            ));
+        }
+        Ok(resolved)
+    }
+
+    pub fn inherited_permission(
+        &self,
+        configuration: &SessionConfiguration,
+    ) -> Result<PermissionConfig, String> {
+        let profile = self.resolve_session_profile(
+            configuration.profile.as_deref(),
+            configuration.relation_kind,
+        )?;
+        Ok(profile.effective_permission(&self.permission))
+    }
+
+    pub fn effective_permission(
+        &self,
+        configuration: &SessionConfiguration,
+    ) -> Result<PermissionConfig, String> {
+        match configuration.permission_profile.as_deref() {
+            // A stored reference may outlive a catalog entry. Keep it visible
+            // and deny by default until the operator selects a new policy.
+            Some(id) => Ok(self
+                .access_control
+                .standalone_permission(id)
+                .unwrap_or_else(|_| PermissionConfig::default().standalone())),
+            None => Ok(self
+                .inherited_permission(configuration)?
+                .merged_with(&configuration.permission)),
+        }
     }
 
     pub fn session_selection(
         &self,
-        profile: Option<&str>,
+        configuration: &SessionConfiguration,
         selected: &ExecutionSelection,
     ) -> Result<ExecutionSelection, String> {
-        let inherited = self.resolve_profile(profile)?.map_or_else(
-            || self.default_selection.clone(),
-            |profile| {
-                self.default_selection
-                    .overlay_with_cascade(&profile.selection)
-            },
-        );
-        Ok(inherited.overlay_with_cascade(selected))
+        let inherited = self
+            .default_selection
+            .overlay_with_cascade(&configuration.selection_defaults);
+        let profile = self.resolve_session_profile(
+            configuration.profile.as_deref(),
+            configuration.relation_kind,
+        )?;
+        Ok(inherited
+            .overlay_with_cascade(&profile.selection)
+            .overlay_with_cascade(selected))
     }
 }

@@ -235,6 +235,14 @@ impl App {
     }
 
     pub(crate) fn sync_run_model_stack_from_execution(&mut self) {
+        // Background refreshes may precede the response to a local selection
+        // write. Retain its raw pending snapshot until that request completes.
+        if self
+            .pending_session_model_write
+            .is_some_and(|(session_id, _)| self.transcript.session_id == Some(session_id))
+        {
+            return;
+        }
         let Some(execution) = self.transcript.execution.as_ref() else {
             self.run_options.clear_model_stack();
             return;
@@ -259,6 +267,7 @@ impl App {
             execution.execution.model_verbosity.clone(),
             execution.execution.model_parallel_tool_calls,
         );
+        self.run_options.raw_selection = Some(execution.execution.selected_selection.clone());
         self.run_options.mark_model_stack_resolved();
     }
 

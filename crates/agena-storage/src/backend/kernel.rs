@@ -556,8 +556,8 @@ pub trait KernelBackend: Send + Sync {
     async fn latest_round(&self, session: SessionId)
     -> Result<ReadView<Option<ProviderRoundView>>>;
     /// Most recent completed round that retained provider usage. A later
-    /// failed round can finish without a measurement; it must not hide the
-    /// context size measured by the previous provider request.
+    /// failed round or timing-only observation can finish without token usage;
+    /// it must not hide the context size measured by the previous request.
     async fn latest_usage_round(
         &self,
         session: SessionId,

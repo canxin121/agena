@@ -14,6 +14,9 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+mod composition;
+pub use composition::validate_compositions;
+
 /// Largest accepted body for a single fragment.
 pub const MAX_FRAGMENT_BYTES: usize = 16 * 1024;
 /// Largest accepted assembled prompt contributed by all layers together.
@@ -28,6 +31,7 @@ pub enum PromptError {
     DuplicateOrder(String),
     DuplicateInline(String),
     UnknownFragment { scope: PromptScope, id: String },
+    InvalidComposition { id: String, reason: String },
     FragmentTooLarge { id: String, bytes: usize },
     TotalTooLarge { bytes: usize },
 }
@@ -56,6 +60,7 @@ impl fmt::Display for PromptError {
                 "fragment `{id}` is not available in the {} library",
                 scope.as_str()
             ),
+            Self::InvalidComposition { id, reason } => write!(formatter, "prompt `{id}`: {reason}"),
             Self::FragmentTooLarge { id, bytes } => write!(
                 formatter,
                 "fragment `{id}` is {bytes} bytes; the limit is {MAX_FRAGMENT_BYTES}"
@@ -157,6 +162,9 @@ pub struct PromptFragment {
     pub category: String,
     #[serde(default)]
     pub body: String,
+    /// An ordered list of prompt references. A composition has an empty body.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<FragmentId>,
     #[serde(default)]
     pub when: PromptCondition,
 }
@@ -168,6 +176,7 @@ impl PromptFragment {
             title: String::new(),
             category: String::new(),
             body: body.into(),
+            parts: Vec::new(),
             when: PromptCondition::default(),
         }
     }
@@ -182,6 +191,15 @@ impl PromptFragment {
                 id: self.id.to_string(),
                 bytes: self.body.len(),
             });
+        }
+        if !self.parts.is_empty() && !self.body.trim().is_empty() {
+            return Err(self.composition_error("choose a body or referenced prompts"));
+        }
+        if self.parts.len() > composition::MAX_COMPONENTS {
+            return Err(self.composition_error("too many components"));
+        }
+        if self.parts.iter().collect::<BTreeSet<_>>().len() != self.parts.len() {
+            return Err(self.composition_error("the component list contains duplicate prompts"));
         }
         Ok(())
     }
@@ -317,6 +335,7 @@ pub struct PromptContext {
 pub enum PromptWarningKind {
     ConditionNotMatched,
     UnknownVariable,
+    MissingFragment,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -401,32 +420,11 @@ pub fn resolve(
                     scope: source.scope,
                     id: id.to_string(),
                 })?;
-            fragment.validate()?;
-            if !fragment.when.matches(
-                context.route.as_ref().unwrap_or(&empty_route()),
-                context.tools_enabled,
-            ) {
-                warnings.push(PromptWarning {
-                    scope: source.scope,
-                    id: id.clone(),
-                    kind: PromptWarningKind::ConditionNotMatched,
-                    detail: if fragment.when.models.is_empty() {
-                        "requires_tools".to_owned()
-                    } else {
-                        fragment.when.models.join(", ")
-                    },
-                });
+            let Some(text) =
+                composition::render_fragment(fragment, source, context, &mut warnings)?
+            else {
                 continue;
-            }
-            let (text, unknown) = render(&fragment.body, context);
-            if !unknown.is_empty() {
-                warnings.push(PromptWarning {
-                    scope: source.scope,
-                    id: id.clone(),
-                    kind: PromptWarningKind::UnknownVariable,
-                    detail: unknown.join(", "),
-                });
-            }
+            };
             resolved.retain(|(existing, _)| existing != id);
             resolved.push((
                 id.clone(),

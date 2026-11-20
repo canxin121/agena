@@ -8,14 +8,16 @@ use crate::{
     tool::{ToolError, ToolExecutor},
 };
 use agena_domain::{
-    NetworkAction, NetworkEgressConfig, NetworkIngressConfig, NetworkPeerConfig,
+    AccessKind, NetworkAction, NetworkEgressConfig, NetworkIngressConfig, NetworkPeerConfig,
     NetworkPermissionConfig, NetworkPortConfig, NetworkProtocol, NetworkRuleConfig, NetworkTarget,
     PermissionDecision,
 };
 use agena_process::sandbox::{SandboxNetwork, SandboxPolicy};
+use agena_runtime_contracts::authorization::SandboxPermissionSnapshot;
 use dns::resolver_targets;
 use std::{
     collections::HashMap,
+    fs, io,
     net::{IpAddr, ToSocketAddrs},
     path::{Path, PathBuf},
 };
@@ -96,9 +98,14 @@ pub(crate) fn policy_from_settings(executor: &ToolExecutor) -> Result<SandboxPol
         });
     }
     let snapshot = executor.sandbox_permission_snapshot();
-    let scope = snapshot
+    let mut scope = snapshot
         .filesystem_policy()
         .map_err(|error| ToolError::invalid_input(format!("sandbox permission policy: {error}")))?;
+    protect_project_settings(
+        &snapshot,
+        &mut scope.readonly_paths,
+        &mut scope.readwrite_paths,
+    )?;
     prepare_managed_state_root(
         executor.workspace_root(),
         &scope,
@@ -165,9 +172,101 @@ pub(crate) fn policy_from_settings(executor: &ToolExecutor) -> Result<SandboxPol
         denied_paths,
         configured_filesystem: true,
         default_denied_paths,
+        private_storage_roots: snapshot.private_storage_roots(),
         network: SandboxNetwork::Native { policy: network },
         ..Default::default()
     })
+}
+
+/// Pin the settings directory and protect the config filename even before the
+/// user saves their first project settings. Existing editable subtrees can
+/// retain their ordinary permissions under the read-only directory.
+fn protect_project_settings(
+    snapshot: &SandboxPermissionSnapshot,
+    reads: &mut Vec<PathBuf>,
+    writes: &mut Vec<PathBuf>,
+) -> Result<(), ToolError> {
+    if snapshot.workspace_root.as_os_str().is_empty() {
+        return Ok(());
+    }
+    let workspace = crate::canonicalize_mutation_path(&snapshot.workspace_root);
+    let config = agena_storage_layout::project_config_path(&workspace);
+    let directory = config.parent().expect("project config has a parent");
+    if !workspace.is_dir()
+        || !writes
+            .iter()
+            .any(|root| directory.starts_with(crate::canonicalize_mutation_path(root)))
+        || !matches!(
+            snapshot.authorize_path_access(AccessKind::Write, directory),
+            PermissionDecision::Allow
+        )
+        || !matches!(
+            snapshot.authorize_path_access(AccessKind::Read, directory),
+            PermissionDecision::Allow
+        )
+    {
+        return Ok(());
+    }
+    let error = |error: io::Error| {
+        ToolError::invalid_input(format!(
+            "prepare sandbox protection for {}: {error}",
+            directory.display()
+        ))
+    };
+    if let Err(cause) = fs::create_dir(directory)
+        && cause.kind() != io::ErrorKind::AlreadyExists
+    {
+        // The native process also cannot create entries in an unwritable
+        // workspace. Its already-writable subdirectories can still be used.
+        if matches!(
+            cause.kind(),
+            io::ErrorKind::PermissionDenied | io::ErrorKind::ReadOnlyFilesystem
+        ) {
+            return Ok(());
+        }
+        return Err(error(cause));
+    }
+    let metadata = fs::symlink_metadata(directory).map_err(error)?;
+    if metadata.file_type().is_symlink() {
+        return Err(ToolError::invalid_input(format!(
+            "sandbox project settings directory must be a real path: {}",
+            directory.display()
+        )));
+    }
+    let directory = crate::canonicalize_mutation_path(directory);
+    writes.retain(|path| crate::canonicalize_mutation_path(path) != directory);
+    if metadata.is_dir() {
+        for entry in fs::read_dir(&directory)
+            .map_err(error)?
+            .filter_map(Result::ok)
+        {
+            if !entry
+                .file_type()
+                .is_ok_and(|kind| kind.is_dir() || kind.is_file())
+            {
+                continue;
+            }
+            let child = entry.path();
+            // An existing finer read-only mount must still take precedence.
+            if [AccessKind::Read, AccessKind::Write]
+                .into_iter()
+                .all(|access| {
+                    matches!(
+                        snapshot.authorize_path_access(access, &child),
+                        PermissionDecision::Allow
+                    )
+                })
+            {
+                writes.push(child);
+            }
+        }
+    }
+    reads.push(directory);
+    reads.sort();
+    reads.dedup();
+    writes.sort();
+    writes.dedup();
+    Ok(())
 }
 
 /// Initialize the application-owned workspace state only when the compiled
@@ -264,10 +363,14 @@ pub(crate) fn policy_for_paths(
     reads.extend(restrictions.readonly_paths);
     reads.sort();
     reads.dedup();
+    protect_project_settings(&snapshot, &mut reads, &mut writes)?;
     Ok(SandboxPolicy {
         readonly_paths: reads,
         readwrite_paths: writes,
         denied_paths: restrictions.denied_paths,
+        configured_filesystem: !restrictions.default_denied_paths.is_empty(),
+        default_denied_paths: restrictions.default_denied_paths,
+        private_storage_roots: snapshot.private_storage_roots(),
         network: native_network(&snapshot, network)?,
         ..Default::default()
     })
@@ -644,6 +747,53 @@ mod tests {
             panic!("the configured network policy must be used without a declaration");
         };
         assert_eq!(policy.egress.unwrap().default, Some(NetworkAction::Allow));
+    }
+
+    #[test]
+    fn settings_policy_protects_a_new_configuration_and_preserves_project_writes() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let configuration = agena_storage_layout::project_config_path(&root);
+        let settings = configuration.parent().unwrap();
+        let executor = ToolExecutor::new(
+            root.clone(),
+            crate::authorization::ExecutionPrincipal::new(
+                crate::permission::PermissionPolicy::allow_all(),
+                crate::permission::ToolPermissionPolicy::allow_all(),
+            ),
+            agena_plugin_host::PluginHost::new_empty(),
+            None,
+            None,
+        )
+        .with_permission_config(
+            &serde_json::from_value(serde_json::json!({
+                "path":{"workspace":"readwrite", "external":"deny"}
+            }))
+            .unwrap(),
+        );
+
+        let readonly_executor = executor.clone().with_permission_config(
+            &serde_json::from_value(serde_json::json!({
+                "path":{"workspace":"readonly", "external":"deny"}
+            }))
+            .unwrap(),
+        );
+        policy_from_settings(&readonly_executor).unwrap();
+        assert!(!settings.exists());
+
+        let first = policy_from_settings(&executor).unwrap();
+        assert!(settings.is_dir());
+        assert!(!configuration.exists());
+        assert!(first.readonly_paths.contains(&settings.to_path_buf()));
+        assert!(first.readwrite_paths.contains(&root));
+
+        let skills = settings.join("skills");
+        fs::create_dir(&skills).unwrap();
+        fs::write(&configuration, "{}").unwrap();
+        let second = policy_from_settings(&executor).unwrap();
+        assert!(second.readonly_paths.contains(&configuration));
+        assert!(second.readwrite_paths.contains(&skills));
+        assert!(!second.readwrite_paths.contains(&settings.to_path_buf()));
     }
 
     #[test]

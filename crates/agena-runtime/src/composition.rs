@@ -74,6 +74,7 @@ pub(crate) struct RuntimeSessionBuildConfig {
     pub(crate) profiles:
         std::collections::BTreeMap<String, agena_runtime_config::AgentProfileConfig>,
     pub(crate) default_profile: Option<String>,
+    pub(crate) default_subagent_profile: Option<String>,
     pub(crate) auto_title: agena_runtime_config::SessionAutoTitleConfig,
     pub(crate) permission: agena_domain::PermissionConfig,
     pub(crate) access_control: agena_domain::AccessControlConfig,
@@ -117,6 +118,7 @@ pub(crate) fn session_build_config_from_resolved(
         prompts: config.prompts.clone(),
         profiles: config.profiles.clone(),
         default_profile: config.default_profile.clone(),
+        default_subagent_profile: config.default_subagent_profile.clone(),
         auto_title: config.session.auto_title.clone(),
         permission: config.permission.clone(),
         access_control: config.access_control.clone(),

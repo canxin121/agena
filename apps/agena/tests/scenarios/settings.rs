@@ -8,6 +8,99 @@ use serde_json::{Value, json};
 use std::{ffi::OsString, time::Duration};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn workspace_permission_target_selects_the_file_and_saved_rules() -> TestResult {
+    fixture()
+        .configure_global(|config| {
+            config["permission"]["path"]["external"] = json!("deny");
+        })
+        .workspace_config(json!({"permission":{"tools":{"default":"ask"}}}))
+        .run(|case| async move {
+            use reqwest::Method;
+            let http = case.http().await;
+            let other_root = case.paths().root.join("another-workspace");
+            let other_file = other_root.join(".agena/agena.json");
+            tokio::fs::create_dir_all(other_file.parent().unwrap()).await?;
+            tokio::fs::write(
+                &other_file,
+                serde_json::to_vec(&json!({"session":{"max_turns":21},"permission":{"path":{"workspace":"readonly"}}}))?,
+            ).await?;
+            let server: Value = http.send_json(Method::POST, "/api/v1/workspaces/resolve", &json!({
+                "path":case.paths().workspace, "create_if_missing":true
+            })).await?.require_success()?.json()?;
+            let other: Value = http.send_json(Method::POST, "/api/v1/workspaces", &json!({"path":other_root})).await?.require_success()?.json()?;
+            let server_id = server["id"].as_i64().unwrap();
+            let other_id = other["id"].as_i64().unwrap();
+            let endpoint = "/api/v1/settings/layers/workspace";
+            let initial: Value = http.get(&format!("{endpoint}?path=permission")).await?.require_success()?.json()?;
+            ensure!(initial["workspace_id"] == server_id && initial["active_workspace"] == true, "{initial}");
+            let selected_path = format!("{endpoint}?path=permission&workspace_id={other_id}");
+            let selected: Value = http.get(&selected_path).await?.require_success()?.json()?;
+            ensure!(selected["workspace_id"] == other_id && selected["active_workspace"] == false, "{selected}");
+            ensure!(selected["config_path"] == json!(other_file.canonicalize()?), "{selected}");
+            ensure!(selected["value"]["path"]["workspace"] == "readonly");
+            ensure!(selected["inherited_value"]["path"]["external"] == "deny");
+
+            let edited: Value = http.send_json(Method::PUT, &format!("{endpoint}?workspace_id={other_id}"), &json!({
+                "path":"permission", "value":{"path":{"workspace":"readwrite"}},
+                "expected_revision":selected["revision"], "reload":true
+            })).await?.require_success()?.json()?;
+            ensure!(edited["current"]["path"]["workspace"] == "readwrite" && edited["reload_required"] == false, "{edited}");
+            let server_after: Value = http.get(&format!("{endpoint}?path=permission")).await?.require_success()?.json()?;
+            ensure!(server_after["revision"] == initial["revision"], "{server_after}");
+            let stale = http.send_json(Method::PUT, &format!("{endpoint}?workspace_id={other_id}"), &json!({
+                "path":"permission", "value":{"path":{"workspace":"deny"}},"expected_revision":selected["revision"]
+            })).await?;
+            ensure!(stale.status.is_client_error(), "stale revision was accepted: {stale:?}");
+            let deleted: Value = http.send_bytes(Method::DELETE, &format!(
+                "{selected_path}&reload=true&expected_revision={}", edited["after_revision"].as_str().unwrap()
+            ), None, Vec::new()).await?.require_success()?.json()?;
+            ensure!(deleted["deleted"] == true && deleted["reload_required"] == false, "{deleted}");
+            let remaining: Value = serde_json::from_slice(&tokio::fs::read(&other_file).await?)?;
+            ensure!(remaining["session"]["max_turns"] == 21 && remaining.get("permission").is_none(), "{remaining}");
+            ensure!(http.get(&format!("{endpoint}?path=permission&workspace_id=999999")).await?.status.as_u16() == 404);
+
+            for path in ["sandbox", "resource_guard"] {
+                let active: Value = http.get(&format!("{endpoint}?path={path}")).await?.require_success()?.json()?;
+                let target = format!("{endpoint}?path={path}&workspace_id={other_id}");
+                let selected: Value = http.get(&target).await?.require_success()?.json()?;
+                ensure!(selected["workspace_id"] == other_id && selected["active_workspace"] == false, "{selected}");
+                ensure!(selected["config_path"] == json!(other_file.canonicalize()?), "{selected}");
+                let edited: Value = http.send_json(Method::PUT, &format!("{endpoint}?workspace_id={other_id}"), &json!({
+                    "path": path, "value": false, "expected_revision": selected["revision"], "reload": true
+                })).await?.require_success()?.json()?;
+                ensure!(edited["current"] == false && edited["reload_required"] == false, "{edited}");
+                let saved: Value = serde_json::from_slice(&tokio::fs::read(&other_file).await?)?;
+                ensure!(saved[path] == false && saved["session"]["max_turns"] == 21, "{saved}");
+                let unchanged: Value = http.get(&format!("{endpoint}?path={path}")).await?.require_success()?.json()?;
+                ensure!(unchanged["revision"] == active["revision"], "{unchanged}");
+                let deleted: Value = http.send_bytes(Method::DELETE, &format!(
+                    "{target}&reload=true&expected_revision={}", edited["after_revision"].as_str().unwrap()
+                ), None, Vec::new()).await?.require_success()?.json()?;
+                ensure!(deleted["deleted"] == true && deleted["reload_required"] == false, "{deleted}");
+            }
+
+            let rules_endpoint = "/api/v1/permission-rules";
+            let rule: Value = http.send_json(Method::POST, rules_endpoint, &json!({
+                "scope":"workspace", "workspace_id":other_id, "subject_kind":"tool", "tool_name":"agena.fs.read", "mode":"deny"
+            })).await?.require_success()?.json()?;
+            ensure!(rule["workspace_id"] == other_id, "{rule}");
+            let other_rules: Value = http.get(&format!("{rules_endpoint}?limit=200&workspace_id={other_id}")).await?.require_success()?.json()?;
+            let server_rules: Value = http.get(&format!("{rules_endpoint}?limit=200&workspace_id={server_id}")).await?.require_success()?.json()?;
+            ensure!(other_rules["items"][0]["id"] == rule["id"] && server_rules["items"] == json!([]));
+            let mismatched: Value = http.send_json(Method::POST, &format!("{rules_endpoint}/batch"), &json!({
+                "scope":"workspace", "workspace_id":server_id, "rule_ids":[rule["id"]], "operation":{"action":"delete"}
+            })).await?.require_success()?.json()?;
+            ensure!(mismatched["missing_ids"] == json!([rule["id"]]), "{mismatched}");
+            let removed: Value = http.send_json(Method::POST, &format!("{rules_endpoint}/batch"), &json!({
+                "scope":"workspace", "workspace_id":other_id, "rule_ids":[rule["id"]], "operation":{"action":"delete"}
+            })).await?.require_success()?.json()?;
+            ensure!(removed["affected"][0]["id"] == rule["id"], "{removed}");
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn flat_network_editor_reads_parent_and_keeps_explicit_offline_until_deleted() -> TestResult {
     fixture()
         .configure_global(|config| {
@@ -21,9 +114,13 @@ async fn flat_network_editor_reads_parent_and_keeps_explicit_offline_until_delet
                 .await?
                 .require_success()?
                 .json()?;
-            ensure!(before["value"]["network"] == json!({}), "{before}");
+            let offline = json!({"version":2,"default":"deny","allow":[],"deny":[],"inbound":"deny","hostLoopback":"deny"});
+            let outbound = json!({"version":2,"default":"allow","allow":[],"deny":[],"inbound":"deny","hostLoopback":"deny"});
+            ensure!(before["value"]["network"] == offline, "{before}");
+            ensure!(before["layer_value"]["network"] == offline, "{before}");
+            ensure!(before["default_value"]["network"] == outbound, "{before}");
             ensure!(
-                before["inherited_value"]["network"] == json!({"default":"allow"}),
+                before["inherited_value"]["network"] == outbound,
                 "{before}"
             );
             let global: Value = settings
@@ -32,7 +129,9 @@ async fn flat_network_editor_reads_parent_and_keeps_explicit_offline_until_delet
                 .require_success()?
                 .json()?;
             ensure!(
-                global["inherited_value"] == json!({"default":"deny"}),
+                global.get("inherited_value").is_none()
+                    && global["default_value"] == outbound
+                    && global["layer_value"] == outbound,
                 "{global}"
             );
             let snapshot = case.config_snapshot().await?;
@@ -68,6 +167,31 @@ async fn flat_network_editor_reads_parent_and_keeps_explicit_offline_until_delet
             settings
                 .delete(
                     SettingsLayer::Workspace,
+                    "permission.network.default",
+                    EditOptions::default(),
+                )
+                .await?
+                .require_success()?;
+            let partial: Value = settings
+                .layer(SettingsLayer::Workspace, Some("permission.network"))
+                .await?
+                .require_success()?
+                .json()?;
+            ensure!(partial["value"] == json!({"version":2,"allow":[],"deny":[],"inbound":"deny","hostLoopback":"deny"}), "{partial}");
+            ensure!(partial["layer_value"] == outbound, "{partial}");
+            let inherited_default: Value = settings
+                .layer(SettingsLayer::Workspace, Some("permission.network.default"))
+                .await?
+                .require_success()?
+                .json()?;
+            ensure!(inherited_default["has_override"] == false && inherited_default["inherited_value"] == "allow", "{inherited_default}");
+            ensure!(inherited_default["default_value"] == "allow" && inherited_default["layer_value"] == "allow", "{inherited_default}");
+            let partial_snapshot = case.config_snapshot().await?;
+            ensure!(partial_snapshot.loaded.pointer("/config/permission/network/default") == Some(&json!("allow")));
+
+            settings
+                .delete(
+                    SettingsLayer::Workspace,
                     "permission.network",
                     EditOptions::default(),
                 )
@@ -80,6 +204,22 @@ async fn flat_network_editor_reads_parent_and_keeps_explicit_offline_until_delet
                     .pointer("/config/permission/network/default")
                     == Some(&json!("allow"))
             );
+            settings
+                .set(
+                    SettingsLayer::Workspace,
+                    "permission.network.deny",
+                    json!([]),
+                    EditOptions::default(),
+                )
+                .await?
+                .require_success()?;
+            let first_leaf: Value = settings
+                .layer(SettingsLayer::Workspace, Some("permission.network"))
+                .await?
+                .require_success()?
+                .json()?;
+            ensure!(first_leaf["value"] == json!({"version":2,"deny":[]}), "{first_leaf}");
+            ensure!(case.config_snapshot().await?.loaded.pointer("/config/permission/network/default") == Some(&json!("allow")));
             Ok(())
         })
         .await

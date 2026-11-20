@@ -175,6 +175,11 @@ export type AuthorKind = {
 
 export type BindingState = 'disabled' | 'enabled' | 'paused' | 'expired' | 'faulted'
 
+export type BotPromptSelection = {
+  ids: string[]
+  publish_to_channels?: boolean
+}
+
 export type ChannelAccessAudit = {
   actor: string
   after: ChannelAccessPolicy
@@ -212,6 +217,7 @@ export type ChannelAuthority = {
   group_ids?: string[]
   identity: ChannelIdentity
   memory_workspace_root: string
+  permission_complete?: boolean
   permission_overlay?: JsonValue
   platform?: string
   private_paths: string[]
@@ -673,6 +679,7 @@ export type BotSession = {
 
 export type BotPersona = {
   instructions: string
+  prompts?: BotPromptSelection
 }
 
 export type BotProfile = {

@@ -211,6 +211,11 @@ impl App {
                 Overlay::SettingsValueEdit(dialog) => {
                     dialog.input.insert_str(text.as_str());
                 }
+                Overlay::PermissionRawEdit(dialog) => {
+                    if dialog.save_request.is_none() {
+                        dialog.editor.input.insert_str(text.as_str());
+                    }
+                }
                 Overlay::SessionPromptEdit(dialog) => {
                     if let Some(editor) = dialog.editor.as_mut() {
                         editor.input.insert_str(text.as_str());

@@ -162,5 +162,10 @@ fn probe(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         "private home overlaps the input/output fixture"
     );
     std::fs::write(home.join("private-cache"), b"private")?;
+    let temporary = PathBuf::from(std::env::var_os("TMPDIR").expect("private TMPDIR"));
+    let file = tempfile::NamedTempFile::new_in(&temporary)?;
+    assert!(file.path().starts_with(&temporary));
+    #[cfg(target_os = "linux")]
+    let _literal_tmp = tempfile::NamedTempFile::new_in("/tmp")?;
     Ok(())
 }

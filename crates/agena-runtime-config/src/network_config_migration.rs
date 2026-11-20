@@ -1,4 +1,4 @@
-//! One-time conversion of authored directional network settings to flat policies.
+//! Safe upgrades of historical complete network policies to field overlays.
 //!
 //! Legacy layers are resolved before replacement, so partial old overrides keep
 //! their effective allow and deny lists. Ordinary saves only accept the flat form.
@@ -26,6 +26,73 @@ pub fn is_legacy_network(value: &Value) -> bool {
         .is_some_and(|value| value.contains_key("egress") || value.contains_key("ingress"))
 }
 
+/// Project old flat blocks as version-2 fields without writing the file. Invalid
+/// policies remain available for repair through the raw settings editor.
+pub fn normalize_network_settings_document(document: &mut Value) {
+    fn permission(value: &mut Value) {
+        let Some(network) = value.get_mut("network") else {
+            return;
+        };
+        if !network.is_object() || is_legacy_network(network) || network.get("version").is_some() {
+            return;
+        }
+        if let Ok(parsed) = serde_json::from_value::<NetworkPermissionConfig>(network.clone()) {
+            if let Ok(canonical) = serde_json::to_value(parsed) {
+                *network = canonical;
+            }
+        }
+    }
+    if let Some(value) = document.get_mut("permission") {
+        permission(value);
+    }
+    if let Some(profiles) = document.get_mut("profiles").and_then(Value::as_object_mut) {
+        for profile in profiles.values_mut() {
+            if let Some(value) = profile.get_mut("permission") {
+                permission(value);
+            }
+        }
+    }
+    if let Some(access) = document.get_mut("access_control") {
+        if let Some(profiles) = access.get_mut("profiles").and_then(Value::as_object_mut) {
+            for profile in profiles.values_mut() {
+                if let Some(value) = profile.get_mut("permission") {
+                    permission(value);
+                }
+            }
+        }
+        if let Some(users) = access.get_mut("users").and_then(Value::as_array_mut) {
+            for user in users {
+                if let Some(value) = user.get_mut("overrides") {
+                    permission(value);
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+struct LayerNetwork {
+    historical: NetworkPermissionConfig,
+    current: NetworkPermissionConfig,
+}
+
+/// Leaf PUT/PATCH creates a v2 overlay when no network block exists yet.
+pub(crate) fn initialize_network_field_object(value: &mut Value, segments: &[String]) {
+    let path: Vec<_> = segments.iter().map(String::as_str).collect();
+    let network = matches!(
+        path.as_slice(),
+        ["permission", "network"]
+            | ["profiles", _, "permission", "network"]
+            | ["access_control", "profiles", _, "permission", "network"]
+            | ["access_control", "users", _, "overrides", "network"]
+    );
+    if network {
+        if let Some(object) = value.as_object_mut().filter(|object| object.is_empty()) {
+            object.insert("version".to_owned(), Value::from(2));
+        }
+    }
+}
+
 struct PendingFile {
     path: PathBuf,
     original: Vec<u8>,
@@ -34,9 +101,9 @@ struct PendingFile {
 
 fn read_layer(
     path: &Path,
-    inherited: &NetworkPermissionConfig,
+    inherited: &LayerNetwork,
     pending: &mut Vec<PendingFile>,
-) -> Result<NetworkPermissionConfig, ConfigError> {
+) -> Result<LayerNetwork, ConfigError> {
     if path.as_os_str().is_empty() {
         return Ok(inherited.clone());
     }
@@ -55,27 +122,41 @@ fn read_layer(
             path: path.into(),
             source,
         })?;
-    let Some(network) = document.pointer("/permission/network") else {
-        return Ok(inherited.clone());
-    };
-    let legacy = is_legacy_network(network);
-    let effective = if legacy {
-        let overlay = NetworkPermissionConfig::from_legacy_value(network.clone())
+    let before = document.clone();
+    let mut result = inherited.clone();
+    if let Some(network) = document.pointer("/permission/network") {
+        let legacy = is_legacy_network(network);
+        let effective = if legacy {
+            let overlay =
+                NetworkPermissionConfig::from_legacy_value(network.clone()).map_err(|reason| {
+                    ConfigError::Validation(format!("{}: {reason}", path.display()))
+                })?;
+            let mut effective = inherited.historical.clone();
+            effective.merge_legacy_from(overlay);
+            effective.resolved()
+        } else {
+            let overlay = serde_json::from_value::<NetworkPermissionConfig>(network.clone())
+                .map_err(|source| ConfigError::ParseFile {
+                    path: path.into(),
+                    source,
+                })?;
+            let mut effective = inherited.current.clone();
+            effective.merge_from(overlay);
+            effective.resolved()
+        };
+        effective
+            .validate_for_platform(std::env::consts::OS)
             .map_err(|reason| ConfigError::Validation(format!("{}: {reason}", path.display())))?;
-        let mut effective = inherited.clone();
-        effective.merge_legacy_from(overlay);
-        effective.resolved()
-    } else {
-        serde_json::from_value(network.clone()).map_err(|source| ConfigError::ParseFile {
-            path: path.into(),
-            source,
-        })?
-    };
-    effective
-        .validate_for_platform(std::env::consts::OS)
-        .map_err(|reason| ConfigError::Validation(format!("{}: {reason}", path.display())))?;
-    if legacy {
-        document["permission"]["network"] = serde_json::to_value(&effective)?;
+        if legacy {
+            document["permission"]["network"] = serde_json::to_value(&effective)?;
+        }
+        result = LayerNetwork {
+            historical: effective.clone(),
+            current: effective,
+        };
+    }
+    normalize_network_settings_document(&mut document);
+    if document != before {
         let mut replacement = serde_json::to_vec_pretty(&document)?;
         replacement.push(b'\n');
         pending.push(PendingFile {
@@ -84,11 +165,11 @@ fn read_layer(
             replacement,
         });
     }
-    Ok(effective)
+    Ok(result)
 }
 
-/// Upgrade only recognized directional policies, with a private backup of each
-/// original file. New flat objects, including {}, always use whole-block semantics.
+/// Upgrade recognized old policies with a private backup of each original file.
+/// Unversioned flat blocks are complete policies, including an offline {}.
 pub fn migrate_network_config_files(
     global_path: &Path,
     workspace_path: &Path,
@@ -99,7 +180,10 @@ pub fn migrate_network_config_files(
         // historical policy even if new, unconfigured projects allow outbound.
         let global = read_layer(
             global_path,
-            &NetworkPermissionConfig::offline(),
+            &LayerNetwork {
+                historical: NetworkPermissionConfig::offline(),
+                current: NetworkPermissionConfig::allow_all(),
+            },
             &mut pending,
         )?;
         let effective = if workspace_path == global_path {
@@ -126,7 +210,7 @@ pub fn migrate_network_config_files(
                 let parent = file.path.parent().unwrap_or_else(|| Path::new("."));
                 let name = file.path.file_name().unwrap_or_default().to_string_lossy();
                 let mut backup = tempfile::Builder::new()
-                    .prefix(&format!("{name}.network-v1-"))
+                    .prefix(&format!("{name}.network-v2-"))
                     .suffix(".bak")
                     .tempfile_in(parent)?;
                 backup.write_all(&file.original)?;
@@ -156,8 +240,8 @@ pub fn migrate_network_config_files(
             }
         }
         Ok(NetworkConfigMigration {
-            global,
-            effective,
+            global: global.historical,
+            effective: effective.historical,
             migrated_files: pending.into_iter().map(|file| file.path).collect(),
         })
     })
@@ -222,7 +306,10 @@ mod tests {
             assert_eq!(result.effective, NetworkPermissionConfig::offline());
             assert_eq!(result.migrated_files, vec![authored.clone()]);
             let saved: Value = serde_json::from_slice(&fs::read(authored).unwrap()).unwrap();
-            assert_eq!(saved["permission"]["network"], json!({"default":"deny"}));
+            assert_eq!(
+                saved["permission"]["network"],
+                json!({"version":2,"default":"deny","allow":[],"deny":[],"inbound":"deny","hostLoopback":"deny"})
+            );
             let resolved = serde_json::from_value::<crate::RawConfig>(saved)
                 .unwrap()
                 .resolve()
@@ -235,7 +322,7 @@ mod tests {
     }
 
     #[test]
-    fn new_empty_object_is_explicit_offline_and_is_not_migrated() {
+    fn unversioned_empty_object_migrates_to_an_explicit_offline_policy() {
         let root = tempfile::tempdir().unwrap();
         let global = root.path().join("global.json");
         let workspace = root.path().join("workspace.json");
@@ -244,8 +331,31 @@ mod tests {
         fs::write(&workspace, before).unwrap();
         let result = migrate_network_config_files(&global, &workspace).unwrap();
         assert_eq!(result.effective, NetworkPermissionConfig::offline());
+        assert_eq!(result.migrated_files.len(), 2);
+        let saved: Value = serde_json::from_slice(&fs::read(&workspace).unwrap()).unwrap();
+        assert_eq!(
+            saved["permission"]["network"],
+            json!({"version":2,"default":"deny","allow":[],"deny":[],"inbound":"deny","hostLoopback":"deny"})
+        );
+        assert!(
+            migrate_network_config_files(&global, &workspace)
+                .unwrap()
+                .migrated_files
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn version_two_partial_policy_inherits_current_defaults_without_rewriting() {
+        let root = tempfile::tempdir().unwrap();
+        let global = root.path().join("global.json");
+        let workspace = root.path().join("workspace.json");
+        let original = r#"{"permission":{"network":{"version":2,"hostLoopback":"deny"}}}"#;
+        fs::write(&workspace, original).unwrap();
+        let result = migrate_network_config_files(&global, &workspace).unwrap();
+        assert_eq!(result.effective, NetworkPermissionConfig::allow_all());
         assert!(result.migrated_files.is_empty());
-        assert_eq!(fs::read_to_string(workspace).unwrap(), before);
+        assert_eq!(fs::read_to_string(workspace).unwrap(), original);
     }
 
     #[test]

@@ -3,11 +3,10 @@ use crate::{
     PermissionStudioEditor, PermissionStudioEditorAction, PermissionStudioFocus,
     PermissionStudioNetworkAction as Action, PermissionStudioNetworkField as Field,
     PermissionStudioOverlay, PermissionStudioPage, PermissionStudioSectionId, UiFailure, UiResult,
-    editor_save_footer, permission_studio_custom_network, permission_studio_network,
-    permission_studio_network_delete_rule, permission_studio_network_field_keys,
-    permission_studio_network_field_text, permission_studio_network_rule_draft,
-    permission_studio_network_rule_policy, permission_studio_read_only_message,
-    refresh_permission_studio_dialog,
+    editor_save_footer, permission_studio_network_delete_rule,
+    permission_studio_network_field_keys, permission_studio_network_field_text,
+    permission_studio_network_rule_draft, permission_studio_network_rule_policy,
+    permission_studio_read_only_message, refresh_permission_studio_dialog,
 };
 
 impl App {
@@ -27,6 +26,15 @@ impl App {
             self.flash_warning(self.i18n.text("permission-studio-network-saving"));
             return;
         }
+        if !crate::permission_studio_action_editable(
+            dialog,
+            &crate::PermissionStudioAction::Network(action),
+        ) {
+            self.flash_warning(crate::permission_studio_inherited_message(
+                &self.i18n, dialog,
+            ));
+            return;
+        }
         let result = self.apply_permission_studio_network_action(dialog, action);
         if let Err(error) = result {
             self.flash_error(error);
@@ -40,21 +48,35 @@ impl App {
     ) -> UiResult<()> {
         match action {
             Action::Source => {
+                if !matches!(dialog.source, crate::PermissionStudioSource::GlobalConfig) {
+                    self.open_permission_studio_network_source(dialog);
+                    return Ok(());
+                }
                 if dialog.network_rule.is_some() {
                     return Err(UiFailure::message(
                         self.i18n.text("permission-studio-network-save-or-cancel"),
                     ));
                 }
                 if dialog.permission.network.is_some() {
+                    let global =
+                        matches!(dialog.source, crate::PermissionStudioSource::GlobalConfig);
                     self.overlay = Some(Overlay::Confirm(self.build_confirm_overlay(
-                        self.i18n.text("permission-studio-network-inherit-title"),
-                        vec![self.i18n.text("permission-studio-network-inherit-help")],
+                        self.i18n.text(if global {
+                            "permission-studio-network-default-title"
+                        } else {
+                            "permission-studio-network-inherit-title"
+                        }),
+                        vec![self.i18n.text(if global {
+                            "permission-studio-network-default-help"
+                        } else {
+                            "permission-studio-network-inherit-help"
+                        })],
                         ConfirmAction::PermissionStudioDeleteNetworkPolicy,
                     )));
-                } else {
-                    let permission = permission_studio_custom_network(dialog);
-                    self.persist_permission_studio(dialog, permission)?;
                 }
+            }
+            Action::ListSource { deny } => {
+                self.open_permission_studio_network_list_source(dialog, deny)
             }
             Action::Offline | Action::Outbound => {
                 if dialog.network_rule.is_some() {
@@ -196,12 +218,11 @@ impl App {
             return;
         };
         let result =
-            permission_studio_network_delete_rule(permission_studio_network(&dialog), deny, index)
-                .and_then(|network| {
-                    let mut permission = dialog.permission.clone();
-                    permission.network = Some(network);
-                    self.persist_permission_studio(&mut dialog, permission)
-                });
+            permission_studio_network_delete_rule(&dialog, deny, index).and_then(|network| {
+                let mut permission = dialog.permission.clone();
+                permission.network = Some(network);
+                self.persist_permission_studio(&mut dialog, permission)
+            });
         self.restore_permission_studio_dialog(host, dialog);
         if let Err(error) = result {
             self.flash_error(error);

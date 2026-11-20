@@ -51,6 +51,7 @@ fn tool_rule() -> PersistedPermissionRule {
 fn list_query() -> PermissionRuleListQuery {
     PermissionRuleListQuery {
         search: None,
+        workspace_id: None,
         before_updated_at_ms: None,
         before_id: None,
         limit: 100,

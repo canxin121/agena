@@ -530,8 +530,8 @@ overlay-permission-rule-preview-invalid = invalid rule: {$error}
 overlay-workbench-overview = Overview
 overlay-workbench-details = Details
 overlay-permission-studio-title = Permission
-overlay-permission-studio-footer = Left/Right or Tab/Shift+Tab switch panes · Arrows select · Enter edit · Esc back
-overlay-permission-studio-footer-nested = Ctrl+N add · Enter edit · Ctrl+E rename · Ctrl+D remove · Esc back
+overlay-permission-studio-footer = Ctrl+O source · Left/Right or Tab/Shift+Tab switch panes · Arrows select · Enter edit · Esc back
+overlay-permission-studio-footer-nested = Ctrl+O source · Ctrl+N add · Enter edit · Ctrl+E rename · Ctrl+D remove · Esc back
 overlay-permission-studio-sections = Permission Sections
 overlay-permission-studio-nav = Navigation
 permission-studio-new-rule-label = + New Rule
@@ -546,7 +546,7 @@ permission-studio-catalog-custom-detail = Add a tag or tool name that is not in 
 permission-studio-catalog-custom-search = custom new manual tag tool name
 flash-permission-studio-catalog-empty = Select at least one entry before adding rules.
 overlay-settings-title = Settings
-overlay-settings-footer = Ctrl+R refresh · ←/→ switch panes · Tab/Shift+Tab cycle panes · ↑/↓ select · Enter open · Esc close
+overlay-settings-footer = Ctrl+O source · Ctrl+R refresh · ←/→ switch panes · Tab/Shift+Tab cycle panes · ↑/↓ select · Enter open · Esc close
 overlay-settings-sections = Sections
 overlay-settings-options = Options
 overlay-settings-group-core = Core
@@ -749,8 +749,8 @@ settings-client-versions-entry-label = Provider Client Versions
 settings-agent-profile-label = Agent profile
 settings-agent-profile-unselected = No profile selected
 settings-agent-profile-detail = Choose a reusable set of instructions, model preferences, permissions, and turn limits for this session. Explicit session settings take precedence.
-settings-agent-profile-none = No profile
-settings-agent-profile-none-detail = Clear this session's profile and use workspace defaults plus explicit session settings.
+settings-agent-profile-none = Restore default role
+settings-agent-profile-none-detail = Use main for ordinary sessions or worker for subagents, preserving explicit session settings.
 settings-agent-profile-prompt = Choose the agent profile for session {$session}. The server applies the profile to this session and saves the selection.
 settings-agent-profile-repair = Current session configuration could not be resolved: {$error}. Select a profile or clear the selection to repair it.
 settings-agent-profile-saved = Session profile updated
@@ -783,7 +783,6 @@ permission-studio-field-path-external = Path External Defaults
 permission-studio-field-path-rules = Path Rules
 permission-studio-field-tool-names = Tool Names
 permission-studio-field-tool-rules = Tool Rules
-permission-studio-command-rules-shell-only = Command rules apply to shell.exec, shell.spawn, shell.watch, shell.open and shell.write; use a name rule or the default for other tools.
 permission-studio-field-prompt-json = Enter JSON for {$field}. Leave the editor empty to clear this override.
 permission-studio-detail-override = Override
 permission-studio-detail-effective = Effective
@@ -849,7 +848,7 @@ permission-studio-tool-default = Tool Default
 permission-studio-tool-default-summary = default {$value}
 permission-studio-add-path-rule = Add Path Rule
 permission-studio-add-name = Add Name
-permission-studio-add-tool-rule = Add Tool Rule
+permission-studio-add-command-rule = Add Command Rule
 permission-studio-rule-key = Key
 permission-studio-rule-pattern = Pattern
 permission-studio-rule-mode = Mode
@@ -2041,7 +2040,6 @@ settings-mcp-server-enabled-flash = Agena MCP server enabled
 settings-mcp-server-disabled-flash = Agena MCP server disabled
 settings-mcp-auth-mode-updated = Agena MCP authentication mode set to {$mode}
 settings-mcp-anonymous-access-updated = Agena MCP anonymous tool access set to {$policy}
-permission-studio-command-pattern-title = {$tool_name} command pattern
 permission-studio-command-pattern-help = Enter a shell command glob, for example `git status` or `git push *`.
 permission-studio-rename-unsupported = This entry cannot be renamed; delete and recreate it instead.
 settings-tool-api-list-description = Enumerate execution tools.
@@ -2568,7 +2566,6 @@ flash-ui-backend-queue-full = UI backend command queue is full; wait for current
 flash-ui-backend-unavailable = UI backend command actor is unavailable
 help-diagnostics-kitty-helper = Kitty helper
 message-role-tool = tool
-permission-studio-command-pattern-suffix = + command pattern
 search-picker-preview-title = Preview
 search-picker-search-failed = Search failed
 search-picker-no-preview = No preview available
@@ -3008,7 +3005,7 @@ permission-studio-rule-duplicate = Rule already exists.
 
 permission-studio-network-json = Advanced Network JSON
 
-permission-studio-network-json-help = Edit a complete network policy with default, allow, deny, inbound and hostLoopback. Rules use to, protocol, ports and except. Missing fields use deny or empty lists. Remove network to inherit the parent policy.
+permission-studio-network-json-help = Edit version: 2 network fields: default, inbound, hostLoopback, allow and deny. Missing fields use the layer fallback; [] keeps this list explicitly empty. Rules use to, protocol, ports and except.
 
 permission-studio-network-invalid-action = Network actions must be allow or deny.
 
@@ -3030,7 +3027,7 @@ permission-studio-network-collapse = Collapse
 
 permission-studio-network-expand = Expand
 
-permission-studio-network-json-short = Edit complete network JSON
+permission-studio-network-json-short = Edit this layer’s network JSON
 
 permission-studio-network-rule-form = Network rule
 
@@ -3058,7 +3055,7 @@ permission-studio-network-saving = Saving permissions. Please wait.
 
 permission-studio-network-save-or-cancel = Save or cancel the current edit first.
 
-permission-studio-network-inherit-title = Inherit parent network policy
+permission-studio-network-inherit-title = Restore all network inheritance
 
 permission-studio-network-inherit-help = Remove this layer’s entire network policy and inherit the parent configuration.
 
@@ -3125,7 +3122,15 @@ permission-studio-loopback-label = Loopback
 permission-studio-network-controls = Network controls
 permission-studio-add-network-rule = + Add network rule
 permission-studio-inherited-rule-no-local-edit = Edit the inherited rule to create an override. Only local rules can be renamed or removed.
+settings-agent-profile-mode-primary = Primary sessions
+settings-agent-profile-mode-subagent = Subagents
+settings-agent-profile-mode-all = Primary sessions and subagents
+settings-agent-profile-source-builtin = Built-in
+settings-agent-profile-source-global = Global
+settings-agent-profile-source-workspace = Workspace
+settings-agent-profile-effective = Effective default role: {$profile}
 
+# Measured provider-request performance
 usage-performance-title = Model performance · averages
 usage-performance-tps = TPS (tok/s)
 usage-performance-ttft = TTFT
@@ -3145,3 +3150,55 @@ status-part-model-generation = last generation={$value}
 status-part-model-throughput = last E2E={$value} tok/s
 session-status-tps = {$value} tok/s
 session-status-latency = request {$value}
+settings-layer-source-title = Configuration source
+settings-layer-parent-value = Parent value
+settings-layer-inherit = Inherit from parent
+settings-layer-local = Set in this layer
+settings-layer-source-description = Inherited settings follow parent changes. Local settings stay in this layer.
+settings-layer-group-network = This choice applies to the complete network policy.
+settings-layer-group-tool = This choice applies to all rules for this tool.
+settings-layer-group-commands = This choice applies to the shared command rules.
+settings-layer-group-model = This choice applies to the model and its mode settings as a group.
+settings-key-source = source
+settings-layer-ancestor-override = This choice applies to the whole {$path} settings group. Restore inheritance to edit this field separately.
+settings-model-source-changed = The session or model changed. Reopen the model settings.
+settings-model-source-needs-model = Choose a specific model to set this layer’s model group.
+permission-studio-origin-default = default
+settings-layer-default-value = Default value
+settings-layer-default = Restore default
+settings-layer-default-description = Restore the selected setting to its application default. Other settings stay unchanged.
+settings-layer-ancestor-default = This action applies to the whole {$path} group. Restore its defaults before editing this field separately.
+permission-studio-network-default-title = Restore all network defaults
+permission-studio-network-default-help = Remove all local network fields and use application defaults.
+permission-studio-network-allow-list = Allowed targets
+permission-studio-network-deny-list = Denied targets
+permission-studio-network-list-empty = Set an empty local list
+permission-studio-network-list-source-help = This choice applies to this list only. An empty local list overrides all default or inherited entries.
+permission-studio-default-rule-no-local-edit = Edit a default rule to create a local override; only local rules can be renamed or deleted.
+
+settings-key-restore-default = restore default
+
+settings-restore-default-title = Restore defaults for {$setting}?
+
+settings-restore-default-preview = After restoring: {$value}
+
+settings-already-default = This setting already uses its default value.
+
+settings-list-actions = Actions
+
+settings-list-actions-description = Clear this list or restore its default entries. Other network settings stay unchanged.
+
+permission-studio-network-list-clear = Clear list
+
+permission-studio-raw-title = {$scope} · Permission JSON
+permission-studio-raw-unavailable = Default or parent permissions are unavailable. Edit this layer’s saved permissions here.
+permission-studio-raw-help = Only this layer’s permission object is saved. Enter a JSON object, or null to remove it.
+permission-studio-raw-invalid = Enter a valid permission JSON object or null: {$error}
+
+settings-layer-parent-global = Global
+settings-layer-parent-config = Parent configuration
+settings-layer-inherited-from = inherit · {$source}
+settings-layer-inherited-locked = Inherited from {$source}. Choose Local with Ctrl+O before editing.
+settings-network-source-group = This source choice applies to all network defaults and both rule lists. Choose Local before editing the complete network JSON.
+settings-inherited-unavailable = The parent value is unavailable. Enter an explicit local value instead of copying it.
+settings-source-unavailable = Unavailable

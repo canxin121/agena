@@ -479,7 +479,7 @@ permission-studio-catalog-custom-search = カスタム新しい手動タグツ�
 
 overlay-settings-title = 設定
 
-overlay-settings-footer = Ctrl+R リフレッシュ ・ ←/→ パンの切り替え ・ タブ/シフト+ タブサイクルパン・↑/↓ 選択・入る・Escクローズ
+overlay-settings-footer = Ctrl+O 設定元 · Ctrl+R リフレッシュ ・ ←/→ パンの切り替え ・ タブ/シフト+ タブサイクルパン・↑/↓ 選択・入る・Escクローズ
 
 overlay-settings-sections = セクション
 
@@ -945,7 +945,7 @@ permission-studio-add-path-rule = パスルールを追加
 
 permission-studio-add-name = 名前を追加
 
-permission-studio-add-tool-rule = ツールルールの追加
+permission-studio-add-command-rule = コマンドルールの追加
 
 permission-studio-rule-key = キーキー
 
@@ -1217,7 +1217,6 @@ settings-mcp-auth-mode-updated = エイジナ MCP 認証モードを {$mode} に
 settings-mcp-anonymous-access-updated = エイジナ MCP 匿名ツール {$policy}
 
 
-permission-studio-command-pattern-title = {$tool_name} コマンドパターン
 
 settings-tool-api-list-description = 実行ツールを実行します。
 
@@ -1359,7 +1358,7 @@ overlay-permission-rule-detail-session-id = セッションスコープのルー
 overlay-permission-rule-detail-mode = 「許可」はアクションを許可し、承認を求めるプロンプトを表示し、「拒否」はアクションをブロックします。
 overlay-workbench-details = 詳細
 overlay-permission-studio-title = 許可
-overlay-permission-studio-footer-nested = Ctrl+N 追加 · 編集を入力 · Ctrl+E 名前変更 · Ctrl+D 削除 · Esc 戻る
+overlay-permission-studio-footer-nested = Ctrl+O 設定元 · Ctrl+N 追加 · 編集を入力 · Ctrl+E 名前変更 · Ctrl+D 削除 · Esc 戻る
 permission-studio-catalog-prompt = ライブツールカタログを検索します。 1 つ以上のエントリを選択するか、現在登録されていない値のカスタム ルールを選択します。
 permission-studio-catalog-custom-detail = 現在のライブ カタログにないタグまたはツール名を追加します。
 flash-permission-studio-catalog-empty = ルールを追加する前に、少なくとも 1 つのエントリを選択してください。
@@ -1403,7 +1402,6 @@ settings-client-versions-section-description = プロバイダー要求 ID ヘ�
 settings-provider-workbench-detail = 認証、アダプター、モデルルーティング、または新しいプロバイダーを構成する前に、検索可能なプロバイダーのリストを開きます。
 settings-provider-new-detail = 新しいプロバイダーを作成し、ライブアダプターモデルをリストし、プロバイダーアダプター構成を編集します。モデルは別途選択してください。
 settings-model-catalog-open-detail = 解決されたモデル メタデータを検査し、ローカル モデル カタログ キャッシュを更新します。
-permission-studio-command-rules-shell-only = コマンドルールは shell.exec、shell.spawn、shell.watch、shell.open、shell.write に適用されます。他のツールには名前ルールまたはデフォルトを使用してください。
 permission-studio-detail-editable = Enter を押すと、この権限スライスの複数行の JSON エディターが開きます。
 permission-studio-detail-add-hint = Enter を押すとこのアイテムが作成され、すぐに開きます。
 permission-studio-detail-full-config-editable = Enter を押すと、ドキュメント全体の高度な JSON エディターが開きます。
@@ -2140,7 +2138,6 @@ flash-ui-backend-queue-full = UI バックエンドのコマンドキューが�
 flash-ui-backend-unavailable = UI バックエンドのコマンドサービスを利用できません
 help-diagnostics-kitty-helper = Kitty ヘルパー
 message-role-tool = ツール
-permission-studio-command-pattern-suffix = + コマンドパターン
 search-picker-preview-title = プレビュー
 search-picker-search-failed = 検索に失敗しました
 search-picker-no-preview = プレビューはありません
@@ -2262,7 +2259,7 @@ overlay-permission-rule-preview-workspace-root = workspace_root: {$path}
 overlay-permission-rule-preview-session-id = session_id: {$session}
 overlay-permission-rule-preview-invalid = 無効なルール: {$error}
 overlay-workbench-overview = 概要
-overlay-permission-studio-footer = Left/Right または Tab/Shift+Tab ペイン切替 · 矢印キー 選択 · Enter 編集 · Esc 戻る
+overlay-permission-studio-footer = Ctrl+O 設定元 · Left/Right または Tab/Shift+Tab ペイン切替 · 矢印キー 選択 · Enter 編集 · Esc 戻る
 overlay-permission-studio-sections = 権限セクション
 overlay-permission-studio-nav = ナビゲーション
 overlay-detail-current-value = 現在の値
@@ -3312,7 +3309,7 @@ permission-studio-rule-duplicate = このルールは既に存在します。
 
 permission-studio-network-json = 高度なネットワーク JSON
 
-permission-studio-network-json-help = default、allow、deny、inbound、hostLoopback で設定全体を編集します。ルールには to、protocol、ports、except を使用します。省略項目は拒否または空リストとなり、network を削除すると親の設定を継承します。
+permission-studio-network-json-help = version: 2 のネットワーク項目 default、inbound、hostLoopback、allow、deny を編集します。省略した項目は既定値または継承値を使用し、[] は明示的な空リストです。ルールは to、protocol、ports、except を使用します。
 
 permission-studio-network-invalid-action = ネットワークの動作は allow または deny です。
 
@@ -3334,7 +3331,7 @@ permission-studio-network-collapse = 閉じる
 
 permission-studio-network-expand = 開く
 
-permission-studio-network-json-short = ネットワーク JSON 全体を編集
+permission-studio-network-json-short = このレイヤーのネットワーク JSON を編集
 
 permission-studio-network-rule-form = ネットワークルール
 
@@ -3362,7 +3359,7 @@ permission-studio-network-saving = 権限を保存しています。お待ちく
 
 permission-studio-network-save-or-cancel = 先に現在の編集を保存またはキャンセルしてください。
 
-permission-studio-network-inherit-title = 親のネットワーク設定を継承
+permission-studio-network-inherit-title = ネットワークの継承をすべて復元
 
 permission-studio-network-inherit-help = この階層のネットワーク設定全体を削除し、親の設定を継承します。
 
@@ -3429,7 +3426,17 @@ permission-studio-loopback-label = ホストループ
 permission-studio-network-controls = ネットワーク操作
 permission-studio-add-network-rule = + ネットワークルールを追加
 permission-studio-inherited-rule-no-local-edit = 継承ルールを編集するとこの層で上書きできます。名前変更と削除はこの層のルールに適用されます。
+settings-agent-profile-none = 既定のロールに戻す
+settings-agent-profile-none-detail = 通常のセッションは main、サブエージェントは worker を使用し、明示的なセッション設定を保持します。
+settings-agent-profile-mode-primary = メインセッション
+settings-agent-profile-mode-subagent = サブエージェント
+settings-agent-profile-mode-all = メインセッションとサブエージェント
+settings-agent-profile-source-builtin = 組み込み
+settings-agent-profile-source-global = グローバル
+settings-agent-profile-source-workspace = ワークスペース
+settings-agent-profile-effective = 有効な既定のロール: {$profile}
 
+# モデルリクエストの実測性能
 usage-performance-title = モデル性能 · 平均値
 usage-performance-tps = TPS (tok/s)
 usage-performance-ttft = 初回出力
@@ -3449,3 +3456,55 @@ status-part-model-generation = 直近の生成時間={$value}
 status-part-model-throughput = 直近のE2E={$value} tok/s
 session-status-tps = {$value} tok/s
 session-status-latency = 応答 {$value}
+settings-layer-source-title = 設定元
+settings-layer-parent-value = 上位の値
+settings-layer-inherit = 上位から継承
+settings-layer-local = この層で設定
+settings-layer-source-description = 継承は上位の変更に追従します。この層の設定は現在の値を固定します。
+settings-layer-group-network = この操作はネットワークポリシー全体に適用されます。
+settings-layer-group-tool = この操作はこのツールのルール全体に適用されます。
+settings-layer-group-commands = この操作は共有コマンドルール全体に適用されます。
+settings-layer-group-model = この操作はモデルとそのモード設定全体に適用されます。
+settings-key-source = 設定元
+settings-layer-ancestor-override = この操作は {$path} 設定グループ全体に適用されます。この項目を個別に編集するには継承に戻してください。
+settings-model-source-changed = セッションまたはモデルが変更されました。モデル設定を開き直してください。
+settings-model-source-needs-model = この層のモデル設定を固定するには、具体的なモデルを選択してください。
+permission-studio-origin-default = 既定
+settings-layer-default-value = 既定値
+settings-layer-default = 既定に戻す
+settings-layer-default-description = 選択した設定をアプリの既定値に戻します。他の設定は変わりません。
+settings-layer-ancestor-default = この操作は {$path} グループ全体に適用されます。個別に編集する前にグループの既定値を復元してください。
+permission-studio-network-default-title = ネットワークの既定値をすべて復元
+permission-studio-network-default-help = このレイヤーのネットワーク設定を削除し、アプリの既定値を使用します。
+permission-studio-network-allow-list = 許可する接続先
+permission-studio-network-deny-list = 拒否する接続先
+permission-studio-network-list-empty = このレイヤーで空リストを設定
+permission-studio-network-list-source-help = この操作は現在のリストだけに適用されます。空リストを設定すると既定または継承した項目をすべて置き換えます。
+permission-studio-default-rule-no-local-edit = 既定のルールを編集してこのレイヤーの設定を作成できます。名前の変更と削除はこのレイヤーのルールに適用されます。
+
+settings-key-restore-default = 既定に戻す
+
+settings-restore-default-title = {$setting} を既定に戻しますか？
+
+settings-restore-default-preview = 復元後：{$value}
+
+settings-already-default = この設定は既定値を使用しています。
+
+settings-list-actions = 操作
+
+settings-list-actions-description = このリストを空にするか、既定の項目を復元します。他のネットワーク設定は変わりません。
+
+permission-studio-network-list-clear = リストを空にする
+
+permission-studio-raw-title = {$scope} · 権限 JSON
+permission-studio-raw-unavailable = 既定または上位の権限を取得できません。ここでこの階層に保存された権限を確認・編集できます。
+permission-studio-raw-help = この階層の permission オブジェクトのみを保存します。JSON オブジェクトを入力してください。null を入力すると、この階層の権限設定を削除します。
+permission-studio-raw-invalid = 有効な権限 JSON オブジェクトまたは null を入力してください: {$error}
+
+settings-layer-parent-global = グローバル
+settings-layer-parent-config = 上位設定
+settings-layer-inherited-from = 継承 · {$source}
+settings-layer-inherited-locked = {$source} から継承しています。編集するには Ctrl+O で「この階層」を選択してください。
+settings-network-source-group = このソース選択はすべてのネットワーク既定値と両方のルール一覧に適用されます。ネットワーク全体の JSON を編集する前に「この階層」を選択してください。
+settings-inherited-unavailable = 上位の値を取得できません。コピーせず、この階層の値を明示的に入力してください。
+settings-source-unavailable = 取得不可

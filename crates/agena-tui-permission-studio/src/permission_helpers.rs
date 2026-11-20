@@ -168,7 +168,13 @@ pub fn normalize_permission_config(permission: &mut PermissionConfig) {
     {
         permission.path = None;
     }
-    // An explicit empty network policy is offline; only None means inherit.
+    if permission
+        .network
+        .as_ref()
+        .is_some_and(agena_domain::NetworkPermissionConfig::is_empty)
+    {
+        permission.network = None;
+    }
     if permission
         .tools
         .as_ref()

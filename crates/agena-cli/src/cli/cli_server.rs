@@ -2011,6 +2011,7 @@ fn permission_rule_params(
         network_host,
         network_port: args.network_port,
         scope: Some(permission_scope_name(args.scope).to_owned()),
+        workspace_id: None,
         session_id: args.session_id,
         mode: permission_mode(args.rule_mode),
     })

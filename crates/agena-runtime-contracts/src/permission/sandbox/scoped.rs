@@ -13,6 +13,8 @@ impl SandboxPermissionSnapshot {
             return Ok((Vec::new(), Vec::new()));
         }
         let mut candidates = writes.to_vec();
+        candidates.extend(self.protected_paths.native_readonly_paths().cloned());
+        candidates.extend(self.protected_paths.git_directories().cloned());
         if !self.workspace_root.as_os_str().is_empty() {
             candidates.push(self.workspace_root.clone());
         }
@@ -93,7 +95,14 @@ impl SandboxPermissionSnapshot {
                         access: "write",
                     });
                 }
-                readonly.push(path);
+                if path.exists()
+                    || self
+                        .protected_paths
+                        .check(AccessKind::Write, &path)
+                        .is_none()
+                {
+                    readonly.push(path);
+                }
             } else if readonly.iter().any(|boundary| within(&path, boundary)) {
                 // Restoring a configured descendant only refines a root that
                 // the host already approved; it never expands the invocation.
@@ -103,7 +112,7 @@ impl SandboxPermissionSnapshot {
         Ok((readonly, readwrite))
     }
 
-    fn scoped_access_allowed(
+    pub(super) fn scoped_access_allowed(
         &self,
         access: AccessKind,
         path: &Path,

@@ -57,6 +57,23 @@ fn provider() -> Value {
 }
 
 #[test]
+fn a_profile_uses_the_complete_named_permission_instead_of_inheriting_rule_tables() {
+    let config = resolve(json!({
+        "permission": {"tools": {"names": {"agena.fs.read": "allow"}}},
+        "access_control": {"profiles":{"closed":{"name":"Closed", "complete":true}}},
+        "profiles":{"main":{"permission_profile":"closed"}}
+    }));
+    let profile = resolve_agent_profile(&config.profiles, "main")
+        .unwrap()
+        .with_permission_profile(&config.access_control)
+        .unwrap();
+    assert_eq!(
+        profile.effective_permission(&config.permission),
+        agena_domain::PermissionConfig::default().standalone()
+    );
+}
+
+#[test]
 fn old_configuration_and_unselected_catalog_preserve_global_defaults() {
     let baseline = resolve(json!({}));
     let with_catalog = resolve(json!({"profiles":{"review":{
@@ -66,12 +83,12 @@ fn old_configuration_and_unselected_catalog_preserve_global_defaults() {
     assert_eq!(with_catalog.permission, baseline.permission);
     assert_eq!(with_catalog.default_selection, baseline.default_selection);
     assert_eq!(with_catalog.session.max_turns, baseline.session.max_turns);
-    assert!(with_catalog.default_profile.is_none());
-    assert!(baseline.profiles.is_empty());
+    assert_eq!(with_catalog.default_profile.as_deref(), Some("main"));
+    assert_eq!(baseline.profiles.len(), 4);
 }
 
 #[test]
-fn workspace_replaces_named_entries_and_can_disable_inherited_default() {
+fn workspace_replaces_named_entries_and_can_reset_inherited_default() {
     let (_dir, request) = fixture(
         json!({
             "sandbox": false,
@@ -88,7 +105,7 @@ fn workspace_replaces_named_entries_and_can_disable_inherited_default() {
     );
     let loader = ConfigLoader::new(EmptyEnvironment);
     let scoped = loader.load(&request).unwrap().config;
-    assert!(scoped.default_profile.is_none());
+    assert_eq!(scoped.default_profile.as_deref(), Some("main"));
     assert_eq!(scoped.profiles["review"].title, "Workspace");
     assert!(scoped.profiles["review"].max_turns.is_none());
     let permission = serde_json::to_value(&scoped.profiles["review"].permission).unwrap();
@@ -425,4 +442,19 @@ fn global_profiles_cannot_depend_on_workspace_only_definitions() {
         .unwrap_err();
         assert!(error.to_string().contains(expected), "{error}");
     }
+}
+
+#[test]
+fn global_subagent_default_cannot_depend_on_a_workspace_only_role() {
+    let (_dir, request) = fixture(
+        json!({"sandbox":false,"default_subagent_profile":"project-scout"}),
+        json!({"profiles":{"project-scout":{"extends":"explore"}}}),
+    );
+    let error = ConfigLoader::new(EmptyEnvironment)
+        .load(&request)
+        .unwrap_err();
+    assert!(
+        error.to_string().contains("default_subagent_profile"),
+        "{error}"
+    );
 }

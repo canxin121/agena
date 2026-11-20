@@ -313,6 +313,13 @@ impl SessionManager {
                         return Ok(AgentHandle {
                             agent_id: child.get(),
                             name: agent.name,
+                            profile: Some(
+                                config
+                                    .profile
+                                    .as_deref()
+                                    .unwrap_or(agena_runtime_config::DEFAULT_SUBAGENT_PROFILE)
+                                    .to_owned(),
+                            ),
                             status: AgentStatus::Running,
                         });
                     }
@@ -320,29 +327,15 @@ impl SessionManager {
                     Err(error) => return Err(kernel_error(error)),
                 }
             } else if agent.status != AgentStatus::Running {
-                let metadata = self
-                    .kernel()
-                    .reader
-                    .metadata(child)
-                    .await
-                    .map_err(kernel_error)?;
-                let selection = metadata.selection.clone().unwrap_or_default();
                 drop(preparation);
                 let launch = AgentLaunch {
                     parent_session_id: caller,
                     launch_call_id: call,
                     name: agent.name,
                     prompt: request.message.clone(),
+                    profile: None,
                     commands: Vec::new(),
-                    selection: agena_domain::ModelSelectionConfig {
-                        provider: selection.provider,
-                        adapter: selection.adapter,
-                        model: selection.model,
-                        thinking_mode: selection.thinking_mode,
-                        speed_mode: selection.speed_mode,
-                        verbosity: selection.verbosity,
-                        parallel_tool_calls: selection.parallel_tool_calls,
-                    },
+                    selection: Default::default(),
                     timeout_ms: agent.limits.timeout_ms,
                     max_tokens: agent.limits.max_tokens,
                     max_cost_microusd: agent.limits.max_cost_microusd,

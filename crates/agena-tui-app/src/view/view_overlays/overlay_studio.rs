@@ -66,7 +66,14 @@ impl App {
         .footer_max_height(area.height.saturating_sub(6).max(2));
         let workbench = render_workbench_frame(frame, area, surface, &spec);
         let width = workbench.body.width.saturating_sub(2) as usize;
-        let columns = super::super::permission_studio_columns(&self.i18n, dialog, width);
+        let columns = dialog
+            .state
+            .sections()
+            .iter()
+            .map(|section| {
+                super::super::permission_studio_columns(&self.i18n, dialog, section, width)
+            })
+            .collect::<Vec<_>>();
         let items = rows
             .iter()
             .map(|row| match *row {
@@ -80,12 +87,17 @@ impl App {
                     )))
                 }
                 crate::PermissionStudioRow::Item { section, item } => {
+                    let row_columns = &columns[section];
                     let section = &dialog.state.sections()[section];
                     ListItem::new(super::super::permission_studio_dense_line(
                         &self.i18n,
                         &section.items[item],
                         section.id,
-                        &columns,
+                        row_columns,
+                        crate::permission_studio_action_editable(
+                            dialog,
+                            &section.items[item].action,
+                        ),
                         width,
                     ))
                 }
@@ -130,6 +142,33 @@ impl App {
                 }),
                 None,
             );
+            if dialog.editable
+                && let crate::PermissionStudioRow::Item { section, item } = rows[index]
+                && let Some(source) = dialog.state.sections()[section].items[item].source
+                && (!matches!(dialog.source, crate::PermissionStudioSource::GlobalConfig)
+                    || source == crate::PermissionStudioValueSource::Current)
+            {
+                let source = columns[section].source_range();
+                let x = workbench
+                    .body
+                    .x
+                    .saturating_add(2)
+                    .saturating_add(source.start as u16)
+                    .min(workbench.body.right());
+                pointer::register(
+                    Rect::new(
+                        x,
+                        workbench.body.y + (index - state.offset()) as u16,
+                        (source.len() as u16).min(workbench.body.right().saturating_sub(x)),
+                        1,
+                    ),
+                    Some(pointer::PointerAction::NamedIndex(
+                        "permission-source",
+                        index,
+                    )),
+                    None,
+                );
+            }
         }
         if let Some(editor) = &dialog.editor {
             agena_tui_components::render_workbench_editor_dialog(

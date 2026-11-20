@@ -455,6 +455,20 @@ impl Application {
         session_command_resource(outcome, self.session_execution_resource(outcome.session_id)).await
     }
 
+    pub async fn set_session_permission_profile(
+        &self,
+        session_id: i64,
+        profile: Option<String>,
+    ) -> Result<SessionExecutionResource, ApplicationError> {
+        let outcome = self
+            .session_execution_services()?
+            .commands
+            .set_session_permission_profile(session_id, profile)
+            .await
+            .map_err(|error| ApplicationError::from_failure(error.failure))?;
+        session_command_resource(outcome, self.session_execution_resource(outcome.session_id)).await
+    }
+
     pub async fn rewind_session_to_message(
         &self,
         session_id: i64,
@@ -797,6 +811,7 @@ impl Application {
             && options.thinking_mode.is_none()
             && options.speed_mode.is_none()
             && options.verbosity.is_none()
+            && options.parallel_tool_calls.is_none()
         {
             let outcome = self
                 .session_execution_services()?

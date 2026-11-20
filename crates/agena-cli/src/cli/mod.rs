@@ -1127,7 +1127,7 @@ pub enum SessionsSubcommand {
     List(SessionListArgs),
     /// Create a session, optionally choosing a named agent profile.
     Create(SessionCreateArgs),
-    /// Change or clear an existing session's named agent profile.
+    /// Change a session's named agent profile or restore its automatic role.
     Update(SessionUpdateArgs),
     /// Export a session to a JSONL bundle (stdout). Pipe to a file to keep.
     Export(SessionExportArgs),
@@ -1146,7 +1146,7 @@ pub struct SessionCreateArgs {
     pub title: String,
     #[arg(long)]
     pub parent: Option<i64>,
-    /// Named agent profile. An empty value starts without a profile.
+    /// Named agent profile. An empty value uses the automatic main role.
     #[arg(long, env = "AGENA_PROFILE", value_name = "NAME")]
     pub profile: Option<String>,
     #[arg(long, default_value = "json")]
@@ -1156,7 +1156,7 @@ pub struct SessionCreateArgs {
 #[derive(Debug, Clone, Args)]
 pub struct SessionUpdateArgs {
     pub session_id: i64,
-    /// Select a named agent profile; pass --profile="" to clear it.
+    /// Select a named agent profile; pass --profile="" to restore its automatic role.
     /// Existing sessions change only when this option is explicitly supplied.
     #[arg(long, value_name = "NAME")]
     pub profile: String,
@@ -1562,7 +1562,7 @@ pub struct DebugSessionArgs {
 pub struct ExecArgs {
     #[arg(long = "workspace")]
     pub workspace: Option<PathBuf>,
-    /// Named agent profile for the new session. Empty disables the default.
+    /// Named agent profile for the new session. Empty uses the automatic main role.
     #[arg(long, env = "AGENA_PROFILE", value_name = "NAME")]
     pub profile: Option<String>,
     #[arg(long)]
@@ -1605,8 +1605,13 @@ pub struct TuiArgs {
 pub struct ReviewArgs {
     #[arg(long = "workspace")]
     pub workspace: Option<PathBuf>,
-    /// Named agent profile for the new review session.
-    #[arg(long, env = "AGENA_PROFILE", value_name = "NAME")]
+    /// Named agent profile for the review session. Empty uses the automatic main role.
+    #[arg(
+        long,
+        env = "AGENA_PROFILE",
+        default_value = "reviewer",
+        value_name = "NAME"
+    )]
     pub profile: Option<String>,
     #[arg(long, default_value = "main")]
     pub base: String,

@@ -1,4 +1,26 @@
 use super::*;
+use clap::{CommandFactory, FromArgMatches};
+
+#[test]
+fn review_defaults_to_reviewer_without_changing_process_environment() {
+    // Disable only this parser's environment input so the default remains
+    // deterministic even when the test runner has AGENA_PROFILE configured.
+    let command = AgenaCli::command().mut_subcommand("review", |command| {
+        command.mut_arg("profile", |arg| arg.env(None::<&str>))
+    });
+    for (arguments, expected) in [
+        (vec!["agena", "review"], "reviewer"),
+        (vec!["agena", "review", "--profile", "main"], "main"),
+        (vec!["agena", "review", "--profile="], ""),
+    ] {
+        let matches = command.clone().try_get_matches_from(arguments).unwrap();
+        let cli = AgenaCli::from_arg_matches(&matches).unwrap();
+        let Some(AgenaCommand::Review(args)) = cli.command else {
+            panic!("expected review");
+        };
+        assert_eq!(args.profile.as_deref(), Some(expected));
+    }
+}
 
 #[test]
 fn one_shot_profiles_preserve_explicit_selection_and_clearing() {

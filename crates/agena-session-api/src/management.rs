@@ -67,6 +67,8 @@ pub enum SettingsQuery {
     Get(ConfigSettingsGetInput),
     GetLayer {
         layer: ConfigSettingsLayer,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workspace_id: Option<i64>,
         input: ConfigSettingsGetInput,
     },
     Sources {
@@ -83,12 +85,16 @@ pub enum SettingsCommand {
     Set(ConfigSettingsSetInput),
     SetLayer {
         layer: ConfigSettingsLayer,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workspace_id: Option<i64>,
         input: ConfigSettingsSetInput,
     },
     Patch(ConfigSettingsPatchInput),
     Delete(ConfigSettingsDeleteInput),
     DeleteLayer {
         layer: ConfigSettingsLayer,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        workspace_id: Option<i64>,
         input: ConfigSettingsDeleteInput,
     },
 }
@@ -506,6 +512,8 @@ pub struct UsageQuery {
 pub struct PermissionRuleBatchRequest {
     pub rule_ids: Vec<i64>,
     pub scope: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<i64>,
     #[serde(default)]
     pub session_id: Option<i64>,
     pub operation: PermissionRuleBatchOperation,
@@ -544,7 +552,7 @@ mod tests {
             }
         }))
         .unwrap();
-        let ManagementCommand::Settings(SettingsCommand::SetLayer { layer, input }) = &request
+        let ManagementCommand::Settings(SettingsCommand::SetLayer { layer, input, .. }) = &request
         else {
             panic!("settings command")
         };

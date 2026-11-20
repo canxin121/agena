@@ -49,16 +49,9 @@ impl ApplicationService {
                 "session scope requires a positive session_id",
             ));
         }
-        let workspace_id = if permission_scope == PermissionScope::Workspace {
-            Some(
-                self.workspace_repository
-                    .ensure_id(self.workspace_root.as_str())
-                    .await
-                    .map_err(|error| ApplicationError::internal_error(&error))?,
-            )
-        } else {
-            None
-        };
+        let workspace_id = self
+            .permission_rule_workspace_id(permission_scope, request.workspace_id)
+            .await?;
         let scope = PermissionRuleBatchScope {
             scope: permission_scope,
             workspace_id,
@@ -99,6 +92,17 @@ impl ApplicationService {
         &self,
         query: SearchPaginationQuery,
     ) -> ApplicationResult<PaginatedResponse<PermissionRuleResource>> {
+        self.list_permission_rules_for_workspace(query, None).await
+    }
+
+    pub async fn list_permission_rules_for_workspace(
+        &self,
+        query: SearchPaginationQuery,
+        workspace_id: Option<i64>,
+    ) -> ApplicationResult<PaginatedResponse<PermissionRuleResource>> {
+        if let Some(id) = workspace_id {
+            self.ensure_workspace_exists(id).await?;
+        }
         let limit = normalize_resource_limit(query.limit());
         let cursor = query
             .cursor()
@@ -108,6 +112,7 @@ impl ApplicationService {
             .permission_rule_repository
             .list(PermissionRuleListQuery {
                 search: non_empty(query.search()).map(ToString::to_string),
+                workspace_id,
                 before_updated_at_ms: cursor.map(|value| value.updated_at_ms),
                 before_id: cursor.map(|value| value.id),
                 limit: limit + 1,
@@ -145,13 +150,49 @@ impl ApplicationService {
         &self,
         request: UpsertPermissionRuleParams,
     ) -> ApplicationResult<PermissionRuleResource> {
-        self.create_permission_rule_command(permission_rule_write_command_from_request(
+        let command = self.permission_rule_write_command(request).await?;
+        self.create_permission_rule_command(command).await
+    }
+
+    async fn permission_rule_write_command(
+        &self,
+        request: UpsertPermissionRuleParams,
+    ) -> ApplicationResult<PermissionRuleWriteCommand> {
+        let root = match request.workspace_id {
+            Some(id) => self.registered_workspace_path(id).await?,
+            None => self.workspace_root.clone(),
+        };
+        permission_rule_write_command_from_request(
             request,
             "api",
             Some("http_api".to_string()),
-            self.workspace_root.as_str(),
-        )?)
-        .await
+            &root,
+        )
+    }
+
+    async fn permission_rule_workspace_id(
+        &self,
+        scope: PermissionScope,
+        workspace_id: Option<i64>,
+    ) -> ApplicationResult<Option<i64>> {
+        if scope != PermissionScope::Workspace {
+            return if workspace_id.is_some() {
+                Err(ApplicationError::bad_request(
+                    "workspace_id requires workspace permission scope",
+                ))
+            } else {
+                Ok(None)
+            };
+        }
+        if let Some(id) = workspace_id {
+            self.ensure_workspace_exists(id).await?;
+            return Ok(Some(id));
+        }
+        self.workspace_repository
+            .ensure_id(self.workspace_root.as_str())
+            .await
+            .map(Some)
+            .map_err(|error| ApplicationError::internal_error(&error))
     }
 
     pub async fn create_permission_rule_command(
@@ -173,16 +214,8 @@ impl ApplicationService {
         rule_id: i64,
         request: UpsertPermissionRuleParams,
     ) -> ApplicationResult<PermissionRuleResource> {
-        self.replace_permission_rule_command(
-            rule_id,
-            permission_rule_write_command_from_request(
-                request,
-                "api",
-                Some("http_api".to_string()),
-                self.workspace_root.as_str(),
-            )?,
-        )
-        .await
+        let command = self.permission_rule_write_command(request).await?;
+        self.replace_permission_rule_command(rule_id, command).await
     }
 
     pub async fn replace_permission_rule_command(
@@ -249,16 +282,9 @@ impl ApplicationService {
                 "session scope requires a session_id",
             ));
         }
-        let workspace_id = if command.scope == PermissionScope::Workspace {
-            Some(
-                self.workspace_repository
-                    .ensure_id(self.workspace_root.as_str())
-                    .await
-                    .map_err(|error| ApplicationError::internal_error(&error))?,
-            )
-        } else {
-            None
-        };
+        let workspace_id = self
+            .permission_rule_workspace_id(command.scope, command.workspace_id)
+            .await?;
         Ok(PersistedPermissionRule {
             id: None,
             created_at_ms: None,
@@ -593,6 +619,7 @@ fn permission_rule_write_command_from_request(
         action,
         mode,
         scope,
+        workspace_id: request.workspace_id,
         session_id: request.session_id,
         source: source.to_owned(),
         operator,

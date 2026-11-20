@@ -11,6 +11,7 @@ pub enum PermissionStudioSectionId {
     PathRules,
     NetworkDefaults,
     NetworkRules,
+    NetworkDenyRules,
     ToolDefaults,
     ToolNames,
     ToolCommandRules,

@@ -1,6 +1,8 @@
 //! Flat network settings compiled to the native MXC network model.
 
 mod flat;
+#[cfg(test)]
+mod layer_tests;
 mod simplification;
 
 use ipnet::IpNet;
@@ -26,7 +28,8 @@ pub enum NetworkProtocol {
 }
 
 /// Native composition model with a flat, human-editable serialized format.
-/// A present network section is a complete policy; missing defaults deny.
+/// Version 2 preserves each field's presence for layered configuration. The
+/// unversioned flat format is upgraded as a complete policy during decoding.
 #[derive(Debug, Clone, Default)]
 pub struct NetworkPermissionConfig {
     pub egress: Option<NetworkEgressConfig>,
@@ -96,7 +99,7 @@ pub struct NetworkEgressConfig {
         deserialize_with = "deserialize_present"
     )]
     pub default: Option<NetworkAction>,
-    /// Explicit native grants. Public settings replace the complete network block.
+    /// Explicit grants replace this list; an omitted list inherits its parent.
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -239,9 +242,19 @@ impl NetworkPermissionConfig {
         }
     }
 
-    /// A present network block replaces the complete configuration.
+    /// Apply only authored fields. Lists replace their own list, including [].
     pub fn merge_from(&mut self, overlay: Self) {
-        *self = overlay;
+        self.merge_legacy_from(overlay);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.egress
+            .as_ref()
+            .is_none_or(NetworkEgressConfig::is_empty)
+            && self
+                .ingress
+                .as_ref()
+                .is_none_or(NetworkIngressConfig::is_empty)
     }
 
     /// Decode the retired nested shape at an explicit file-migration boundary.
@@ -252,7 +265,7 @@ impl NetworkPermissionConfig {
             .map_err(|error| format!("permission.network.{}: {}", error.path(), error.inner()))
     }
 
-    /// Resolve old partial layers before converting them to complete flat blocks.
+    /// Apply directional fields before converting a historical nested policy.
     pub fn merge_legacy_from(&mut self, overlay: Self) {
         if let Some(overlay) = overlay.egress {
             let current = self.egress.get_or_insert_with(Default::default);
@@ -569,6 +582,7 @@ mod tests {
     #[test]
     fn flat_network_round_trips_with_ports_ranges_and_exclusions() {
         let value = json!({
+            "version":2,
             "default":"deny",
             "allow":[
                 {"to":"192.0.2.10","protocol":"tcp","ports":[443,"8000-8099"]},
@@ -658,7 +672,7 @@ mod tests {
     }
 
     #[test]
-    fn omitted_network_inherits_but_present_blocks_replace_fully() {
+    fn unversioned_network_blocks_keep_historical_complete_policy_semantics() {
         let original: crate::PermissionConfig = serde_json::from_value(json!({
             "network":{
                 "default":"allow",
@@ -685,7 +699,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(replaced).unwrap(),
             json!({
-                "network":{"default":"deny","allow":[{"to":"198.51.100.7"}]}
+                "network":{"version":2,"default":"deny","allow":[{"to":"198.51.100.7"}],"deny":[],"inbound":"deny","hostLoopback":"deny"}
             })
         );
     }
@@ -704,7 +718,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(empty_except).unwrap(),
             json!({
-                "default":"deny","allow":[{"to":"*"}]
+                "version":2,"default":"deny","allow":[{"to":"*"}],"deny":[],"inbound":"deny","hostLoopback":"deny"
             })
         );
         assert!(serde_json::from_value::<NetworkPermissionConfig>(json!({"allow":[{}]})).is_err());
@@ -776,7 +790,7 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&policy).unwrap(),
             json!({
-                "default":"allow","allow":[{"to":"192.0.2.10"}],"deny":[{"to":"10.0.0.0/8"}]
+                "version":2,"default":"allow","allow":[{"to":"192.0.2.10"}],"deny":[{"to":"10.0.0.0/8"}]
             })
         );
     }

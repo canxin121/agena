@@ -908,6 +908,10 @@ pub struct AgentSpawnRequest {
     /// Scope, constraints, required context and output contracts, and expected final result.
     /// Parent history is not copied; include any chart or UI contract the task needs.
     pub prompt: String,
+    /// Role profile from the available subagent catalog. Choose the role that
+    /// fits the task; omission uses the configured subagent default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
     /// Command instructions attached to the initial message.
     #[serde(default)]
     pub commands: Vec<String>,
@@ -938,6 +942,9 @@ pub struct AgentModelSelection {
 pub struct AgentHandle {
     pub agent_id: i64,
     pub name: String,
+    /// Effective role selected for this child.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
     pub status: agena_domain::AgentStatus,
 }
 
@@ -1741,4 +1748,43 @@ fn unavailable() -> PluginError {
         crate::error::PluginErrorKind::HostUnavailable,
         "host is unavailable for this plugin",
     )
+}
+
+#[cfg(test)]
+mod agent_profile_contract_tests {
+    use super::{AgentHandle, AgentSpawnRequest};
+
+    #[test]
+    fn agent_spawn_profile_is_optional_for_existing_callers_and_exposed_in_schema() {
+        let old: AgentSpawnRequest = serde_json::from_value(serde_json::json!({
+            "name":"research", "prompt":"Find the call sites"
+        }))
+        .unwrap();
+        assert!(old.profile.is_none());
+        let selected: AgentSpawnRequest = serde_json::from_value(serde_json::json!({
+            "name":"research", "prompt":"Find the call sites", "profile":"explore"
+        }))
+        .unwrap();
+        assert_eq!(selected.profile.as_deref(), Some("explore"));
+        let schema = serde_json::to_value(schemars::schema_for!(AgentSpawnRequest)).unwrap();
+        assert!(schema["properties"].get("profile").is_some());
+        assert!(
+            !schema["required"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value == "profile")
+        );
+    }
+
+    #[test]
+    fn agent_handles_accept_old_payloads_and_report_the_selected_profile() {
+        let mut handle: AgentHandle = serde_json::from_value(serde_json::json!({
+            "agent_id":1,"name":"research","status":"running"
+        }))
+        .unwrap();
+        assert!(handle.profile.is_none());
+        handle.profile = Some("explore".into());
+        assert_eq!(serde_json::to_value(handle).unwrap()["profile"], "explore");
+    }
 }

@@ -54,6 +54,99 @@ fn restart(manager: &SessionManager) -> SessionManager {
 }
 
 #[tokio::test]
+async fn bot_resolves_saved_compositions_and_publishes_them_only_when_selected() {
+    let (manager, _) = fixture().await;
+    let state = manager.global_state.load_full();
+    let mut config = state.config.clone();
+    config.prompts.global = serde_json::from_value(serde_json::json!({"library": [
+        {"id":"intro", "body":"Answer questions."},
+        {"id":"sources", "body":"Cite sources."},
+        {"id":"answer", "parts":["intro", "sources"]}
+    ]}))
+    .unwrap();
+    manager.reconfigure_global(
+        state.providers.clone(),
+        state.processor.clone(),
+        state.executor.clone(),
+        config,
+    );
+
+    let make = |key: &str, id: &str| BotCreate {
+        persona: Some(BotPersona {
+            prompts: Some(BotPromptSelection {
+                ids: vec![id.into()],
+                publish_to_channels: false,
+            }),
+            ..Default::default()
+        }),
+        ..create(key, "Help Bot")
+    };
+    assert!(
+        manager
+            .create_bot_profile(make("missing", "missing"))
+            .await
+            .is_err()
+    );
+    let bot = manager
+        .create_bot_profile(make("saved-composition", "answer"))
+        .await
+        .unwrap();
+    let id = session_id(bot.local_session_id.unwrap()).unwrap();
+    let model = agena_domain::ModelRef::new("test", "test");
+    let preview = manager.prompt_preview(id, &model).await.unwrap();
+    let saved = preview
+        .fragments
+        .iter()
+        .find(|fragment| fragment.id.as_str() == "answer")
+        .unwrap();
+    assert_eq!(saved.text, "Answer questions.\n\nCite sources.");
+
+    let owner = SessionOwner {
+        bot: bot.id,
+        surface: SessionSurface::Group,
+        scope_key: None,
+    };
+    assert!(
+        manager
+            .bot_prompt_layer(Some(&owner), Default::default())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let mut update = edit_avatar("publish", &bot, None);
+    update.persona.prompts.as_mut().unwrap().publish_to_channels = true;
+    let published = manager.update_bot_profile(bot.id, update).await.unwrap();
+    let mut legacy = edit_avatar("rename", &published, None);
+    legacy.persona.prompts = None;
+    manager.update_bot_profile(bot.id, legacy).await.unwrap();
+    let layer = manager
+        .bot_prompt_layer(Some(&owner), Default::default())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(layer.order[0].as_str(), "answer");
+
+    let state = manager.global_state.load_full();
+    let mut config = state.config.clone();
+    config
+        .prompts
+        .global
+        .library
+        .retain(|fragment| fragment.id.as_str() != "answer");
+    manager.reconfigure_global(
+        state.providers.clone(),
+        state.processor.clone(),
+        state.executor.clone(),
+        config,
+    );
+    let preview = manager.prompt_preview(id, &model).await.unwrap();
+    assert!(preview.warnings.iter().any(|warning| {
+        warning.id.as_str() == "answer"
+            && warning.kind == agena_prompt_layers::PromptWarningKind::MissingFragment
+    }));
+}
+
+#[tokio::test]
 async fn avatars_follow_identity_across_edit_replay_conversation_replacement_and_archive() {
     let (manager, _ordinary) = fixture().await;
     let input = BotCreate {
@@ -354,6 +447,7 @@ async fn names_are_unique_per_active_bot_and_revision_guards_edits() {
                 name: "Lotus II".into(),
                 persona: BotPersona {
                     instructions: "短句优先".into(),
+                    prompts: None,
                 },
                 avatar: None,
             },

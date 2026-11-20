@@ -33,10 +33,15 @@ impl App {
         let section = dialog.state.selected_section().map(|section| section.id);
         let action = match section {
             Some(PermissionStudioSectionId::PathRules) => PermissionStudioEditorAction::AddPathRule,
-            Some(PermissionStudioSectionId::NetworkRules) => {
+            Some(
+                PermissionStudioSectionId::NetworkRules
+                | PermissionStudioSectionId::NetworkDenyRules,
+            ) => {
                 self.activate_permission_studio_network(
                     dialog,
-                    crate::PermissionStudioNetworkAction::AddRule { deny: false },
+                    crate::PermissionStudioNetworkAction::AddRule {
+                        deny: section == Some(PermissionStudioSectionId::NetworkDenyRules),
+                    },
                 );
                 return;
             }
@@ -48,7 +53,7 @@ impl App {
                 return;
             }
             Some(PermissionStudioSectionId::ToolCommandRules) => {
-                PermissionStudioEditorAction::AddToolRule
+                PermissionStudioEditorAction::AddToolCommandPattern
             }
             _ => {
                 self.flash_warning(ui_text::t(&self.i18n, "flash-permission-studio-no-add"));
@@ -150,10 +155,13 @@ impl App {
             )
             && !crate::permission_studio_has_override(dialog, target)
         {
-            self.flash_warning(
-                self.i18n
-                    .text("permission-studio-inherited-rule-no-local-edit"),
-            );
+            self.flash_warning(self.i18n.text(
+                if matches!(dialog.source, crate::PermissionStudioSource::GlobalConfig) {
+                    "permission-studio-default-rule-no-local-edit"
+                } else {
+                    "permission-studio-inherited-rule-no-local-edit"
+                },
+            ));
             return;
         }
         let (title, body, action) = match dialog.state.selected_section().map(|section| section.id)
@@ -194,7 +202,10 @@ impl App {
                     ConfirmAction::PermissionStudioDeletePathRule { pattern },
                 )
             }
-            Some(PermissionStudioSectionId::NetworkRules) => {
+            Some(
+                PermissionStudioSectionId::NetworkRules
+                | PermissionStudioSectionId::NetworkDenyRules,
+            ) => {
                 self.activate_permission_studio_network(
                     dialog,
                     crate::PermissionStudioNetworkAction::DeleteRule,
@@ -415,6 +426,7 @@ impl App {
             SettingsPickerAction::EditMcpServerUrl => {
                 self.open_settings_field_editor(
                     SettingsFieldSpec {
+                        explicit_local: false,
                         workspace: false,
                         section: agena_tui_settings::SettingsStudioSectionId::McpServer,
                         path: MCP_SERVER_URL_SETTINGS_PATH.to_owned(),

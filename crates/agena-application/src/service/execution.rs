@@ -67,6 +67,7 @@ impl ApplicationService {
                 .verbosity
                 .as_ref()
                 .map(|value| value.trim().to_ascii_lowercase()),
+            parallel_tool_calls: request.parallel_tool_calls,
             ..Default::default()
         };
         let explicit_model = request.model.is_some();
@@ -260,7 +261,9 @@ impl ApplicationService {
             verbosity,
             model_supports_parallel_tool_calls: Some(
                 metadata.supports_parallel_tool_calls_for_model()
-                    && inherited_parallel
+                    && request
+                        .parallel_tool_calls
+                        .or(inherited_parallel)
                         .or_else(|| {
                             uses_global_default
                                 .then_some(global_selection.parallel_tool_calls)
@@ -409,6 +412,7 @@ impl ApplicationService {
             background_activities: Vec::new(),
             execution: SessionExecutionContextResource {
                 profile: context.profile,
+                profile_is_default: context.profile_is_default,
                 prompts: context.prompts,
                 provider_retry: execution_control.provider_retry(session_id).await,
                 conversation: context.conversation,
@@ -416,6 +420,7 @@ impl ApplicationService {
                 selected_permission: agena_api::resource::PermissionConfigResource::from(
                     &context.selected_permission,
                 ),
+                permission_profile: context.permission_profile,
                 inherited_permission: agena_api::resource::PermissionConfigResource::from(
                     &context.inherited_permission,
                 ),
@@ -430,6 +435,8 @@ impl ApplicationService {
                     .iter()
                     .map(agena_api::resource::PermissionConfigResource::from)
                     .collect(),
+                selected_selection: context.selected_selection,
+                inherited_selection: context.inherited_selection,
                 model_provider_id: context.model_provider_id,
                 model_adapter_id: context.model_adapter_id,
                 model_id: context.model_id,

@@ -30,6 +30,7 @@ mod attachment;
 mod auto_compaction;
 mod background_activity;
 mod command_events;
+mod config_setting_source;
 mod content;
 mod context_policy;
 mod doom_loop;
@@ -104,8 +105,8 @@ pub mod mcp_connections;
 pub mod session_kernel;
 pub use access::{AccessKind, AccessSelector, PathKind};
 pub use access_control::{
-    AccessControlConfig, PermissionConversationBinding, PermissionProfile, PermissionUserBinding,
-    PermissionUserGroup, ResolvedAccessControl,
+    AccessControlConfig, DEFAULT_PERMISSION_PROFILE_ID, PermissionConversationBinding,
+    PermissionProfile, PermissionUserBinding, PermissionUserGroup, ResolvedAccessControl,
 };
 pub use activity::{
     ActivityPayload, ActivityProvenance, ActivityState, CancellationOutcome, CancellationResult,
@@ -131,6 +132,10 @@ pub use background_activity::{
     BackgroundActivityLogRead, BackgroundActivityStatus,
 };
 pub use command_events::CommandOutputStream;
+pub use config_setting_source::{
+    config_setting_has_override, config_setting_inheritance_override_path,
+    config_setting_override_path, config_setting_requires_group_reset,
+};
 pub use content::{
     ContentChunk, ContentCursor, ContentDocument, ContentField, ContentFormat, ContentInput,
     ContentKind, ContentPage, ContentPayload, ContentRange, ContentRef, ContentResource,
@@ -247,7 +252,9 @@ pub use tool_effects::{FilesystemAccess, FilesystemEffect, FilesystemEffects, Ne
 pub use tool_invocation::ToolInvocation;
 pub use tool_output::{ToolManagedOutput, ToolOutput};
 pub use tool_permission::ToolPermissionRules;
-pub use tool_permission_config::ToolPermissionConfig;
+pub use tool_permission_config::{
+    SHELL_COMMAND_RULE_GROUP, ToolPermissionConfig, command_class_keyword,
+};
 pub use tool_result::ToolResultState;
 pub use usage_period::UsagePeriod;
 pub use usage_query::UsageStatsQuery;

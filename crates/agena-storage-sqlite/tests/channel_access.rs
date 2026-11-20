@@ -87,6 +87,7 @@ fn authority(b: &IntegrationBinding) -> ChannelAuthority {
         profile_ids: Vec::new(),
         profile_fingerprint: String::new(),
         permission_overlay: Default::default(),
+        permission_complete: false,
         source_workspace_root: None,
         source_admin: false,
         binding_id: b.id.to_string(),

@@ -224,6 +224,7 @@ async fn assert_session_path_modes(
 fn permission_save() -> SettingsCommand {
     SettingsCommand::SetLayer {
         layer: ConfigSettingsLayer::Global,
+        workspace_id: None,
         input: ConfigSettingsSetInput {
             path: "permission".into(),
             value: json!({"path":{"workspace":"readwrite","external":"readonly"}}),
@@ -486,7 +487,8 @@ async fn named_profiles_are_applied_through_public_session_commands() {
             .unwrap(),
     )
     .unwrap();
-    assert!(execution["execution"].get("profile").is_none());
+    assert_eq!(execution["execution"]["profile"], "main");
+    assert_eq!(execution["execution"]["profile_is_default"], true);
     assert_eq!(execution["execution"]["model_id"], "base-model");
     assert_eq!(
         execution["execution"]["effective_permission"]["path"]["workspace"],

@@ -174,7 +174,7 @@ fn network_capability_checks_follow_the_native_backends_for_each_default_combina
 
 #[cfg(not(target_os = "macos"))]
 #[test]
-fn workspace_network_replaces_parent_rules_and_empty_offline_can_restore_inheritance() {
+fn legacy_workspace_network_replaces_parent_rules_and_empty_offline_can_restore_inheritance() {
     let root = tempfile::tempdir().unwrap();
     let global = root.path().join("global.json");
     let workspace_root = root.path().join("workspace");
@@ -200,8 +200,8 @@ fn workspace_network_replaces_parent_rules_and_empty_offline_can_restore_inherit
     )
     .unwrap();
     assert_eq!(
-        serde_json::to_value(load_network(&global, &workspace_root)).unwrap(),
-        custom
+        load_network(&global, &workspace_root),
+        serde_json::from_value::<NetworkPermissionConfig>(custom).unwrap()
     );
     let policy =
         NetworkPermissionPolicy::from_config(&load_network(&global, &workspace_root)).unwrap();
@@ -247,8 +247,8 @@ fn workspace_network_replaces_parent_rules_and_empty_offline_can_restore_inherit
     )
     .unwrap();
     assert_eq!(
-        serde_json::to_value(load_network(&global, &workspace_root)).unwrap(),
-        parent
+        load_network(&global, &workspace_root),
+        serde_json::from_value::<NetworkPermissionConfig>(parent).unwrap()
     );
     assert_eq!(fs::read(&global).unwrap(), parent_bytes);
 }

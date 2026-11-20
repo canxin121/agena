@@ -249,6 +249,10 @@ pub struct BotRecord {
     /// Trimmed and case-folded name used for active-name uniqueness.
     pub name_folded: String,
     pub instructions: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prompt_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub publish_prompts: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avatar: Option<String>,
     pub revision: i64,
@@ -443,6 +447,7 @@ pub struct PermissionRuleRecord {
 /// Query for listing permission rules.
 pub struct PermissionRuleListQuery {
     pub search: Option<String>,
+    pub workspace_id: Option<i64>,
     pub before_updated_at_ms: Option<i64>,
     pub before_id: Option<i64>,
     pub limit: u64,

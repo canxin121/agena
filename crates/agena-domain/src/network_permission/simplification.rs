@@ -110,7 +110,7 @@ mod tests {
             let lowered = config.simplified_for_sandbox().unwrap();
             assert_eq!(
                 serde_json::to_value(&lowered).unwrap(),
-                json!({"default":"allow","deny":denied})
+                json!({"version":2,"default":"allow","allow":[],"deny":denied,"inbound":"deny","hostLoopback":"deny"})
             );
             assert!(config.validate_for_platform("macos").is_err());
             config.validate_for_platform("linux").unwrap();

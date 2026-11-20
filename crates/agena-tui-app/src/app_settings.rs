@@ -23,6 +23,9 @@ impl App {
                     );
                     return true;
                 }
+                if !self.require_settings_field_editable(&action) {
+                    return false;
+                }
                 match parse_settings_field_input(&self.i18n, &action, input.as_str()) {
                     Ok(Some(value)) => {
                         let path = action.path.clone();

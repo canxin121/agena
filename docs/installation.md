@@ -202,15 +202,18 @@ Network settings now use the flat `permission.network` fields `default`,
 `allow`, `deny`, `inbound`, and `hostLoopback`. On startup, recognized directional
 `egress` / `ingress` settings are resolved using their former inheritance rules
 and migrated to complete flat policies. Original configuration files are backed
-up beside the file as `*.network-v1-*.bak`; stored session policies are backed up
+up beside the file as `*.network-v2-*.bak`. Stored session policies are backed up
 and migrated in a database transaction. New saves accept only the flat format.
-An omitted network block inherits its parent; an explicit `network: {}` means
+An omitted network block inherits its parent. An unversioned `network: {}` means
 offline.
 
-The older `internet`, `private`, `loopback`, and domain `rules` require an explicit
-IP/CIDR policy before starting the updated service. See
-[native network configuration](sandbox.md#网络设置与执行) for examples, editor
-controls, migration details, and platform capabilities.
+Stored sessions with older `internet`, `private`, `loopback`, or domain rules
+are migrated to offline network policies. Legacy workspace and external
+filesystem defaults keep their unconditional access. The original session
+settings are kept in the database under `migration.permission.legacy.session.<id>`.
+Older network fields in configuration files still need an explicit IP/CIDR
+policy. See [native network configuration](sandbox.md#网络设置与执行) for
+configuration examples and migration details.
 
 To repair the dependencies/host permissions and rerun the installed binary's
 checks without replacing it or restarting the service:

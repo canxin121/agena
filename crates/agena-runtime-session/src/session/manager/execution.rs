@@ -37,8 +37,21 @@ impl SessionManager {
         permit: OwnedSemaphorePermit,
         budget: Option<AgentBudget>,
     ) -> Result<Arc<RunControl>, AppError> {
-        let compact = compact || execution.purpose == ExecutionPurpose::Compaction;
         let state = self.state_for_session(execution.session_id).await?;
+        self.supervise_with_budget_and_state(execution, options, compact, permit, budget, state)
+            .await
+    }
+
+    pub(super) async fn supervise_with_budget_and_state(
+        &self,
+        execution: ExecutionView,
+        options: SessionRunOptions,
+        compact: bool,
+        permit: OwnedSemaphorePermit,
+        budget: Option<AgentBudget>,
+        state: Arc<ExecutionState>,
+    ) -> Result<Arc<RunControl>, AppError> {
+        let compact = compact || execution.purpose == ExecutionPurpose::Compaction;
         let mut active = self.active.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(run) = active.get(&execution.id)
             && run.generation >= execution.generation
@@ -494,9 +507,10 @@ impl SessionManager {
                 let mut prompt=self.prompt_hydrator.hydrate_with_executor(&self.kernel().reader,facts,&options.model,native,&executor,context.conversation.as_ref()).await.map_err(kernel_error)?;
                 let bindings=if state.providers.agena_tool_mode(&options.model)?.is_disabled(){Vec::new()}else{agena_tool_api::ToolApiRegistry.definitions()};
                 let request_layer=super::session_prompt::request_system_layer(options.system.as_deref());
-                let prompt_inputs=super::session_prompt::PromptInputs{profile:&context.profile_prompts,session:&context.prompts,request_layer:request_layer.as_ref(),model:&options.model,session_id:control.session.get(),workspace:context.effective_workspace_root.as_ref().map(|path|path.to_string_lossy().into_owned()).unwrap_or_default(),global:context.global,tools_enabled:!bindings.is_empty()};
+                let bot_prompt=self.bot_prompt_layer(context.owner.as_ref(),context.relation_kind).await?;
+                let prompt_inputs=super::session_prompt::PromptInputs{profile:&context.profile_prompts,session:&context.prompts,bot:bot_prompt.as_ref(),request_layer:request_layer.as_ref(),model:&options.model,session_id:control.session.get(),workspace:context.effective_workspace_root.as_ref().map(|path|path.to_string_lossy().into_owned()).unwrap_or_default(),global:context.global,tools_enabled:!bindings.is_empty()};
                 let additional_system=super::session_prompt::resolve_configured_prompts(&state,&prompt_inputs);
-                let mut system_text=self.assemble_session_system_prompt_with_executor(&executor,(!additional_system.is_empty()).then_some(additional_system.as_str()),!bindings.is_empty());
+                let mut system_text=self.assemble_session_system_prompt_with_executor(&executor,(!additional_system.is_empty()).then_some(additional_system.as_str()),!bindings.is_empty(),context.profile.as_deref(),&state.config);
                 system_text.push_str(&self.agent_roster(control.session).await?);
                 state.processor.transform_model_input(
                     control.session.get(),
@@ -1300,7 +1314,7 @@ impl SessionManager {
         self.prepare_options_with_state(session, options, &state)
             .await
     }
-    async fn prepare_options_with_state(
+    pub(super) async fn prepare_options_with_state(
         &self,
         session: SessionId,
         options: &mut SessionRunOptions,
@@ -1359,7 +1373,7 @@ impl SessionManager {
             .map_err(kernel_error)?;
         let selection = state
             .config
-            .session_selection(configuration.profile.as_deref(), selection)
+            .session_selection(&configuration, selection)
             .map_err(AppError::Config)?;
         self.options_for_selection_with_state(&selection, &state)
     }
@@ -1701,9 +1715,13 @@ impl SessionManager {
         let executor = state.executor.for_session_context_async(&context).await;
         let native = state.providers.native_compaction_enabled(&options.model)?;
         let request_layer = super::session_prompt::request_system_layer(options.system.as_deref());
+        let bot_prompt = self
+            .bot_prompt_layer(context.owner.as_ref(), context.relation_kind)
+            .await?;
         let prompt_inputs = super::session_prompt::PromptInputs {
             profile: &context.profile_prompts,
             session: &context.prompts,
+            bot: bot_prompt.as_ref(),
             request_layer: request_layer.as_ref(),
             model: &options.model,
             session_id: control.session.get(),
@@ -1721,6 +1739,8 @@ impl SessionManager {
             &executor,
             (!additional_system.is_empty()).then_some(additional_system.as_str()),
             false,
+            context.profile.as_deref(),
+            &state.config,
         );
         system.push_str(&self.agent_roster(control.session).await?);
         let mut completion = completion_request(options, Some(system), Vec::new(), Vec::new());

@@ -4,6 +4,7 @@
 //! ceilings, and resolves path aliases in the parent. It carries no credentials
 //! and grants nothing on its own: launch paths still require normal approval.
 
+use super::protected_paths::ProtectedPaths;
 use super::*;
 use agena_domain::{
     NetworkEgressConfig, NetworkPeerConfig, NetworkPermissionConfig, NetworkPortConfig,
@@ -17,6 +18,8 @@ use std::net::IpAddr;
 pub struct SandboxPermissionSnapshot {
     pub blocked: bool,
     pub workspace_root: PathBuf,
+    #[serde(default)]
+    protected_paths: ProtectedPaths,
     /// The base policy followed by every independent authority ceiling.
     pub path_layers: Vec<SandboxPathPolicy>,
     pub network_layers: Vec<NetworkPermissionConfig>,
@@ -103,6 +106,9 @@ pub struct SandboxFilesystemRestrictions {
     pub readwrite_paths: Vec<PathBuf>,
     /// Boundaries which must remain inaccessible even inside an allowed tree.
     pub denied_paths: Vec<PathBuf>,
+    /// Host-owned subtrees to remove when partitioning broader grants.
+    #[serde(default)]
+    pub default_denied_paths: Vec<PathBuf>,
 }
 
 /// Complete statically granted filesystem scope for a native subprocess.
@@ -157,8 +163,14 @@ impl SandboxPermissionSnapshot {
         } else {
             Some(agena_storage_layout::StorageLayout::current().workspace_dir(&workspace_root))
         };
+        let mut paths = paths.peekable();
         Self {
             blocked,
+            protected_paths: ProtectedPaths::for_workspace(
+                &workspace_root,
+                &agena_storage_layout::StorageLayout::current(),
+                paths.peek().copied(),
+            ),
             path_layers: paths
                 .map(|policy| SandboxPathPolicy {
                     workspace_read_default: policy.workspace_read_default,
@@ -221,12 +233,21 @@ impl SandboxPermissionSnapshot {
         self
     }
 
+    /// Host storage boundaries must also constrain dependencies added by the
+    /// launcher after the configured filesystem grants have been lowered.
+    pub fn private_storage_roots(&self) -> Vec<PathBuf> {
+        self.protected_paths.private_roots().cloned().collect()
+    }
+
     pub fn authorize_path_access(&self, access: AccessKind, target: &Path) -> PermissionDecision {
         if self.blocked {
             return denied("execution principal is blocked");
         }
         if !target.is_absolute() {
             return denied("sandbox path access requires an absolute path");
+        }
+        if let Some(denial) = self.protected_paths.check(access, target) {
+            return denial;
         }
         let mut decision = PermissionDecision::Allow;
         for layer in &self.path_layers {
@@ -608,6 +629,34 @@ impl SandboxPermissionSnapshot {
         restrictions.denied_paths.dedup();
         (restrictions.readonly_paths, restrictions.readwrite_paths) =
             self.scoped_write_boundaries(&all_reads, &writes, &restrictions.denied_paths)?;
+        restrictions.default_denied_paths = self
+            .protected_paths
+            .private_roots()
+            .filter(|path| all_reads.iter().any(|grant| within(path, grant)))
+            .cloned()
+            .collect();
+        // A broad grant can contain the instance's workspaces parent. Reopen
+        // only the current workspace state, at most with the original grant.
+        if let Some(state) = self.protected_paths.own_state().filter(|state| {
+            state.is_dir()
+                && restrictions
+                    .default_denied_paths
+                    .iter()
+                    .any(|path| within(state, path))
+                && !restrictions
+                    .denied_paths
+                    .iter()
+                    .any(|path| within(state, path))
+        }) && self.scoped_access_allowed(AccessKind::Read, state, &all_reads)?
+        {
+            if writes.iter().any(|grant| within(state, grant))
+                && self.scoped_access_allowed(AccessKind::Write, state, &writes)?
+            {
+                restrictions.readwrite_paths.push(state.to_path_buf());
+            } else {
+                restrictions.readonly_paths.push(state.to_path_buf());
+            }
+        }
         Ok(restrictions)
     }
 

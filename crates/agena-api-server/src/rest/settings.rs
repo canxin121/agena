@@ -6,6 +6,11 @@ pub struct SettingsSourcesQuery {
     paths: String,
 }
 
+#[derive(serde::Deserialize)]
+pub struct SettingsLayerQuery {
+    workspace_id: Option<i64>,
+}
+
 /// URL query fields stay flat so the query deserializer parses each boolean
 /// before converting to the shared settings DTO. Deserializing its flattened
 /// options directly buffers URL values as strings and rejects explicit booleans.
@@ -66,10 +71,12 @@ pub async fn get_settings(
 pub async fn get_layer_settings(
     State(state): State<AppState>,
     Path(layer): Path<String>,
+    AxumQuery(target): AxumQuery<SettingsLayerQuery>,
     AxumQuery(input): AxumQuery<ConfigSettingsGetInput>,
 ) -> Result<impl IntoResponse, ServerError> {
     json_http(state.application().query_settings(SettingsQuery::GetLayer {
         layer: parse_settings_layer(&layer)?,
+        workspace_id: target.workspace_id,
         input,
     }))
     .await
@@ -108,6 +115,7 @@ pub async fn set_settings(
 pub async fn set_layer_settings(
     State(state): State<AppState>,
     Path(layer): Path<String>,
+    AxumQuery(target): AxumQuery<SettingsLayerQuery>,
     Json(input): Json<ConfigSettingsSetInput>,
 ) -> Result<impl IntoResponse, ServerError> {
     json_http(
@@ -115,6 +123,7 @@ pub async fn set_layer_settings(
             .application()
             .command_settings(SettingsCommand::SetLayer {
                 layer: parse_settings_layer(&layer)?,
+                workspace_id: target.workspace_id,
                 input,
             }),
     )
@@ -148,6 +157,7 @@ pub async fn delete_settings(
 pub async fn delete_layer_settings(
     State(state): State<AppState>,
     Path(layer): Path<String>,
+    AxumQuery(target): AxumQuery<SettingsLayerQuery>,
     AxumQuery(query): AxumQuery<SettingsDeleteQuery>,
 ) -> Result<impl IntoResponse, ServerError> {
     json_http(
@@ -155,6 +165,7 @@ pub async fn delete_layer_settings(
             .application()
             .command_settings(SettingsCommand::DeleteLayer {
                 layer: parse_settings_layer(&layer)?,
+                workspace_id: target.workspace_id,
                 input: query.into(),
             }),
     )

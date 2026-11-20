@@ -1,10 +1,22 @@
 //! Named, instance-owned permission configurations and exact channel assignments.
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::{ChannelGrant, ChannelIdentity, PermissionConfig};
+
+/// Reserved outside the existing user-defined ID grammar.
+pub const DEFAULT_PERMISSION_PROFILE_ID: &str = "@default";
+
+static DEFAULT_PERMISSION_PROFILE: LazyLock<PermissionProfile> =
+    LazyLock::new(|| PermissionProfile {
+        name: "Default permissions".into(),
+        permission: PermissionConfig::global_default(),
+        complete: true,
+        ..PermissionProfile::default()
+    });
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -22,6 +34,10 @@ pub struct PermissionProfile {
     pub description: String,
     pub revision: u64,
     pub permission: PermissionConfig,
+    /// Complete configurations replace earlier named policies. The legacy
+    /// format is retained for existing installations that authored overlays.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub complete: bool,
     /// Optional replacement for the channel capability selection. Permission
     /// overlays still run through the source's independent permission ceiling.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -35,6 +51,7 @@ impl Default for PermissionProfile {
             description: String::new(),
             revision: 1,
             permission: PermissionConfig::default(),
+            complete: false,
             grant: None,
         }
     }
@@ -58,6 +75,9 @@ pub struct PermissionUserBinding {
     pub tenant: String,
     pub account: String,
     pub actor: String,
+    /// Optional exact conversation for this sender's assignment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource: Option<String>,
     pub group_ids: BTreeSet<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile_id: Option<String>,
@@ -80,6 +100,8 @@ pub struct PermissionConversationBinding {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResolvedAccessControl {
     pub permission: PermissionConfig,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub complete: bool,
     pub grant: ChannelGrant,
     pub group_ids: Vec<String>,
     pub profile_ids: Vec<String>,
@@ -89,6 +111,17 @@ pub struct ResolvedAccessControl {
 }
 
 impl AccessControlConfig {
+    pub fn with_default_profile(mut self) -> Self {
+        self.profiles
+            .entry(DEFAULT_PERMISSION_PROFILE_ID.into())
+            .or_insert_with(|| DEFAULT_PERMISSION_PROFILE.clone());
+        self
+    }
+
+    pub fn standalone_permission(&self, id: &str) -> Result<PermissionConfig, String> {
+        Ok(self.profile(id)?.permission.standalone())
+    }
+
     pub fn is_empty(&self) -> bool {
         self.profiles.is_empty()
             && self.groups.is_empty()
@@ -97,7 +130,9 @@ impl AccessControlConfig {
     }
 
     pub fn validate(&self) -> Result<(), String> {
-        if self.profiles.len() > 256
+        if self.profiles.len()
+            - usize::from(self.profiles.contains_key(DEFAULT_PERMISSION_PROFILE_ID))
+            > 256
             || self.groups.len() > 256
             || self.users.len() > 10000
             || self.conversations.len() > 4096
@@ -105,7 +140,9 @@ impl AccessControlConfig {
             return Err("access_control exceeds profile/group/member/conversation limits".into());
         }
         for (id, profile) in &self.profiles {
-            validate_id("profile", id)?;
+            if id != DEFAULT_PERMISSION_PROFILE_ID {
+                validate_id("profile", id)?;
+            }
             validate_name("profile", &profile.name)?;
             if profile.revision == 0 || profile.description.len() > 4096 {
                 return Err(format!(
@@ -128,10 +165,19 @@ impl AccessControlConfig {
         let mut identities = BTreeSet::new();
         for user in &self.users {
             validate_identity(&user.platform, &user.tenant, &user.account, &user.actor)?;
-            if !identities.insert((&user.platform, &user.tenant, &user.account, &user.actor)) {
+            if let Some(resource) = &user.resource {
+                validate_identity(&user.platform, &user.tenant, &user.account, resource)?;
+            }
+            if !identities.insert((
+                &user.platform,
+                &user.tenant,
+                &user.account,
+                &user.actor,
+                &user.resource,
+            )) {
                 return Err(format!(
-                    "duplicate access_control user {:?}/{:?}/{:?}/{:?}",
-                    user.platform, user.tenant, user.account, user.actor
+                    "duplicate access_control user {:?}/{:?}/{:?}/{:?} in {:?}",
+                    user.platform, user.tenant, user.account, user.actor, user.resource
                 ));
             }
             if let Some(profile) = &user.profile_id {
@@ -148,7 +194,11 @@ impl AccessControlConfig {
                     {
                         let a = self.profile(left_profile)?;
                         let b = self.profile(right_profile)?;
-                        if permissions_conflict(&a.permission, &b.permission)
+                        if ((a.complete || b.complete)
+                            && (a.complete != b.complete
+                                || a.permission != b.permission
+                                || a.grant != b.grant))
+                            || permissions_conflict(&a.permission, &b.permission)
                             || matches!((&a.grant, &b.grant), (Some(x), Some(y)) if x != y)
                         {
                             return Err(format!(
@@ -203,12 +253,15 @@ impl AccessControlConfig {
                 && item.account == identity.account
                 && item.resource == resource
         });
-        let user = self.users.iter().find(|item| {
+        let mut matching_users = self.users.iter().filter(|item| {
             item.platform == platform
                 && item.tenant == identity.tenant
                 && item.account == identity.account
                 && item.actor == actor
         });
+        let user = matching_users.clone().find(|item| item.resource.is_none());
+        let conversation_user =
+            matching_users.find(|item| item.resource.as_deref() == Some(resource));
         let mut resolved = ResolvedAccessControl {
             permission: base_permission.clone(),
             grant: base_grant.clone(),
@@ -223,9 +276,11 @@ impl AccessControlConfig {
                 &mut selected_profiles,
             )?;
         }
-        if let Some(user) = user {
+        for user in [user, conversation_user].into_iter().flatten() {
             for (id, group) in self.user_groups(user)? {
-                resolved.group_ids.push(id.clone());
+                if !resolved.group_ids.contains(id) {
+                    resolved.group_ids.push(id.clone());
+                }
                 selected_groups.push((id, group));
                 if let Some(profile) = &group.profile_id {
                     self.apply_profile(profile, &mut resolved, &mut selected_profiles)?;
@@ -236,12 +291,14 @@ impl AccessControlConfig {
             }
             resolved.permission.merge_from(user.overrides.clone());
         }
-        if conversation.is_some() || user.is_some() {
-            let payload =
-                serde_json::to_vec(&(conversation, user, selected_groups, selected_profiles))
-                    .map_err(|error| {
-                        format!("cannot fingerprint permission assignment: {error}")
-                    })?;
+        if conversation.is_some() || user.is_some() || conversation_user.is_some() {
+            let selections = (conversation, user, selected_groups, selected_profiles);
+            let payload = if let Some(scoped) = conversation_user {
+                serde_json::to_vec(&(selections, scoped))
+            } else {
+                serde_json::to_vec(&selections)
+            }
+            .map_err(|error| format!("cannot fingerprint permission assignment: {error}"))?;
             resolved.fingerprint = Sha256::digest(payload)
                 .iter()
                 .map(|byte| format!("{byte:02x}"))
@@ -251,9 +308,12 @@ impl AccessControlConfig {
     }
 
     fn profile(&self, id: &str) -> Result<&PermissionProfile, String> {
-        self.profiles.get(id).ok_or_else(|| {
-            format!("permission profile {id:?} is missing or still referenced after deletion")
-        })
+        self.profiles
+            .get(id)
+            .or_else(|| (id == DEFAULT_PERMISSION_PROFILE_ID).then(|| &*DEFAULT_PERMISSION_PROFILE))
+            .ok_or_else(|| {
+                format!("permission profile {id:?} is missing or still referenced after deletion")
+            })
     }
 
     fn user_groups<'a>(
@@ -284,9 +344,17 @@ impl AccessControlConfig {
         selected: &mut Vec<(String, &'a PermissionProfile)>,
     ) -> Result<(), String> {
         let profile = self.profile(id)?;
-        resolved.permission.merge_from(profile.permission.clone());
-        if let Some(grant) = &profile.grant {
-            resolved.grant = grant.clone();
+        if profile.complete {
+            resolved.permission = profile.permission.standalone();
+            resolved.grant = profile.grant.clone().unwrap_or_default();
+            resolved.complete = true;
+            resolved.profile_ids.clear();
+            selected.clear();
+        } else {
+            resolved.permission.merge_from(profile.permission.clone());
+            if let Some(grant) = &profile.grant {
+                resolved.grant = grant.clone();
+            }
         }
         if !resolved.profile_ids.iter().any(|value| value == id) {
             resolved.profile_ids.push(id.to_owned());
@@ -480,6 +548,39 @@ mod tests {
             original,
             resolve(&config, "alice", "bot", "room-1").fingerprint
         );
+    }
+
+    #[test]
+    fn a_complete_profile_replaces_earlier_rule_tables_and_grants_for_this_room() {
+        let mut config = catalog();
+        let earlier = config.profiles.get_mut("room").unwrap();
+        earlier.permission =
+            serde_json::from_value(json!({"path":{"rules":{"/room/docs":"readonly"}}})).unwrap();
+        earlier.grant = Some(serde_json::from_value(json!({"tools":["agena.fs.read"]})).unwrap());
+        config.profiles.insert(
+            "chat-only".into(),
+            PermissionProfile {
+                name: "Chat only".into(),
+                complete: true,
+                ..Default::default()
+            },
+        );
+        config.users.push(
+            serde_json::from_value(json!({
+                "platform":"agena.telegram", "tenant":"telegram", "account":"bot", "actor":"alice",
+                "resource":"room-1", "profile_id":"chat-only"
+            }))
+            .unwrap(),
+        );
+        let room = resolve(&config, "alice", "bot", "room-1");
+        assert!(room.complete);
+        assert_eq!(room.profile_ids, ["chat-only"]);
+        assert!(room.grant.tools.is_empty());
+        assert_eq!(room.permission, PermissionConfig::default().standalone());
+        let elsewhere = resolve(&config, "alice", "bot", "room-2");
+        assert!(!elsewhere.complete);
+        assert!(elsewhere.grant.tools.contains("agena.fs.write"));
+        assert_ne!(room.fingerprint, elsewhere.fingerprint);
     }
 
     #[test]

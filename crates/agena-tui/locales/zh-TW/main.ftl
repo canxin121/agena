@@ -218,7 +218,7 @@ overlay-permission-footer-details = Esc 返回
 overlay-permission-decision-heading = 選擇如何處理此請求
 overlay-permission-scope-heading = 將此決定套用於
 overlay-workbench-overview = 概覽
-overlay-permission-studio-footer = Left/Right 或 Tab/Shift+Tab 切換面板 · 方向鍵選取 · Enter 編輯 · Esc 返回
+overlay-permission-studio-footer = Ctrl+O 來源 · Left/Right 或 Tab/Shift+Tab 切換面板 · 方向鍵選取 · Enter 編輯 · Esc 返回
 overlay-permission-studio-sections = 權限區段
 overlay-permission-studio-nav = 導覽
 overlay-detail-current-value = 目前值
@@ -475,7 +475,7 @@ permission-studio-catalog-custom-search = 自定義 新建 手動 標籤 工具 
 
 overlay-settings-title = 設定
 
-overlay-settings-footer = Ctrl+R 重新整理 · 左右鍵切換面板 · Tab/Shift+Tab 循環面板 · 上下鍵選擇 · Enter 打開 · Esc 關閉
+overlay-settings-footer = Ctrl+O 來源 · Ctrl+R 重新整理 · 左右鍵切換面板 · Tab/Shift+Tab 循環面板 · 上下鍵選擇 · Enter 打開 · Esc 關閉
 
 overlay-settings-sections = 分區
 
@@ -846,7 +846,7 @@ settings-client-versions-section-summary = 運行時身份版本
 
 settings-client-versions-section-description = Provider 請求身份 Header 使用的精確兼容版本。可逐個編輯，按 Ctrl+R 從 npm 重新整理。
 
-settings-provider-workbench-label = 服務商列表
+settings-provider-workbench-label = 服務商設定
 
 settings-provider-workbench-value = {$count} 個服務商
 
@@ -888,7 +888,6 @@ permission-studio-field-tool-names = 工具名稱
 
 permission-studio-field-tool-rules = 工具規則
 
-permission-studio-command-rules-shell-only = 命令規則適用於 shell.exec、shell.spawn、shell.watch、shell.open 和 shell.write；其他工具請使用名稱規則或預設策略。
 
 permission-studio-field-prompt-json = 輸入 {$field} 的 JSON。留空可清除此覆蓋值。
 
@@ -1023,7 +1022,7 @@ permission-studio-add-path-rule = 新增路徑規則
 
 permission-studio-add-name = 新增名稱
 
-permission-studio-add-tool-rule = 新增工具規則
+permission-studio-add-command-rule = 新增命令規則
 
 permission-studio-rule-key = 鍵
 
@@ -1040,7 +1039,7 @@ overlay-providers-title = Provider 列表
 
 overlay-providers-prompt = 選擇一個 provider 進行設定
 
-overlay-provider-list-title = Provider 列表
+overlay-provider-list-title = 服務商設定
 
 overlay-provider-list-prompt = 搜尋已設定的 provider
 
@@ -1052,9 +1051,9 @@ overlay-provider-list-create-detail = 建立服務商草稿，然後設定認證
 
 overlay-provider-list-row-detail-no-model = {$adapter} · 已設定 {$count} 個 adapters
 
-overlay-provider-studio-title = Provider 設定
+overlay-provider-studio-title = 服務商設定
 
-overlay-provider-studio-header = Provider 設定
+overlay-provider-studio-header = 服務商設定
 
 overlay-provider-studio-footer = Tab/Shift+Tab 切換面板 · 方向鍵選擇 · Space 切換 · Enter 編輯 · Ctrl+D 刪除選中項 · Ctrl+R 重新整理 · Ctrl+N 新增模型 · Ctrl+A 儲存 Adapter · Ctrl+S 儲存 Provider · Esc 關閉
 
@@ -1306,7 +1305,6 @@ settings-mcp-auth-mode-updated = Agena MCP 身份驗證模式已設為 {$mode}
 settings-mcp-anonymous-access-updated = Agena MCP 匿名工具訪問策略已設為 {$policy}
 
 
-permission-studio-command-pattern-title = {$tool_name} 命令模式
 
 permission-studio-command-pattern-help = 輸入 Shell 命令 glob，例如 `git status` 或 `git push *`。
 
@@ -1502,7 +1500,7 @@ overlay-permission-rule-overview-workspace-root = 工作區根目錄
 
 overlay-workbench-details = 詳情
 overlay-permission-studio-title = 授權
-overlay-permission-studio-footer-nested = Ctrl+N 新增 · 輸入編輯 · Ctrl+E 重新命名 · Ctrl+D 刪除 · Esc 返回
+overlay-permission-studio-footer-nested = Ctrl+O 來源 · Ctrl+N 新增 · 輸入編輯 · Ctrl+E 重新命名 · Ctrl+D 刪除 · Esc 返回
 flash-permission-studio-catalog-empty = 新增規則之前至少選擇一項。
 overlay-runtime-setting-current-value = 目前覆蓋：{ $value }
 overlay-choice-clear-value = 清晰的價值
@@ -2227,7 +2225,6 @@ flash-ui-backend-queue-full = 介面後端命令佇列已滿；請等待目前�
 flash-ui-backend-unavailable = 介面後端命令服務無法使用
 help-diagnostics-kitty-helper = Kitty 輔助程式
 message-role-tool = 工具
-permission-studio-command-pattern-suffix = + 命令模式
 search-picker-preview-title = 預覽
 search-picker-search-failed = 搜尋失敗
 search-picker-no-preview = 沒有可用的預覽
@@ -3363,7 +3360,7 @@ permission-studio-rule-duplicate = 此規則已存在。
 
 permission-studio-network-json = 進階網路 JSON
 
-permission-studio-network-json-help = 編輯包含 default、allow、deny、inbound、hostLoopback 的完整網路設定。規則使用 to、protocol、ports、except。省略欄位使用拒絕或空清單；刪除 network 才恢復繼承上層。
+permission-studio-network-json-help = 編輯 version: 2 的網路欄位：default、inbound、hostLoopback、allow、deny。缺少欄位時使用本層的預設或繼承值；[] 表示本層明確使用空清單。規則使用 to、protocol、ports、except。
 
 permission-studio-network-invalid-action = 網路動作只能是 allow 或 deny。
 
@@ -3385,7 +3382,7 @@ permission-studio-network-collapse = 收合
 
 permission-studio-network-expand = 展開
 
-permission-studio-network-json-short = 編輯完整網路 JSON
+permission-studio-network-json-short = 編輯本層網路 JSON
 
 permission-studio-network-rule-form = 網路規則
 
@@ -3413,7 +3410,7 @@ permission-studio-network-saving = 正在儲存權限，請稍候。
 
 permission-studio-network-save-or-cancel = 請先儲存或取消目前的編輯。
 
-permission-studio-network-inherit-title = 繼承上層網路設定
+permission-studio-network-inherit-title = 還原全部網路繼承
 
 permission-studio-network-inherit-help = 刪除目前層級的整份網路設定，使用上層設定。
 
@@ -3480,7 +3477,17 @@ permission-studio-loopback-label = 主機回環
 permission-studio-network-controls = 網路操作
 permission-studio-add-network-rule = + 新增網路規則
 permission-studio-inherited-rule-no-local-edit = 編輯繼承規則可建立本層覆寫；重新命名和刪除僅適用於本層規則。
+settings-agent-profile-none = 恢復預設角色
+settings-agent-profile-none-detail = 一般工作階段使用 main，子代理使用 worker，並保留工作階段明確設定。
+settings-agent-profile-mode-primary = 主要工作階段
+settings-agent-profile-mode-subagent = 子代理
+settings-agent-profile-mode-all = 主要工作階段與子代理
+settings-agent-profile-source-builtin = 內建
+settings-agent-profile-source-global = 全域
+settings-agent-profile-source-workspace = 工作區
+settings-agent-profile-effective = 生效預設角色：{$profile}
 
+# AI 請求效能
 usage-performance-title = 模型效能 · 平均值
 usage-performance-tps = TPS (tok/s)
 usage-performance-ttft = 首次輸出
@@ -3500,3 +3507,55 @@ status-part-model-generation = 最近生成耗時={$value}
 status-part-model-throughput = 最近端對端速度={$value} tok/s
 session-status-tps = {$value} tok/s
 session-status-latency = 請求 {$value}
+settings-layer-source-title = 設定來源
+settings-layer-parent-value = 上層值
+settings-layer-inherit = 繼承上層
+settings-layer-local = 本層設定
+settings-layer-source-description = 繼承會跟隨上層變化；本層設定會固定目前值。
+settings-layer-group-network = 此操作套用於整個網路策略。
+settings-layer-group-tool = 此操作套用於該工具的整組規則。
+settings-layer-group-commands = 此操作套用於所有終端共用的命令規則。
+settings-layer-group-model = 此操作套用於模型及其模式設定整組。
+settings-key-source = 來源
+settings-layer-ancestor-override = 此操作套用於整個 {$path} 設定群組；恢復整組繼承後可單獨編輯此欄位。
+settings-model-source-changed = 工作階段或模型已變更，請重新開啟模型設定。
+settings-model-source-needs-model = 請先選擇一個具體模型，再將模型設定固定在本層。
+permission-studio-origin-default = 預設
+settings-layer-default-value = 預設值
+settings-layer-default = 恢復預設
+settings-layer-default-description = 恢復所選設定的內建預設值，其他設定保持不變。
+settings-layer-ancestor-default = 此操作套用整個 {$path} 設定組；還原整組預設後可單獨編輯此欄位。
+permission-studio-network-default-title = 還原全部網路預設
+permission-studio-network-default-help = 刪除本層全部網路設定，使用應用程式預設值。
+permission-studio-network-allow-list = 允許的目標
+permission-studio-network-deny-list = 禁止的目標
+permission-studio-network-list-empty = 本層使用空清單
+permission-studio-network-list-source-help = 此操作僅影響目前清單。本層空清單會覆寫預設或繼承的全部項目。
+permission-studio-default-rule-no-local-edit = 編輯預設規則可建立本層設定；重新命名和刪除僅適用於本層規則。
+
+settings-key-restore-default = 恢復預設
+
+settings-restore-default-title = 恢復 {$setting} 的預設設定？
+
+settings-restore-default-preview = 恢復後：{$value}
+
+settings-already-default = 此設定已使用預設值。
+
+settings-list-actions = 操作
+
+settings-list-actions-description = 清空此清單或恢復預設項目，其他網路設定保持不變。
+
+permission-studio-network-list-clear = 清空清單
+
+permission-studio-raw-title = {$scope} · 權限 JSON
+permission-studio-raw-unavailable = 預設權限或上層權限暫時無法取得。可在這裡查看及修改本層已儲存的權限。
+permission-studio-raw-help = 僅儲存本層的 permission 物件。輸入 JSON 物件；輸入 null 可移除本層權限設定。
+permission-studio-raw-invalid = 請輸入有效的權限 JSON 物件或 null：{$error}
+
+settings-layer-parent-global = 全域
+settings-layer-parent-config = 上層設定
+settings-layer-inherited-from = 繼承 · {$source}
+settings-layer-inherited-locked = 目前值繼承自{$source}。按 Ctrl+O 選擇「本層」後才能編輯。
+settings-network-source-group = 此來源選擇適用於全部網路預設項與兩類規則清單。編輯完整網路 JSON 前，請先選擇「本層」。
+settings-inherited-unavailable = 無法取得上層值。請明確輸入本層值，不能複製未知值。
+settings-source-unavailable = 無法取得

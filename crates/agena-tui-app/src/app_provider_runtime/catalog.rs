@@ -91,6 +91,14 @@ impl App {
     }
 
     fn open_model_chooser(&mut self, purpose: SessionModelChooserPurpose) {
+        self.open_model_chooser_with_source(purpose, false);
+    }
+
+    pub(crate) fn open_model_chooser_with_source(
+        &mut self,
+        purpose: SessionModelChooserPurpose,
+        explicit_local: bool,
+    ) {
         // The runtime override (`/model`) must work without an open session:
         // with no session it edits the run-options model stack used by the
         // next created session. When a session exists, keep the busy guard so
@@ -103,6 +111,22 @@ impl App {
             return;
         }
         let mut dialog = self.build_session_model_chooser_overlay(purpose);
+        dialog.meta.explicit_local = explicit_local;
+        dialog.meta.editable = self.settings_model_editable(purpose, explicit_local);
+        if explicit_local {
+            dialog.prompt = format!(
+                "{}\n{}",
+                ui_text::t(&self.i18n, "overlay-session-model-prompt"),
+                self.settings_model_source_prompt(purpose, true)
+            );
+        }
+        if !dialog.meta.editable {
+            let session = purpose == SessionModelChooserPurpose::RuntimeOverride;
+            dialog.prompt.push_str(&format!(
+                "\n{}",
+                crate::settings_inherited_locked_message(&self.i18n, session)
+            ));
+        }
         dialog.set_loading(false);
         dialog.empty_message = ui_text::t(&self.i18n, "overlay-picker-empty");
         match self.session_model_chooser_items() {
@@ -129,6 +153,9 @@ impl App {
                     }
                 };
                 mark_current_session_model_choice(&self.i18n, &mut items, current_model.as_ref());
+                for item in &mut items {
+                    item.disabled = !dialog.meta.editable;
+                }
                 dialog.replace_items(items);
                 agena_tui::model_chooser::refresh(&mut dialog, true);
             }

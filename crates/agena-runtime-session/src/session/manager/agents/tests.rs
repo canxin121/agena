@@ -54,6 +54,7 @@ impl SubagentProbe {
 struct ProbeProvider {
     model: ModelId,
     requests: tokio::sync::mpsc::UnboundedSender<Option<u32>>,
+    models: Arc<StdMutex<Vec<String>>>,
     gate: Arc<Semaphore>,
     reply: Arc<StdMutex<Option<agena_provider::CompletionUsage>>>,
     panic_in_provider: Arc<std::sync::atomic::AtomicBool>,
@@ -80,6 +81,7 @@ impl ModelRuntime for ProbeProvider {
         &self,
         request: agena_provider::CompletionRequest,
     ) -> Result<CompletionResponse, ProviderError> {
+        self.models.lock().unwrap().push(request.model.to_string());
         self.requests.send(request.max_output_tokens).unwrap();
         self.gate.acquire().await.unwrap().forget();
         assert!(
@@ -115,6 +117,7 @@ struct Fixture {
     child: SessionId,
     options: SessionRunOptions,
     requests: tokio::sync::mpsc::UnboundedReceiver<Option<u32>>,
+    models: Arc<StdMutex<Vec<String>>>,
     gate: Arc<Semaphore>,
     reply: Arc<StdMutex<Option<agena_provider::CompletionUsage>>>,
     panic_in_provider: Arc<std::sync::atomic::AtomicBool>,
@@ -209,6 +212,7 @@ impl Fixture {
             None,
         );
         let (tx, requests) = tokio::sync::mpsc::unbounded_channel();
+        let models = Arc::new(StdMutex::new(Vec::new()));
         let gate = Arc::new(Semaphore::new(0));
         let reply = Arc::new(StdMutex::new(None));
         let panic_in_provider = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -216,6 +220,7 @@ impl Fixture {
         providers.register(ProbeProvider {
             model: ModelId::new("probe"),
             requests: tx,
+            models: models.clone(),
             gate: gate.clone(),
             reply: reply.clone(),
             panic_in_provider: panic_in_provider.clone(),
@@ -250,6 +255,7 @@ impl Fixture {
             child,
             options,
             requests,
+            models,
             gate,
             reply,
             panic_in_provider,
@@ -626,6 +632,7 @@ async fn a_direct_turn_queued_after_delegation_waits_for_exactly_one_previous_se
             launch_call_id: None,
             name: "worker".into(),
             prompt: "Delegated first task".into(),
+            profile: None,
             commands: Vec::new(),
             selection: agena_domain::ModelSelectionConfig {
                 provider: Some("agent-lifecycle-test".into()),
@@ -685,6 +692,7 @@ async fn denied_subagent_launch_settles_failed_without_running_a_model() {
             launch_call_id: None,
             name: "worker".into(),
             prompt: "This work must not execute".into(),
+            profile: None,
             commands: Vec::new(),
             selection: agena_domain::ModelSelectionConfig {
                 provider: Some("agent-lifecycle-test".into()),
@@ -773,6 +781,7 @@ async fn delegated_profile_keeps_the_parent_permission_ceiling() {
             AgentSpawnRequest {
                 name: "profile_worker".into(),
                 prompt: "Inspect the project".into(),
+                profile: Some("builder".into()),
                 commands: vec![],
                 selection: None,
                 timeout_ms: None,
@@ -891,6 +900,7 @@ async fn delegated_profile_freezes_parent_permissions_under_a_wider_ceiling() {
             AgentSpawnRequest {
                 name: "profile_worker".into(),
                 prompt: "Inspect the project".into(),
+                profile: Some("review".into()),
                 commands: vec![],
                 selection: None,
                 timeout_ms: None,
@@ -989,5 +999,527 @@ async fn delegated_profile_freezes_parent_permissions_under_a_wider_ceiling() {
     assert_eq!(saved.permission_ceiling_layers.len(), 1);
     fixture.gate.add_permits(1);
     fixture.idle().await;
+    fixture.close().await;
+}
+
+fn role_spawn(name: &str, profile: Option<&str>) -> AgentSpawnRequest {
+    AgentSpawnRequest {
+        name: name.into(),
+        prompt: "Inspect the role behavior and report evidence".into(),
+        profile: profile.map(ToOwned::to_owned),
+        commands: Vec::new(),
+        selection: None,
+        timeout_ms: None,
+        max_tokens: None,
+        max_cost_microusd: None,
+    }
+}
+
+#[test]
+fn subagent_profile_selection_uses_defaults_and_rejects_primary_roles() {
+    let mut config = RuntimeSessionManagerConfig::default();
+    assert_eq!(
+        resolve_subagent_profile_name(&config, None).unwrap(),
+        "worker"
+    );
+    config.default_subagent_profile = Some("explore".into());
+    assert_eq!(
+        resolve_subagent_profile_name(&config, None).unwrap(),
+        "explore"
+    );
+    assert_eq!(
+        resolve_subagent_profile_name(&config, Some("")).unwrap(),
+        "worker"
+    );
+    assert_eq!(
+        resolve_subagent_profile_name(&config, Some("reviewer")).unwrap(),
+        "reviewer"
+    );
+    assert!(
+        resolve_subagent_profile_name(&config, Some("main"))
+            .unwrap_err()
+            .to_string()
+            .contains("cannot be used for a subagent")
+    );
+    config.profiles.insert(
+        "hidden_probe".into(),
+        agena_runtime_config::AgentProfileConfig {
+            extends: Some("explore".into()),
+            hidden: Some(true),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        resolve_subagent_profile_name(&config, Some("hidden_probe")).unwrap(),
+        "hidden_probe"
+    );
+    let error = resolve_subagent_profile_name(&config, Some("missing"))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("Available subagent profiles"));
+    assert!(error.contains("explore"));
+    assert!(!error.contains("hidden_probe"));
+}
+
+#[tokio::test]
+async fn delegated_explore_profile_controls_prompt_permissions_and_models_through_followup() {
+    let mut fixture = Fixture::new(Default::default()).await;
+    let mut state = (*fixture.manager.state.load_full()).clone();
+    state.config.sandbox_enabled = false;
+    // A specific global write rule and a parent override must not widen a
+    // child role whose independent boundary is read-only.
+    state.config.permission = serde_json::from_value(serde_json::json!({
+        "path":{"workspace":"readwrite","external":"deny","rules":{"/agent-lifecycle-tests/file.rs":"readwrite"}}
+    })).unwrap();
+    state.config.profiles.get_mut("explore").unwrap().model =
+        Some(agena_domain::ModelSelectionConfig {
+            provider: Some("agent-lifecycle-test".into()),
+            model: Some("explore-v1".into()),
+            ..Default::default()
+        });
+    fixture.manager.state.store(Arc::new(state));
+    fixture
+        .manager
+        .kernel()
+        .sessions
+        .configure(
+            RequestId::new(),
+            fixture.parent,
+            SessionConfigurationChange {
+                permission: Some(
+                    serde_json::from_value(serde_json::json!({
+                        "path":{"workspace":"readwrite","external":"readwrite"}
+                    }))
+                    .unwrap(),
+                ),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    fixture
+        .manager
+        .kernel()
+        .sessions
+        .update_selection(
+            RequestId::new(),
+            fixture.parent,
+            SelectionChange::Model(Some(ModelRef::new("agent-lifecycle-test", "parent-model"))),
+        )
+        .await
+        .unwrap();
+    let handle = fixture
+        .manager
+        .spawn_agent(
+            fixture.parent.get(),
+            None,
+            role_spawn("exploration", Some("explore")),
+        )
+        .await
+        .unwrap();
+    assert_eq!(handle.profile.as_deref(), Some("explore"));
+    fixture.child = SessionId::try_from(handle.agent_id).unwrap();
+    fixture.wait_provider().await;
+    assert_eq!(
+        fixture.models.lock().unwrap().last().map(String::as_str),
+        Some("explore-v1")
+    );
+    let saved = fixture
+        .manager
+        .kernel()
+        .reader
+        .configuration(fixture.child)
+        .await
+        .unwrap();
+    assert_eq!(saved.profile.as_deref(), Some("explore"));
+    assert!(saved.permission.is_empty());
+    assert_eq!(
+        saved.selection_defaults.model.as_deref(),
+        Some("parent-model")
+    );
+    assert!(
+        fixture
+            .manager
+            .kernel()
+            .reader
+            .metadata(fixture.child)
+            .await
+            .unwrap()
+            .selection
+            .is_none()
+    );
+    let context = fixture
+        .manager
+        .execution_context_value(fixture.child)
+        .await
+        .unwrap();
+    let executor = fixture
+        .manager
+        .tool_executor()
+        .for_session_context_async(&context)
+        .await;
+    assert!(matches!(
+        executor
+            .path_permission_check(
+                agena_domain::AccessKind::Read,
+                "/agent-lifecycle-tests/file.rs"
+            )
+            .decision,
+        agena_domain::PermissionDecision::Allow
+    ));
+    assert!(matches!(
+        executor
+            .path_permission_check(
+                agena_domain::AccessKind::Write,
+                "/agent-lifecycle-tests/file.rs"
+            )
+            .decision,
+        agena_domain::PermissionDecision::Deny { .. }
+    ));
+    let preview = fixture
+        .manager
+        .prompt_preview(
+            fixture.child,
+            &ModelRef::new("agent-lifecycle-test", "explore-v1"),
+        )
+        .await
+        .unwrap();
+    assert!(preview.text.contains("# Explore role"));
+    assert!(!preview.text.contains("# Main role"));
+    fixture.gate.add_permits(1);
+    fixture.idle().await;
+    // A role model update takes effect without being pinned by inherited
+    // parent settings or the previous resolved request.
+    let mut state = (*fixture.manager.state.load_full()).clone();
+    state
+        .config
+        .profiles
+        .get_mut("explore")
+        .unwrap()
+        .model
+        .as_mut()
+        .unwrap()
+        .model = Some("explore-v2".into());
+    fixture.manager.state.store(Arc::new(state));
+    let handle = fixture
+        .manager
+        .followup_agent(
+            fixture.parent.get(),
+            None,
+            agena_plugin_host::sdk::host_api::AgentMessageRequest {
+                target: "exploration".into(),
+                message: "Continue the investigation".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(handle.profile.as_deref(), Some("explore"));
+    fixture.wait_provider().await;
+    assert_eq!(
+        fixture.models.lock().unwrap().last().map(String::as_str),
+        Some("explore-v2")
+    );
+    fixture.gate.add_permits(1);
+    fixture.idle().await;
+    // Removing the role's model restores its captured parent fallback, even
+    // if the parent's own explicit model has changed in the meantime.
+    fixture
+        .manager
+        .kernel()
+        .sessions
+        .update_selection(
+            RequestId::new(),
+            fixture.parent,
+            SelectionChange::Model(Some(ModelRef::new(
+                "agent-lifecycle-test",
+                "different-parent-model",
+            ))),
+        )
+        .await
+        .unwrap();
+    let mut state = (*fixture.manager.state.load_full()).clone();
+    state.config.profiles.get_mut("explore").unwrap().model = None;
+    fixture.manager.state.store(Arc::new(state));
+    fixture
+        .manager
+        .followup_agent(
+            fixture.parent.get(),
+            None,
+            agena_plugin_host::sdk::host_api::AgentMessageRequest {
+                target: "exploration".into(),
+                message: "Report the final evidence".into(),
+            },
+        )
+        .await
+        .unwrap();
+    fixture.wait_provider().await;
+    assert_eq!(
+        fixture.models.lock().unwrap().last().map(String::as_str),
+        Some("parent-model")
+    );
+    assert!(
+        fixture
+            .manager
+            .kernel()
+            .reader
+            .metadata(fixture.child)
+            .await
+            .unwrap()
+            .selection
+            .is_none()
+    );
+    let boundary = fixture
+        .manager
+        .kernel()
+        .reader
+        .active_executions(fixture.child, None, 1)
+        .await
+        .unwrap()
+        .executions[0]
+        .message_id;
+    fixture.gate.add_permits(1);
+    fixture.idle().await;
+    // Branches drop the agent identity, but retain the selected role and the
+    // inherited model fallback even when the runtime has no default model.
+    assert!(
+        fixture
+            .manager
+            .state
+            .load()
+            .config
+            .default_selection
+            .is_empty()
+    );
+    let fork = fixture
+        .manager
+        .kernel()
+        .sessions
+        .fork(RequestId::new(), fixture.child, boundary)
+        .await
+        .unwrap()
+        .value
+        .id;
+    let rewind = fixture
+        .manager
+        .kernel()
+        .sessions
+        .rewind(RequestId::new(), fixture.child, boundary)
+        .await
+        .unwrap()
+        .value
+        .session
+        .id;
+    for branch in [fork, rewind] {
+        let stored = fixture
+            .manager
+            .kernel()
+            .reader
+            .configuration(branch)
+            .await
+            .unwrap();
+        assert_eq!(stored.profile.as_deref(), Some("explore"));
+        assert!(stored.agent.is_none());
+        assert_eq!(
+            stored.selection_defaults.model.as_deref(),
+            Some("parent-model")
+        );
+        let projected = fixture.manager.get_session(branch.get()).await.unwrap();
+        assert_eq!(projected.execution.profile.as_deref(), Some("explore"));
+        assert!(!projected.execution.profile_is_default);
+        assert_eq!(
+            projected.execution.selection.model.as_deref(),
+            Some("parent-model")
+        );
+        assert_eq!(
+            fixture
+                .manager
+                .session_run_options(branch.get())
+                .await
+                .unwrap()
+                .model,
+            ModelRef::new("agent-lifecycle-test", "parent-model")
+        );
+    }
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn saved_roles_survive_mode_changes_and_clear_to_relation_defaults() {
+    let fixture = Fixture::new(Default::default()).await;
+    let parent = fixture
+        .manager
+        .get_session(fixture.parent.get())
+        .await
+        .unwrap();
+    assert_eq!(parent.execution.profile.as_deref(), Some("main"));
+    assert!(parent.execution.profile_is_default);
+    let child = fixture
+        .manager
+        .get_session(fixture.child.get())
+        .await
+        .unwrap();
+    assert_eq!(child.execution.profile.as_deref(), Some("worker"));
+    assert!(child.execution.profile_is_default);
+    assert!(
+        fixture
+            .manager
+            .set_session_profile(fixture.parent.get(), Some("explore".into()))
+            .await
+            .is_err()
+    );
+    assert!(
+        fixture
+            .manager
+            .set_session_profile(fixture.child.get(), Some("main".into()))
+            .await
+            .is_err()
+    );
+    fixture
+        .manager
+        .set_session_profile(fixture.child.get(), Some("explore".into()))
+        .await
+        .unwrap();
+    let mut state = (*fixture.manager.state.load_full()).clone();
+    state.config.profiles.get_mut("explore").unwrap().mode =
+        Some(agena_runtime_config::AgentProfileMode::Primary);
+    state.config.default_profile = Some("reviewer".into());
+    state.config.default_subagent_profile = Some("reviewer".into());
+    fixture.manager.state.store(Arc::new(state));
+    let child = fixture
+        .manager
+        .get_session(fixture.child.get())
+        .await
+        .unwrap();
+    assert_eq!(child.execution.profile.as_deref(), Some("explore"));
+    assert!(!child.execution.profile_is_default);
+    assert!(
+        fixture
+            .manager
+            .set_session_profile(fixture.child.get(), Some("explore".into()))
+            .await
+            .is_err()
+    );
+    fixture
+        .manager
+        .set_session_profile(fixture.child.get(), None)
+        .await
+        .unwrap();
+    let child = fixture
+        .manager
+        .get_session(fixture.child.get())
+        .await
+        .unwrap();
+    assert_eq!(child.execution.profile.as_deref(), Some("worker"));
+    assert!(child.execution.profile_is_default);
+    assert!(
+        fixture
+            .manager
+            .kernel()
+            .reader
+            .configuration(fixture.child)
+            .await
+            .unwrap()
+            .profile
+            .is_none()
+    );
+    fixture
+        .manager
+        .set_session_profile(fixture.parent.get(), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture
+            .manager
+            .get_session(fixture.parent.get())
+            .await
+            .unwrap()
+            .execution
+            .profile
+            .as_deref(),
+        Some("main")
+    );
+    fixture
+        .manager
+        .set_session_profile(fixture.child.get(), Some("reviewer".into()))
+        .await
+        .unwrap();
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn default_subagent_profiles_are_applied_and_invalid_roles_leave_no_child() {
+    let mut fixture = Fixture::new(Default::default()).await;
+    fixture
+        .manager
+        .kernel()
+        .sessions
+        .update_selection(
+            RequestId::new(),
+            fixture.parent,
+            SelectionChange::Model(Some(ModelRef::new("agent-lifecycle-test", "probe"))),
+        )
+        .await
+        .unwrap();
+    for name in ["main", "missing"] {
+        assert!(
+            fixture
+                .manager
+                .spawn_agent(
+                    fixture.parent.get(),
+                    None,
+                    role_spawn("invalid_role", Some(name))
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            fixture
+                .manager
+                .kernel()
+                .reader
+                .find_agent(fixture.parent, "invalid_role")
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+    for (name, configured, requested, expected) in [
+        ("standard_worker", "worker", None, "worker"),
+        ("default_explore", "explore", None, "explore"),
+        ("factory_worker", "explore", Some(""), "worker"),
+    ] {
+        let mut state = (*fixture.manager.state.load_full()).clone();
+        state.config.default_subagent_profile = Some(configured.into());
+        fixture.manager.state.store(Arc::new(state));
+        let handle = fixture
+            .manager
+            .spawn_agent(fixture.parent.get(), None, role_spawn(name, requested))
+            .await
+            .unwrap();
+        assert_eq!(handle.profile.as_deref(), Some(expected));
+        fixture.child = SessionId::try_from(handle.agent_id).unwrap();
+        fixture.wait_provider().await;
+        let stored = fixture
+            .manager
+            .kernel()
+            .reader
+            .configuration(fixture.child)
+            .await
+            .unwrap();
+        assert_eq!(stored.profile.as_deref(), Some(expected));
+        assert!(
+            fixture
+                .manager
+                .kernel()
+                .reader
+                .metadata(fixture.child)
+                .await
+                .unwrap()
+                .selection
+                .is_none()
+        );
+        fixture.gate.add_permits(1);
+        fixture.idle().await;
+    }
     fixture.close().await;
 }

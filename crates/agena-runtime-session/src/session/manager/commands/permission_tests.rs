@@ -48,6 +48,93 @@ fn invalid_network(cidr: &str) -> PermissionConfig {
 }
 
 #[tokio::test]
+async fn a_session_links_a_live_permission_profile_without_overwriting_saved_custom_rules() {
+    let access_control = serde_json::from_value(serde_json::json!({"profiles": {
+        "reader": {"name": "Reader", "complete":true, "permission":{"tools":{"default":"ask"}}}
+    }}))
+    .unwrap();
+    let (manager, session) = fixture_with_config(RuntimeSessionManagerConfig {
+        access_control,
+        ..Default::default()
+    })
+    .await;
+    let custom = paths(&[("<workspace>/output", PathPermissionMode::Readwrite)]);
+    manager
+        .set_session_permission(session.get(), custom.clone())
+        .await
+        .unwrap();
+    assert!(
+        manager
+            .set_session_permission_profile(session.get(), Some("missing".into()))
+            .await
+            .is_err()
+    );
+    manager
+        .set_session_permission_profile(session.get(), Some("reader".into()))
+        .await
+        .unwrap();
+    let snapshot = manager
+        .kernel()
+        .reader
+        .control_snapshot(session, 1)
+        .await
+        .unwrap();
+    let context = crate::SessionQueryService::execution_context(&manager, &snapshot).unwrap();
+    assert_eq!(context.permission_profile.as_deref(), Some("reader"));
+    assert_eq!(context.selected_permission, custom);
+    assert!(context.effective_permission.path.unwrap().rules.is_empty());
+    assert_eq!(
+        context.effective_permission.tools.unwrap().default,
+        Some(agena_domain::PermissionMode::Ask)
+    );
+
+    let state = manager.state.load_full();
+    let mut config = state.config.clone();
+    config
+        .access_control
+        .profiles
+        .get_mut("reader")
+        .unwrap()
+        .permission
+        .tools
+        .as_mut()
+        .unwrap()
+        .default = Some(agena_domain::PermissionMode::Deny);
+    manager.reconfigure(
+        state.providers.clone(),
+        state.governor.clone(),
+        state.processor.clone(),
+        state.executor.clone(),
+        config,
+    );
+    let context = crate::SessionQueryService::execution_context(&manager, &snapshot).unwrap();
+    assert_eq!(
+        context.effective_permission.tools.unwrap().default,
+        Some(agena_domain::PermissionMode::Deny)
+    );
+
+    manager
+        .set_session_permission_profile(session.get(), None)
+        .await
+        .unwrap();
+    let snapshot = manager
+        .kernel()
+        .reader
+        .control_snapshot(session, 1)
+        .await
+        .unwrap();
+    assert_eq!(snapshot.configuration.permission_profile, None);
+    assert_eq!(snapshot.configuration.permission, custom);
+    manager
+        .kernel_runtime
+        .ports
+        .clone()
+        .shutdown()
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn network_editor_context_keeps_parent_distinct_from_selected_offline_policy() {
     let parent: PermissionConfig =
         serde_json::from_value(serde_json::json!({"network":{"default":"allow"}})).unwrap();

@@ -7,6 +7,7 @@
 use super::*;
 use agena_assistant::bot::*;
 use agena_domain::SessionOwner;
+use agena_prompt_layers::{FragmentId, PromptLayer, PromptScope};
 use agena_storage::{BotRecord, BotRepositoryError};
 use caseless::Caseless;
 use uuid::Uuid;
@@ -81,6 +82,10 @@ fn profile(record: BotRecord) -> BotProfile {
         name: record.name,
         persona: BotPersona {
             instructions: record.instructions,
+            prompts: (!record.prompt_ids.is_empty()).then_some(BotPromptSelection {
+                ids: record.prompt_ids,
+                publish_to_channels: record.publish_prompts,
+            }),
         },
         avatar: record.avatar,
         revision: record.revision,
@@ -92,11 +97,14 @@ fn profile(record: BotRecord) -> BotProfile {
 }
 
 fn record(profile: &BotProfile) -> BotRecord {
+    let prompts = profile.persona.prompts.clone().unwrap_or_default();
     BotRecord {
         id: profile.id,
         name: profile.name.clone(),
         name_folded: folded_name(&profile.name),
         instructions: profile.persona.instructions.clone(),
+        prompt_ids: prompts.ids,
+        publish_prompts: prompts.publish_to_channels,
         avatar: profile.avatar.clone(),
         revision: profile.revision,
         archived: profile.archived,
@@ -105,9 +113,63 @@ fn record(profile: &BotProfile) -> BotRecord {
     }
 }
 
+fn prompt_layer(ids: &[String]) -> Result<PromptLayer, AppError> {
+    let order = ids
+        .iter()
+        .map(|id| FragmentId::parse(id))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| invalid(&error.to_string()))?;
+    let layer = PromptLayer {
+        order,
+        ..Default::default()
+    };
+    layer
+        .validate()
+        .map_err(|error| invalid(&error.to_string()))?;
+    Ok(layer)
+}
+
 impl SessionManager {
     fn bots(&self) -> &dyn agena_storage::BotRepository {
         self.kernel_runtime.bots.as_ref()
+    }
+
+    fn validate_bot_prompt_selection(
+        &self,
+        selection: Option<&BotPromptSelection>,
+    ) -> Result<(), AppError> {
+        let Some(selection) = selection.filter(|selection| !selection.ids.is_empty()) else {
+            return Ok(());
+        };
+        let state = self.global_state.load();
+        let prompts = &state.config.prompts;
+        let library = prompts
+            .library(PromptScope::Global)
+            .map_err(|error| invalid(&error.to_string()))?;
+        for id in prompt_layer(&selection.ids)?.order {
+            if !library.contains_key(&id) && !prompts.global.inline.iter().any(|part| part.id == id)
+            {
+                return Err(invalid(&format!(
+                    "Bot prompt `{id}` is missing from the global prompt library"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    pub(in crate::session::manager) async fn bot_prompt_layer(
+        &self,
+        owner: Option<&SessionOwner>,
+        relation: agena_domain::SessionRelationKind,
+    ) -> Result<Option<PromptLayer>, AppError> {
+        let Some(owner) = owner.filter(|_| !relation.is_subagent()) else {
+            return Ok(None);
+        };
+        let record = self.bots().get(owner.bot).await.map_err(repository_error)?;
+        if record.prompt_ids.is_empty() || (!owner.surface.is_local() && !record.publish_prompts) {
+            return Ok(None);
+        }
+        prompt_layer(&record.prompt_ids).map(Some)
     }
 
     /// Short instance-wide gate for Bot creation and first-open.
@@ -289,6 +351,7 @@ impl SessionManager {
         if let Some(profile) = self.replay(&key, &create).await? {
             return Ok(profile);
         }
+        self.validate_bot_prompt_selection(persona.prompts.as_ref())?;
         if self.bots().count().await.map_err(repository_error)? >= MAX_BOTS {
             return Err(repository_error(BotRepositoryError::Capacity));
         }
@@ -344,7 +407,11 @@ impl SessionManager {
             return Err(repository_error(BotRepositoryError::Conflict));
         }
         let name = validate_name(&update.name, &update.persona)?;
-        let persona = update.persona.clone();
+        self.validate_bot_prompt_selection(update.persona.prompts.as_ref())?;
+        let mut persona = update.persona.clone();
+        if persona.prompts.is_none() {
+            persona.prompts = current.persona.prompts.clone();
+        }
         let avatar = match update.avatar.as_ref() {
             None => current.avatar.clone(),
             Some(None) => None,

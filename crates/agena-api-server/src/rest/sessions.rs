@@ -210,10 +210,19 @@ pub async fn replace_session_permission(
     Json(request): Json<SessionPermissionUpdateRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
     assert_if_match_session_version(&state, session_id, &headers).await?;
-    let permission = request.permission.into();
-    Ok(Json(
-        state.set_session_permission(session_id, permission).await?,
-    ))
+    let updated = match request {
+        SessionPermissionUpdateRequest::Custom { permission } => {
+            state
+                .set_session_permission(session_id, permission.into())
+                .await?
+        }
+        SessionPermissionUpdateRequest::Profile { permission_profile } => {
+            state
+                .set_session_permission_profile(session_id, permission_profile)
+                .await?
+        }
+    };
+    Ok(Json(updated))
 }
 
 #[tracing::instrument(skip_all)]

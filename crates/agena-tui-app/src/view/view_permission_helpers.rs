@@ -2,37 +2,84 @@ pub(crate) struct PermissionStudioColumns {
     label: usize,
     value: usize,
     source: usize,
+    global: bool,
+    parent_source: String,
+}
+
+impl PermissionStudioColumns {
+    pub(crate) fn source_range(&self) -> std::ops::Range<usize> {
+        let start = self.label + self.value + 2;
+        start..start + self.source
+    }
 }
 
 pub(crate) fn permission_studio_columns(
     i18n: &I18n,
     dialog: &crate::PermissionStudioOverlay,
+    section: &crate::PermissionStudioSection,
     width: usize,
 ) -> PermissionStudioColumns {
-    let items = dialog
-        .state
-        .sections()
+    let parent_source = crate::settings_inherited_source_label(
+        i18n,
+        matches!(
+            dialog.source,
+            crate::PermissionStudioSource::Session { .. }
+                | crate::PermissionStudioSource::EffectiveSession { .. }
+        ),
+    );
+    let global = matches!(dialog.source, crate::PermissionStudioSource::GlobalConfig);
+    let value = section
+        .items
         .iter()
-        .flat_map(|section| &section.items)
-        .filter(|item| item.source.is_some());
-    let value = items
-        .clone()
         .map(|item| UnicodeWidthStr::width(sanitize_display_text(&item.value).as_str()))
         .max()
         .unwrap_or(0)
-        .min(width / 3 + 1);
-    let source = items
+        .min(width / 3);
+    let source = section
+        .items
+        .iter()
         .filter_map(|item| item.source)
         .map(|source| {
-            UnicodeWidthStr::width(crate::permission_studio_source_label(i18n, source).as_str())
+            if global {
+                if source == crate::PermissionStudioValueSource::Current {
+                    3
+                } else {
+                    0
+                }
+            } else if source == crate::PermissionStudioValueSource::Inherited {
+                UnicodeWidthStr::width(parent_source.as_str())
+            } else {
+                UnicodeWidthStr::width(crate::permission_studio_source_label(i18n, source).as_str())
+            }
         })
         .max()
         .unwrap_or(0)
-        .min(width / 3);
+        .min(width / 2);
+    let label_budget = width.saturating_sub(value + source + 2);
+    let has_sources = section.items.iter().any(|item| item.source.is_some());
+    let label = section
+        .items
+        .iter()
+        .filter(|item| !has_sources || item.source.is_some())
+        .map(|item| {
+            UnicodeWidthStr::width(
+                sanitize_display_text(&permission_studio_table_label(
+                    item,
+                    section.id,
+                    label_budget,
+                ))
+                .as_str(),
+            )
+        })
+        .max()
+        .unwrap_or(0)
+        .min(label_budget);
     PermissionStudioColumns {
-        label: width.saturating_sub(value + source + 2),
+        label,
         value,
         source,
+        global,
+        parent_source,
     }
 }
 
@@ -41,6 +88,7 @@ pub(crate) fn permission_studio_dense_line(
     item: &PermissionStudioItem,
     section_id: PermissionStudioSectionId,
     columns: &PermissionStudioColumns,
+    editable: bool,
     width: usize,
 ) -> ratatui::text::Line<'static> {
     use ratatui::{
@@ -48,7 +96,11 @@ pub(crate) fn permission_studio_dense_line(
         text::{Line, Span},
     };
     let muted = Style::default().fg(agena_tui_components::theme::muted_color());
-    let value_style = Style::default().add_modifier(Modifier::BOLD);
+    let value_style = if editable {
+        Style::default().add_modifier(Modifier::BOLD)
+    } else {
+        muted.add_modifier(Modifier::DIM)
+    };
     if let Some(source) = item.source {
         let label = permission_studio_table_label(item, section_id, columns.label);
         return Line::from(vec![
@@ -61,7 +113,17 @@ pub(crate) fn permission_studio_dense_line(
             Span::raw(" "),
             Span::styled(
                 permission_studio_cell(
-                    &crate::permission_studio_source_label(i18n, source),
+                    &if columns.global {
+                        if source == crate::PermissionStudioValueSource::Current {
+                            "[↺]".to_owned()
+                        } else {
+                            String::new()
+                        }
+                    } else if source == crate::PermissionStudioValueSource::Inherited {
+                        columns.parent_source.clone()
+                    } else {
+                        crate::permission_studio_source_label(i18n, source)
+                    },
                     columns.source,
                 ),
                 muted,
@@ -236,3 +298,63 @@ use super::{
     provider_studio_main_field_value, sanitize_display_text,
 };
 use crate::ui_text;
+
+#[cfg(test)]
+mod inheritance_render_tests {
+    use super::*;
+    #[test]
+    fn inherited_permission_value_and_parent_source_render_muted() {
+        use ratatui::{Terminal, backend::TestBackend, style::Modifier, widgets::Paragraph};
+        let i18n = I18n::english();
+        let columns = PermissionStudioColumns {
+            label: 18,
+            value: 14,
+            source: 30,
+            global: false,
+            parent_source: crate::settings_inherited_source_label(&i18n, true),
+        };
+        for editable in [false, true] {
+            let item = PermissionStudioItem {
+                label: "Workspace files".into(),
+                value: "λReadWrite".into(),
+                source: Some(if editable {
+                    crate::PermissionStudioValueSource::Current
+                } else {
+                    crate::PermissionStudioValueSource::Inherited
+                }),
+                action: crate::PermissionStudioAction::EditMode(
+                    crate::PermissionStudioModeTarget::PathWorkspace,
+                ),
+            };
+            let line = permission_studio_dense_line(
+                &i18n,
+                &item,
+                PermissionStudioSectionId::PathDefaults,
+                &columns,
+                editable,
+                80,
+            );
+            let mut terminal = Terminal::new(TestBackend::new(80, 2)).unwrap();
+            terminal
+                .draw(|frame| frame.render_widget(Paragraph::new(line), frame.area()))
+                .unwrap();
+            let buffer = terminal.backend().buffer();
+            let text = buffer
+                .content
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<String>();
+            assert!(text.contains("λReadWrite"));
+            let cell = buffer
+                .content
+                .iter()
+                .find(|cell| cell.symbol() == "λ")
+                .unwrap();
+            assert_eq!(cell.modifier.contains(Modifier::DIM), !editable);
+            if !editable {
+                assert_eq!(cell.fg, agena_tui_components::theme::muted_color());
+                assert!(text.contains("Parent configuration"));
+            }
+        }
+    }
+}

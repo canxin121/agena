@@ -13,18 +13,32 @@ fn shell_policy(value: serde_json::Value) -> ToolPermissionPolicy {
 #[test]
 fn command_rules_keep_document_order_including_the_catch_all() {
     let policy = shell_policy(json!({"tools": {"rules": {
-        "agena.shell.exec": {"*": "allow", "git push *": "deny"}
+        "shell.*": {"*": "allow", "git push *": "deny"}
     }}}));
+    for tool in [
+        "agena.shell.exec",
+        "agena.shell.spawn",
+        "agena.shell.watch",
+        "agena.shell.open",
+        "agena.shell.write",
+    ] {
+        assert!(
+            matches!(
+                policy.check_tool(tool, Some("git push origin main"), &[ToolTag::Shell]),
+                PermissionDecision::Deny { .. }
+            ),
+            "{tool}"
+        );
+        assert!(
+            matches!(
+                policy.check_tool(tool, Some("git status"), &[ToolTag::Shell]),
+                PermissionDecision::Allow
+            ),
+            "{tool}"
+        );
+    }
     assert!(matches!(
-        policy.check_tool(
-            "agena.shell.exec",
-            Some("git push origin main"),
-            &[ToolTag::Shell]
-        ),
-        PermissionDecision::Deny { .. }
-    ));
-    assert!(matches!(
-        policy.check_tool("agena.shell.exec", Some("git status"), &[ToolTag::Shell]),
+        policy.check_tool("agena.monitor.start", None, &[ToolTag::Network]),
         PermissionDecision::Allow
     ));
     let later_broad = shell_policy(json!({"tools": {"rules": {
@@ -75,7 +89,7 @@ fn named_decisions_override_class_defaults() {
 fn command_allows_do_not_approve_arbitrary_persistent_terminal_input() {
     let policy = shell_policy(json!({"tools": {
         "names": {"agena.shell.write": "ask"},
-        "rules": {"agena.shell.write": {"*": "allow"}}
+        "rules": {"shell.*": {"*": "allow"}}
     }}));
     assert!(matches!(
         policy.check_tool(
@@ -88,11 +102,36 @@ fn command_allows_do_not_approve_arbitrary_persistent_terminal_input() {
 }
 
 #[test]
+fn legacy_command_lists_share_restrictions_across_terminal_tools() {
+    let policy = shell_policy(json!({"tools": {"rules": {
+        "shell.exec": {"git push *": "deny", "routine": "allow"},
+        "agena_shell_spawn": {"git *": "allow", "ROUTINE": "ask"},
+        "agena.shell.watch": {"git status": "ask"},
+    }}}));
+    for tool in [
+        "agena.shell.exec",
+        "agena.shell.spawn",
+        "agena.shell.open",
+        "agena.shell.write",
+    ] {
+        assert!(matches!(
+            policy.check_tool(tool, Some("git push origin main"), &[ToolTag::Shell]),
+            PermissionDecision::Deny { .. }
+        ));
+        assert!(matches!(
+            policy.check_tool(tool, Some("git status"), &[ToolTag::Shell]),
+            PermissionDecision::Ask { .. }
+        ));
+    }
+}
+
+#[test]
 fn unsupported_tool_conditions_fail_instead_of_being_ignored() {
     for value in [
         json!({"tools": {"rules": {"agena.fs.read": {"**/secret/**": "deny"}}}}),
         json!({"tools": {"rules": {"*": "deny"}}}),
         json!({"tools": {"rules": {"*": {"routine": "allow"}}}}),
+        json!({"tools": {"rules": {"shell.*": "allow"}}}),
         json!({"tools": {"rules": {"agena.shell.exec": {"": "deny"}}}}),
         json!({"tools": {"rules": {"agena.shell.exec": {"123": "deny"}}}}),
         json!({"tools": {"names": {"agena.fs.*": "allow"}}}),

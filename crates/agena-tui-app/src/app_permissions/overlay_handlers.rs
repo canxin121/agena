@@ -105,6 +105,10 @@ impl App {
                 self.refresh_settings_studio_overlay(dialog);
                 false
             }
+            agena_tui_settings::SettingsStudioEffect::Source => {
+                self.open_settings_studio_source(dialog);
+                false
+            }
             agena_tui_settings::SettingsStudioEffect::Activate => {
                 self.activate_settings_studio_selection(dialog)
             }
@@ -151,6 +155,10 @@ impl App {
                         };
                     },
                 );
+                false
+            }
+            agena_tui_settings::SettingsStudioEffect::Source => {
+                self.open_settings_studio_source(dialog);
                 false
             }
             agena_tui_settings::SettingsStudioEffect::Activate => {
@@ -246,6 +254,10 @@ impl App {
             }
             Some(KeyAction::PermissionRename) => {
                 self.open_permission_studio_rename_current(dialog);
+                false
+            }
+            Some(KeyAction::SettingsSource) => {
+                self.open_permission_studio_source(dialog);
                 false
             }
             Some(KeyAction::Activate) => self.activate_permission_studio_selection(dialog),

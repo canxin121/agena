@@ -224,6 +224,7 @@ pub enum KeyAction {
     Refresh,
     SettingsSearch,
     SettingsDetails,
+    SettingsSource,
     PlanToggleAutorun,
     ProviderRefreshModels,
     ProviderAddModel,

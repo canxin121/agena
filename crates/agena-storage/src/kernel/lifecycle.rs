@@ -25,7 +25,16 @@ pub struct SessionConfiguration {
     /// Named agent configuration; absent on legacy sessions.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    /// Model settings inherited at delegation time, below the selected role
+    /// and explicit choices. Branches retain them independently of agent identity.
+    #[serde(
+        default,
+        skip_serializing_if = "agena_domain::ExecutionSelection::is_empty"
+    )]
+    pub selection_defaults: agena_domain::ExecutionSelection,
     pub permission: PermissionConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission_profile: Option<String>,
     pub permission_ceiling: PermissionConfig,
     /// Additional immutable delegation boundaries, intersected at execution.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -110,7 +119,16 @@ pub struct SessionConfigurationChange {
     pub prompts: Option<agena_prompt_layers::PromptLayer>,
     /// Outer absence keeps the selection; inner absence clears it.
     pub profile: Option<Option<String>>,
+    /// Internal creation/import snapshot; ordinary session editing does not expose it.
+    pub selection_defaults: Option<agena_domain::ExecutionSelection>,
     pub permission: Option<PermissionConfig>,
+    /// Outer absence leaves the choice untouched; inner absence selects custom rules.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_permission_profile_change"
+    )]
+    pub permission_profile: Option<Option<String>>,
     pub permission_ceiling: Option<PermissionConfig>,
     /// Existing layers are immutable; callers may append stricter boundaries.
     pub permission_ceiling_layers: Option<Vec<PermissionConfig>>,
@@ -120,6 +138,15 @@ pub struct SessionConfigurationChange {
     pub capability_denied_tool_names: Option<BTreeSet<String>>,
     pub effective_workspace_root: Option<Option<PathBuf>>,
     pub agent: Option<Option<SessionAgentConfiguration>>,
+}
+
+fn deserialize_permission_profile_change<'de, D>(
+    value: D,
+) -> std::result::Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(value).map(Some)
 }
 /// Host-reviewed recovery of an unchanged channel privacy and capability scope.
 /// The runtime drains the old epoch first; the writer checks both versions and

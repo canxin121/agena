@@ -121,7 +121,16 @@ pub(crate) fn settings_source_rows_for_workspace_config_path(
     workspace_summary: impl Into<String>,
     effective_summary: impl Into<String>,
 ) -> Vec<SettingsStudioSourceRow> {
+    let projection = super::SettingsFieldProjection::at_path(sources, path, true);
     vec![
+        SettingsStudioSourceRow::new(
+            i18n.text("settings-layer-source-title"),
+            projection.source_label(i18n),
+        ),
+        SettingsStudioSourceRow::new(
+            projection.fallback_label(i18n),
+            super::settings_layer_value_label(i18n, projection.inherited.as_ref()),
+        ),
         SettingsStudioSourceRow::new(
             ui_text::t(i18n, "settings-source-row-workspace-config-file"),
             settings_workspace_config_file_source_summary(i18n, sources),
@@ -180,6 +189,7 @@ pub(crate) fn settings_studio_activity_kind_items(
             Some(kind.label.clone())
         };
         let field = SettingsFieldSpec {
+            explicit_local: false,
             workspace: false,
             section: SettingsStudioSectionId::Interface,
             path: path.clone(),
@@ -189,16 +199,10 @@ pub(crate) fn settings_studio_activity_kind_items(
             label_override,
             description_override,
         };
-        let file_value =
-            get_json_path(&sources.file, Some(path.as_str())).unwrap_or(JsonValue::Null);
-        let effective_value =
-            get_json_path(&sources.effective, Some(path.as_str())).unwrap_or(JsonValue::Null);
-        let effective_summary = settings_field_effective_summary(&effective_value);
-        let current_summary = if file_value.is_null() {
-            ui_text::t(i18n, "settings-source-unset")
-        } else {
-            format_setting_value_inline(&file_value)
-        };
+        let projection = super::SettingsFieldProjection::new(sources, &field);
+        let effective_summary =
+            super::settings_layer_value_label(i18n, projection.effective.as_ref());
+        let current_summary = super::settings_layer_value_label(i18n, projection.local.as_ref());
         let source_rows = settings_source_rows_for_config_path(
             i18n,
             sources,
@@ -206,16 +210,19 @@ pub(crate) fn settings_studio_activity_kind_items(
             current_summary.clone(),
             effective_summary.clone(),
         );
-        items.push(SettingsStudioItem::from_parts(
-            settings_field_display_label(i18n, &field),
-            effective_summary.clone(),
-            settings_field_display_description(i18n, &field),
-            Some(path.clone()),
-            Some(current_summary),
-            Some(effective_summary),
-            source_rows,
-            SettingsPickerAction::EditField(field.clone()),
-        ));
+        items.push(
+            SettingsStudioItem::from_parts(
+                settings_field_display_label(i18n, &field),
+                super::SettingsFieldProjection::new(sources, &field).row_value(i18n),
+                settings_field_display_description(i18n, &field),
+                Some(path.clone()),
+                Some(current_summary),
+                Some(effective_summary),
+                source_rows,
+                SettingsPickerAction::EditField(field.clone()),
+            )
+            .with_control(super::SettingsFieldProjection::new(sources, &field).control(i18n)),
+        );
     }
     items
 }
@@ -268,6 +275,7 @@ pub(crate) fn settings_studio_activity_tool_items(
                 summary
             };
             let field = SettingsFieldSpec {
+                explicit_local: false,
                 workspace: false,
                 section: SettingsStudioSectionId::Interface,
                 path: path.clone(),
@@ -277,16 +285,11 @@ pub(crate) fn settings_studio_activity_tool_items(
                 label_override: Some(name),
                 description_override: Some(description),
             };
-            let file_value =
-                get_json_path(&sources.file, Some(path.as_str())).unwrap_or(JsonValue::Null);
-            let effective_value =
-                get_json_path(&sources.effective, Some(path.as_str())).unwrap_or(JsonValue::Null);
-            let effective_summary = settings_field_effective_summary(&effective_value);
-            let current_summary = if file_value.is_null() {
-                ui_text::t(i18n, "settings-source-unset")
-            } else {
-                format_setting_value_inline(&file_value)
-            };
+            let projection = super::SettingsFieldProjection::new(sources, &field);
+            let effective_summary =
+                super::settings_layer_value_label(i18n, projection.effective.as_ref());
+            let current_summary =
+                super::settings_layer_value_label(i18n, projection.local.as_ref());
             let source_rows = settings_source_rows_for_config_path(
                 i18n,
                 sources,
@@ -296,14 +299,15 @@ pub(crate) fn settings_studio_activity_tool_items(
             );
             SettingsStudioItem::from_parts(
                 settings_field_display_label(i18n, &field),
-                effective_summary.clone(),
+                super::SettingsFieldProjection::new(sources, &field).row_value(i18n),
                 settings_field_display_description(i18n, &field),
                 Some(path.clone()),
                 Some(current_summary),
                 Some(effective_summary),
                 source_rows,
-                SettingsPickerAction::EditField(field),
+                SettingsPickerAction::EditField(field.clone()),
             )
+            .with_control(super::SettingsFieldProjection::new(sources, &field).control(i18n))
         })
         .collect()
 }
@@ -317,28 +321,29 @@ pub(crate) fn settings_studio_field_items(
         .into_iter()
         .filter(|field| field.section == section)
         .map(|field| {
-            let file_value =
-                get_json_path(&sources.file, Some(field.path.as_str())).unwrap_or(JsonValue::Null);
-            let effective_value = get_json_path(&sources.effective, Some(field.path.as_str()))
-                .unwrap_or(JsonValue::Null);
-            let effective_summary = settings_field_effective_summary(&effective_value);
-            let display_value = match &effective_value {
-                JsonValue::Null => ui_text::t(i18n, "settings-source-unset"),
-                JsonValue::String(value) if !value.trim().is_empty() => value.clone(),
-                _ => effective_summary.clone(),
-            };
-            let current_summary = if file_value.is_null() {
-                ui_text::t(i18n, "settings-source-unset")
+            let projection = super::SettingsFieldProjection::new(sources, &field);
+            let effective_summary =
+                super::settings_layer_value_label(i18n, projection.effective.as_ref());
+            let display_value = projection.row_value(i18n);
+            let current_summary =
+                super::settings_layer_value_label(i18n, projection.local.as_ref());
+            let source_rows = if field.workspace {
+                settings_source_rows_for_workspace_config_path(
+                    i18n,
+                    sources,
+                    field.path.as_str(),
+                    current_summary.clone(),
+                    effective_summary.clone(),
+                )
             } else {
-                file_value.to_string()
+                settings_source_rows_for_config_path(
+                    i18n,
+                    sources,
+                    field.path.as_str(),
+                    current_summary.clone(),
+                    effective_summary.clone(),
+                )
             };
-            let source_rows = settings_source_rows_for_config_path(
-                i18n,
-                sources,
-                field.path.as_str(),
-                current_summary.clone(),
-                effective_summary.clone(),
-            );
             SettingsStudioItem::from_parts(
                 settings_field_display_label(i18n, &field),
                 display_value,
@@ -349,18 +354,9 @@ pub(crate) fn settings_studio_field_items(
                 source_rows,
                 SettingsPickerAction::EditField(field.clone()),
             )
+            .with_control(super::SettingsFieldProjection::new(sources, &field).control(i18n))
         })
         .collect()
-}
-
-fn settings_field_effective_summary(value: &JsonValue) -> String {
-    // The row renderer truncates to its viewport; the details view retains
-    // the complete value for inspecting long paths and configuration strings.
-    if value.is_null() {
-        "unset".to_owned()
-    } else {
-        value.to_string()
-    }
 }
 
 pub(crate) fn settings_studio_provider_items(
@@ -403,23 +399,28 @@ pub(crate) fn settings_studio_provider_items(
                 summary.clone(),
             )
         };
-        items.push(SettingsStudioItem::from_parts(
-            ui_text::t(
-                i18n,
-                if workspace {
-                    "settings-workspace-auxiliary-model-label"
-                } else {
-                    "settings-auxiliary-model-label"
-                },
+        items.push(
+            SettingsStudioItem::from_parts(
+                ui_text::t(
+                    i18n,
+                    if workspace {
+                        "settings-workspace-auxiliary-model-label"
+                    } else {
+                        "settings-auxiliary-model-label"
+                    },
+                ),
+                settings_model_layer_summary(i18n, sources, path, workspace),
+                ui_text::t(i18n, "settings-auxiliary-model-description"),
+                Some(path.into()),
+                Some(current),
+                Some(summary),
+                rows,
+                SettingsPickerAction::OpenAuxiliaryModelChooser { workspace },
+            )
+            .with_control(
+                super::SettingsFieldProjection::at_path(sources, path, workspace).control(i18n),
             ),
-            summary.clone(),
-            ui_text::t(i18n, "settings-auxiliary-model-description"),
-            Some(path.into()),
-            Some(current),
-            Some(summary),
-            rows,
-            SettingsPickerAction::OpenAuxiliaryModelChooser { workspace },
-        ));
+        );
     }
     items.extend(
         settings_studio_field_items(i18n, sources, SettingsStudioSectionId::ModelsProviders)
@@ -452,13 +453,17 @@ pub(crate) fn settings_studio_global_default_model_item(
     );
     SettingsStudioItem::from_parts(
         ui_text::t(i18n, "settings-global-default-model-label"),
-        effective_summary.clone(),
+        settings_model_layer_summary(i18n, sources, "providers.default_selection", false),
         ui_text::t(i18n, "settings-global-default-model-description"),
         Some("providers.default_selection".to_owned()),
         Some(current_summary),
         Some(effective_summary),
         source_rows,
         SettingsPickerAction::OpenGlobalDefaultModelChooser,
+    )
+    .with_control(
+        super::SettingsFieldProjection::at_path(sources, "providers.default_selection", false)
+            .control(i18n),
     )
 }
 
@@ -488,7 +493,7 @@ pub(crate) fn settings_studio_workspace_default_model_item(
     );
     SettingsStudioItem::from_parts(
         ui_text::t(i18n, "settings-workspace-default-model-label"),
-        workspace_summary.clone(),
+        settings_model_layer_summary(i18n, sources, "providers.default_selection", true),
         ui_text::t(i18n, "settings-workspace-default-model-description"),
         Some("providers.default_selection".to_owned()),
         Some(workspace_summary),
@@ -496,6 +501,20 @@ pub(crate) fn settings_studio_workspace_default_model_item(
         source_rows,
         SettingsPickerAction::OpenWorkspaceDefaultModelChooser,
     )
+    .with_control(
+        super::SettingsFieldProjection::at_path(sources, "providers.default_selection", true)
+            .control(i18n),
+    )
+}
+
+fn settings_model_layer_summary(
+    i18n: &I18n,
+    sources: &ConfigJsonSources,
+    path: &str,
+    workspace: bool,
+) -> String {
+    let projection = super::SettingsFieldProjection::at_path(sources, path, workspace);
+    global_default_selection_summary(i18n, projection.value.as_ref().unwrap_or(&JsonValue::Null))
 }
 
 fn global_default_selection_summary(i18n: &I18n, value: &JsonValue) -> String {
@@ -571,13 +590,17 @@ pub(crate) fn settings_studio_provider_approval_model_item(
     );
     SettingsStudioItem::from_parts(
         ui_text::t(i18n, "settings-field-permission-approval-model-label"),
-        effective_summary.clone(),
+        settings_model_layer_summary(i18n, sources, "permission.approval_model", false),
         ui_text::t(i18n, "settings-field-permission-approval-model-description"),
         Some("permission.approval_model".to_owned()),
         Some(current_summary),
         Some(effective_summary),
         source_rows,
         SettingsPickerAction::OpenPermissionApprovalModelChooser,
+    )
+    .with_control(
+        super::SettingsFieldProjection::at_path(sources, "permission.approval_model", false)
+            .control(i18n),
     )
 }
 
@@ -607,13 +630,17 @@ pub(crate) fn settings_studio_workspace_provider_approval_model_item(
     );
     SettingsStudioItem::from_parts(
         ui_text::t(i18n, "settings-workspace-approval-model-label"),
-        workspace_summary.clone(),
+        settings_model_layer_summary(i18n, sources, "permission.approval_model", true),
         ui_text::t(i18n, "settings-workspace-approval-model-description"),
         Some("permission.approval_model".to_owned()),
         Some(workspace_summary),
         Some(effective_summary),
         source_rows,
         SettingsPickerAction::OpenWorkspacePermissionApprovalModelChooser,
+    )
+    .with_control(
+        super::SettingsFieldProjection::at_path(sources, "permission.approval_model", true)
+            .control(i18n),
     )
 }
 

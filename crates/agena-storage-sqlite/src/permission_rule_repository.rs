@@ -77,6 +77,10 @@ impl PermissionRuleRepository for SeaPermissionRuleRepository {
             clauses.push("action_key LIKE ?");
             values.push(format!("%{search}%").into());
         }
+        if let Some(workspace_id) = query.workspace_id {
+            clauses.push("scope = 'workspace' AND workspace_id = ?");
+            values.push(workspace_id.into());
+        }
         if let (Some(updated), Some(id)) = (query.before_updated_at_ms, query.before_id) {
             clauses.push("(updated_at_ms < ? OR (updated_at_ms = ? AND id < ?))");
             values.extend([updated.into(), updated.into(), id.into()]);

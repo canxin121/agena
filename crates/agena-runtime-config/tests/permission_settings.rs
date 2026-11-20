@@ -31,6 +31,95 @@ fn input(value: Value) -> ConfigSettingsSetInput {
 }
 
 #[test]
+fn default_profile_is_visible_in_the_library_and_selected_only_by_the_global_layer() {
+    let directory = tempfile::tempdir().unwrap();
+    let global = directory.path().join("global.json");
+    let workspace = directory.path().join("workspace.json");
+    let id = agena_domain::DEFAULT_PERMISSION_PROFILE_ID;
+    let read = |layer, path: &str| {
+        let mut input = agena_runtime_config::ConfigSettingsGetInput::default();
+        input.target.path = Some(path.into());
+        agena_runtime_config::read_runtime_layer_setting(&global, &workspace, layer, input).unwrap()
+    };
+    let catalog = read(ConfigSettingsLayer::Global, "access_control");
+    assert!(catalog.value.is_null());
+    assert_eq!(
+        catalog.default_value.unwrap()["profiles"][id]["complete"],
+        true
+    );
+    assert_eq!(
+        read(ConfigSettingsLayer::Global, "permission_profile").layer_value,
+        Some(json!(id))
+    );
+    let project = read(ConfigSettingsLayer::Workspace, "permission_profile");
+    assert!(project.value.is_null());
+    assert_eq!(project.inherited_value, Some(json!(id)));
+    assert!(!global.exists() && !workspace.exists());
+
+    fs::write(&global, json!({"access_control":{"profiles":{
+        (id):{"name":"Default permissions", "complete":true, "permission":{"tools":{"default":"ask"}}}
+    }}}).to_string()).unwrap();
+    let project = read(ConfigSettingsLayer::Workspace, "permission");
+    assert!(project.value.is_null());
+    assert_eq!(project.layer_value.unwrap()["tools"]["default"], "ask");
+
+    let global_custom = serde_json::from_value::<RawConfig>(json!({"permission_profile":""}))
+        .unwrap()
+        .resolve()
+        .unwrap();
+    assert_eq!(global_custom.permission_profile, None);
+    assert_eq!(
+        global_custom.permission,
+        agena_domain::PermissionConfig::global_default()
+    );
+}
+
+#[test]
+fn named_permissions_replace_one_layer_and_custom_overrides_remain_separate() {
+    let raw = |value: Value| serde_json::from_value::<RawConfig>(value).unwrap();
+    let global = raw(json!({
+        "access_control": {"profiles": {
+            "reader": {"name":"Reader", "complete":true, "permission":{"path":{"workspace":"readonly"}}},
+            "offline": {"name":"Offline", "complete":true}
+        }},
+        "permission_profile": "reader",
+        "permission": {"tools":{"names":{"agena.fs.write":"allow"}}}
+    }));
+    let published = global.clone().resolve().unwrap();
+    assert_eq!(published.permission_profile.as_deref(), Some("reader"));
+    let value = serde_json::to_value(&published.permission).unwrap();
+    assert_eq!(value["path"]["workspace"], "readonly");
+    assert_eq!(value["tools"]["default"], "deny");
+    assert!(value["tools"]["names"].get("agena.fs.write").is_none());
+
+    let mut workspace = global.clone();
+    workspace.merge_project_from_with_keys(
+        raw(json!({"permission":{"tools":{"default":"ask"}}})),
+        Default::default(),
+    );
+    let inherited = serde_json::to_value(workspace.resolve().unwrap().permission).unwrap();
+    assert_eq!(inherited["path"]["workspace"], "readonly");
+    assert_eq!(inherited["tools"]["default"], "ask");
+    assert!(inherited["tools"]["names"].get("agena.fs.write").is_none());
+
+    let mut workspace = global.clone();
+    workspace.merge_project_from_with_keys(
+        raw(json!({"permission_profile":"offline","permission":{"network":{"default":"allow"}}})),
+        Default::default(),
+    );
+    let selected = workspace.resolve().unwrap();
+    assert_eq!(selected.permission_profile.as_deref(), Some("offline"));
+    assert_eq!(
+        selected.permission,
+        agena_domain::PermissionConfig::default().standalone()
+    );
+    let mut custom = global;
+    custom.permission_profile = None;
+    let restored = serde_json::to_value(custom.resolve().unwrap().permission).unwrap();
+    assert_eq!(restored["tools"]["names"]["agena.fs.write"], "allow");
+}
+
+#[test]
 fn empty_raw_config_resolves_to_a_writable_project_and_outbound_network() {
     for document in [
         json!({}),
@@ -44,7 +133,10 @@ fn empty_raw_config_resolves_to_a_writable_project_and_outbound_network() {
         let permission = serde_json::to_value(&resolved.permission).unwrap();
         assert_eq!(permission["path"]["workspace"], "readwrite");
         assert_eq!(permission["path"]["external"], "deny");
-        assert_eq!(permission["network"], json!({"default":"allow"}));
+        assert_eq!(
+            permission["network"],
+            json!({"version":2,"default":"allow","allow":[],"deny":[],"inbound":"deny","hostLoopback":"deny"})
+        );
         assert_eq!(permission["tools"]["default"], "allow");
         assert!(resolved.sandbox);
         assert!(resolved.resource_guard);
@@ -64,14 +156,20 @@ fn partial_permission_overlay_keeps_unset_resource_defaults() {
     assert_eq!(permission["path"]["workspace"], "readwrite");
     assert_eq!(permission["path"]["external"], "deny");
     assert_eq!(permission["path"]["rules"]["<workspace>/secrets"], "deny");
-    assert_eq!(permission["network"], json!({"default":"allow"}));
+    assert_eq!(
+        permission["network"],
+        json!({"version":2,"default":"allow","allow":[],"deny":[],"inbound":"deny","hostLoopback":"deny"})
+    );
     assert_eq!(permission["tools"]["names"]["agena.shell.exec"], "ask");
 }
 
 #[test]
 fn project_overrides_preserve_explicit_parent_readonly_deny_and_offline_rules() {
     for mode in ["readonly", "deny"] {
-        for network in [json!({}), json!({"default":"deny"})] {
+        for network in [
+            json!({}),
+            json!({"version":2,"default":"deny","allow":[],"deny":[],"inbound":"deny","hostLoopback":"deny"}),
+        ] {
             let mut global = serde_json::from_value::<RawConfig>(json!({"permission":{
                 "path":{"workspace":mode},
                 "network":network
@@ -85,7 +183,10 @@ fn project_overrides_preserve_explicit_parent_readonly_deny_and_offline_rules() 
             let permission = serde_json::to_value(global.resolve().unwrap().permission).unwrap();
             assert_eq!(permission["path"]["workspace"], mode);
             assert_eq!(permission["path"]["external"], "deny");
-            assert_eq!(permission["network"], json!({"default":"deny"}));
+            assert_eq!(
+                permission["network"],
+                json!({"version":2,"default":"deny","allow":[],"deny":[],"inbound":"deny","hostLoopback":"deny"})
+            );
             assert_eq!(permission["tools"]["default"], "ask");
         }
     }
@@ -112,7 +213,10 @@ fn shipped_defaults_can_be_saved_in_global_and_workspace_layers() {
         let saved = serde_json::to_value(resolved.permission).unwrap();
         assert_eq!(saved["path"]["workspace"], "readwrite");
         assert_eq!(saved["path"]["external"], "deny");
-        assert_eq!(saved["network"], json!({"default":"allow"}));
+        assert_eq!(
+            saved["network"],
+            json!({"version":2,"default":"allow","allow":[],"deny":[],"inbound":"deny","hostLoopback":"deny"})
+        );
     }
 }
 
@@ -239,7 +343,10 @@ fn explicit_empty_network_is_saved_and_replaces_the_complete_parent_policy() {
     )
     .unwrap();
     let saved: Value = serde_json::from_slice(&fs::read(&workspace).unwrap()).unwrap();
-    assert_eq!(saved["permission"]["network"], json!({"default":"deny"}));
+    assert_eq!(
+        saved["permission"]["network"],
+        json!({"version":2,"default":"deny","allow":[],"deny":[],"inbound":"deny","hostLoopback":"deny"})
+    );
     let global_value: Value = serde_json::from_slice(&fs::read(&global).unwrap()).unwrap();
     let mut merged: agena_domain::PermissionConfig =
         serde_json::from_value(global_value["permission"].clone()).unwrap();
@@ -269,6 +376,8 @@ fn network_editor_reads_the_complete_parent_before_the_selected_layer() {
         json!({"permission":{"network":selected}}).to_string(),
     )
     .unwrap();
+    let parent = json!({"version":2,"default":"allow","allow":[],"deny":[{"to":"192.0.2.0/24"}],"inbound":"deny","hostLoopback":"deny"});
+    let selected = json!({"version":2,"default":"deny","allow":[{"to":"198.51.100.10","protocol":"tcp","ports":[443]}],"deny":[],"inbound":"deny","hostLoopback":"deny"});
     let mut query = agena_runtime_config::ConfigSettingsGetInput::default();
     query.target.path = Some("permission".into());
     let response = agena_runtime_config::read_runtime_layer_setting(
@@ -299,7 +408,13 @@ fn network_editor_reads_the_complete_parent_before_the_selected_layer() {
     )
     .unwrap();
     assert_eq!(response.value, parent);
-    assert_eq!(response.inherited_value, Some(json!({"default":"allow"})));
+    assert!(response.inherited_value.is_none());
+    assert_eq!(
+        response.default_value,
+        Some(
+            json!({"version":2,"default":"allow","allow":[],"deny":[],"inbound":"deny","hostLoopback":"deny"})
+        )
+    );
 }
 
 #[test]
@@ -318,7 +433,12 @@ fn missing_network_layer_exposes_defaults_without_creating_files() {
     .unwrap();
     assert!(!response.config_found);
     assert!(response.value.is_null());
-    assert_eq!(response.inherited_value, Some(json!({"default":"allow"})));
+    assert_eq!(
+        response.inherited_value,
+        Some(
+            json!({"version":2,"default":"allow","allow":[],"deny":[],"inbound":"deny","hostLoopback":"deny"})
+        )
+    );
     assert!(!global.exists());
     assert!(!workspace.exists());
 }

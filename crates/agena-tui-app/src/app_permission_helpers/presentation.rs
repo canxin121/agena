@@ -6,19 +6,18 @@ use crate::{
 };
 
 /// The rows describe the effective policy; mutations still start from the
-/// selected layer. Domain merging preserves whole-network/whole-tool-rule
-/// replacement rather than inventing a separate UI inheritance model.
+/// selected layer. Domain merging preserves each network field and each
+/// complete tool-rule group at its actual replacement boundary.
 pub(crate) struct PermissionStudioProjection {
     pub(crate) selected: PermissionConfig,
     pub(crate) effective: PermissionConfig,
     read_only: bool,
+    global: bool,
 }
 
 fn canonical_permission(permission: &PermissionConfig) -> PermissionConfig {
     let mut permission = permission.clone();
-    permission.tools = permission
-        .tools
-        .map(|tools| tools.with_canonical_tool_names());
+    permission.tools = permission.tools.map(|tools| tools.normalized());
     if let Some(ToolPermissionRules::Ordered(entries)) = permission
         .tools
         .as_mut()
@@ -56,6 +55,7 @@ impl PermissionStudioProjection {
             selected,
             effective,
             read_only,
+            global: matches!(dialog.source, PermissionStudioSource::GlobalConfig),
         }
     }
 
@@ -80,7 +80,39 @@ impl PermissionStudioProjection {
         {
             Source::Current
         } else {
+            self.fallback_origin()
+        }
+    }
+
+    pub(crate) fn fallback_origin(&self) -> Source {
+        if self.read_only {
+            Source::Effective
+        } else if self.global {
+            Source::Default
+        } else {
             Source::Inherited
+        }
+    }
+
+    pub(crate) fn network_list_origin(&self, deny: bool) -> Source {
+        if self.read_only {
+            Source::Effective
+        } else if self
+            .selected
+            .network
+            .as_ref()
+            .and_then(|network| network.egress.as_ref())
+            .is_some_and(|egress| {
+                if deny {
+                    egress.deny.is_some()
+                } else {
+                    egress.allow.is_some()
+                }
+            })
+        {
+            Source::Current
+        } else {
+            self.fallback_origin()
         }
     }
 
@@ -140,13 +172,7 @@ impl PermissionStudioProjection {
                 if tool_name == "*" && pattern == "read-only" =>
             {
                 let mode = read_only_class_mode(&self.effective).unwrap_or(PermissionMode::Allow);
-                if matches!(
-                    self.effective
-                        .tools
-                        .as_ref()
-                        .and_then(|tools| tools.rules.get("*")),
-                    Some(ToolPermissionRules::Mode(_))
-                ) {
+                if invalid_read_only_class(&self.effective) {
                     i18n.text("permission-studio-read-only-invalid")
                 } else if mode == PermissionMode::Auto {
                     i18n.text_args("permission-studio-read-only-follows-default", &agena_tui::fl_args!("value" => permission_mode_label(i18n, tool_default(&self.effective))))
@@ -187,6 +213,20 @@ pub(crate) fn read_only_class_mode(permission: &PermissionConfig) -> Option<Perm
     }
 }
 
+pub(crate) fn invalid_read_only_class(permission: &PermissionConfig) -> bool {
+    match permission
+        .tools
+        .as_ref()
+        .and_then(|tools| tools.rules.get("*"))
+    {
+        Some(ToolPermissionRules::Mode(_)) => true,
+        Some(ToolPermissionRules::Ordered(entries)) => {
+            entries.keys().any(|pattern| !is_read_only_class(pattern))
+        }
+        None => false,
+    }
+}
+
 fn is_read_only_class(pattern: &str) -> bool {
     matches!(
         pattern.to_ascii_lowercase().replace('_', "-").as_str(),
@@ -210,7 +250,9 @@ fn target_has_override(permission: &PermissionConfig, target: &Target) -> bool {
             .is_some_and(|path| path.rules.contains_key(pattern)),
         Target::NetworkEgressDefault
         | Target::NetworkIngressDefault
-        | Target::NetworkHostLoopback => permission.network.is_some(),
+        | Target::NetworkHostLoopback => {
+            permission_studio_mode_target_value(permission, target).is_some()
+        }
         Target::ToolDefault => permission
             .tools
             .as_ref()
@@ -252,9 +294,6 @@ pub(crate) fn permission_studio_mode_edit_config(
     target: &Target,
     reset: bool,
 ) -> PermissionConfig {
-    if target.is_network() {
-        return super::permission_studio_custom_network(dialog);
-    }
     let mut permission = dialog.permission.clone();
     if matches!(
         target,
@@ -292,6 +331,7 @@ pub(crate) fn permission_studio_mode_edit_config(
 pub(crate) fn permission_studio_source_label(i18n: &I18n, source: Source) -> String {
     i18n.text(match source {
         Source::Current => "permission-studio-origin-current",
+        Source::Default => "permission-studio-origin-default",
         Source::Inherited => "permission-studio-origin-inherited",
         Source::Effective => "permission-studio-origin-effective",
     })
@@ -381,7 +421,7 @@ mod tests {
             Some(Source::Current)
         );
         let ToolPermissionRules::Ordered(entries) =
-            &projection.effective.tools.as_ref().unwrap().rules["agena.shell.exec"]
+            &projection.effective.tools.as_ref().unwrap().rules["shell.*"]
         else {
             unreachable!()
         };
@@ -501,13 +541,13 @@ mod tests {
         let original = dialog.permission.clone();
         for pattern in ["git status", "git log"] {
             let target = Target::ToolCommandPattern {
-                tool_name: "agena.shell.exec".into(),
+                tool_name: "shell.*".into(),
                 pattern: pattern.into(),
             };
             let mut edited = permission_studio_mode_edit_config(&dialog, &target, false);
             crate::apply_permission_studio_mode_input(&i18n, &mut edited, &target, "ask").unwrap();
             let ToolPermissionRules::Ordered(entries) =
-                &edited.tools.as_ref().unwrap().rules["agena.shell.exec"]
+                &edited.tools.as_ref().unwrap().rules["shell.*"]
             else {
                 unreachable!()
             };
@@ -521,14 +561,7 @@ mod tests {
                 original.tools.as_ref().unwrap().names
             );
             let reset = permission_studio_mode_edit_config(&dialog, &target, true);
-            assert!(
-                !reset
-                    .tools
-                    .as_ref()
-                    .unwrap()
-                    .rules
-                    .contains_key("agena.shell.exec")
-            );
+            assert!(!reset.tools.as_ref().unwrap().rules.contains_key("shell.*"));
         }
         assert_eq!(dialog.permission, original);
     }
@@ -548,7 +581,7 @@ mod tests {
         );
         let projection = PermissionStudioProjection::new(&dialog);
         let target = Target::ToolCommandPattern {
-            tool_name: "agena.shell.exec".into(),
+            tool_name: "shell.*".into(),
             pattern: "git status".into(),
         };
         assert_eq!(projection.origin(&target), Source::Current);
@@ -565,7 +598,7 @@ mod tests {
         assert!(!tools.rules.contains_key("shell.exec"));
         assert!(!tools.names.contains_key("shell.exec"));
         assert_eq!(tools.names["agena.shell.exec"], PermissionMode::Ask);
-        let ToolPermissionRules::Ordered(entries) = &tools.rules["agena.shell.exec"] else {
+        let ToolPermissionRules::Ordered(entries) = &tools.rules["shell.*"] else {
             unreachable!()
         };
         assert_eq!(entries["git status"], PermissionMode::Allow);

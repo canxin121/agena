@@ -22,6 +22,15 @@ impl SandboxPermissionSnapshot {
         if !self.workspace_root.as_os_str().is_empty() {
             candidates.push(self.workspace_root.clone());
         }
+        candidates.extend(self.protected_paths.native_readonly_paths().cloned());
+        candidates.extend(self.protected_paths.git_directories().cloned());
+        candidates.extend(self.protected_paths.private_roots().cloned());
+        candidates.extend(
+            self.protected_paths
+                .own_state()
+                .filter(|state| state.is_dir())
+                .map(Path::to_path_buf),
+        );
         for layer in &self.path_layers {
             for rule in &layer.rules {
                 for pattern in &rule.patterns {
@@ -82,6 +91,17 @@ impl SandboxPermissionSnapshot {
                 (true, false) => ConfiguredMode::ReadOnly,
                 _ => ConfiguredMode::Deny,
             };
+            if mode == ConfiguredMode::ReadOnly
+                && !path.exists()
+                && self
+                    .protected_paths
+                    .check(AccessKind::Write, &path)
+                    .is_some()
+            {
+                // The setting is still protected for file tools. Native
+                // readonly mounts require an existing target.
+                continue;
+            }
             if read {
                 self.validate_configured_subtree(AccessKind::Read, &path)?;
             }
@@ -274,6 +294,29 @@ mod tests {
         )
         .try_apply_permission_config(&serde_json::from_value(value).unwrap())
         .unwrap()
+    }
+
+    fn assert_default_denials(
+        snapshot: &SandboxPermissionSnapshot,
+        scope: &SandboxFilesystemPolicy,
+        mut expected: Vec<PathBuf>,
+    ) {
+        expected.extend(
+            snapshot
+                .protected_paths
+                .private_roots()
+                .filter(|path| {
+                    scope
+                        .readonly_paths
+                        .iter()
+                        .chain(&scope.readwrite_paths)
+                        .any(|grant| within(path, grant))
+                })
+                .cloned(),
+        );
+        expected.sort_by_key(|path| (path.components().count(), path.clone()));
+        expected.dedup();
+        assert_eq!(scope.default_denied_paths, expected);
     }
 
     #[test]
@@ -521,14 +564,14 @@ mod tests {
                     scope.readwrite_paths, readwrite,
                     "workspace={workspace}, external={external}"
                 );
-                assert_eq!(
-                    scope.default_denied_paths,
+                assert_default_denials(
+                    &snapshot,
+                    &scope,
                     if workspace == "deny" && external != "deny" {
                         vec![root.clone()]
                     } else {
                         vec![]
                     },
-                    "workspace={workspace}, external={external}"
                 );
                 assert!(scope.denied_paths.is_empty());
             }
@@ -548,6 +591,165 @@ mod tests {
         assert_eq!(scope.readwrite_paths, [root.clone()]);
         assert_eq!(scope.readonly_paths, [root.join("reference")]);
         assert!(scope.denied_paths.is_empty());
+    }
+
+    #[test]
+    fn project_config_is_readonly_even_with_a_matching_settings_grant() {
+        let fixture = IdentityFixture::new();
+        let workspace = &normalized_paths(&[fixture.0.clone()]).unwrap()[0];
+        let configuration = agena_storage_layout::project_config_path(workspace);
+        let principal = principal(serde_json::json!({"path":{
+            "workspace":"readwrite", "external":"deny",
+            "rules":{"<workspace>/.agena/agena.json":"readwrite"}
+        }}));
+        let snapshot = principal.sandbox_permission_snapshot(workspace);
+        assert!(matches!(
+            principal.authorize_path_access(AccessKind::Write, workspace, &configuration),
+            PermissionDecision::Deny { .. }
+        ));
+        assert!(matches!(
+            snapshot.authorize_path_access(AccessKind::Write, &configuration),
+            PermissionDecision::Deny { .. }
+        ));
+        assert!(
+            snapshot
+                .filesystem_policy()
+                .unwrap()
+                .readonly_paths
+                .is_empty()
+        );
+
+        std::fs::create_dir(configuration.parent().unwrap()).unwrap();
+        std::fs::write(&configuration, "{}").unwrap();
+        let scope = snapshot.filesystem_policy().unwrap();
+        assert!(scope.readonly_paths.contains(&configuration));
+        assert!(scope.readwrite_paths.contains(workspace));
+    }
+
+    #[test]
+    fn linked_git_worktree_protects_configuration_and_keeps_index_writable() {
+        let fixture = IdentityFixture::new();
+        let root = &normalized_paths(&[fixture.0.clone()]).unwrap()[0];
+        let workspace = root.join("checkout");
+        let common = root.join("repo/.git");
+        let gitdir = common.join("worktrees/checkout");
+        std::fs::create_dir(&workspace).unwrap();
+        std::fs::create_dir_all(&gitdir).unwrap();
+        std::fs::create_dir(common.join("hooks")).unwrap();
+        std::fs::write(
+            workspace.join(".git"),
+            "gitdir: ../repo/.git/worktrees/checkout\n",
+        )
+        .unwrap();
+        std::fs::write(gitdir.join("commondir"), "../..\n").unwrap();
+        std::fs::write(gitdir.join("config.worktree"), "").unwrap();
+        let config = common.join("config");
+        std::fs::write(&config, "").unwrap();
+        let snapshot = principal(serde_json::json!({"path":{
+            "workspace":"readwrite", "external":"deny",
+            "rules":{common.to_str().unwrap():"readwrite"}
+        }}))
+        .sandbox_permission_snapshot(&workspace);
+        let scope = snapshot.filesystem_policy().unwrap();
+        for path in [
+            workspace.join(".git"),
+            config.clone(),
+            common.join("hooks"),
+            gitdir.join("config.worktree"),
+        ] {
+            assert!(scope.readonly_paths.contains(&path), "{path:?}");
+            assert!(matches!(
+                snapshot.authorize_path_access(AccessKind::Write, &path),
+                PermissionDecision::Deny { .. }
+            ));
+        }
+        assert!(scope.readwrite_paths.contains(&gitdir));
+        assert_eq!(
+            snapshot.authorize_path_access(AccessKind::Write, &gitdir.join("index")),
+            PermissionDecision::Allow
+        );
+
+        let explicit = principal(serde_json::json!({"path":{
+            "workspace":"readwrite", "external":"deny",
+            "rules":{config.to_str().unwrap():"readwrite"}
+        }}));
+        let scope = explicit
+            .sandbox_permission_snapshot(&workspace)
+            .filesystem_policy()
+            .unwrap();
+        assert!(scope.readwrite_paths.contains(&config));
+        assert_eq!(
+            explicit.authorize_path_access(AccessKind::Write, &workspace, &config),
+            PermissionDecision::Allow
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn linked_git_directory_does_not_add_an_unauthorized_external_mount() {
+        let fixture = IdentityFixture::new();
+        let workspace = fixture.0.join("checkout");
+        let gitdir = fixture.0.join("actual-gitdir");
+        std::fs::create_dir(&workspace).unwrap();
+        std::fs::create_dir(&gitdir).unwrap();
+        std::fs::write(gitdir.join("config"), "").unwrap();
+        std::os::unix::fs::symlink(&gitdir, workspace.join(".git")).unwrap();
+        let snapshot = principal(serde_json::json!({"path":{
+            "workspace":"readwrite", "external":"deny"
+        }}))
+        .sandbox_permission_snapshot(&workspace);
+        let scope = snapshot.filesystem_policy().unwrap();
+        assert_eq!(scope.readwrite_paths, [workspace.clone()]);
+        assert!(scope.readonly_paths.is_empty());
+        assert!(matches!(
+            snapshot.authorize_path_access(AccessKind::Write, &workspace.join(".git/config")),
+            PermissionDecision::Deny { .. }
+        ));
+    }
+
+    #[test]
+    fn broad_grants_exclude_private_instance_storage_and_reopen_own_state() {
+        use agena_storage_layout::StorageLayout;
+
+        let fixture = IdentityFixture::new();
+        let workspace = &normalized_paths(&[fixture.0.clone()]).unwrap()[0];
+        let layout = StorageLayout::new(workspace.join("instance"));
+        let state = PathBuf::from(normalize_path_string(&layout.workspace_dir(workspace)));
+        let foreign_state = layout.workspace_dir(&workspace.join("other-project"));
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::create_dir_all(&foreign_state).unwrap();
+        let mut snapshot = principal(serde_json::json!({"path":{
+            "workspace":"readwrite", "external":"deny"
+        }}))
+        .sandbox_permission_snapshot(workspace);
+        snapshot.protected_paths = ProtectedPaths::for_workspace(workspace, &layout, None);
+        let scope = snapshot.filesystem_policy().unwrap();
+        let worker = snapshot
+            .filesystem_restrictions(&[], &[workspace.clone()])
+            .unwrap();
+        for path in [
+            layout.database_path(),
+            layout.config_path(),
+            layout.secrets_dir(),
+            layout.workspaces_dir(),
+        ] {
+            assert!(scope.default_denied_paths.contains(&path));
+            assert!(worker.default_denied_paths.contains(&path));
+        }
+        for path in [foreign_state, layout.root().join("agena.db-wal")] {
+            for access in [AccessKind::Read, AccessKind::Write] {
+                assert!(matches!(
+                    snapshot.authorize_path_access(access, &path),
+                    PermissionDecision::Deny { .. }
+                ));
+            }
+        }
+        assert!(scope.readwrite_paths.contains(&state));
+        assert!(worker.readwrite_paths.contains(&state));
+        assert_eq!(
+            snapshot.authorize_path_access(AccessKind::Write, &state),
+            PermissionDecision::Allow
+        );
     }
 
     #[test]
@@ -635,7 +837,7 @@ mod tests {
         readonly.push(root.join("input"));
         assert_eq!(scope.readonly_paths, readonly);
         assert_eq!(scope.readwrite_paths, [root.join("output")]);
-        assert_eq!(scope.default_denied_paths, [root.clone()]);
+        assert_default_denials(&snapshot, &scope, vec![root.clone()]);
         assert_eq!(scope.denied_paths, [root.join("secrets")]);
     }
 
@@ -660,7 +862,7 @@ mod tests {
         readonly.push(root.join("input"));
         assert_eq!(scope.readonly_paths, readonly);
         assert_eq!(scope.readwrite_paths, [root.join("output")]);
-        assert_eq!(scope.default_denied_paths, [root]);
+        assert_default_denials(&snapshot, &scope, vec![root]);
         assert!(scope.denied_paths.is_empty());
     }
 
@@ -734,7 +936,7 @@ mod tests {
         assert_eq!(scope.readonly_paths, [filesystem_root, root.clone()]);
         assert_eq!(scope.readwrite_paths, [root.join("output")]);
         assert_eq!(scope.denied_paths, [root.join("secrets")]);
-        assert!(scope.default_denied_paths.is_empty());
+        assert_default_denials(&snapshot, &scope, vec![]);
         assert!(matches!(
             snapshot.authorize_path_access(AccessKind::Read, &root.join("reference/file")),
             PermissionDecision::Allow
@@ -751,18 +953,17 @@ mod tests {
 
     #[test]
     fn global_external_default_has_no_implicit_workspace() {
-        let scope = principal(serde_json::json!({"path": {
+        let snapshot = principal(serde_json::json!({"path": {
             "workspace":"readwrite", "external":"readonly"
         }}))
-        .sandbox_permission_snapshot(Path::new(""))
-        .filesystem_policy()
-        .unwrap();
+        .sandbox_permission_snapshot(Path::new(""));
+        let scope = snapshot.filesystem_policy().unwrap();
         assert_eq!(
             scope.readonly_paths,
             normalized_paths(&filesystem_roots().unwrap()).unwrap()
         );
         assert!(scope.readwrite_paths.is_empty());
-        assert!(scope.default_denied_paths.is_empty());
+        assert_default_denials(&snapshot, &scope, vec![]);
     }
 
     #[test]

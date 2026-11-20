@@ -135,8 +135,8 @@ pub(crate) fn setting_value_input_text(value: &JsonValue) -> String {
 pub(crate) fn settings_value_edit_prompt(
     i18n: &I18n,
     field: &SettingsFieldSpec,
-    file_value: &JsonValue,
-    effective_value: &JsonValue,
+    file_value: Option<&JsonValue>,
+    effective_value: Option<&JsonValue>,
 ) -> String {
     let mut lines = vec![
         settings_field_display_description(i18n, field),
@@ -145,21 +145,21 @@ pub(crate) fn settings_value_edit_prompt(
             &agena_tui::fl_args!("path" => field.path.as_str()),
         ),
     ];
-    if !file_value.is_null() {
+    if let Some(file_value) = file_value {
         lines.push(i18n.text_args(
             "overlay-settings-edit-file-value",
-            &agena_tui::fl_args!("value" => format_setting_value_inline(file_value)),
+            &agena_tui::fl_args!("value" => crate::settings_layer_value_label(i18n, Some(file_value))),
         ));
-        if file_value != effective_value {
+        if Some(file_value) != effective_value {
             lines.push(i18n.text_args(
                 "overlay-settings-edit-effective-value",
-                &agena_tui::fl_args!("value" => format_setting_value_inline(effective_value)),
+                &agena_tui::fl_args!("value" => crate::settings_layer_value_label(i18n, effective_value)),
             ));
         }
     } else {
         lines.push(i18n.text_args(
             "overlay-settings-edit-effective-value",
-            &agena_tui::fl_args!("value" => format_setting_value_inline(effective_value)),
+            &agena_tui::fl_args!("value" => crate::settings_layer_value_label(i18n, effective_value)),
         ));
     }
     lines.push(settings_field_help_suffix(i18n, field.kind));
@@ -332,7 +332,7 @@ pub(crate) fn choice_overlay_clear_detail(i18n: &I18n, action: &ChoiceOverlayAct
             "overlay-choice-clear-settings-detail",
             &agena_tui::fl_args!("field" => field.path.as_str()),
         ),
-        ChoiceOverlayAction::SessionModelMode(step) => i18n.text_args(
+        ChoiceOverlayAction::SessionModelMode { step, .. } => i18n.text_args(
             "overlay-choice-clear-runtime-detail",
             &agena_tui::fl_args!(
                 "field" => model_mode_display_label(i18n, *step)
@@ -371,6 +371,12 @@ pub(crate) fn choice_overlay_clear_detail(i18n: &I18n, action: &ChoiceOverlayAct
             &agena_tui::fl_args!("field" => permission_studio_mode_target_label(i18n, target)),
         ),
         ChoiceOverlayAction::RememberedPermissionRules { .. }
+        | ChoiceOverlayAction::SessionModelSource { .. }
+        | ChoiceOverlayAction::SessionModelModeSource { .. }
+        | ChoiceOverlayAction::SettingsFieldSource { .. }
+        | ChoiceOverlayAction::PermissionStudioSource(_)
+        | ChoiceOverlayAction::PermissionStudioNetworkSource
+        | ChoiceOverlayAction::PermissionStudioNetworkListSource { .. }
         | ChoiceOverlayAction::MessageQueue { .. }
         | ChoiceOverlayAction::QueuedMessage { .. }
         | ChoiceOverlayAction::StoppedMessageQueue { .. }
@@ -517,6 +523,7 @@ pub(crate) fn session_model_choice_item(
     )
     .to_ascii_lowercase();
     SessionModelChoiceItem {
+        disabled: false,
         label: if display_name.is_empty() {
             model.id.to_string()
         } else {
@@ -584,6 +591,7 @@ pub(crate) fn mark_current_session_model_choice(
     items.insert(
         0,
         SessionModelChoiceItem {
+            disabled: false,
             label: current_model.model_id.to_string(),
             detail: join_inline_segments([
                 format!("{} / {adapter_label}", current_model.provider_id),

@@ -50,9 +50,20 @@ pub fn read_file_setting(
     let config_path = config_path.into();
     let (config_found, mut file_value) = read_or_create_doc(&config_path)?;
     let revision = crate::runtime_config_settings_service::document_revision(&file_value);
-    crate::normalize_execution_settings_document(&mut file_value)
-        .map_err(ConfigError::Validation)?;
+    crate::normalize_settings_document(&mut file_value).map_err(ConfigError::Validation)?;
     let value = get_json_path(&file_value, input.target.path.as_deref())?;
+    let override_path = if config_found {
+        agena_domain::config_setting_override_path(&file_value, input.target.path.as_deref())
+            .map_err(|error| ConfigError::validation_error(&error))?
+    } else {
+        None
+    };
+    let requires_group_reset = agena_domain::config_setting_requires_group_reset(
+        &file_value,
+        input.target.path.as_deref(),
+        override_path.as_deref(),
+    )
+    .map_err(|error| ConfigError::validation_error(&error))?;
     Ok(ConfigSettingsReadResponse {
         revision: Some(revision),
         config_path,
@@ -60,6 +71,11 @@ pub fn read_file_setting(
         source: ConfigSettingsSource::File,
         path: input.target.path,
         value,
+        has_override: Some(override_path.is_some()),
+        override_path,
+        requires_group_reset: Some(requires_group_reset),
+        default_value: None,
+        layer_value: None,
         inherited_value: None,
     })
 }
@@ -71,8 +87,7 @@ pub fn list_file_settings(
     let config_path = config_path.into();
     let (config_found, mut file_value) = read_or_create_doc(&config_path)?;
     let revision = crate::runtime_config_settings_service::document_revision(&file_value);
-    crate::normalize_execution_settings_document(&mut file_value)
-        .map_err(ConfigError::Validation)?;
+    crate::normalize_settings_document(&mut file_value).map_err(ConfigError::Validation)?;
     let items = list_json_path(&file_value, input.target.path.as_deref(), input.recursive)?;
     Ok(ConfigSettingsListResponse {
         revision: Some(revision),
@@ -139,7 +154,7 @@ fn set_file_setting_impl(
             ));
         }
         let before = doc.clone();
-        crate::normalize_execution_settings_document(&mut doc).map_err(ConfigError::Validation)?;
+        crate::normalize_settings_document(&mut doc).map_err(ConfigError::Validation)?;
         let previous = get_json_path(&doc, Some(input.path.as_str()))?;
         let created = previous.is_null();
         set_json_path(&mut doc, &segments, input.value)?;
@@ -216,7 +231,7 @@ fn delete_file_setting_impl(
             ));
         }
         let before = doc.clone();
-        crate::normalize_execution_settings_document(&mut doc).map_err(ConfigError::Validation)?;
+        crate::normalize_settings_document(&mut doc).map_err(ConfigError::Validation)?;
         let deleted = remove_json_path(&mut doc, &segments)?;
         finish_edit(
             config_path,
@@ -293,7 +308,7 @@ fn patch_file_settings_impl(
             ));
         }
         let before = doc.clone();
-        crate::normalize_execution_settings_document(&mut doc).map_err(ConfigError::Validation)?;
+        crate::normalize_settings_document(&mut doc).map_err(ConfigError::Validation)?;
         let created = match input.target.path.as_deref() {
             Some(path) => get_json_path(&doc, Some(path))?.is_null(),
             None => false,
@@ -383,8 +398,7 @@ fn finish_edit(
     }
     let before_revision = crate::runtime_config_settings_service::document_revision(&before);
     let mut previous_document = before;
-    crate::normalize_execution_settings_document(&mut previous_document)
-        .map_err(ConfigError::Validation)?;
+    crate::normalize_settings_document(&mut previous_document).map_err(ConfigError::Validation)?;
     let previous = get_json_path(&previous_document, path.as_deref())?;
     let current = get_json_path(&doc, path.as_deref())?;
     let after_revision = crate::runtime_config_settings_service::document_revision(&doc);
@@ -477,14 +491,14 @@ fn ensure_object_path<'a>(
     };
     let segments = parse_settings_path(path)?;
     let mut cursor = root;
-    for segment in segments {
+    for (index, segment) in segments.iter().enumerate() {
         let object = cursor.as_object_mut().ok_or_else(|| {
             ConfigError::Validation(format!(
                 "settings path `{path}` crosses non-object segment `{segment}`"
             ))
         })?;
         let child = object
-            .entry(segment)
+            .entry(segment.clone())
             .or_insert_with(|| JsonValue::Object(JsonMap::new()));
         if child.is_null() {
             *child = JsonValue::Object(JsonMap::new());
@@ -494,6 +508,10 @@ fn ensure_object_path<'a>(
                 "settings path `{path}` crosses non-object segment"
             )));
         }
+        crate::network_config_migration::initialize_network_field_object(
+            child,
+            &segments[..=index],
+        );
         cursor = child;
     }
     cursor

@@ -12,6 +12,10 @@ use std::{
 
 static PROCESS_LAYOUT: OnceLock<StorageLayout> = OnceLock::new();
 
+pub fn project_config_path(workspace: &Path) -> PathBuf {
+    workspace.join(".agena").join("agena.json")
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StorageLayout {
     root: PathBuf,
@@ -89,7 +93,10 @@ impl StorageLayout {
         self.root.join("secrets")
     }
     pub fn workspace_dir(&self, workspace: &Path) -> PathBuf {
-        self.root.join("workspaces").join(workspace_key(workspace))
+        self.workspaces_dir().join(workspace_key(workspace))
+    }
+    pub fn workspaces_dir(&self) -> PathBuf {
+        self.root.join("workspaces")
     }
     pub fn memory_dir(&self, workspace: &Path) -> PathBuf {
         self.workspace_dir(workspace).join("memory")

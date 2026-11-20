@@ -118,12 +118,23 @@ impl SettingsStudioSourceRow {
     }
 }
 
+/// Editing controls distinguish layered inheritance from a global reset command.
+#[derive(Debug, Clone)]
+pub enum SettingsStudioControl {
+    Source(String),
+    Inherited(String),
+    RestoreDefault { enabled: bool },
+}
+
 #[derive(Debug, Clone)]
 /// An item of the settings studio.
 pub struct SettingsStudioItem<A> {
     pub label: String,
     pub value: String,
     pub detail: String,
+    pub source: Option<String>,
+    pub restore_default: Option<bool>,
+    pub value_editable: bool,
     pub path: Option<String>,
     pub current_value: Option<String>,
     pub effective_value: Option<String>,
@@ -167,12 +178,34 @@ impl<A> SettingsStudioItem<A> {
             label: label.into(),
             value: value.into(),
             detail: detail.into(),
+            source: None,
+            restore_default: None,
+            value_editable: true,
             path,
             current_value,
             effective_value,
             source_rows,
             action,
         }
+    }
+
+    pub fn with_control(mut self, control: SettingsStudioControl) -> Self {
+        match control {
+            SettingsStudioControl::Source(source) => self.source = Some(source),
+            SettingsStudioControl::Inherited(source) => {
+                self.source = Some(source);
+                self.value_editable = false;
+            }
+            SettingsStudioControl::RestoreDefault { enabled } => {
+                self.restore_default = Some(enabled)
+            }
+        }
+        self
+    }
+
+    pub fn with_source(mut self, source: impl Into<String>) -> Self {
+        self.source = Some(source.into());
+        self
     }
 }
 
@@ -337,12 +370,13 @@ impl<A> SettingsStudioPresentation<A> {
                     return Some(index);
                 }
                 let text = format!(
-                    "{} {} {} {} {}",
+                    "{} {} {} {} {} {}",
                     section.label,
                     item.label,
                     item.value,
                     item.detail,
-                    item.path.as_deref().unwrap_or_default()
+                    item.path.as_deref().unwrap_or_default(),
+                    item.source.as_deref().unwrap_or_default()
                 )
                 .to_lowercase();
                 terms
@@ -485,6 +519,7 @@ pub enum SettingsStudioEffect {
     KeepOpen,
     Close,
     Refresh,
+    Source,
     Activate,
 }
 
@@ -589,9 +624,19 @@ pub fn handle_key<A>(
             SettingsStudioEffect::KeepOpen
         }
         Some(KeyAction::Refresh) => SettingsStudioEffect::Refresh,
+        Some(KeyAction::SettingsSource)
+            if presentation.focus() == SettingsStudioFocus::Items
+                && presentation
+                    .selected_item()
+                    .is_some_and(|item| item.restore_default != Some(false)) =>
+        {
+            SettingsStudioEffect::Source
+        }
         Some(KeyAction::Activate)
             if presentation.focus() == SettingsStudioFocus::Navigation
-                || presentation.selected_item().is_some() =>
+                || presentation
+                    .selected_item()
+                    .is_some_and(|item| item.value_editable) =>
         {
             SettingsStudioEffect::Activate
         }

@@ -59,9 +59,12 @@
       }
     ]
   },
-  "default_profile": null,
+  "default_profile": "main",
+  "default_subagent_profile": "worker",
   "profiles": {
     "developer": {
+      "extends": "main",
+      "mode": "primary",
       "title": "Developer",
       "description": "Implement and verify changes in the current workspace.",
       "prompts": {
@@ -84,6 +87,7 @@
       }
     },
     "reviewer": {
+      "mode": "all",
       "title": "Reviewer",
       "description": "Inspect code and explain actionable findings.",
       "extends": "developer",
@@ -143,13 +147,5 @@
       }
     }
   },
-  "permission": {
-    "path": {
-      "workspace": "readwrite",
-      "external": "deny"
-    },
-    "network": {
-      "default": "allow"
-    }
-  }
+  "permission_profile": "@default"
 }

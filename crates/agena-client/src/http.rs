@@ -1283,8 +1283,8 @@ impl AgenaClient {
             .await
     }
 
-    /// Create a session with a named agent profile. An empty profile opts out
-    /// of the configured default; omission inherits the parent or default.
+    /// Create a session with a named agent profile. An empty profile uses the
+    /// automatic main role; omission inherits the parent or configured default.
     pub async fn create_session_with_profile(
         &self,
         workspace_id: i64,
@@ -1303,7 +1303,8 @@ impl AgenaClient {
         self.post_json("/api/v1/sessions", body).await
     }
 
-    /// Select a named agent profile; None clears the saved selection.
+    /// Select a named agent profile; None clears the saved selection and restores
+    /// the automatic role: main for ordinary sessions or worker for subagents.
     pub async fn set_session_profile(
         &self,
         session_id: i64,

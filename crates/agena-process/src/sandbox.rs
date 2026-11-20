@@ -92,6 +92,9 @@ pub struct SandboxPolicy {
     /// granted descendants. These are not explicit MXC denied paths.
     #[serde(default)]
     pub default_denied_paths: Vec<PathBuf>,
+    /// Host storage boundaries excluded from implicit runtime dependencies.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub private_storage_roots: Vec<PathBuf>,
     /// Additional installation files required by a configured tool or language server.
     #[serde(default)]
     pub runtime_paths: Vec<PathBuf>,
@@ -741,15 +744,17 @@ fn wait_exit_code(outcome: WaitResult) -> i32 {
 }
 
 fn mxc_request(payload: &LauncherRequest, scratch: &Path) -> io::Result<ContainerRequest> {
-    let mut readonly_paths = payload.policy.readonly_paths.clone();
-    readonly_paths.extend(payload.policy.runtime_paths.iter().cloned());
-    readonly_paths.extend(runtime_paths(
+    let mut dependencies = payload.policy.runtime_paths.clone();
+    dependencies.extend(runtime_paths(
         &payload.argv,
         &payload.cwd,
         &payload.environment,
     )?);
     let bootstrap = std::env::current_exe()?;
-    add_executable_paths(&bootstrap, &mut readonly_paths)?;
+    add_executable_paths(&bootstrap, &mut dependencies)?;
+    reject_private_storage_dependencies(&payload.policy, &dependencies)?;
+    let mut readonly_paths = payload.policy.readonly_paths.clone();
+    readonly_paths.extend(dependencies);
     reject_shared_temporary_grants(
         &readonly_paths,
         &payload.temporary_root,
@@ -965,6 +970,7 @@ fn validate_policy_for_root(policy: &SandboxPolicy, temporary_root: &Path) -> io
         .chain(&policy.readwrite_paths)
         .chain(&policy.denied_paths)
         .chain(&policy.default_denied_paths)
+        .chain(&policy.private_storage_roots)
         .chain(&policy.runtime_paths)
         .chain(&policy.private_paths)
     {
@@ -1004,6 +1010,33 @@ fn validate_policy_for_root(policy: &SandboxPolicy, temporary_root: &Path) -> io
         }
     }
     network_policy(&policy.network)?;
+    Ok(())
+}
+
+fn reject_private_storage_dependencies(
+    policy: &SandboxPolicy,
+    dependencies: &[PathBuf],
+) -> io::Result<()> {
+    if policy.private_storage_roots.is_empty() {
+        return Ok(());
+    }
+    let private = path_aliases::identities(&policy.private_storage_roots)?;
+    let mut approved = path_aliases::identities(&policy.readonly_paths)?;
+    approved.extend(path_aliases::identities(&policy.readwrite_paths)?);
+    for path in path_aliases::identities(dependencies)? {
+        let overlaps_private = private
+            .iter()
+            .any(|root| identity_within(&path, root) || identity_within(root, &path));
+        if overlaps_private && !approved.iter().any(|root| identity_within(&path, root)) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "sandbox runtime dependency overlaps Agena private storage: {}",
+                    path.display()
+                ),
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -2194,6 +2227,27 @@ mod tests {
         assert_eq!(quote_windows("a b"), "\"a b\"");
         assert_eq!(quote_windows("a\"b"), "\"a\\\"b\"");
         assert_eq!(quote_windows("a\\"), "\"a\\\\\"");
+    }
+
+    #[test]
+    fn runtime_dependencies_cannot_reopen_hidden_instance_storage() {
+        let fixture = tempfile::tempdir().unwrap();
+        let instance = fixture.path().canonicalize().unwrap();
+        let workspaces = instance.join("workspaces");
+        let state = workspaces.join("own");
+        let foreign = workspaces.join("foreign");
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::create_dir(&foreign).unwrap();
+        let policy = SandboxPolicy {
+            private_storage_roots: vec![instance.join("secrets"), workspaces],
+            readwrite_paths: vec![state.clone()],
+            ..Default::default()
+        };
+        assert!(reject_private_storage_dependencies(&policy, &[state]).is_ok());
+        for blocked in [foreign, instance] {
+            let error = reject_private_storage_dependencies(&policy, &[blocked]).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        }
     }
 
     #[test]

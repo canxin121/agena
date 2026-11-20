@@ -15,7 +15,11 @@ fn assert_supported_defaults(name: &str, text: &str) {
     let permission = serde_json::to_value(config.permission).unwrap();
     assert_eq!(permission["path"]["workspace"], "readwrite", "{name}");
     assert_eq!(permission["path"]["external"], "deny", "{name}");
-    assert_eq!(permission["network"], json!({"default":"allow"}), "{name}");
+    assert_eq!(
+        permission["network"],
+        json!({"version":2,"default":"allow","allow":[],"deny":[],"inbound":"deny","hostLoopback":"deny"}),
+        "{name}"
+    );
     assert!(config.sandbox, "{name}");
     assert!(config.resource_guard, "{name}");
 }

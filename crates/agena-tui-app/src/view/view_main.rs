@@ -546,6 +546,7 @@ impl App {
                     "session-summary"
                         | "session-thinking"
                         | "session-speed"
+                        | "session-performance"
                         | "session-token-usage"
                 ) {
                     pointer::register(

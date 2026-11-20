@@ -12,6 +12,7 @@
 //! [`mcp_config`].
 
 pub mod agent_profiles;
+mod builtin_profiles;
 pub mod config;
 pub mod config_error;
 mod config_file;
@@ -29,10 +30,11 @@ pub mod config_environment;
 pub mod config_paths;
 
 pub use agent_profiles::{
-    AgentProfileConfig, ResolvedAgentProfile, check_agent_profile_libraries, resolve_agent_profile,
-    validate_agent_profile_name,
+    AgentProfileConfig, AgentProfileMode, ResolvedAgentProfile, check_agent_profile_libraries,
+    resolve_agent_profile, validate_agent_profile_name,
 };
-pub use config::raw::normalize_execution_settings_document;
+pub use builtin_profiles::{DEFAULT_SUBAGENT_PROFILE, MAIN_AGENT_PROFILE, builtin_agent_profiles};
+pub use config::raw::{normalize_execution_settings_document, normalize_settings_document};
 pub use config::{
     ConfigLoader, RawConfig, RawConfigFile, RawTracingConfig, RawUiConfig, apply_config_override,
     delete_layered_file_setting, list_file_settings, list_json_path, parse_settings_path,

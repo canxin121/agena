@@ -1,7 +1,7 @@
 //! A profile reference is durable session configuration, guarded like policy changes.
 use agena_domain::{
-    ComposerDocument, ComposerNode, PathAccessModes, PathPermissionConfig, PathPermissionMode,
-    PermissionConfig,
+    ComposerDocument, ComposerNode, ExecutionSelection, PathAccessModes, PathPermissionConfig,
+    PathPermissionMode, PermissionConfig,
 };
 use agena_prompt_layers::{FragmentId, PromptFragment, PromptLayer};
 use agena_storage::kernel::*;
@@ -11,6 +11,12 @@ fn configuration() -> SessionConfiguration {
     let fragment = FragmentId::parse("session-note").unwrap();
     SessionConfiguration {
         profile: Some("reviewer".into()),
+        selection_defaults: ExecutionSelection {
+            provider: Some("profile-parent".into()),
+            model: Some("parent-model".into()),
+            thinking_mode: Some("high".into()),
+            ..Default::default()
+        },
         prompts: PromptLayer {
             order: vec![fragment.clone()],
             inline: vec![PromptFragment::new(
@@ -88,6 +94,10 @@ async fn profile_survives_restart_and_legacy_configuration_has_no_profile() {
     let runtime = open_kernel_runtime(&url).await.unwrap();
     let stored = runtime.ports.reader.configuration(session).await.unwrap();
     assert_eq!(stored.profile.as_deref(), Some("reviewer"));
+    assert_eq!(
+        stored.selection_defaults,
+        configuration().selection_defaults
+    );
     assert_eq!(stored.prompts, configuration().prompts);
     assert_eq!(
         stored.permission_ceiling,
@@ -99,6 +109,7 @@ async fn profile_survives_restart_and_legacy_configuration_has_no_profile() {
     );
     let legacy: SessionConfiguration = serde_json::from_str("{}").unwrap();
     assert!(legacy.profile.is_none());
+    assert!(legacy.selection_defaults.is_empty());
     assert!(legacy.permission_ceiling_layers.is_empty());
     runtime.ports.clone().shutdown().await.unwrap();
 }
@@ -122,6 +133,10 @@ async fn switching_and_clearing_profiles_preserves_explicit_session_settings() {
         .unwrap();
     let changed = runtime.ports.reader.configuration(session).await.unwrap();
     assert_eq!(changed.profile.as_deref(), Some("developer"));
+    assert_eq!(
+        changed.selection_defaults,
+        configuration().selection_defaults
+    );
     assert_eq!(changed.prompts, configuration().prompts);
     assert_eq!(changed.permission, configuration().permission);
     assert_eq!(
@@ -210,6 +225,10 @@ async fn switching_and_clearing_profiles_preserves_explicit_session_settings() {
         .unwrap();
     let cleared = runtime.ports.reader.configuration(session).await.unwrap();
     assert!(cleared.profile.is_none());
+    assert_eq!(
+        cleared.selection_defaults,
+        configuration().selection_defaults
+    );
     assert_eq!(
         cleared.permission_ceiling,
         configuration().permission_ceiling
@@ -502,6 +521,10 @@ async fn forks_and_rewinds_keep_the_profile_and_permission_ceiling() {
     for branch in [fork, rewind] {
         let stored = runtime.ports.reader.configuration(branch).await.unwrap();
         assert_eq!(stored.profile.as_deref(), Some("reviewer"));
+        assert_eq!(
+            stored.selection_defaults,
+            configuration().selection_defaults
+        );
         assert_eq!(
             stored.permission_ceiling,
             configuration().permission_ceiling

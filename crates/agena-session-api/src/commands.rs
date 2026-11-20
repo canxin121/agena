@@ -123,7 +123,7 @@ pub struct ResolveWorkspaceParams {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Parameters for creating a session inside a workspace.
 pub struct CreateSessionParams {
-    /// Named agent profile; an empty string opts out of the configured default.
+    /// Named agent profile; an empty string uses the automatic main role.
     #[serde(default)]
     pub profile: Option<String>,
     pub workspace_id: i64,
@@ -315,6 +315,8 @@ pub struct UpsertPermissionRuleParams {
     pub network_port: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_id: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<i64>,
     pub mode: PermissionMode,

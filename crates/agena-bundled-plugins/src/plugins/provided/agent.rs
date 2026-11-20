@@ -104,11 +104,11 @@ impl AgentPlugin {
     }
     #[tool(
         tags(agent),
-        summary = "Create an independent child and return its handle immediately. Its final reply is delivered automatically. Parent history is not copied; include scope and constraints in prompt.",
+        summary = "Delegate a bounded task to a role profile and return its handle immediately. Choose profile from the available subagent catalog: explore for investigation, worker for implementation, reviewer for verification. Omission uses the configured subagent default. Parent history is not copied; include scope, constraints, and expected result in prompt. Final replies are delivered automatically.",
         translations(
             locale(
                 "zh-CN",
-                summary = "创建独立 agent，立即返回其标识；完成结果自动送达。"
+                summary = "按任务选择 Profile 创建独立 agent：探索用 explore，实现用 worker，审查用 reviewer；省略时使用默认子角色。结果自动送达。"
             ),
             locale("zh-TW", summary = "建立獨立 agent，立即回傳識別碼；結果自動送達。"),
             locale(

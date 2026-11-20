@@ -1,3 +1,5 @@
+use agena_domain::{SHELL_COMMAND_RULE_GROUP, ToolPermissionConfig};
+
 use super::{
     normalize_permission_config, parse_permission_studio_key_input,
     parse_permission_studio_optional_mode_input, parse_permission_studio_optional_path_mode_input,
@@ -81,17 +83,9 @@ fn permission_studio_tool_defaults(
 ) -> PermissionStudioSection {
     let tools = projection.effective.tools.as_ref();
     let names = tools.map_or(0, |tools| tools.names.len());
-    let commands = tools.map_or(0, |tools| {
-        tools
-            .rules
-            .iter()
-            .filter(|(name, _)| name.as_str() != "*")
-            .map(|(_, rules)| match rules {
-                ToolPermissionRules::Mode(_) => 1,
-                ToolPermissionRules::Ordered(entries) => entries.len(),
-            })
-            .sum::<usize>()
-    });
+    let commands = tools
+        .and_then(ToolPermissionConfig::command_rules)
+        .map_or(0, indexmap::IndexMap::len);
     PermissionStudioSection {
         id: PermissionStudioSectionId::ToolDefaults,
         label: i18n.text_args(
@@ -186,58 +180,30 @@ fn permission_studio_command_rules(
     i18n: &I18n,
     projection: &super::PermissionStudioProjection,
 ) -> PermissionStudioSection {
-    let mut items = Vec::new();
-    let mut actions = Vec::new();
-    for (tool_name, rules) in projection
+    let mut items = projection
         .effective
         .tools
         .as_ref()
+        .and_then(ToolPermissionConfig::command_rules)
         .into_iter()
-        .flat_map(|tools| tools.rules.iter())
-    {
-        // The read-only class is a top-level default, not a command exception.
-        if tool_name == "*" {
-            continue;
-        }
-        match rules {
-            ToolPermissionRules::Ordered(entries) => {
-                for pattern in entries.keys() {
-                    items.push(projection.mode_item(
-                        i18n,
-                        format!("{tool_name} · {pattern}"),
-                        PermissionStudioModeTarget::ToolCommandPattern {
-                            tool_name: tool_name.clone(),
-                            pattern: pattern.clone(),
-                        },
-                    ));
-                }
-            }
-            ToolPermissionRules::Mode(_) => items.push(projection.mode_item(
+        .flat_map(|rules| rules.keys())
+        .map(|pattern| {
+            projection.mode_item(
                 i18n,
-                tool_name.clone(),
-                PermissionStudioModeTarget::ToolRule {
-                    tool_name: tool_name.clone(),
+                pattern.clone(),
+                PermissionStudioModeTarget::ToolCommandPattern {
+                    tool_name: SHELL_COMMAND_RULE_GROUP.to_owned(),
+                    pattern: pattern.clone(),
                 },
-            )),
-        }
-        actions.push(PermissionStudioItem {
-            label: format!(
-                "{tool_name} · {}",
-                i18n.text("permission-studio-command-pattern-suffix")
-            ),
-            value: String::new(),
-            source: None,
-            action: PermissionStudioAction::AddToolCommandPattern {
-                tool_name: tool_name.clone(),
-            },
-        });
-    }
-    local_rules_first(&mut items);
-    items.extend(actions);
-    items.push(permission_studio_new_rule_item(
-        i18n,
-        "permission-studio-add-tool-rule",
-    ));
+            )
+        })
+        .collect::<Vec<_>>();
+    items.push(PermissionStudioItem {
+        label: format!("+ {}", i18n.text("permission-studio-add-command-rule")),
+        value: String::new(),
+        source: None,
+        action: PermissionStudioAction::AddToolCommandPattern,
+    });
     PermissionStudioSection {
         id: PermissionStudioSectionId::ToolCommandRules,
         label: i18n.text("permission-studio-nav-command-rules"),
@@ -296,11 +262,23 @@ pub(crate) fn permission_studio_mode_target_input_text(
             .unwrap_or_default()
             .to_owned();
     }
-    let permission = if target.is_network() {
-        super::permission_studio_custom_network(dialog)
-    } else {
-        super::permission_studio_local_config(dialog)
-    };
+    let permission = super::permission_studio_local_config(dialog);
+    // A local wildcard group replaces the parent group as a whole. Without a
+    // read-only class it uses Allow, even when the parent class is restrictive.
+    if matches!(target, PermissionStudioModeTarget::ToolCommandPattern { tool_name, pattern }
+        if tool_name == "*" && pattern == "read-only")
+        && matches!(
+            permission
+                .tools
+                .as_ref()
+                .and_then(|tools| tools.rules.get("*")),
+            Some(ToolPermissionRules::Ordered(_))
+        )
+        && super::read_only_class_mode(&permission).is_none()
+        && !super::invalid_read_only_class(&permission)
+    {
+        return permission_mode_token_text(Some(agena_domain::PermissionMode::Allow));
+    }
     permission_mode_token_text(permission_studio_mode_target_value(&permission, target))
 }
 
@@ -347,21 +325,10 @@ pub(crate) fn permission_studio_creator_spec(
             ),
             String::new(),
         ),
-        PermissionStudioEditorAction::AddToolRule => (
+        PermissionStudioEditorAction::AddToolCommandPattern => (
             settings_edit_title(
                 i18n,
-                ui_text::t(i18n, "permission-studio-add-tool-rule").as_str(),
-            ),
-            String::new(),
-        ),
-        PermissionStudioEditorAction::AddToolCommandPattern { tool_name } => (
-            settings_edit_title(
-                i18n,
-                i18n.text_args(
-                    "permission-studio-command-pattern-title",
-                    &agena_tui::fl_args!("tool_name" => tool_name.clone()),
-                )
-                .as_str(),
+                ui_text::t(i18n, "permission-studio-add-command-rule").as_str(),
             ),
             i18n.text("permission-studio-command-pattern-help"),
         ),
@@ -409,7 +376,7 @@ pub(crate) fn apply_permission_studio_mode_input(
         .map_err(crate::UiFailure::message)?;
     if target.is_network() {
         let action = match mode {
-            None => Some(agena_domain::NetworkAction::Deny),
+            None => None,
             Some(agena_domain::PermissionMode::Allow) => Some(agena_domain::NetworkAction::Allow),
             Some(agena_domain::PermissionMode::Deny) => Some(agena_domain::NetworkAction::Deny),
             _ => {
@@ -491,10 +458,7 @@ pub(crate) fn apply_permission_studio_mode_input(
             } else {
                 entries.shift_remove(pattern.as_str());
             }
-            // An emptied rule set is dropped so the entry falls back to the
-            // built-in one of the same name (or, for a tool the built-ins say
-            // nothing about, to `tools.default`).
-            if entries.is_empty() {
+            if entries.is_empty() && tool_name != SHELL_COMMAND_RULE_GROUP {
                 tools.rules.remove(tool_name.as_str());
             } else {
                 tools
@@ -517,6 +481,7 @@ pub(crate) fn apply_permission_studio_network_input(
     // shape here; the server checks its native backend before saving.
     network.validate().map_err(crate::UiFailure::message)?;
     permission.network = Some(network);
+    normalize_permission_config(permission);
     Ok(())
 }
 
@@ -674,12 +639,12 @@ mod tests {
     fn native_network_json_defers_platform_capabilities_to_execution_host() {
         for (input, supported_platform, unsupported_platform) in [
             (
-                r#"{"default":"deny","allow":[{"to":"192.0.2.10","protocol":"tcp","ports":[443]}]}"#,
+                r#"{"version":2,"default":"deny","allow":[{"to":"192.0.2.10","protocol":"tcp","ports":[443]}]}"#,
                 "linux",
                 "macos",
             ),
             (
-                r#"{"default":"deny","inbound":"allow","hostLoopback":"allow"}"#,
+                r#"{"version":2,"default":"deny","inbound":"allow","hostLoopback":"allow"}"#,
                 "windows",
                 "linux",
             ),

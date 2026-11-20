@@ -74,6 +74,7 @@ impl agena_runtime_contracts::ChannelAccessVerifier for ChannelVerifier {
                 || resolved.group_ids != authority.group_ids
                 || resolved.profile_ids != authority.profile_ids
                 || resolved.permission != authority.permission_overlay
+                || resolved.complete != authority.permission_complete
             {
                 return Err(
                     "access-control profile or user membership changed; submit a new message"
@@ -160,6 +161,7 @@ fn compatible_channel_recovery(
             r.fingerprint != old.profile_fingerprint
                 || r.group_ids != old.group_ids
                 || r.permission != old.permission_overlay
+                || r.complete != old.permission_complete
         })
         || old.identity != policy.identity
         || old.session_mode != policy.session_mode_for(&old.actor, now)
@@ -297,6 +299,7 @@ impl AssistantRuntime {
             profile_ids: resolved.profile_ids,
             profile_fingerprint: resolved.fingerprint,
             permission_overlay: resolved.permission,
+            permission_complete: resolved.complete,
             epoch: b.epoch,
             actor: actor.to_owned(),
             role,
@@ -344,6 +347,7 @@ impl AssistantRuntime {
             baseline.profile_ids.clear();
             baseline.profile_fingerprint.clear();
             baseline.permission_overlay = Default::default();
+            baseline.permission_complete = false;
             baseline.grant = policy.grant.clone();
             baseline.expires_at_ms = b.spec.authority_expires_at(None);
             baseline.memory_workspace_root = private_root.clone();
@@ -736,6 +740,7 @@ mod tests {
             profile_ids: Vec::new(),
             profile_fingerprint: String::new(),
             permission_overlay: Default::default(),
+            permission_complete: false,
             source_workspace_root: None,
             binding_id: binding.id.to_string(),
             epoch: 1,

@@ -530,8 +530,8 @@ overlay-permission-rule-preview-invalid = 规则无效：{$error}
 overlay-workbench-overview = 概览
 overlay-workbench-details = 详情
 overlay-permission-studio-title = 权限
-overlay-permission-studio-footer = 左右键或 Tab/Shift+Tab 切换面板 · 方向键选择 · Enter 编辑 · Esc 返回
-overlay-permission-studio-footer-nested = Ctrl+N 新建 · Enter 编辑 · Ctrl+E 重命名 · Ctrl+D 删除 · Esc 返回
+overlay-permission-studio-footer = Ctrl+O 来源 · 左右键或 Tab/Shift+Tab 切换面板 · 方向键选择 · Enter 编辑 · Esc 返回
+overlay-permission-studio-footer-nested = Ctrl+O 来源 · Ctrl+N 新建 · Enter 编辑 · Ctrl+E 重命名 · Ctrl+D 删除 · Esc 返回
 overlay-permission-studio-sections = 权限分区
 overlay-permission-studio-nav = 导航
 permission-studio-new-rule-label = + 新建规则
@@ -546,7 +546,7 @@ permission-studio-catalog-custom-detail = 添加当前实时目录中不存在�
 permission-studio-catalog-custom-search = 自定义 新建 手动 标签 工具 名称
 flash-permission-studio-catalog-empty = 请至少选择一个条目后再添加规则。
 overlay-settings-title = 设置
-overlay-settings-footer = Ctrl+R 刷新 · 左右键切换面板 · Tab/Shift+Tab 循环面板 · 上下键选择 · Enter 打开 · Esc 关闭
+overlay-settings-footer = Ctrl+O 来源 · Ctrl+R 刷新 · 左右键切换面板 · Tab/Shift+Tab 循环面板 · 上下键选择 · Enter 打开 · Esc 关闭
 overlay-settings-sections = 分区
 overlay-settings-options = 选项
 overlay-settings-group-core = 核心
@@ -749,8 +749,8 @@ settings-client-versions-entry-label = Provider 客户端版本
 settings-agent-profile-label = Agent 配置档
 settings-agent-profile-unselected = 尚未选择配置档
 settings-agent-profile-detail = 为当前会话选择可复用的提示词、模型偏好、权限和轮次限制。会话显式设置优先。
-settings-agent-profile-none = 不使用配置档
-settings-agent-profile-none-detail = 清除当前会话的配置档，使用工作区默认设置和会话显式设置。
+settings-agent-profile-none = 恢复默认角色
+settings-agent-profile-none-detail = 普通会话使用 main，子智能体使用 worker，并保留会话显式设置。
 settings-agent-profile-prompt = 选择会话 {$session} 的 Agent 配置档。服务器会将配置应用到当前会话并保存选择。
 settings-agent-profile-repair = 当前会话配置解析失败：{$error}。可选择其他配置档或清除选择来修复。
 settings-agent-profile-saved = 会话配置档已更新
@@ -762,7 +762,7 @@ settings-client-versions-section-label = 客户端版本
 settings-client-versions-section-summary = 运行时身份版本
 settings-client-versions-section-description = Provider 请求身份 Header 使用的精确兼容版本。可逐个编辑，按 Ctrl+R 从 npm 刷新。
 
-settings-provider-workbench-label = 服务商列表
+settings-provider-workbench-label = 服务商设置
 settings-provider-workbench-value = {$count} 个服务商
 settings-provider-workbench-detail = 先打开可搜索的服务商列表，再配置认证、adapter、模型路由或新建服务商。
 settings-global-default-model-label = 全局默认模型
@@ -783,7 +783,6 @@ permission-studio-field-path-external = 路径外部默认值
 permission-studio-field-path-rules = 路径规则
 permission-studio-field-tool-names = 工具名称
 permission-studio-field-tool-rules = 工具规则
-permission-studio-command-rules-shell-only = 命令规则适用于 shell.exec、shell.spawn、shell.watch、shell.open 和 shell.write；其他工具请使用名称规则或默认策略。
 permission-studio-field-prompt-json = 输入 {$field} 的 JSON。留空可清除此覆盖值。
 permission-studio-detail-override = 覆盖值
 permission-studio-detail-effective = 生效值
@@ -849,7 +848,7 @@ permission-studio-tool-default = 工具默认值
 permission-studio-tool-default-summary = 默认 {$value}
 permission-studio-add-path-rule = 添加路径规则
 permission-studio-add-name = 添加名称
-permission-studio-add-tool-rule = 添加工具规则
+permission-studio-add-command-rule = 添加命令规则
 permission-studio-rule-key = 键
 permission-studio-rule-pattern = 模式
 permission-studio-rule-mode = 权限模式
@@ -1007,7 +1006,7 @@ overlay-picker-empty = 没有匹配项
 overlay-picker-footer = Tab 填入选中标签
 overlay-providers-title = Provider 列表
 overlay-providers-prompt = 选择一个 provider 进行配置
-overlay-provider-list-title = Provider 列表
+overlay-provider-list-title = 服务商设置
 overlay-provider-list-prompt = 搜索已配置的 provider
 overlay-provider-list-footer = 选择“新建 Provider”或已有 Provider，然后按 Enter
 overlay-provider-list-create-label = + 新建 Provider
@@ -1023,8 +1022,8 @@ overlay-session-model-list-title = 模型
 overlay-session-model-footer = 输入以过滤
 session-model-context-window = 上下文 {$value}
 session-model-max-output = 输出 {$value}
-overlay-provider-studio-title = Provider 配置
-overlay-provider-studio-header = Provider 配置
+overlay-provider-studio-title = 服务商设置
+overlay-provider-studio-header = 服务商设置
 overlay-provider-studio-footer = Tab/Shift+Tab 切换面板 · 方向键选择 · Space 切换 · Enter 编辑 · Ctrl+D 删除选中项 · Ctrl+R 刷新 · Ctrl+N 新增模型 · Ctrl+A 保存 Adapter · Ctrl+S 保存 Provider · Esc 关闭
 overlay-provider-studio-providers = 服务商
 overlay-provider-studio-draft = 草稿
@@ -2041,7 +2040,6 @@ settings-mcp-server-enabled-flash = Agena MCP 服务已启用
 settings-mcp-server-disabled-flash = Agena MCP 服务已禁用
 settings-mcp-auth-mode-updated = Agena MCP 身份验证模式已设为 {$mode}
 settings-mcp-anonymous-access-updated = Agena MCP 匿名工具访问策略已设为 {$policy}
-permission-studio-command-pattern-title = {$tool_name} 命令模式
 permission-studio-command-pattern-help = 输入 Shell 命令 glob，例如 `git status` 或 `git push *`。
 permission-studio-rename-unsupported = 此条目无法重命名；请删除后重新创建。
 settings-tool-api-list-description = 枚举执行工具。
@@ -2568,7 +2566,6 @@ flash-ui-backend-queue-full = 界面后端命令队列已满；请等待当前�
 flash-ui-backend-unavailable = 界面后端命令服务不可用
 help-diagnostics-kitty-helper = Kitty 辅助程序
 message-role-tool = 工具
-permission-studio-command-pattern-suffix = + 命令模式
 search-picker-preview-title = 预览
 search-picker-search-failed = 搜索失败
 search-picker-no-preview = 没有可用预览
@@ -3008,7 +3005,7 @@ permission-studio-rule-duplicate = 该规则已存在。
 
 permission-studio-network-json = 高级网络 JSON
 
-permission-studio-network-json-help = 编辑包含 default、allow、deny、inbound、hostLoopback 的完整网络配置。规则使用 to、protocol、ports、except。省略字段使用拒绝或空列表；删除 network 才恢复继承上层。
+permission-studio-network-json-help = 编辑 version: 2 的网络字段：default、inbound、hostLoopback、allow、deny。缺少字段时使用当前层的默认或继承值；[] 表示本层明确使用空列表。规则使用 to、protocol、ports、except。
 
 permission-studio-network-invalid-action = 网络动作只能是 allow 或 deny。
 
@@ -3030,7 +3027,7 @@ permission-studio-network-collapse = 收起
 
 permission-studio-network-expand = 展开
 
-permission-studio-network-json-short = 编辑完整网络 JSON
+permission-studio-network-json-short = 编辑本层网络 JSON
 
 permission-studio-network-rule-form = 网络规则
 
@@ -3058,7 +3055,7 @@ permission-studio-network-saving = 正在保存权限，请稍候。
 
 permission-studio-network-save-or-cancel = 请先保存或取消当前编辑。
 
-permission-studio-network-inherit-title = 继承上层网络配置
+permission-studio-network-inherit-title = 恢复全部网络继承
 
 permission-studio-network-inherit-help = 删除当前层的整份网络配置，使用上层配置。
 
@@ -3125,7 +3122,15 @@ permission-studio-loopback-label = 宿主回环
 permission-studio-network-controls = 网络操作
 permission-studio-add-network-rule = + 添加网络规则
 permission-studio-inherited-rule-no-local-edit = 编辑继承规则可创建本层覆盖；重命名和删除仅适用于本层规则。
+settings-agent-profile-mode-primary = 主会话
+settings-agent-profile-mode-subagent = 子智能体
+settings-agent-profile-mode-all = 主会话与子智能体
+settings-agent-profile-source-builtin = 内置
+settings-agent-profile-source-global = 全局
+settings-agent-profile-source-workspace = 工作区
+settings-agent-profile-effective = 生效默认角色：{$profile}
 
+# AI 请求性能
 usage-performance-title = 模型性能 · 平均值
 usage-performance-tps = TPS (tok/s)
 usage-performance-ttft = 首输出
@@ -3145,3 +3150,55 @@ status-part-model-generation = 最近生成耗时={$value}
 status-part-model-throughput = 最近端到端速度={$value} tok/s
 session-status-tps = {$value} tok/s
 session-status-latency = 请求 {$value}
+settings-layer-source-title = 配置来源
+settings-layer-parent-value = 上层值
+settings-layer-inherit = 继承上层
+settings-layer-local = 本层设置
+settings-layer-source-description = 继承会跟随上层变化；本层设置会固定当前值。
+settings-layer-group-network = 此操作应用于整个网络策略。
+settings-layer-group-tool = 此操作应用于该工具的整组规则。
+settings-layer-group-commands = 此操作应用于所有终端共用的命令规则。
+settings-layer-group-model = 此操作应用于模型及其模式设置整组。
+settings-key-source = 来源
+settings-layer-ancestor-override = 此操作作用于整个 {$path} 配置组；恢复整组继承后可单独编辑此字段。
+settings-model-source-changed = 会话或模型已变化，请重新打开模型设置。
+settings-model-source-needs-model = 请先选择一个具体模型，再将模型配置固定在本层。
+permission-studio-origin-default = 默认
+settings-layer-default-value = 默认值
+settings-layer-default = 恢复默认
+settings-layer-default-description = 恢复所选设置的内置默认值，其他设置保持不变。
+settings-layer-ancestor-default = 此操作作用于整个 {$path} 配置组；恢复整组默认后可单独编辑此字段。
+permission-studio-network-default-title = 恢复全部网络默认
+permission-studio-network-default-help = 删除本层全部网络设置，使用应用默认值。
+permission-studio-network-allow-list = 允许的目标
+permission-studio-network-deny-list = 禁止的目标
+permission-studio-network-list-empty = 本层使用空列表
+permission-studio-network-list-source-help = 此操作仅影响当前列表。本层空列表会覆盖默认或继承的全部条目。
+permission-studio-default-rule-no-local-edit = 编辑默认规则可创建本层设置；重命名和删除仅适用于本层规则。
+
+settings-key-restore-default = 恢复默认
+
+settings-restore-default-title = 恢复 {$setting} 的默认设置？
+
+settings-restore-default-preview = 恢复后：{$value}
+
+settings-already-default = 此设置已使用默认值。
+
+settings-list-actions = 操作
+
+settings-list-actions-description = 清空此列表或恢复默认条目，其他网络设置保持不变。
+
+permission-studio-network-list-clear = 清空列表
+
+permission-studio-raw-title = {$scope} · 权限 JSON
+permission-studio-raw-unavailable = 默认权限或上层权限暂不可用。可在这里查看和修改本层已保存的权限。
+permission-studio-raw-help = 仅保存本层的 permission 对象。输入 JSON 对象；输入 null 可移除本层权限设置。
+permission-studio-raw-invalid = 请输入有效的权限 JSON 对象或 null：{$error}
+
+settings-layer-parent-global = 全局
+settings-layer-parent-config = 上层配置
+settings-layer-inherited-from = 继承 · {$source}
+settings-layer-inherited-locked = 当前值继承自{$source}。按 Ctrl+O 选择“本层”后才能编辑。
+settings-network-source-group = 此来源选择作用于全部网络默认项和两类规则列表。编辑完整网络 JSON 前，请先选择“本层”。
+settings-inherited-unavailable = 无法获取上层值。请明确输入本层值，不能复制未知值。
+settings-source-unavailable = 无法获取

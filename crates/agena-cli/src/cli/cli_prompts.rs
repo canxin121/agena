@@ -236,6 +236,7 @@ async fn add(
         title: args.title.unwrap_or_default(),
         category: String::new(),
         body: body.unwrap_or_default(),
+        parts: Vec::new(),
         when: PromptCondition {
             models: args.models,
             requires_tools: requires_tools(args.requires_tools),

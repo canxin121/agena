@@ -16,6 +16,20 @@ impl SessionManager {
         } else {
             self.global_state.load_full()
         };
+        self.validate_session_permission_configuration_with_state(
+            workspace_id,
+            configuration,
+            &state,
+        )
+        .await
+    }
+
+    pub(super) async fn validate_session_permission_configuration_with_state(
+        &self,
+        workspace_id: Option<i64>,
+        configuration: &SessionConfiguration,
+        state: &ExecutionState,
+    ) -> Result<(), AppError> {
         let workspace = match (
             workspace_id,
             configuration.effective_workspace_root.as_ref(),
@@ -24,12 +38,12 @@ impl SessionManager {
             (Some(id), None) => Some(self.workspace_root_by_id(id).await?),
             (None, _) => None,
         };
-        let inherited = state
+        let effective = state
             .config
-            .inherited_permission(configuration.profile.as_deref())
+            .effective_permission(configuration)
             .map_err(AppError::Config)?;
         validate_configuration_permissions(
-            &inherited,
+            &effective,
             configuration,
             workspace.as_deref(),
             state.config.sandbox_enabled,
@@ -70,8 +84,13 @@ impl SessionManager {
                 .effective_workspace_root
                 .as_deref()
                 .unwrap_or(&workspace);
-            let base = config.inherited_permission(configuration.profile.as_deref())?;
-            validate_configuration_permissions(&base, configuration, Some(root), sandbox_enabled)
+            let effective = config.effective_permission(configuration)?;
+            validate_configuration_permissions(
+                &effective,
+                configuration,
+                Some(root),
+                sandbox_enabled,
+            )
         }))
     }
 }
@@ -102,20 +121,41 @@ pub(super) fn delegated_permission_ceiling_layers(
     Ok(layers)
 }
 
+/// Add one independent role boundary without losing ordered rule semantics.
+pub(super) fn append_permission_ceiling_layer(
+    primary: &PermissionConfig,
+    layers: &mut Vec<PermissionConfig>,
+    ceiling: &PermissionConfig,
+) -> Result<(), AppError> {
+    if ceiling.is_empty() {
+        return Ok(());
+    }
+    let value = serde_json::to_vec(ceiling)?;
+    if value == serde_json::to_vec(primary)? {
+        return Ok(());
+    }
+    for layer in layers.iter() {
+        if value == serde_json::to_vec(layer)? {
+            return Ok(());
+        }
+    }
+    layers.push(ceiling.clone());
+    Ok(())
+}
+
 fn validate_configuration_permissions(
-    base: &PermissionConfig,
+    effective: &PermissionConfig,
     configuration: &SessionConfiguration,
     workspace: Option<&std::path::Path>,
     sandbox_enabled: bool,
 ) -> Result<(), String> {
-    let effective = base.merged_with(&configuration.permission);
     for (field, permission) in [
         ("session.permission", &configuration.permission),
         (
             "session.permission_ceiling",
             &configuration.permission_ceiling,
         ),
-        ("effective session.permission", &effective),
+        ("effective session.permission", effective),
     ] {
         validate_for_scope(permission, workspace).map_err(|reason| format!("{field}: {reason}"))?;
     }
@@ -142,7 +182,7 @@ fn validate_configuration_permissions(
             PermissionPolicy::allow_all(),
             ToolPermissionPolicy::allow_all(),
         )
-        .try_apply_permission_config(&effective)
+        .try_apply_permission_config(effective)
         .and_then(|principal| {
             let mut principal =
                 principal.try_apply_permission_ceiling(&configuration.permission_ceiling)?;
@@ -260,7 +300,7 @@ mod sandbox_mode_tests {
             let configuration = configuration(permission);
             for sandbox_enabled in [true, false] {
                 validate_configuration_permissions(
-                    &base,
+                    &base.merged_with(&configuration.permission),
                     &configuration,
                     Some(&workspace),
                     sandbox_enabled,
@@ -288,6 +328,12 @@ mod sandbox_mode_tests {
             "path": {"rules": {"<workspace>/output": "deny"}}
         }))
         .unwrap();
-        validate_configuration_permissions(&base, &configuration, Some(&workspace), true).unwrap();
+        validate_configuration_permissions(
+            &base.merged_with(&configuration.permission),
+            &configuration,
+            Some(&workspace),
+            true,
+        )
+        .unwrap();
     }
 }

@@ -67,6 +67,9 @@ pub struct SessionExecutionContext {
     pub prompts: agena_prompt_layers::PromptLayer,
     #[serde(default)]
     pub profile: Option<String>,
+    /// The effective role comes from the relation-specific fallback.
+    #[serde(default)]
+    pub profile_is_default: bool,
     #[serde(default)]
     pub profile_prompts: Vec<agena_prompt_layers::PromptLayer>,
     #[serde(default)]

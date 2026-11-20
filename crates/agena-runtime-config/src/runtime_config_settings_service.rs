@@ -145,12 +145,11 @@ pub trait RuntimeConfigSettingsService: Send + Sync {
         &self,
         input: ConfigSettingsGetInput,
     ) -> Result<ConfigSettingsReadResponse, RuntimeConfigSettingsError>;
-    /// Read the workspace-local configuration file selected by the composed
-    /// runtime. The target is deliberately implicit so callers cannot inject
-    /// arbitrary concrete configuration paths.
+    /// Read the composed workspace or a workspace root resolved by the application.
     fn read_project_file_settings(
         &self,
         input: ConfigSettingsGetInput,
+        workspace_root: Option<&Path>,
     ) -> Result<ConfigSettingsReadResponse, RuntimeConfigSettingsError>;
     fn list_file_settings(
         &self,
@@ -160,11 +159,11 @@ pub trait RuntimeConfigSettingsService: Send + Sync {
         &self,
         input: ConfigSettingsSetInput,
     ) -> Result<ConfigSettingsEditResponse, RuntimeConfigSettingsError>;
-    /// Write the workspace-local configuration file selected by the composed
-    /// runtime without exposing its concrete path to callers.
+    /// Write the composed workspace or a workspace root resolved by the application.
     fn set_project_file_setting(
         &self,
         input: ConfigSettingsSetInput,
+        workspace_root: Option<&Path>,
     ) -> Result<ConfigSettingsEditResponse, RuntimeConfigSettingsError>;
     fn patch_file_settings(
         &self,
@@ -177,6 +176,7 @@ pub trait RuntimeConfigSettingsService: Send + Sync {
     fn delete_project_file_setting(
         &self,
         input: ConfigSettingsDeleteInput,
+        workspace_root: Option<&Path>,
     ) -> Result<ConfigSettingsEditResponse, RuntimeConfigSettingsError>;
     fn validate_file_settings(
         &self,
@@ -191,24 +191,50 @@ pub fn read_runtime_file_setting(
     config_path: impl Into<PathBuf>,
     input: ConfigSettingsGetInput,
 ) -> Result<ConfigSettingsReadResponse, RuntimeConfigSettingsError> {
-    let config_path = config_path.into();
+    read_runtime_file_setting_document(config_path.into(), input).map(|(response, _)| response)
+}
+
+fn read_runtime_file_setting_document(
+    config_path: PathBuf,
+    input: ConfigSettingsGetInput,
+) -> Result<(ConfigSettingsReadResponse, JsonValue), RuntimeConfigSettingsError> {
     let (config_found, mut document) = read_runtime_settings_document(&config_path)?;
     let revision = document_revision(&document);
-    crate::normalize_execution_settings_document(&mut document)
+    crate::normalize_settings_document(&mut document)
         .map_err(RuntimeConfigSettingsError::invalid_input)?;
     let value = get_json_path(&document, input.target.path.as_deref())?;
-    Ok(ConfigSettingsReadResponse {
+    let override_path = if config_found {
+        agena_domain::config_setting_override_path(&document, input.target.path.as_deref())
+            .map_err(|error| RuntimeConfigSettingsError::invalid_input_error(&error))?
+    } else {
+        None
+    };
+    let requires_group_reset = agena_domain::config_setting_requires_group_reset(
+        &document,
+        input.target.path.as_deref(),
+        override_path.as_deref(),
+    )
+    .map_err(|error| RuntimeConfigSettingsError::invalid_input_error(&error))?;
+    let response = ConfigSettingsReadResponse {
         revision: Some(revision),
         config_path,
         config_found,
         source: ConfigSettingsSource::File,
         path: input.target.path,
         value,
+        has_override: Some(override_path.is_some()),
+        override_path,
+        requires_group_reset: Some(requires_group_reset),
+        default_value: None,
+        layer_value: None,
         inherited_value: None,
-    })
+    };
+    Ok((response, document))
 }
 
-/// Read a file layer and expose its complete inherited permission for editors.
+/// Read a raw file layer alongside defaults, its actual parent, and the result
+/// through that layer. Later file, environment, and command-line overrides never
+/// leak into the values shown while editing an earlier layer.
 pub fn read_runtime_layer_setting(
     global_path: &Path,
     workspace_path: &Path,
@@ -216,26 +242,124 @@ pub fn read_runtime_layer_setting(
     input: ConfigSettingsGetInput,
 ) -> Result<ConfigSettingsReadResponse, RuntimeConfigSettingsError> {
     let path = config_settings_layer_path(layer, global_path, workspace_path);
-    let mut response = read_runtime_file_setting(path, input)?;
-    if response
-        .path
-        .as_deref()
-        .is_some_and(|path| path != "permission" && !path.starts_with("permission."))
-    {
-        return Ok(response);
+    let (mut response, document) = read_runtime_file_setting_document(path.to_path_buf(), input)?;
+    if layer == ConfigSettingsLayer::Workspace && response.config_found {
+        response.override_path = agena_domain::config_setting_inheritance_override_path(
+            &document,
+            response.path.as_deref(),
+        )
+        .map_err(|error| RuntimeConfigSettingsError::invalid_input_error(&error))?;
+        response.has_override = Some(response.override_path.is_some());
+        response.requires_group_reset = Some(
+            agena_domain::config_setting_requires_group_reset(
+                &document,
+                response.path.as_deref(),
+                response.override_path.as_deref(),
+            )
+            .map_err(|error| RuntimeConfigSettingsError::invalid_input_error(&error))?,
+        );
     }
-    let mut inherited = agena_domain::PermissionConfig::global_default();
-    if layer == ConfigSettingsLayer::Workspace {
-        let (_, document) = read_runtime_settings_document(global_path)?;
-        if let Some(value) = document.get("permission").filter(|value| !value.is_null()) {
-            let overlay = serde_json::from_value(value.clone())
-                .map_err(|error| RuntimeConfigSettingsError::invalid_input_error(&error))?;
-            inherited.merge_from(overlay);
+    response.default_value = default_settings_document()
+        .ok()
+        .map(|defaults| get_json_path(defaults, response.path.as_deref()))
+        .transpose()?;
+
+    // Invalid files stay available for raw repair. An unavailable projection is
+    // omitted, never replaced with final effective values from later layers.
+    let selected = crate::RawConfigFile::from_document(path, document, response.config_found);
+    let (global, workspace) = match layer {
+        ConfigSettingsLayer::Global => (selected, None),
+        ConfigSettingsLayer::Workspace => (crate::RawConfigFile::read(global_path), Some(selected)),
+    };
+    if let Ok(global) = global {
+        if layer == ConfigSettingsLayer::Workspace {
+            response.inherited_value = resolved_settings_layer_document(
+                global.config.clone(),
+                None,
+                global_path,
+                workspace_path,
+            )
+            .ok()
+            .map(|value| get_json_path(&value, response.path.as_deref()))
+            .transpose()?;
         }
+        let resolved = match workspace {
+            None => {
+                resolved_settings_layer_document(global.config, None, global_path, workspace_path)
+            }
+            Some(workspace) => workspace
+                .map_err(|error| RuntimeConfigSettingsError::invalid_input_error(&error))
+                .and_then(|workspace| {
+                    resolved_settings_layer_document(
+                        global.config,
+                        Some(workspace),
+                        global_path,
+                        workspace_path,
+                    )
+                }),
+        };
+        response.layer_value = resolved
+            .ok()
+            .map(|value| get_json_path(&value, response.path.as_deref()))
+            .transpose()?;
     }
-    let document = serde_json::json!({"permission": inherited});
-    response.inherited_value = Some(get_json_path(&document, response.path.as_deref())?);
     Ok(response)
+}
+
+fn default_settings_document() -> Result<&'static JsonValue, RuntimeConfigSettingsError> {
+    // Program defaults do not depend on a file or runtime environment. Cache the
+    // root once; both leaf and batch reads slice this same schema projection.
+    static DEFAULTS: std::sync::LazyLock<Result<JsonValue, RuntimeConfigSettingsError>> =
+        std::sync::LazyLock::new(|| {
+            let config = crate::RawConfig::default()
+                .resolve()
+                .map_err(|error| RuntimeConfigSettingsError::invalid_input_error(&error))?;
+            crate::resolved_config_json_value(&config)
+                .map_err(|error| RuntimeConfigSettingsError::internal_error(&error))
+        });
+    DEFAULTS.as_ref().map_err(Clone::clone)
+}
+
+fn resolved_settings_layer_document(
+    mut global: crate::RawConfig,
+    workspace: Option<crate::RawConfigFile>,
+    global_path: &Path,
+    workspace_path: &Path,
+) -> Result<JsonValue, RuntimeConfigSettingsError> {
+    let global_prompts = global.prompts.clone().unwrap_or_default();
+    let mut workspace_prompts = Default::default();
+    let mut workspace_dir = Default::default();
+    if let Some(workspace) = workspace {
+        if workspace.config.access_control.is_some() {
+            return Err(RuntimeConfigSettingsError::invalid_input(
+                "access_control is instance-owned; edit it in global settings, not a workspace file",
+            ));
+        }
+        workspace_prompts = workspace.config.prompts.clone().unwrap_or_default();
+        if !workspace_path.as_os_str().is_empty() {
+            workspace_dir = workspace_path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("prompts");
+        }
+        global.merge_project_from_with_keys(workspace.config, workspace.merge_keys);
+    }
+    // Use Runtime's schema rules: scalar fields merge, while keyed entries,
+    // model selections, and per-tool command rule groups retain their boundaries.
+    let mut resolved = global
+        .resolve()
+        .map_err(|error| RuntimeConfigSettingsError::invalid_input_error(&error))?;
+    resolved.prompts = crate::PromptLayersConfig {
+        global: global_prompts,
+        workspace: workspace_prompts,
+        global_dir: global_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("prompts"),
+        workspace_dir,
+    };
+    crate::resolved_config_json_value(&resolved)
+        .map_err(|error| RuntimeConfigSettingsError::internal_error(&error))
 }
 
 /// List values from a configuration document using Runtime's stable path
@@ -247,7 +371,7 @@ pub fn list_runtime_file_settings(
     let config_path = config_path.into();
     let (config_found, mut document) = read_runtime_settings_document(&config_path)?;
     let revision = document_revision(&document);
-    crate::normalize_execution_settings_document(&mut document)
+    crate::normalize_settings_document(&mut document)
         .map_err(RuntimeConfigSettingsError::invalid_input)?;
     let items = list_json_path(&document, input.target.path.as_deref(), input.recursive)?;
     Ok(ConfigSettingsListResponse {
@@ -277,7 +401,7 @@ pub fn set_runtime_file_setting(
         let (config_found, mut document) = read_runtime_settings_document(&config_path)?;
         verify_document_revision(&document, input.options.expected_revision.as_deref())?;
         let before = document.clone();
-        crate::normalize_execution_settings_document(&mut document)
+        crate::normalize_settings_document(&mut document)
             .map_err(RuntimeConfigSettingsError::invalid_input)?;
         let previous = get_json_path(&document, Some(input.path.as_str()))?;
         let created = previous.is_null();
@@ -308,7 +432,7 @@ pub fn delete_runtime_file_setting(
         let (config_found, mut document) = read_runtime_settings_document(&config_path)?;
         verify_document_revision(&document, input.options.expected_revision.as_deref())?;
         let before = document.clone();
-        crate::normalize_execution_settings_document(&mut document)
+        crate::normalize_settings_document(&mut document)
             .map_err(RuntimeConfigSettingsError::invalid_input)?;
         let deleted = remove_runtime_json_path(&mut document, &segments)?;
         finish_runtime_settings_edit(
@@ -341,7 +465,7 @@ pub fn patch_runtime_file_settings(
         let (config_found, mut document) = read_runtime_settings_document(&config_path)?;
         verify_document_revision(&document, input.options.expected_revision.as_deref())?;
         let before = document.clone();
-        crate::normalize_execution_settings_document(&mut document)
+        crate::normalize_settings_document(&mut document)
             .map_err(RuntimeConfigSettingsError::invalid_input)?;
         let created = input
             .target
@@ -415,7 +539,7 @@ fn finish_runtime_settings_edit(
     };
     let before_revision = document_revision(&before);
     let mut previous_document = before;
-    crate::normalize_execution_settings_document(&mut previous_document)
+    crate::normalize_settings_document(&mut previous_document)
         .map_err(RuntimeConfigSettingsError::invalid_input)?;
     let previous = get_json_path(&previous_document, path.as_deref())?;
     let current = get_json_path(&document, path.as_deref())?;
@@ -453,7 +577,7 @@ fn finish_runtime_settings_edit(
 pub(crate) fn normalize_settings_document(
     document: &mut JsonValue,
 ) -> Result<(), RuntimeConfigSettingsError> {
-    crate::normalize_execution_settings_document(document)
+    crate::normalize_settings_document(document)
         .map_err(RuntimeConfigSettingsError::invalid_input)?;
     if let Some(value) = document.get("permission").filter(|value| !value.is_null()) {
         let mut permission: agena_domain::PermissionConfig =
@@ -481,6 +605,9 @@ pub(crate) fn normalize_settings_document(
                 ))
             })?;
         for (id, profile) in &mut access_control.profiles {
+            if profile.complete {
+                profile.permission = profile.permission.standalone();
+            }
             normalize_permission_config(
                 &mut profile.permission,
                 &format!("access_control.profiles.{id}.permission"),
@@ -553,14 +680,14 @@ fn ensure_runtime_object_path<'a>(
     };
     let segments = parse_runtime_settings_path(path)?;
     let mut cursor = root;
-    for segment in segments {
+    for (index, segment) in segments.iter().enumerate() {
         let object = cursor.as_object_mut().ok_or_else(|| {
             RuntimeConfigSettingsError::invalid_input(format!(
                 "settings path `{path}` crosses non-object segment `{segment}`"
             ))
         })?;
         let child = object
-            .entry(segment)
+            .entry(segment.clone())
             .or_insert_with(|| JsonValue::Object(JsonMap::new()));
         if child.is_null() {
             *child = JsonValue::Object(JsonMap::new());
@@ -570,6 +697,10 @@ fn ensure_runtime_object_path<'a>(
                 "settings path `{path}` crosses non-object segment"
             )));
         }
+        crate::network_config_migration::initialize_network_field_object(
+            child,
+            &segments[..=index],
+        );
         cursor = child;
     }
     cursor.as_object_mut().ok_or_else(|| {

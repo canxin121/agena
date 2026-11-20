@@ -122,6 +122,7 @@ mod app_overlays;
 mod app_paste;
 mod app_permission_display;
 mod app_permission_helpers;
+mod app_permission_raw;
 mod app_permission_studio;
 mod app_permissions;
 mod app_plan_document;

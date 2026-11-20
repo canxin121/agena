@@ -91,6 +91,7 @@ pub struct PermissionRuleWriteCommand {
     pub action: PermissionAction,
     pub mode: PermissionMode,
     pub scope: PermissionScope,
+    pub workspace_id: Option<i64>,
     pub session_id: Option<i64>,
     pub source: String,
     pub operator: Option<String>,
@@ -177,28 +178,65 @@ impl ApplicationService {
                 .prepare_session_profile(workspace_id, configuration, requested, use_default)
                 .await
                 .map_err(|error| ApplicationError::bad_request_error(&error)),
-            None if requested.is_some() || configuration.profile.is_some() => Err(
-                ApplicationError::service_unavailable("session profile service not initialised"),
-            ),
-            None => Ok(configuration),
+            None => {
+                let mut configuration = configuration;
+                let defaults = agena_runtime::RuntimeSessionManagerConfig::default();
+                let validate_mode = requested.is_some()
+                    || (use_default && configuration.parent_session_id.is_none());
+                if let Some(name) = requested {
+                    let name = name.trim().to_owned();
+                    configuration.profile = (!name.is_empty()).then_some(name);
+                } else if use_default && configuration.parent_session_id.is_none() {
+                    configuration.profile = Some(
+                        defaults
+                            .effective_profile_name(None, configuration.relation_kind)
+                            .to_owned(),
+                    );
+                }
+                if validate_mode {
+                    defaults.validate_session_profile(
+                        configuration.profile.as_deref(),
+                        configuration.relation_kind,
+                    )
+                } else {
+                    defaults.resolve_session_profile(
+                        configuration.profile.as_deref(),
+                        configuration.relation_kind,
+                    )
+                }
+                .map_err(|error| {
+                    ApplicationError::bad_request_error(&agena_runtime::AppError::Config(error))
+                })?;
+                Ok(configuration)
+            }
         }
     }
 
     async fn ensure_workspace_exists(&self, workspace_id: i64) -> ApplicationResult<()> {
-        let exists = self
-            .workspace_repository
+        self.registered_workspace_path(workspace_id)
+            .await
+            .map(|_| ())
+    }
+
+    pub(crate) async fn registered_workspace_path(
+        &self,
+        workspace_id: i64,
+    ) -> ApplicationResult<String> {
+        self.workspace_repository
             .path_by_id(workspace_id)
             .await
             .map_err(|error| ApplicationError::internal_error(&error))?
-            .is_some();
-        if exists {
-            Ok(())
-        } else {
-            Err(ApplicationError::not_found_with_diagnostic(
-                "The workspace was not found.",
-                format!("workspace not found: {workspace_id}"),
-            ))
-        }
+            .ok_or_else(|| {
+                ApplicationError::not_found_with_diagnostic(
+                    "The workspace was not found.",
+                    format!("workspace not found: {workspace_id}"),
+                )
+            })
+    }
+
+    pub(crate) async fn server_workspace_id(&self) -> ApplicationResult<Option<i64>> {
+        self.workspace_id_by_path(self.workspace_root.as_str())
+            .await
     }
 
     async fn ensure_session_exists(&self, session_id: i64) -> ApplicationResult<()> {

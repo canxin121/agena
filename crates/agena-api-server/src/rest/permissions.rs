@@ -1,8 +1,19 @@
+#[derive(serde::Deserialize)]
+pub struct PermissionRulesListTarget {
+    workspace_id: Option<i64>,
+}
+
 pub async fn list_permission_rules(
     State(state): State<AppState>,
     AxumQuery(query): AxumQuery<SearchPaginationQuery>,
+    AxumQuery(target): AxumQuery<PermissionRulesListTarget>,
 ) -> Result<impl IntoResponse, ServerError> {
-    json_http(state.service().list_permission_rules(query)).await
+    json_http(
+        state
+            .service()
+            .list_permission_rules_for_workspace(query, target.workspace_id),
+    )
+    .await
 }
 
 pub async fn batch_permission_rules(

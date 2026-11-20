@@ -496,6 +496,26 @@ pub struct ConfigJsonSources {
     pub applied_layers: Vec<String>,
     pub file: serde_json::Value,
     pub project_file: serde_json::Value,
+    /// Program defaults used to fill missing global settings and restore them.
+    /// This is a reference document, not an editable configuration layer.
+    /// Null means the default document is unavailable.
+    #[serde(default)]
+    pub defaults: serde_json::Value,
+    /// Configuration resolved through the global and workspace file layers,
+    /// respectively, excluding environment and command-line overrides.
+    /// Null means that the document could not be resolved.
+    #[serde(default)]
+    pub global_resolved: serde_json::Value,
+    #[serde(default)]
+    pub workspace_resolved: serde_json::Value,
+    /// Deprecated compatibility field. Global settings have no parent and this
+    /// is always null; use `defaults` for the built-in default reference.
+    #[serde(default)]
+    pub global_inherited: serde_json::Value,
+    /// Actual parent of the workspace layer, excluding later overrides.
+    /// Null if the global document cannot be resolved.
+    #[serde(default)]
+    pub workspace_inherited: serde_json::Value,
     pub effective: serde_json::Value,
 }
 

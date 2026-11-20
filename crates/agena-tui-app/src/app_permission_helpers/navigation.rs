@@ -41,7 +41,17 @@ pub(crate) fn refresh_permission_studio_dialog(
     } else if !dialog.editable {
         i18n.text("permission-studio-access-read-only-footer")
     } else {
-        permission_studio_footer(i18n, &dialog.page)
+        format!(
+            "Ctrl+O {} · {}",
+            i18n.text(
+                if matches!(dialog.source, crate::PermissionStudioSource::GlobalConfig) {
+                    "settings-key-restore-default"
+                } else {
+                    "settings-key-source"
+                }
+            ),
+            permission_studio_footer(i18n, &dialog.page)
+        )
     };
     dialog.state = SectionedListState::new(sections, selected_section, selected_item, focus);
 }

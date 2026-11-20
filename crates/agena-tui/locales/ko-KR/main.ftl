@@ -394,7 +394,7 @@ permission-studio-catalog-custom-search = 사용자 정의 새로운 수동 태�
 
 overlay-settings-title = 설정
 
-overlay-settings-footer = Ctrl+R 새로 고침 · ←/→ 스위치 팬 · 탭/Shift+ 탭 사이클 팬 · ↑/↓ 선택 · 열려있는 입력 · 조건 닫기
+overlay-settings-footer = Ctrl+O 출처 · Ctrl+R 새로 고침 · ←/→ 스위치 팬 · 탭/Shift+ 탭 사이클 팬 · ↑/↓ 선택 · 열려있는 입력 · 조건 닫기
 
 overlay-settings-sections = 섹션
 
@@ -860,7 +860,7 @@ permission-studio-add-path-rule = 경로 규칙 추가
 
 permission-studio-add-name = 이름 *
 
-permission-studio-add-tool-rule = 도구 규칙 추가
+permission-studio-add-command-rule = 명령 규칙 추가
 
 permission-studio-rule-key = 이름 *
 
@@ -1086,7 +1086,6 @@ settings-mcp-auth-mode-updated = Agena MCP 인증 모드 설정 {$mode}
 settings-mcp-anonymous-access-updated = Agena MCP 익명 도구 액세스 설정 {$policy}
 
 
-permission-studio-command-pattern-title = {$tool_name} 명령 패턴
 
 settings-tool-api-list-description = 실행 도구.
 
@@ -1228,7 +1227,7 @@ overlay-permission-rule-detail-session-id = 세션 범위 규칙에는 구체적
 overlay-permission-rule-detail-mode = 허용은 작업을 허용하고, 승인을 요청하고, 거부하면 차단합니다.
 overlay-workbench-details = 세부정보
 overlay-permission-studio-title = 허가
-overlay-permission-studio-footer-nested = Ctrl+N 추가 · 편집 입력 · Ctrl+E 이름 바꾸기 · Ctrl+D 제거 · Esc 뒤로
+overlay-permission-studio-footer-nested = Ctrl+O 출처 · Ctrl+N 추가 · 편집 입력 · Ctrl+E 이름 바꾸기 · Ctrl+D 제거 · Esc 뒤로
 permission-studio-catalog-prompt = 라이브 도구 카탈로그를 검색하세요. 하나 이상의 항목을 선택하거나 현재 등록되지 않은 값에 대해 사용자 지정 규칙을 선택합니다.
 permission-studio-catalog-custom-detail = 현재 라이브 카탈로그에 없는 태그 또는 도구 이름을 추가하세요.
 flash-permission-studio-catalog-empty = 규칙을 추가하기 전에 항목을 하나 이상 선택하세요.
@@ -1272,7 +1271,6 @@ settings-client-versions-section-description = 공급자 요청 ID 헤더에 사
 settings-provider-workbench-detail = 인증, 어댑터, 모델 라우팅 또는 새 공급자를 구성하기 전에 검색 가능한 공급자 목록을 엽니다.
 settings-provider-new-detail = 새 공급자를 만들고, 라이브 어댑터 모델을 나열하고, 공급자 어댑터 구성을 편집합니다. 모델을 별도로 선택하십시오.
 settings-model-catalog-open-detail = 확인된 모델 메타데이터를 검사하고 로컬 모델 카탈로그 캐시를 새로 고칩니다.
-permission-studio-command-rules-shell-only = 명령 규칙은 shell.exec, shell.spawn, shell.watch, shell.open, shell.write에 적용됩니다. 다른 도구에는 이름 규칙 또는 기본값을 사용하세요.
 permission-studio-detail-editable = Enter를 누르면 이 권한 슬라이스에 대한 여러 줄 JSON 편집기가 열립니다.
 permission-studio-detail-add-hint = Enter를 누르면 이 항목이 생성되고 즉시 열립니다.
 permission-studio-detail-full-config-editable = Enter를 누르면 전체 문서에 대한 고급 JSON 편집기가 열립니다.
@@ -2046,7 +2044,6 @@ flash-ui-backend-queue-full = UI 백엔드 명령 대기열이 가득 찼습니�
 flash-ui-backend-unavailable = UI 백엔드 명령 서비스를 사용할 수 없습니다
 help-diagnostics-kitty-helper = Kitty 도우미
 message-role-tool = 도구
-permission-studio-command-pattern-suffix = + 명령 패턴
 search-picker-preview-title = 미리 보기
 search-picker-search-failed = 검색 실패
 search-picker-no-preview = 미리 보기를 사용할 수 없습니다
@@ -2403,7 +2400,7 @@ overlay-permission-rule-preview-target = target: {$target}
 overlay-permission-rule-preview-workspace-root = workspace_root: {$path}
 overlay-permission-scope-heading = 이 결정을 적용할 범위를 선택하세요
 overlay-permission-session = session: #{$session}
-overlay-permission-studio-footer = Left/Right 또는 Tab/Shift+Tab 창 전환 · 화살표 선택 · Enter 편집 · Esc 돌아가기
+overlay-permission-studio-footer = Ctrl+O 출처 · Left/Right 또는 Tab/Shift+Tab 창 전환 · 화살표 선택 · Enter 편집 · Esc 돌아가기
 overlay-permission-studio-nav = 탐색
 overlay-permission-studio-sections = 권한 섹션
 overlay-plan-approval-footer = a 한 번 승인 | s 세션 승인 | d 거부
@@ -3308,7 +3305,7 @@ permission-studio-rule-duplicate = 이 규칙이 이미 있습니다.
 
 permission-studio-network-json = 고급 네트워크 JSON
 
-permission-studio-network-json-help = default, allow, deny, inbound, hostLoopback으로 전체 설정을 편집합니다. 규칙은 to, protocol, ports, except를 사용합니다. 생략한 필드는 거부 또는 빈 목록이 되며, network를 삭제하면 상위 설정을 상속합니다.
+permission-studio-network-json-help = version: 2 네트워크 필드 default, inbound, hostLoopback, allow, deny를 편집합니다. 누락된 필드는 기본값 또는 상속값을 사용하고 []는 명시적인 빈 목록입니다. 규칙은 to, protocol, ports, except를 사용합니다.
 
 permission-studio-network-invalid-action = 네트워크 동작은 allow 또는 deny여야 합니다.
 
@@ -3330,7 +3327,7 @@ permission-studio-network-collapse = 접기
 
 permission-studio-network-expand = 펼치기
 
-permission-studio-network-json-short = 전체 네트워크 JSON 편집
+permission-studio-network-json-short = 현재 계층 네트워크 JSON 편집
 
 permission-studio-network-rule-form = 네트워크 규칙
 
@@ -3358,7 +3355,7 @@ permission-studio-network-saving = 권한을 저장하고 있습니다. 잠시 �
 
 permission-studio-network-save-or-cancel = 현재 편집을 먼저 저장하거나 취소하세요.
 
-permission-studio-network-inherit-title = 상위 네트워크 설정 상속
+permission-studio-network-inherit-title = 모든 네트워크 상속 복원
 
 permission-studio-network-inherit-help = 이 계층의 전체 네트워크 설정을 삭제하고 상위 설정을 상속합니다.
 
@@ -3425,7 +3422,17 @@ permission-studio-loopback-label = 호스트 루프백
 permission-studio-network-controls = 네트워크 작업
 permission-studio-add-network-rule = + 네트워크 규칙 추가
 permission-studio-inherited-rule-no-local-edit = 상속된 규칙을 편집하면 현재 범위에서 재정의됩니다. 현재 범위의 규칙만 이름을 바꾸거나 삭제할 수 있습니다.
+settings-agent-profile-none = 기본 역할 복원
+settings-agent-profile-none-detail = 일반 세션은 main, 하위 에이전트는 worker를 사용하며 명시적 세션 설정을 유지합니다.
+settings-agent-profile-mode-primary = 기본 세션
+settings-agent-profile-mode-subagent = 하위 에이전트
+settings-agent-profile-mode-all = 기본 세션 및 하위 에이전트
+settings-agent-profile-source-builtin = 기본 제공
+settings-agent-profile-source-global = 전역
+settings-agent-profile-source-workspace = 작업 공간
+settings-agent-profile-effective = 적용된 기본 역할: {$profile}
 
+# 모델 요청의 측정 성능
 usage-performance-title = 모델 성능 · 평균
 usage-performance-tps = TPS (tok/s)
 usage-performance-ttft = 첫 출력
@@ -3445,3 +3452,55 @@ status-part-model-generation = 최근 생성 시간={$value}
 status-part-model-throughput = 최근 E2E={$value} tok/s
 session-status-tps = {$value} tok/s
 session-status-latency = 요청 {$value}
+settings-layer-source-title = 설정 출처
+settings-layer-parent-value = 상위 값
+settings-layer-inherit = 상위 설정 상속
+settings-layer-local = 현재 계층에 설정
+settings-layer-source-description = 상속하면 상위 변경을 따릅니다. 현재 계층 설정은 현재 값을 고정합니다.
+settings-layer-group-network = 이 선택은 전체 네트워크 정책에 적용됩니다.
+settings-layer-group-tool = 이 선택은 이 도구의 모든 규칙에 적용됩니다.
+settings-layer-group-commands = 이 선택은 모든 공유 명령 규칙에 적용됩니다.
+settings-layer-group-model = 이 선택은 모델과 모드 설정 전체에 적용됩니다.
+settings-key-source = 출처
+settings-layer-ancestor-override = 이 선택은 {$path} 설정 그룹 전체에 적용됩니다. 이 필드를 따로 편집하려면 상속을 복원하세요.
+settings-model-source-changed = 세션 또는 모델이 변경되었습니다. 모델 설정을 다시 여세요.
+settings-model-source-needs-model = 현재 계층에 모델 설정을 고정하려면 구체적인 모델을 선택하세요.
+permission-studio-origin-default = 기본값
+settings-layer-default-value = 기본값
+settings-layer-default = 기본값 복원
+settings-layer-default-description = 선택한 설정을 앱 기본값으로 복원합니다. 다른 설정은 유지됩니다.
+settings-layer-ancestor-default = 이 작업은 {$path} 그룹 전체에 적용됩니다. 필드를 따로 편집하려면 먼저 그룹 기본값을 복원하세요.
+permission-studio-network-default-title = 모든 네트워크 기본값 복원
+permission-studio-network-default-help = 현재 계층의 네트워크 설정을 모두 삭제하고 앱 기본값을 사용합니다.
+permission-studio-network-allow-list = 허용 대상
+permission-studio-network-deny-list = 차단 대상
+permission-studio-network-list-empty = 현재 계층에 빈 목록 설정
+permission-studio-network-list-source-help = 이 작업은 현재 목록에만 적용됩니다. 빈 목록은 기본값 또는 상속된 모든 항목을 덮어씁니다.
+permission-studio-default-rule-no-local-edit = 기본 규칙을 편집하여 현재 계층 설정을 만들 수 있습니다. 이름 변경과 삭제는 현재 계층 규칙에 적용됩니다.
+
+settings-key-restore-default = 기본값 복원
+
+settings-restore-default-title = {$setting}의 기본값을 복원할까요?
+
+settings-restore-default-preview = 복원 후: {$value}
+
+settings-already-default = 이 설정은 이미 기본값을 사용합니다.
+
+settings-list-actions = 작업
+
+settings-list-actions-description = 이 목록을 비우거나 기본 항목을 복원합니다. 다른 네트워크 설정은 유지됩니다.
+
+permission-studio-network-list-clear = 목록 비우기
+
+permission-studio-raw-title = {$scope} · 권한 JSON
+permission-studio-raw-unavailable = 기본 권한 또는 상위 권한을 가져올 수 없습니다. 여기에서 이 계층에 저장된 권한을 확인하고 수정할 수 있습니다.
+permission-studio-raw-help = 이 계층의 permission 객체만 저장합니다. JSON 객체를 입력하세요. null을 입력하면 이 계층의 권한 설정을 삭제합니다.
+permission-studio-raw-invalid = 올바른 권한 JSON 객체 또는 null을 입력하세요: {$error}
+
+settings-layer-parent-global = 전역
+settings-layer-parent-config = 상위 설정
+settings-layer-inherited-from = 상속 · {$source}
+settings-layer-inherited-locked = {$source}에서 상속한 값입니다. 편집하려면 Ctrl+O로 이 계층을 선택하세요.
+settings-network-source-group = 이 출처 선택은 모든 네트워크 기본값과 두 규칙 목록에 적용됩니다. 전체 네트워크 JSON을 편집하기 전에 이 계층을 선택하세요.
+settings-inherited-unavailable = 상위 값을 가져올 수 없습니다. 복사하지 말고 이 계층의 값을 직접 입력하세요.
+settings-source-unavailable = 사용 불가

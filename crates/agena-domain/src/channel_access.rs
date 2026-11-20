@@ -495,6 +495,8 @@ pub struct ChannelAuthority {
     #[serde(default)]
     #[schemars(with = "serde_json::Value")]
     pub permission_overlay: crate::PermissionConfig,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub permission_complete: bool,
     pub epoch: i64,
     pub actor: String,
     pub role: ChannelRole,
@@ -535,6 +537,7 @@ impl ChannelAuthority {
             profile_ids: Vec::new(),
             profile_fingerprint: String::new(),
             permission_overlay: Default::default(),
+            permission_complete: false,
             epoch,
             actor: actor.into(),
             role,

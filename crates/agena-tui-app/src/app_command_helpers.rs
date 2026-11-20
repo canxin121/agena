@@ -14,6 +14,7 @@ pub(crate) fn permission_rule_params_from_draft(
             network_host: None,
             network_port: None,
             scope: Some(draft.scope.trim().to_string()),
+            workspace_id: None,
             session_id: if draft.scope.trim() == "session" {
                 draft.session_id.trim().parse::<i64>().ok()
             } else {
@@ -33,6 +34,7 @@ pub(crate) fn permission_rule_params_from_draft(
             network_host: None,
             network_port: None,
             scope: Some(draft.scope.trim().to_string()),
+            workspace_id: None,
             session_id: if draft.scope.trim() == "session" {
                 draft.session_id.trim().parse::<i64>().ok()
             } else {
@@ -52,6 +54,7 @@ pub(crate) fn permission_rule_params_from_draft(
             network_host: None,
             network_port: None,
             scope: Some(draft.scope.trim().to_string()),
+            workspace_id: None,
             session_id: if draft.scope.trim() == "session" {
                 draft.session_id.trim().parse::<i64>().ok()
             } else {

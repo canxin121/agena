@@ -19,6 +19,12 @@ pub(super) fn normalize_configuration_permissions(
             path.normalize_rules()
                 .map_err(|reason| invalid(format!("{field}: {reason}")))?;
         }
+        if let Some(tools) = permission.tools.take() {
+            tools
+                .validate_aliases()
+                .map_err(|reason| invalid(format!("{field}: {reason}")))?;
+            permission.tools = Some(tools.normalized());
+        }
     }
     for (index, permission) in configuration
         .permission_ceiling_layers
@@ -167,6 +173,23 @@ async fn configure(
         validate_profile_change(connection, session, &original.profile, value).await?;
         next.profile = value.clone();
     }
+    if let Some(value) = &change.selection_defaults
+        && original.selection_defaults != *value
+    {
+        let entries: i64 = sqlx::query_scalar(
+            "SELECT entry_count FROM agena_session_statistics WHERE session_id=?",
+        )
+        .bind(session.get())
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(sql_error)?;
+        if entries != 0 || !original.selection_defaults.is_empty() {
+            return Err(KernelError::Conflict(
+                "inherited selection defaults are immutable after creation".into(),
+            ));
+        }
+        next.selection_defaults = value.clone();
+    }
     if let Some(owner) = &change.owner {
         if original.owner.is_some() || owner.is_none() {
             // Ownership is assigned once, when the conversation is created.
@@ -195,6 +218,9 @@ async fn configure(
     }
     if let Some(value) = &change.permission {
         next.permission = value.clone();
+    }
+    if let Some(value) = &change.permission_profile {
+        next.permission_profile = value.clone();
     }
     if let Some(value) = &change.permission_ceiling {
         if !original.permission_ceiling.is_empty() && &original.permission_ceiling != value {
@@ -1391,7 +1417,9 @@ pub(super) async fn apply(
                     conversation: Some(config.conversation.clone()),
                     prompts: Some(config.prompts.clone()),
                     profile: Some(config.profile.clone()),
+                    selection_defaults: Some(config.selection_defaults.clone()),
                     permission: Some(config.permission.clone()),
+                    permission_profile: Some(config.permission_profile.clone()),
                     permission_ceiling: Some(config.permission_ceiling.clone()),
                     permission_ceiling_layers: Some(config.permission_ceiling_layers.clone()),
                     channel_authority: config.channel_authority.clone(),

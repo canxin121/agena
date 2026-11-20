@@ -17,6 +17,7 @@ struct AgentLaunch {
     launch_call_id: Option<i64>,
     name: String,
     prompt: String,
+    profile: Option<String>,
     commands: Vec<String>,
     selection: agena_domain::ModelSelectionConfig,
     timeout_ms: Option<u64>,
@@ -94,6 +95,7 @@ impl SessionManager {
             launch_call_id: call,
             name: request.name,
             prompt: request.prompt,
+            profile: request.profile,
             commands: request.commands,
             selection: agena_domain::ModelSelectionConfig {
                 provider: selection.provider,
@@ -228,7 +230,20 @@ impl SessionManager {
             .clone()
             .try_acquire_owned()
             .map_err(|_| AppError::Config("the agent settlement queue is full".into()))?;
-        let parent = self.get_session(request.parent_session_id).await?;
+        let launch = match request.launch_call_id {
+            Some(call) => Some(self.live_tool(request.parent_session_id, call)?),
+            None => None,
+        };
+        let state = match &launch {
+            Some((_, control)) => control.state.clone(),
+            None => {
+                self.state_for_session(session_id(request.parent_session_id)?)
+                    .await?
+            }
+        };
+        let parent = self
+            .get_session_with_state(request.parent_session_id, Some(state.clone()))
+            .await?;
         if parent.is_subagent() {
             return Err(AppError::Config(
                 "delegated agents cannot create nested agents".into(),
@@ -250,7 +265,6 @@ impl SessionManager {
         }
         let mut denials = parent.execution.capability_denied_tool_names.clone();
         denials.extend(agent_child_capability_denials());
-        let state = self.state_for_session(session_id(parent.id)?).await?;
         let selected = request.selection;
         let explicit_selection = ExecutionSelection {
             provider: selected.provider,
@@ -268,36 +282,10 @@ impl SessionManager {
             .configuration(session_id(parent.id)?)
             .await
             .map_err(kernel_error)?;
-        let parent_metadata = self
-            .kernel()
-            .reader
-            .metadata(session_id(parent.id)?)
-            .await
-            .map_err(kernel_error)?;
-        let selection = parent
-            .execution
-            .selection
-            .overlay_with_cascade(&explicit_selection);
-        let mut options = self.options_for_selection_with_state(&selection, &state)?;
-        options.selection_override = if parent.execution.profile.is_some() {
-            Some(
-                parent_metadata
-                    .selection
-                    .clone()
-                    .unwrap_or_default()
-                    .overlay_with_cascade(&explicit_selection),
-            )
-        } else {
-            None
-        };
         let references = resolve_agent_command_references(
             &state.executor.plugin_manager().command_catalog(),
             &request.commands,
         )?;
-        let launch = match request.launch_call_id {
-            Some(call) => Some(self.live_tool(parent.id, call)?),
-            None => None,
-        };
         let origin = match &launch {
             Some((_, control)) => Some(
                 self.kernel()
@@ -355,16 +343,13 @@ impl SessionManager {
                 return Err(AppError::Config("a parent may have at most 8 agents; reuse an existing agent with agent.followup".into()));
             }
         }
-        let previous = if let Some(id) = existing {
+        let existing_configuration = if let Some(id) = existing {
             let configuration = self
                 .kernel()
                 .reader
                 .configuration(id)
                 .await
                 .map_err(kernel_error)?;
-            // Another followup may have launched and finished between this
-            // request's optimistic check and the serialized launch. Wait for
-            // that execution's settlement before replacing its agent state.
             if configuration
                 .agent
                 .as_ref()
@@ -373,13 +358,64 @@ impl SessionManager {
             {
                 return Err(AppError::ExecutionAlreadyActive(id.get()));
             }
-            configuration.agent.as_ref().and_then(|a| a.started_at_ms)
+            Some((*configuration).clone())
         } else {
             None
         };
+        let previous_started = existing_configuration
+            .as_ref()
+            .and_then(|configuration| configuration.agent.as_ref())
+            .and_then(|agent| agent.started_at_ms);
         let now = Utc::now()
             .timestamp_millis()
-            .max(previous.unwrap_or(i64::MIN).saturating_add(1));
+            .max(previous_started.unwrap_or(i64::MIN).saturating_add(1));
+        let profile = match &existing_configuration {
+            Some(configuration) => configuration.profile.clone(),
+            None => Some(resolve_subagent_profile_name(
+                &state.config,
+                request.profile.as_deref(),
+            )?),
+        };
+        let effective_profile = state
+            .config
+            .effective_profile_name(
+                profile.as_deref(),
+                agena_domain::SessionRelationKind::Subagent,
+            )
+            .to_owned();
+        let resolved_profile = state
+            .config
+            .resolve_session_profile(
+                profile.as_deref(),
+                agena_domain::SessionRelationKind::Subagent,
+            )
+            .map_err(AppError::Config)?;
+        let mut parent_selection = parent.execution.selection.clone();
+        if let Some((_, control)) = &launch {
+            parent_selection = parent_selection.overlay_with_cascade(&ExecutionSelection {
+                provider: Some(control.model.provider_id.to_string()),
+                adapter: control.model.adapter_id.as_ref().map(ToString::to_string),
+                model: Some(control.model.model_id.to_string()),
+                ..Default::default()
+            });
+        }
+        let selection_defaults = existing_configuration
+            .as_ref()
+            .map(|configuration| configuration.selection_defaults.clone())
+            .unwrap_or(parent_selection);
+        let selected = if let Some(id) = existing {
+            self.kernel()
+                .reader
+                .metadata(id)
+                .await
+                .map_err(kernel_error)?
+                .selection
+                .clone()
+                .unwrap_or_default()
+                .overlay_with_cascade(&explicit_selection)
+        } else {
+            explicit_selection.clone()
+        };
         let agent = SessionAgentConfiguration {
             origin_message_id: origin,
             name: name.clone(),
@@ -393,15 +429,20 @@ impl SessionManager {
                 max_cost_microusd: request.max_cost_microusd,
             },
         };
+        let mut selection_configuration = existing_configuration.clone().unwrap_or_default();
+        selection_configuration.profile = profile.clone();
+        selection_configuration.selection_defaults = selection_defaults.clone();
+        selection_configuration.relation_kind = agena_domain::SessionRelationKind::Subagent;
+        selection_configuration.agent = Some(agent.clone());
+        let selection = state
+            .config
+            .session_selection(&selection_configuration, &selected)
+            .map_err(AppError::Config)?;
+        let mut options = self.options_for_selection_with_state(&selection, &state)?;
+        options.selection_override = Some(selected);
         let child = match existing {
             Some(id) => {
-                let previous = self
-                    .kernel()
-                    .reader
-                    .configuration(id)
-                    .await
-                    .map_err(kernel_error)?;
-                let mut previous = (*previous).clone();
+                let mut previous = existing_configuration.expect("existing child configuration");
                 if previous.channel_authority != parent.execution.channel_authority {
                     return Err(AppError::Config(
                         "a child from a different channel authority cannot be reused".into(),
@@ -414,8 +455,12 @@ impl SessionManager {
                         &previous.permission_ceiling,
                         previous.permission_ceiling_layers,
                     )?;
-                self.validate_session_permission_configuration(parent.workspace_id, &previous)
-                    .await?;
+                self.validate_session_permission_configuration_with_state(
+                    parent.workspace_id,
+                    &previous,
+                    &state,
+                )
+                .await?;
                 denials.extend(previous.capability_denied_tool_names.iter().cloned());
                 let change = SessionConfigurationChange {
                     agent: Some(Some(agent.clone())),
@@ -441,22 +486,26 @@ impl SessionManager {
                 } else {
                     parent.execution.permission_ceiling.clone()
                 };
-                let permission_ceiling_layers =
+                let mut permission_ceiling_layers =
                     super::permission_config::delegated_permission_ceiling_layers(
                         &parent_configuration,
                         &parent.execution.effective_permission,
                         &permission_ceiling,
                         Vec::new(),
                     )?;
+                // The selected role is a delegation boundary as well as a
+                // default. Broad parent/global overrides cannot expand it.
+                super::permission_config::append_permission_ceiling_layer(
+                    &permission_ceiling,
+                    &mut permission_ceiling_layers,
+                    &resolved_profile.permission,
+                )?;
                 let configuration = SessionConfiguration {
                     parent_session_id: Some(session_id(parent.id)?),
                     relation_kind: agena_domain::SessionRelationKind::Subagent,
-                    profile: parent.execution.profile.clone(),
-                    permission: if parent.execution.profile.is_some() {
-                        parent_configuration.permission.clone()
-                    } else {
-                        parent.execution.effective_permission.clone()
-                    },
+                    profile: profile.clone(),
+                    selection_defaults,
+                    permission: Default::default(),
                     // Freeze both the current effective policy and every
                     // inherited boundary as independent intersections.
                     permission_ceiling,
@@ -467,8 +516,12 @@ impl SessionManager {
                     agent: Some(agent.clone()),
                     ..Default::default()
                 };
-                self.validate_session_permission_configuration(parent.workspace_id, &configuration)
-                    .await?;
+                self.validate_session_permission_configuration_with_state(
+                    parent.workspace_id,
+                    &configuration,
+                    &state,
+                )
+                .await?;
                 persist(|| async {
                     match parent.workspace_id {
                         Some(workspace) => {
@@ -519,7 +572,8 @@ impl SessionManager {
             .map_err(|error| AppError::Config(error.diagnostic_message().to_owned()))?;
         self.persist_submission_selection(child.get(), options.clone())
             .await?;
-        self.prepare_options(child, &mut options).await?;
+        self.prepare_options_with_state(child, &mut options, &state)
+            .await?;
         let activity = match launch {
             Some((tool, _)) => {
                 let activity_request = RequestId::new();
@@ -568,7 +622,7 @@ impl SessionManager {
         let generation = execution.generation;
         let registration = self.register_agent_settlement(child, now, execution_id, generation);
         let control = self
-            .supervise_with_budget(
+            .supervise_with_budget_and_state(
                 execution,
                 options.clone(),
                 false,
@@ -577,6 +631,7 @@ impl SessionManager {
                     max_tokens: request.max_tokens,
                     max_cost_microusd: request.max_cost_microusd,
                 }),
+                state.clone(),
             )
             .await?;
         preparing.lock().unwrap_or_else(|p| p.into_inner()).take();
@@ -637,6 +692,7 @@ impl SessionManager {
         Ok(AgentHandle {
             agent_id: child.get(),
             name,
+            profile: Some(effective_profile),
             status: AgentStatus::Running,
         })
     }
@@ -988,15 +1044,16 @@ impl SessionManager {
         pending: PreparingAgent,
         failure: agena_failure::Failure,
     ) -> Result<(), AppError> {
-        let limits = self
+        let configuration = self
             .kernel()
             .reader
             .configuration(pending.child)
             .await
-            .map_err(kernel_error)?
+            .map_err(kernel_error)?;
+        let limits = configuration
             .agent
             .as_ref()
-            .map(|a| a.limits.clone())
+            .map(|agent| agent.limits.clone())
             .unwrap_or_default();
         let agent = SessionAgentConfiguration {
             origin_message_id: pending.origin,
@@ -1152,4 +1209,37 @@ fn agent_child_capability_denials() -> std::collections::BTreeSet<String> {
             ]
         })
         .collect()
+}
+
+fn resolve_subagent_profile_name(
+    config: &RuntimeSessionManagerConfig,
+    requested: Option<&str>,
+) -> Result<String, AppError> {
+    let name = match requested.map(str::trim) {
+        Some("") => agena_runtime_config::DEFAULT_SUBAGENT_PROFILE,
+        Some(name) => name,
+        None => config
+            .default_subagent_profile
+            .as_deref()
+            .filter(|name| !name.is_empty())
+            .unwrap_or(agena_runtime_config::DEFAULT_SUBAGENT_PROFILE),
+    };
+    if let Err(reason) =
+        config.validate_session_profile(Some(name), agena_domain::SessionRelationKind::Subagent)
+    {
+        let available = config
+            .profiles
+            .keys()
+            .filter_map(|name| {
+                let profile =
+                    agena_runtime_config::resolve_agent_profile(&config.profiles, name).ok()?;
+                (profile.mode.allows_subagent() && !profile.hidden).then_some(name.as_str())
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(AppError::Config(format!(
+            "{reason}. Available subagent profiles: {available}"
+        )));
+    }
+    Ok(name.to_owned())
 }

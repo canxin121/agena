@@ -138,7 +138,7 @@ pub async fn open_kernel_runtime(url: &str) -> Result<SqliteKernel> {
     compose_kernel_runtime(database).await
 }
 
-/// Resolve old session network overrides and ceilings before typed recovery.
+/// Resolve old session permission overrides and ceilings before typed recovery.
 /// Original settings and all rewritten rows are committed in one transaction.
 pub async fn open_kernel_runtime_with_network_migration(
     url: &str,

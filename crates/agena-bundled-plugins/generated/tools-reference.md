@@ -401,7 +401,7 @@ Agent communication and delegation.
 
 ### spawn
 
-`agena.agent.spawn` · **Summary**: Create an independent child and return its handle immediately. Its final reply is delivered automatically. Parent history is not copied; include scope and constraints in prompt.
+`agena.agent.spawn` · **Summary**: Delegate a bounded task to a role profile and return its handle immediately. Choose profile from the available subagent catalog: explore for investigation, worker for implementation, reviewer for verification. Omission uses the configured subagent default. Parent history is not copied; include scope, constraints, and expected result in prompt. Final replies are delivered automatically.
 
 **Tags**: `agent`
 
@@ -414,6 +414,7 @@ Agent communication and delegation.
 | `max_cost_microusd` | `integer / null` | — | — |  |
 | `max_tokens` | `integer / null` | — | — | Per-execution token budget, retained for followup executions. |
 | `name` | `string` | ✓ | — | Unique nonnumeric name: 1–64 lowercase letters, digits or underscores; `parent` and `self` are reserved. |
+| `profile` | `string / null` | — | — | Role profile from the available subagent catalog. Choose the role that<br>fits the task; omission uses the configured subagent default. |
 | `prompt` | `string` | ✓ | — | Scope, constraints, required context and output contracts, and expected final result.<br>Parent history is not copied; include any chart or UI contract the task needs. |
 | `selection` | `AgentModelSelection / null` | — | — |  |
 | `timeout_ms` | `integer / null` | — | — |  |
@@ -506,6 +507,14 @@ Agent communication and delegation.
         "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
       }
     },
+    "profile": {
+      "description": "Role profile from the available subagent catalog. Choose the role that\nfits the task; omission uses the configured subagent default.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
     "commands": {
       "description": "Command instructions attached to the initial message.",
       "type": "array",
@@ -513,7 +522,7 @@ Agent communication and delegation.
         "type": "string"
       },
       "default": [],
-      "x-agena-order": "000002"
+      "x-agena-order": "000003"
     },
     "selection": {
       "anyOf": [
@@ -524,7 +533,7 @@ Agent communication and delegation.
           "type": "null"
         }
       ],
-      "x-agena-order": "000003"
+      "x-agena-order": "000004"
     },
     "timeout_ms": {
       "type": [
@@ -533,7 +542,7 @@ Agent communication and delegation.
       ],
       "format": "uint64",
       "minimum": 1,
-      "x-agena-order": "000004"
+      "x-agena-order": "000005"
     },
     "max_tokens": {
       "description": "Per-execution token budget, retained for followup executions.",
@@ -543,7 +552,7 @@ Agent communication and delegation.
       ],
       "format": "uint64",
       "minimum": 1,
-      "x-agena-order": "000005"
+      "x-agena-order": "000006"
     },
     "max_cost_microusd": {
       "type": [
@@ -552,7 +561,7 @@ Agent communication and delegation.
       ],
       "format": "uint64",
       "minimum": 1,
-      "x-agena-order": "000006"
+      "x-agena-order": "000007"
     }
   },
   "additionalProperties": false,

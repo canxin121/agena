@@ -6,7 +6,8 @@ use super::{
 
 mod fields;
 mod general;
+mod layers;
 mod render;
 mod sandbox;
 
-pub(super) use self::{fields::*, general::*, render::*, sandbox::*};
+pub(super) use self::{fields::*, general::*, layers::*, render::*, sandbox::*};

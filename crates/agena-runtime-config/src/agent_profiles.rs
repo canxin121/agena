@@ -6,7 +6,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use agena_domain::{ExecutionSelection, ModelSelectionConfig, PermissionConfig};
+use agena_domain::{
+    AccessControlConfig, ExecutionSelection, ModelSelectionConfig, PermissionConfig,
+};
 use agena_prompt_layers::{FragmentId, PromptLayer, PromptScope};
 use serde::{Deserialize, Serialize};
 
@@ -14,6 +16,26 @@ use crate::{ConfigError, PromptLayersConfig, ResolvedConfig};
 
 pub const MAX_AGENT_PROFILES: usize = 256;
 pub const MAX_AGENT_PROFILE_DEPTH: usize = 64;
+
+/// Where a role may be selected. Existing custom profiles support both scopes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentProfileMode {
+    Primary,
+    Subagent,
+    #[default]
+    All,
+}
+
+impl AgentProfileMode {
+    pub fn allows_primary(self) -> bool {
+        matches!(self, Self::Primary | Self::All)
+    }
+
+    pub fn allows_subagent(self) -> bool {
+        matches!(self, Self::Subagent | Self::All)
+    }
+}
 
 /// A file-backed profile. Workspace entries replace global entries with the
 /// same name; use `extends` to explicitly share settings with another profile.
@@ -25,6 +47,11 @@ pub struct AgentProfileConfig {
     #[serde(skip_serializing_if = "String::is_empty")]
     pub description: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<AgentProfileMode>,
+    /// Hide from model-facing delegation discovery while keeping explicit use.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hidden: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub extends: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<ModelSelectionConfig>,
@@ -32,6 +59,8 @@ pub struct AgentProfileConfig {
     pub prompts: PromptLayer,
     #[serde(skip_serializing_if = "PermissionConfig::is_empty")]
     pub permission: PermissionConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission_profile: Option<String>,
     /// `0` means unlimited, matching `session.max_turns`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<usize>,
@@ -44,10 +73,43 @@ pub struct AgentProfileConfig {
 pub struct ResolvedAgentProfile {
     pub title: String,
     pub description: String,
+    pub mode: AgentProfileMode,
+    pub hidden: bool,
     pub prompts: Vec<PromptLayer>,
     pub permission: PermissionConfig,
+    pub permission_profile: Option<String>,
     pub selection: ExecutionSelection,
     pub max_turns: Option<usize>,
+}
+
+impl ResolvedAgentProfile {
+    pub fn with_permission_profile(
+        mut self,
+        catalog: &AccessControlConfig,
+    ) -> Result<Self, String> {
+        if let Some(id) = &self.permission_profile {
+            let profile = catalog
+                .profiles
+                .get(id)
+                .filter(|profile| profile.complete)
+                .ok_or_else(|| {
+                    format!("permission configuration `{id}` is missing or is not complete")
+                })?;
+            self.permission = profile
+                .permission
+                .standalone()
+                .merged_with(&self.permission);
+        }
+        Ok(self)
+    }
+
+    pub fn effective_permission(&self, inherited: &PermissionConfig) -> PermissionConfig {
+        if self.permission_profile.is_some() {
+            self.permission.clone()
+        } else {
+            inherited.merged_with(&self.permission)
+        }
+    }
 }
 
 pub fn validate_agent_profile_name(name: &str) -> Result<(), String> {
@@ -98,8 +160,18 @@ pub fn resolve_agent_profile(
         if !profile.description.is_empty() {
             resolved.description.clone_from(&profile.description);
         }
+        if let Some(mode) = profile.mode {
+            resolved.mode = mode;
+        }
+        if let Some(hidden) = profile.hidden {
+            resolved.hidden = hidden;
+        }
         if !profile.prompts.is_empty() {
             resolved.prompts.push(profile.prompts.clone());
+        }
+        if let Some(id) = &profile.permission_profile {
+            resolved.permission_profile = Some(id.clone());
+            resolved.permission = PermissionConfig::default();
         }
         resolved.permission.merge_from(profile.permission.clone());
         if let Some(model) = &profile.model {
@@ -139,8 +211,14 @@ pub(crate) fn validate_agent_profiles(config: &ResolvedConfig) -> Result<(), Con
             .map_err(|error| {
                 ConfigError::Validation(format!("profiles.{name}.permission: {error}"))
             })?;
-        let resolved =
-            resolve_agent_profile(&config.profiles, name).map_err(ConfigError::Validation)?;
+        if profile.permission_profile.is_some() && !profile.permission.is_empty() {
+            return Err(ConfigError::Validation(format!(
+                "profiles.{name}: use either a complete permission configuration or inline permissions"
+            )));
+        }
+        let resolved = resolve_agent_profile(&config.profiles, name)
+            .and_then(|profile| profile.with_permission_profile(&config.access_control))
+            .map_err(ConfigError::Validation)?;
         let selection = config
             .default_selection
             .overlay_with_cascade(&resolved.selection);
@@ -167,9 +245,32 @@ pub(crate) fn validate_agent_profiles(config: &ResolvedConfig) -> Result<(), Con
             )?;
         }
     }
-    if let Some(name) = &config.default_profile {
-        resolve_agent_profile(&config.profiles, name)
-            .map_err(|error| ConfigError::Validation(format!("default_profile: {error}")))?;
+    for (field, name, primary) in [
+        ("profiles.main", Some(crate::MAIN_AGENT_PROFILE), true),
+        (
+            "profiles.worker",
+            Some(crate::DEFAULT_SUBAGENT_PROFILE),
+            false,
+        ),
+        ("default_profile", config.default_profile.as_deref(), true),
+        (
+            "default_subagent_profile",
+            config.default_subagent_profile.as_deref(),
+            false,
+        ),
+    ] {
+        if let Some(name) = name {
+            let profile = resolve_agent_profile(&config.profiles, name)
+                .map_err(|error| ConfigError::Validation(format!("{field}: {error}")))?;
+            if (primary && !profile.mode.allows_primary())
+                || (!primary && !profile.mode.allows_subagent())
+            {
+                return Err(ConfigError::Validation(format!(
+                    "{field}: profile `{name}` does not support {} use",
+                    if primary { "primary" } else { "subagent" }
+                )));
+            }
+        }
     }
     Ok(())
 }
@@ -184,10 +285,11 @@ pub(crate) fn validate_agent_profiles_in_workspace(
         return Ok(());
     }
     for name in config.profiles.keys() {
-        let profile =
-            resolve_agent_profile(&config.profiles, name).map_err(ConfigError::Validation)?;
+        let profile = resolve_agent_profile(&config.profiles, name)
+            .and_then(|profile| profile.with_permission_profile(&config.access_control))
+            .map_err(ConfigError::Validation)?;
         crate::config::raw::validate_permission_config_in_workspace(
-            &config.permission.merged_with(&profile.permission),
+            &profile.effective_permission(&config.permission),
             workspace,
             config.sandbox,
         )

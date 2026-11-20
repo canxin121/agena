@@ -3,6 +3,8 @@ use crate::ui_text;
 
 impl RunOptionsState {
     pub(crate) fn clear_model_stack(&mut self) {
+        self.pending_mode_clears = [false; 3];
+        self.raw_selection = None;
         self.explicit_model_stack = false;
         self.model = None;
         self.thinking_mode = None;
@@ -25,16 +27,55 @@ impl RunOptionsState {
         self.speed_mode = speed_mode;
         self.verbosity = verbosity;
         self.parallel_tool_calls = parallel_tool_calls;
+        self.raw_selection = Some(self.display_model_selection());
+        self.pending_mode_clears = [false; 3];
     }
 
-    pub(crate) fn model_stack_request(&self) -> RunOptions {
-        RunOptions {
-            model: self.model.as_ref().map(model_ref_to_wire),
+    fn display_model_selection(&self) -> agena_domain::ExecutionSelection {
+        agena_domain::ExecutionSelection {
+            provider: self
+                .model
+                .as_ref()
+                .map(|model| model.provider_id.to_string()),
+            adapter: self
+                .model
+                .as_ref()
+                .and_then(|model| model.adapter_id.as_ref().map(ToString::to_string)),
+            model: self.model.as_ref().map(|model| model.model_id.to_string()),
             thinking_mode: self.thinking_mode.clone(),
             speed_mode: self.speed_mode.clone(),
             verbosity: self.verbosity.clone(),
-            ..RunOptions::default()
+            parallel_tool_calls: self.parallel_tool_calls,
+            ..Default::default()
         }
+    }
+
+    pub(crate) fn raw_model_selection(&self) -> agena_domain::ExecutionSelection {
+        self.raw_selection
+            .clone()
+            .unwrap_or_else(|| self.display_model_selection())
+    }
+
+    pub(crate) fn model_stack_request(&self) -> Option<RunOptions> {
+        let raw = self.raw_model_selection();
+        let mut request =
+            crate::app_settings_choices::session_sources::session_model_selection_request(&raw)?;
+        // None means unchanged in a mode-only patch. An explicit empty string
+        // clears that override while retaining other modes and parallel=false.
+        if request.model.is_none()
+            && crate::app_settings_choices::session_sources::session_model_has_override(&raw)
+        {
+            if self.pending_mode_clears[0] {
+                request.thinking_mode = Some(String::new());
+            }
+            if self.pending_mode_clears[1] {
+                request.speed_mode = Some(String::new());
+            }
+            if self.pending_mode_clears[2] {
+                request.verbosity = Some(String::new());
+            }
+        }
+        Some(request)
     }
 
     pub(crate) fn model_mode_summary(&self, i18n: &I18n, step: SessionModelModeStep) -> String {
@@ -56,25 +97,32 @@ impl RunOptionsState {
         }
     }
 
-    pub(crate) fn model_mode_input(&self, step: SessionModelModeStep) -> String {
-        match step {
-            SessionModelModeStep::ThinkingMode => self.thinking_mode.clone().unwrap_or_default(),
-            SessionModelModeStep::SpeedMode => self.speed_mode.clone().unwrap_or_default(),
-            SessionModelModeStep::Verbosity => self.verbosity.clone().unwrap_or_default(),
-        }
-    }
-
     pub(crate) fn apply_model_mode_input(&mut self, step: SessionModelModeStep, input: &str) {
+        let mut raw = self.raw_model_selection();
         self.explicit_model_stack = true;
         let trimmed = input.trim();
         let value = (!trimmed.is_empty()).then(|| trimmed.to_owned());
+        let index = match step {
+            SessionModelModeStep::ThinkingMode => 0,
+            SessionModelModeStep::SpeedMode => 1,
+            SessionModelModeStep::Verbosity => 2,
+        };
+        self.pending_mode_clears[index] = value.is_none();
         match step {
-            SessionModelModeStep::ThinkingMode => self.thinking_mode = value,
-            SessionModelModeStep::SpeedMode => self.speed_mode = value,
+            SessionModelModeStep::ThinkingMode => {
+                raw.thinking_mode = value.clone();
+                self.thinking_mode = value;
+            }
+            SessionModelModeStep::SpeedMode => {
+                raw.speed_mode = value.clone();
+                self.speed_mode = value;
+            }
             SessionModelModeStep::Verbosity => {
-                self.verbosity = value.map(|value| value.to_ascii_lowercase())
+                self.verbosity = value.map(|value| value.to_ascii_lowercase());
+                raw.verbosity = self.verbosity.clone();
             }
         }
+        self.raw_selection = Some(raw);
     }
 
     pub(crate) fn mark_model_stack_resolved(&mut self) {
@@ -85,7 +133,7 @@ impl RunOptionsState {
     /// persisted selection again for ordinary messages and continuations.
     pub(crate) fn submission_request(&self) -> RunOptions {
         if self.explicit_model_stack {
-            self.to_request()
+            self.model_stack_request().unwrap_or_default()
         } else {
             RunOptions::default()
         }

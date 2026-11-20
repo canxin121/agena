@@ -857,13 +857,11 @@ impl Application {
         let file = self
             .runtime_config_settings
             .read_file_settings(agena_runtime::ConfigSettingsGetInput::default())
-            .map_err(|error| ApplicationError::internal_error(&error))?
-            .value;
+            .map_err(|error| ApplicationError::internal_error(&error))?;
         let project_file = self
             .runtime_config_settings
-            .read_project_file_settings(agena_runtime::ConfigSettingsGetInput::default())
-            .map_err(|error| ApplicationError::internal_error(&error))?
-            .value;
+            .read_project_file_settings(agena_runtime::ConfigSettingsGetInput::default(), None)
+            .map_err(|error| ApplicationError::internal_error(&error))?;
         let effective = configuration.effective_config;
         Ok(ConfigJsonSources {
             config_path: configuration.config_path,
@@ -871,8 +869,13 @@ impl Application {
             project_config_path: configuration.project_config_path,
             project_config_found: configuration.project_config_found,
             applied_layers: configuration.applied_layers,
-            file,
-            project_file,
+            file: file.value,
+            project_file: project_file.value,
+            defaults: file.default_value.unwrap_or_default(),
+            global_resolved: file.layer_value.unwrap_or_default(),
+            workspace_resolved: project_file.layer_value.unwrap_or_default(),
+            global_inherited: serde_json::Value::Null,
+            workspace_inherited: project_file.inherited_value.unwrap_or_default(),
             effective,
         })
     }

@@ -53,6 +53,7 @@ impl App {
     pub(crate) fn open_model_selection_mode_step_or_finish(
         &mut self,
         purpose: agena_tui::model_chooser::SessionModelChooserPurpose,
+        explicit_local: bool,
         model: ModelRef,
         thinking_mode: Option<String>,
         speed_mode: Option<String>,
@@ -71,6 +72,7 @@ impl App {
                 SessionModelModeStep::ThinkingMode => self
                     .open_model_selection_mode_step_or_finish(
                         purpose,
+                        explicit_local,
                         model,
                         thinking_mode,
                         speed_mode,
@@ -79,6 +81,7 @@ impl App {
                     ),
                 SessionModelModeStep::SpeedMode => self.open_model_selection_mode_step_or_finish(
                     purpose,
+                    explicit_local,
                     model,
                     thinking_mode,
                     speed_mode,
@@ -88,6 +91,7 @@ impl App {
                 SessionModelModeStep::Verbosity => {
                     self.finish_model_selection(
                         purpose,
+                        explicit_local,
                         model,
                         thinking_mode,
                         speed_mode,
@@ -113,6 +117,7 @@ impl App {
             items,
             ChoiceOverlayAction::ModelSelectionMode {
                 purpose,
+                explicit_local,
                 model,
                 step,
                 thinking_mode,
@@ -179,12 +184,50 @@ impl App {
         &mut self,
         step: SessionModelModeStep,
     ) -> UiResult<bool> {
-        let items = self.session_model_mode_choice_items(step)?;
+        self.open_session_model_mode_overlay_with_source(step, false)
+    }
+
+    pub(crate) fn open_session_model_mode_overlay_with_source(
+        &mut self,
+        step: SessionModelModeStep,
+        explicit_local: bool,
+    ) -> UiResult<bool> {
+        let raw = self.current_raw_model_selection();
+        let local = self.transcript.session_id.is_none()
+            || super::session_sources::session_model_mode_is_local(&raw, step);
+        if !local && !explicit_local {
+            self.open_session_model_mode_source(step);
+            return Ok(true);
+        }
+        let mut items = self.session_model_mode_choice_items(step)?;
         if items.is_empty() {
             return Ok(false);
         }
         let current_summary = self.run_options.model_mode_summary(&self.i18n, step);
-        let current_value = self.run_options.model_mode_input(step);
+        let current_value = super::session_sources::session_model_mode_value(&raw, step);
+        let parent = self
+            .transcript
+            .execution
+            .as_ref()
+            .map(|execution| execution.execution.inherited_selection.clone())
+            .unwrap_or_default();
+        let inherited = super::session_sources::inherited_session_model_mode(&raw, &parent, step);
+        if let Some(default) = items.iter_mut().find(|item| item.value.is_empty()) {
+            default.label = format!(
+                "{} · {}",
+                self.i18n.text(
+                    if super::session_sources::session_model_route_is_local(&raw) {
+                        "value-default"
+                    } else {
+                        "settings-layer-inherit"
+                    }
+                ),
+                inherited
+                    .clone()
+                    .unwrap_or_else(|| self.i18n.text("value-default"))
+            );
+        }
+        let source = self.i18n.text("settings-layer-local");
         self.open_choice_overlay(
             self.build_choice_overlay(
                 settings_edit_title(
@@ -197,11 +240,24 @@ impl App {
                         "overlay-runtime-setting-current-value",
                         &agena_tui::fl_args!("value" => current_summary),
                     ),
+                    format!(
+                        "{}: {source}",
+                        self.i18n.text("settings-layer-source-title")
+                    ),
                 ]
                 .join("\n"),
-                Some(current_value),
+                Some(
+                    current_value
+                        .or_else(|| explicit_local.then_some(inherited).flatten())
+                        .unwrap_or_default(),
+                ),
                 items,
-                ChoiceOverlayAction::SessionModelMode(step),
+                ChoiceOverlayAction::SessionModelMode {
+                    step,
+                    explicit_local,
+                    session_id: self.transcript.session_id,
+                    model: self.current_session_model_ref(),
+                },
                 false,
                 agena_tui::choice::ChoicePresentationStyle::SelectOnly,
             ),

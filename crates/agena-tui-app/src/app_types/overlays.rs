@@ -73,6 +73,7 @@ pub(crate) struct PermissionStudioItem {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PermissionStudioValueSource {
     Current,
+    Default,
     Inherited,
     Effective,
 }
@@ -84,12 +85,13 @@ pub(crate) enum PermissionStudioAction {
     EditMode(PermissionStudioModeTarget),
     EditNetworkPolicy,
     Network(PermissionStudioNetworkAction),
-    AddToolCommandPattern { tool_name: String },
+    AddToolCommandPattern,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PermissionStudioNetworkAction {
     Source,
+    ListSource { deny: bool },
     Offline,
     Outbound,
     AddRule { deny: bool },
@@ -112,6 +114,7 @@ pub(crate) enum PermissionStudioNetworkField {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PermissionStudioNetworkRuleDraft {
     pub(crate) policy: serde_json::Value,
+    pub(crate) effective_policy: serde_json::Value,
     pub(crate) original: Option<(bool, usize)>,
     pub(crate) deny: bool,
     pub(crate) to: String,
@@ -140,8 +143,7 @@ pub(crate) enum PermissionStudioEditorAction {
     EditNetworkPolicy,
     NetworkRuleField(PermissionStudioNetworkField),
     AddToolName,
-    AddToolRule,
-    AddToolCommandPattern { tool_name: String },
+    AddToolCommandPattern,
 }
 
 pub(crate) use agena_tui_permission_studio::PermissionStudioModeTarget;
@@ -281,8 +283,31 @@ pub(crate) enum ChoiceOverlayAction {
         session_id: i64,
     },
     SettingsField(SettingsFieldSpec),
-    SessionModelMode(SessionModelModeStep),
+    SettingsFieldSource {
+        field: SettingsFieldSpec,
+        local_value: Option<serde_json::Value>,
+        model_editor: Option<agena_tui::model_chooser::SessionModelChooserPurpose>,
+    },
+    SessionModelMode {
+        step: SessionModelModeStep,
+        session_id: Option<i64>,
+        model: Option<ModelRef>,
+        explicit_local: bool,
+    },
+    SessionModelModeSource {
+        step: SessionModelModeStep,
+        session_id: i64,
+        model: Option<ModelRef>,
+        selected: agena_domain::ExecutionSelection,
+    },
+    SessionModelSource {
+        session_id: i64,
+        model: Option<ModelRef>,
+        selected: agena_domain::ExecutionSelection,
+        local_value: agena_domain::ExecutionSelection,
+    },
     ModelSelectionMode {
+        explicit_local: bool,
         purpose: agena_tui::model_chooser::SessionModelChooserPurpose,
         model: ModelRef,
         step: SessionModelModeStep,
@@ -299,6 +324,11 @@ pub(crate) enum ChoiceOverlayAction {
         rules: Vec<agena_api::resource::PermissionRuleResource>,
     },
     PermissionStudioMode(PermissionStudioModeTarget),
+    PermissionStudioSource(PermissionStudioModeTarget),
+    PermissionStudioNetworkSource,
+    PermissionStudioNetworkListSource {
+        deny: bool,
+    },
     PermissionStudioNetworkProtocol,
     PermissionStudioAddEntries(PermissionStudioCatalogKind),
     PermissionStudioAddEntriesMode {
@@ -332,6 +362,8 @@ pub(crate) enum PermissionRuleStudioChoiceField {
 
 #[derive(Debug, Clone)]
 pub(crate) struct SettingsFieldSpec {
+    /// Set only by an explicit Local source choice for this editor instance.
+    pub(crate) explicit_local: bool,
     pub(crate) section: SettingsStudioSectionId,
     pub(crate) workspace: bool,
     pub(crate) path: String,
@@ -498,6 +530,15 @@ pub(crate) type ConfirmOverlay = ConfirmDialogState<ConfirmAction>;
 
 #[derive(Debug, Clone)]
 pub(crate) enum ConfirmAction {
+    SettingsRestoreDefault {
+        field: SettingsFieldSpec,
+    },
+    PermissionStudioRestoreDefault {
+        target: PermissionStudioModeTarget,
+    },
+    PermissionStudioRestoreNetworkList {
+        deny: bool,
+    },
     Rewind {
         session_id: i64,
         at_message_id: i64,

@@ -57,10 +57,16 @@ pub struct SessionHierarchyRequest {
 pub use agena_api::extended_sessions::SessionMetadataUpdate as SessionUpdateRequest;
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(untagged, deny_unknown_fields)]
 /// Request to update the permission configuration of a session.
-pub struct SessionPermissionUpdateRequest {
-    pub permission: agena_api::resource::PermissionConfigResource,
+pub enum SessionPermissionUpdateRequest {
+    Custom {
+        permission: agena_api::resource::PermissionConfigResource,
+    },
+    Profile {
+        #[serde(deserialize_with = "Option::<String>::deserialize")]
+        permission_profile: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -208,5 +214,31 @@ mod prompt_layer_tests {
         let run: SessionRunRequestBody =
             serde_json::from_value(serde_json::json!({"system": ""})).unwrap();
         assert_eq!(run.options.system.as_deref(), Some(""));
+    }
+}
+
+#[cfg(test)]
+mod permission_update_tests {
+    use super::*;
+    use serde_json::{from_value, json};
+
+    #[test]
+    fn supports_custom_rules_and_explicit_profile_selection_or_reset() {
+        let parse = from_value::<SessionPermissionUpdateRequest>;
+        assert!(matches!(
+            parse(json!({"permission": {}})).unwrap(),
+            SessionPermissionUpdateRequest::Custom { .. }
+        ));
+        assert!(
+            matches!(parse(json!({"permission_profile": "reader"})).unwrap(), SessionPermissionUpdateRequest::Profile { permission_profile: Some(id) } if id == "reader")
+        );
+        assert!(matches!(
+            parse(json!({"permission_profile": null})).unwrap(),
+            SessionPermissionUpdateRequest::Profile {
+                permission_profile: None
+            }
+        ));
+        assert!(parse(json!({})).is_err());
+        assert!(parse(json!({"permission": {}, "permission_profile": "reader"})).is_err());
     }
 }

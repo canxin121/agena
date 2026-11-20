@@ -10,6 +10,8 @@ fn bot(name: &str, avatar: Option<&str>) -> BotRecord {
         name: name.into(),
         name_folded: name.to_lowercase(),
         instructions: String::new(),
+        prompt_ids: Vec::new(),
+        publish_prompts: false,
         avatar: avatar.map(str::to_owned),
         revision: 1,
         archived: false,
@@ -44,6 +46,8 @@ async fn avatar_and_revision_commit_atomically_and_survive_reopen() {
                 name: "New name".into(),
                 name_folded: "new name".into(),
                 avatar: Some(BLUE.into()),
+                prompt_ids: vec!["first".into(), "second".into()],
+                publish_prompts: true,
                 updated_at_ms: 2,
                 ..original.clone()
             },
@@ -52,6 +56,8 @@ async fn avatar_and_revision_commit_atomically_and_survive_reopen() {
         .await
         .unwrap();
     assert_eq!(updated.revision, 2);
+    assert_eq!(updated.prompt_ids, ["first", "second"]);
+    assert!(updated.publish_prompts);
 
     let stale = BotRecord {
         avatar: None,

@@ -96,6 +96,55 @@ async fn assert_workflow(manager: &SessionManager, session: SessionId, expected:
 }
 
 #[tokio::test]
+async fn execution_projection_keeps_selected_and_inherited_model_modes_separate() {
+    let (manager, session) = fixture().await;
+    manager
+        .kernel()
+        .sessions
+        .update_selection(
+            RequestId::new(),
+            session,
+            agena_storage::kernel::SelectionChange::ThinkingMode(Some("high".into())),
+        )
+        .await
+        .unwrap();
+    let snapshot = manager
+        .kernel()
+        .reader
+        .control_snapshot(session, 1)
+        .await
+        .unwrap();
+    let context = SessionQueryService::execution_context(&manager, &snapshot).unwrap();
+    assert_eq!(
+        context.selected_selection.thinking_mode.as_deref(),
+        Some("high")
+    );
+    assert_eq!(context.selected_selection.provider, None);
+    assert_eq!(context.inherited_selection.thinking_mode, None);
+    assert_eq!(context.model_thinking_mode.as_deref(), Some("high"));
+
+    manager
+        .kernel()
+        .sessions
+        .update_selection(
+            RequestId::new(),
+            session,
+            agena_storage::kernel::SelectionChange::ThinkingMode(None),
+        )
+        .await
+        .unwrap();
+    let snapshot = manager
+        .kernel()
+        .reader
+        .control_snapshot(session, 1)
+        .await
+        .unwrap();
+    let context = SessionQueryService::execution_context(&manager, &snapshot).unwrap();
+    assert_eq!(context.selected_selection.thinking_mode, None);
+    assert_eq!(context.inherited_selection.thinking_mode, None);
+}
+
+#[tokio::test]
 async fn related_sessions_project_their_own_tool_and_interaction_workflow() {
     let (manager, root) = fixture().await;
     let seed = send(&manager, root).await;

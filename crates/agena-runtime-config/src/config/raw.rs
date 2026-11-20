@@ -1,5 +1,6 @@
 use std::{collections::BTreeMap, path::Path};
 
+use agena_domain::{DEFAULT_PERMISSION_PROFILE_ID, PermissionConfig};
 use merge::Merge as DeriveMerge;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -46,26 +47,34 @@ pub struct RawConfigFile {
 impl RawConfigFile {
     pub fn read(path: &Path) -> Result<Self, ConfigError> {
         match crate::read_config_json(path)? {
-            Some(value) => {
-                let merge_keys = RawProjectMergeKeys::from_value(&value);
-                let config = serde_json::from_value::<RawConfig>(value).map_err(|source| {
-                    ConfigError::ParseFile {
-                        path: path.to_path_buf(),
-                        source,
-                    }
-                })?;
-                Ok(Self {
-                    config,
-                    found: true,
-                    merge_keys,
-                })
-            }
+            Some(value) => Self::from_document(path, value, true),
             None => Ok(Self {
                 config: RawConfig::default(),
                 found: false,
                 merge_keys: RawProjectMergeKeys::default(),
             }),
         }
+    }
+
+    /// Parse a captured document so settings metadata describes the same file
+    /// revision as the raw value, even if a concurrent edit replaces the file.
+    pub(crate) fn from_document(
+        path: &Path,
+        value: Value,
+        found: bool,
+    ) -> Result<Self, ConfigError> {
+        let merge_keys = RawProjectMergeKeys::from_value(&value);
+        let config = serde_json::from_value::<RawConfig>(value).map_err(|source| {
+            ConfigError::ParseFile {
+                path: path.to_path_buf(),
+                source,
+            }
+        })?;
+        Ok(Self {
+            config,
+            found,
+            merge_keys,
+        })
     }
 }
 
@@ -111,6 +120,8 @@ pub fn validate_config_text(path: &Path, text: &str) -> Result<(), ConfigError> 
     };
     // A standalone document has no owning workspace. Its templates remain
     // inactive while active host paths and the global native policy are checked.
+    resolved.prompts.validate()?;
+    resolved.prompts.check_libraries()?;
     validate_permission_config_in_workspace(&resolved.permission, Path::new(""), resolved.sandbox)?;
     crate::agent_profiles::validate_agent_profiles_in_workspace(&resolved, Path::new(""))
 }
@@ -181,6 +192,8 @@ pub fn validate_layered_config_text(
                 .join("prompts")
         },
     };
+    resolved.prompts.validate()?;
+    resolved.prompts.check_libraries()?;
     validate_permission_config_in_workspace(
         &resolved.permission,
         workspace_root,
@@ -196,7 +209,13 @@ pub(super) fn validate_global_agent_profile_scope(
     env: &dyn ConfigEnvironment,
     overrides: &[crate::ConfigOverride],
 ) -> Result<(), ConfigError> {
-    if global.profiles.is_empty() && global.default_profile.as_deref().is_none_or(str::is_empty) {
+    if global.profiles.is_empty()
+        && global.default_profile.as_deref().is_none_or(str::is_empty)
+        && global
+            .default_subagent_profile
+            .as_deref()
+            .is_none_or(str::is_empty)
+    {
         return Ok(());
     }
     // Global sessions load this catalog independently of any project. A
@@ -344,13 +363,22 @@ pub struct RawConfig {
     pub session: Option<RawSessionConfig>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub profiles: BTreeMap<String, crate::AgentProfileConfig>,
-    /// Empty string explicitly disables an inherited default profile.
+    /// Empty string resets an inherited default to the built-in main role.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_profile: Option<String>,
+    /// Empty string resets an inherited subagent default to the worker role.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_subagent_profile: Option<String>,
     /// This file's prompt layer: global in the global file, workspace in the
     /// project file. The loader keeps both layers separate.
     pub prompts: Option<crate::PromptScopeConfig>,
     pub permission: Option<agena_domain::PermissionConfig>,
+    /// An empty global selection explicitly uses its custom rules.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission_profile: Option<String>,
+    /// Authored permissions from scopes layered above a named policy.
+    #[serde(skip)]
+    pub permission_overrides: Option<agena_domain::PermissionConfig>,
     /// Instance-owned identity and permission directory. Project layers cannot
     /// replace it, even when their ordinary execution permissions are editable.
     pub access_control: Option<agena_domain::AccessControlConfig>,
@@ -419,6 +447,25 @@ pub fn normalize_execution_settings_document(document: &mut Value) -> Result<(),
     Ok(())
 }
 
+/// Shared read/edit projection. Revisions are captured before normalization;
+/// writes persist canonical policies only when an authored edit is committed.
+pub fn normalize_settings_document(document: &mut Value) -> Result<(), String> {
+    normalize_execution_settings_document(document)?;
+    crate::network_config_migration::normalize_network_settings_document(document);
+    if let Some(tools) = document.pointer_mut("/permission/tools")
+        && let Ok(config) =
+            serde_json::from_value::<agena_domain::ToolPermissionConfig>(tools.clone())
+        && config.validate_aliases().is_ok()
+    {
+        let normalized = config.clone().normalized();
+        if normalized.rules != config.rules {
+            tools["rules"] =
+                serde_json::to_value(normalized.rules).map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
+}
+
 impl<'de> Deserialize<'de> for RawConfig {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -435,14 +482,16 @@ impl<'de> Deserialize<'de> for RawConfig {
             session: Option<RawSessionConfig>,
             profiles: BTreeMap<String, crate::AgentProfileConfig>,
             default_profile: Option<String>,
+            default_subagent_profile: Option<String>,
             prompts: Option<crate::PromptScopeConfig>,
             permission: Option<agena_domain::PermissionConfig>,
+            permission_profile: Option<String>,
             access_control: Option<agena_domain::AccessControlConfig>,
             plugins: Option<PluginConfig>,
             providers: RawProvidersConfig,
         }
         let mut document = Value::deserialize(deserializer)?;
-        normalize_execution_settings_document(&mut document).map_err(serde::de::Error::custom)?;
+        normalize_settings_document(&mut document).map_err(serde::de::Error::custom)?;
         let input = Input::deserialize(document).map_err(serde::de::Error::custom)?;
         Ok(Self {
             tracing: input.tracing,
@@ -453,8 +502,11 @@ impl<'de> Deserialize<'de> for RawConfig {
             session: input.session,
             profiles: input.profiles,
             default_profile: input.default_profile,
+            default_subagent_profile: input.default_subagent_profile,
             prompts: input.prompts,
             permission: input.permission,
+            permission_profile: input.permission_profile,
+            permission_overrides: None,
             access_control: input.access_control,
             plugins: input.plugins,
             providers: input.providers,
@@ -463,6 +515,27 @@ impl<'de> Deserialize<'de> for RawConfig {
 }
 
 impl RawConfig {
+    fn merge_permission_layer(
+        &mut self,
+        profile: Option<String>,
+        permission: Option<agena_domain::PermissionConfig>,
+        overrides: Option<agena_domain::PermissionConfig>,
+    ) {
+        if profile.as_deref().is_some_and(|id| !id.is_empty()) {
+            self.permission_profile = profile;
+            self.permission = permission;
+            self.permission_overrides = overrides;
+        } else if self
+            .permission_profile
+            .as_deref()
+            .is_some_and(|id| !id.is_empty())
+        {
+            merge_option_struct(&mut self.permission_overrides, permission);
+        } else {
+            merge_option_struct(&mut self.permission, permission);
+        }
+    }
+
     pub fn merge_from(&mut self, overlay: Self) {
         merge_option_struct(&mut self.tracing, overlay.tracing);
         merge_option_struct(&mut self.ui, overlay.ui);
@@ -472,7 +545,15 @@ impl RawConfig {
         merge_option_struct(&mut self.session, overlay.session);
         self.profiles.extend(overlay.profiles);
         merge_option(&mut self.default_profile, overlay.default_profile);
-        merge_option_struct(&mut self.permission, overlay.permission);
+        merge_option(
+            &mut self.default_subagent_profile,
+            overlay.default_subagent_profile,
+        );
+        self.merge_permission_layer(
+            overlay.permission_profile,
+            overlay.permission,
+            overlay.permission_overrides,
+        );
         merge_option(&mut self.access_control, overlay.access_control);
         merge_option_struct(&mut self.plugins, overlay.plugins);
         self.providers.merge_from(overlay.providers);
@@ -494,7 +575,15 @@ impl RawConfig {
         merge_option_struct(&mut self.session, overlay.session);
         self.profiles.extend(overlay.profiles);
         merge_option(&mut self.default_profile, overlay.default_profile);
-        merge_option_struct(&mut self.permission, overlay.permission);
+        merge_option(
+            &mut self.default_subagent_profile,
+            overlay.default_subagent_profile,
+        );
+        self.merge_permission_layer(
+            overlay.permission_profile,
+            overlay.permission,
+            overlay.permission_overrides,
+        );
         merge_project_plugins(&mut self.plugins, overlay.plugins, merge_keys);
         self.providers.merge_project_from(overlay.providers);
     }
@@ -508,7 +597,9 @@ impl RawConfig {
             && self.session.is_none()
             && self.profiles.is_empty()
             && self.default_profile.is_none()
+            && self.default_subagent_profile.is_none()
             && self.permission.is_none()
+            && self.permission_profile.is_none()
             && self.access_control.is_none()
             && self.plugins.is_none()
             && self.providers.is_empty()
@@ -598,8 +689,11 @@ impl RawConfig {
             session,
             profiles: BTreeMap::new(),
             default_profile: None,
+            default_subagent_profile: None,
             prompts: None,
             permission: None,
+            permission_profile: None,
+            permission_overrides: None,
             access_control: None,
             plugins: None,
             providers: RawProvidersConfig::default(),
@@ -643,8 +737,32 @@ impl RawConfig {
                 "session.auto_title.message_interval must be greater than zero".into(),
             ));
         }
-        let mut permission = agena_domain::PermissionConfig::global_default();
-        if let Some(overlay) = self.permission {
+        let access_control = self
+            .access_control
+            .unwrap_or_default()
+            .with_default_profile();
+        access_control.validate().map_err(ConfigError::Validation)?;
+        let use_custom = self.permission_profile.as_deref() == Some("");
+        let mut permission_profile = self.permission_profile.filter(|id| !id.is_empty());
+        let overlay = if permission_profile.is_some() {
+            self.permission_overrides
+        } else {
+            self.permission
+        };
+        if permission_profile.is_none()
+            && !use_custom
+            && overlay.as_ref().is_none_or(PermissionConfig::is_empty)
+        {
+            permission_profile = Some(DEFAULT_PERMISSION_PROFILE_ID.into());
+        }
+        let mut permission = access_control
+            .standalone_permission(
+                permission_profile
+                    .as_deref()
+                    .unwrap_or(DEFAULT_PERMISSION_PROFILE_ID),
+            )
+            .map_err(|error| ConfigError::Validation(format!("permission_profile: {error}")))?;
+        if let Some(overlay) = overlay {
             permission.merge_from(overlay);
         }
         let plugins: PluginConfig = self.plugins.unwrap_or_default();
@@ -668,8 +786,6 @@ impl RawConfig {
             &providers,
         )?;
         validate_permission_config("permission", &permission)?;
-        let access_control = self.access_control.unwrap_or_default();
-        access_control.validate().map_err(ConfigError::Validation)?;
         for (id, profile) in &access_control.profiles {
             validate_permission_config(
                 &format!("access_control.profiles.{id}.permission"),
@@ -685,6 +801,9 @@ impl RawConfig {
         // Native filesystem compilation needs the actual execution scope.
         // ConfigLoader and settings validators bind it after all layers resolve.
 
+        let builtin_profiles = crate::builtin_agent_profiles();
+        let profiles =
+            crate::builtin_profiles::compose_profile_overrides(&builtin_profiles, self.profiles)?;
         let resolved = ResolvedConfig {
             default_selection,
             tracing,
@@ -693,10 +812,21 @@ impl RawConfig {
             sandbox,
             resource_guard,
             session,
-            profiles: self.profiles,
-            default_profile: self.default_profile.filter(|name| !name.is_empty()),
+            builtin_profiles,
+            profiles,
+            default_profile: Some(
+                self.default_profile
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or_else(|| crate::MAIN_AGENT_PROFILE.into()),
+            ),
+            default_subagent_profile: Some(
+                self.default_subagent_profile
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or_else(|| crate::DEFAULT_SUBAGENT_PROFILE.into()),
+            ),
             prompts: crate::PromptLayersConfig::default(),
             permission,
+            permission_profile,
             access_control,
             plugins,
             providers,

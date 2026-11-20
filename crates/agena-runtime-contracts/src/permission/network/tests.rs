@@ -17,6 +17,59 @@ fn compiled(config: &NetworkPermissionConfig) -> NetworkPermissionPolicy {
 }
 
 #[test]
+fn version_two_layer_fields_preserve_independent_runtime_network_decisions() {
+    let parent: NetworkPermissionConfig = serde_json::from_value(json!({
+        "version":2,"default":"deny","allow":[{"to":"192.0.2.0/24"}],"deny":[{"to":"192.0.2.13"}],
+    }))
+    .unwrap();
+    let overlay = |value: Value| {
+        let mut result = parent.clone();
+        result.merge_from(serde_json::from_value(value).unwrap());
+        compiled(&result)
+    };
+    let ingress = overlay(json!({"version":2,"hostLoopback":"allow"}));
+    assert!(allowed(
+        &ingress,
+        "192.0.2.10",
+        NetworkProtocol::Tcp,
+        Some(443)
+    ));
+    assert!(!allowed(
+        &ingress,
+        "192.0.2.13",
+        NetworkProtocol::Tcp,
+        Some(443)
+    ));
+    let clear_allow = overlay(json!({"version":2,"allow":[]}));
+    assert!(!allowed(
+        &clear_allow,
+        "192.0.2.10",
+        NetworkProtocol::Tcp,
+        Some(443)
+    ));
+    let default_allow = overlay(json!({"version":2,"default":"allow"}));
+    assert!(allowed(
+        &default_allow,
+        "198.51.100.10",
+        NetworkProtocol::Tcp,
+        Some(443)
+    ));
+    assert!(!allowed(
+        &default_allow,
+        "192.0.2.13",
+        NetworkProtocol::Tcp,
+        Some(443)
+    ));
+    let clear_deny = overlay(json!({"version":2,"deny":[]}));
+    assert!(allowed(
+        &clear_deny,
+        "192.0.2.13",
+        NetworkProtocol::Tcp,
+        Some(443)
+    ));
+}
+
+#[test]
 fn lossless_simplification_preserves_endpoint_decisions() {
     let mut policies = policy_matrix();
     for value in [

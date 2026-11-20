@@ -155,6 +155,7 @@ impl ApplicationService {
                 .await
                 .map_err(crate::kernel_error)?;
             configuration.profile = inherited.profile.clone();
+            configuration.selection_defaults = inherited.selection_defaults.clone();
             configuration.permission = inherited.permission.clone();
             configuration.permission_ceiling = inherited.permission_ceiling.clone();
             configuration.permission_ceiling_layers = inherited.permission_ceiling_layers.clone();

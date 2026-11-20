@@ -118,7 +118,7 @@ impl App {
                         self.flash_error(error.to_string());
                     }
                 }
-                "session-token-usage" => self.open_usage_dashboard(),
+                "session-token-usage" | "session-performance" => self.open_usage_dashboard(),
                 name if name.starts_with("work-") => self.handle_session_work_action(name),
                 "plan" => self.open_plan_viewer_fullscreen(),
                 "btw" => self.open_btw(""),
@@ -214,6 +214,33 @@ impl App {
             }
             PointerAction::FocusList(panel) => {
                 self.focus_pointer_list(panel);
+            }
+            PointerAction::NamedIndex("settings-restore-default", index) => {
+                if activate
+                    && self.overlay.is_none()
+                    && self.context_help.is_none()
+                    && let Route::SettingsStudio(dialog) | Route::ClientVersionsStudio(dialog) =
+                        &mut self.current_route
+                    && dialog.state.select_visible(1, index)
+                {
+                    self.handle_key_event(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL));
+                }
+            }
+            PointerAction::NamedIndex("permission-source", index) => {
+                if activate
+                    && self.overlay.is_none()
+                    && self.context_help.is_none()
+                    && let Some((host, mut dialog)) = self.take_permission_studio_dialog()
+                {
+                    let selected = crate::select_permission_studio_row(&mut dialog, index);
+                    self.restore_permission_studio_dialog(host, dialog);
+                    if selected == Some(true) {
+                        self.handle_key_event(KeyEvent::new(
+                            KeyCode::Char('o'),
+                            KeyModifiers::CONTROL,
+                        ));
+                    }
+                }
             }
             PointerAction::NamedIndex("work-row", index) => self.handle_work_row(index),
             PointerAction::NamedIndex("plugin-tab", index) => {

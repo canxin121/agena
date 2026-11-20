@@ -196,7 +196,7 @@ struct RemoteBackend {
     /// connect and refreshed before settings-studio rebuilds; settings reads
     /// are synchronous in the TUI event loop.
     config_sources: tokio::sync::RwLock<Option<agena_api::resource::ConfigJsonSources>>,
-    permission_parents: tokio::sync::RwLock<HashMap<String, agena_domain::PermissionConfig>>,
+    permission_bases: tokio::sync::RwLock<HashMap<String, agena_domain::PermissionConfig>>,
     /// Authoritative runtime projection used for status and capability caches.
     runtime_status: tokio::sync::RwLock<Option<agena_api::resource::RuntimeStatusResponse>>,
     /// Cached control projection for Agena's own HTTP MCP surface.
@@ -607,7 +607,7 @@ impl TuiBackend {
                 configured_provider_adapter_models: Default::default(),
                 provider_drafts: Default::default(),
                 config_sources: Default::default(),
-                permission_parents: Default::default(),
+                permission_bases: Default::default(),
                 runtime_status: Default::default(),
                 mcp_server_control: Default::default(),
                 plugin_catalog: Default::default(),
@@ -739,7 +739,7 @@ impl TuiBackend {
                 ),
                 provider_drafts: Default::default(),
                 config_sources: Default::default(),
-                permission_parents: Default::default(),
+                permission_bases: Default::default(),
                 runtime_status: tokio::sync::RwLock::new(Some(runtime_status)),
                 mcp_server_control: Default::default(),
                 plugin_catalog: Default::default(),
@@ -922,39 +922,29 @@ impl TuiBackend {
             .and_then(|guard| guard.clone())
     }
 
-    pub(crate) async fn refresh_permission_parent(&self, layer: &str) -> Result<()> {
+    pub(crate) async fn refresh_permission_base(&self, layer: &str) -> Result<()> {
         let response = self
             .client()
             .settings_layer_value(layer, "permission")
             .await?;
-        let inherited = response
-            .get("inherited_value")
-            .filter(|value| !value.is_null())
-            .context("server did not provide inherited permission configuration")?;
-        let permission: agena_domain::PermissionConfig = serde_json::from_value(inherited.clone())
-            .context("invalid inherited permission configuration")?;
-        permission
-            .network
-            .as_ref()
-            .context("server did not provide inherited network configuration")?;
+        let permission = permission_base_from_layer_response(layer, &response)?;
         self.inner
-            .permission_parents
+            .permission_bases
             .write()
             .await
             .insert(layer.to_string(), permission);
         Ok(())
     }
 
-    pub(crate) fn inherited_permission(
-        &self,
-        layer: &str,
-    ) -> Result<agena_domain::PermissionConfig> {
+    pub(crate) fn permission_base(&self, layer: &str) -> Result<agena_domain::PermissionConfig> {
         self.inner
-            .permission_parents
+            .permission_bases
             .try_read()
             .ok()
-            .and_then(|parents| parents.get(layer).cloned())
-            .context("inherited permission configuration has not been loaded from the server")
+            .and_then(|bases| bases.get(layer).cloned())
+            .context(
+                "permission defaults or parent configuration have not been loaded from the server",
+            )
     }
 
     pub(crate) fn runtime_status(&self) -> Option<agena_api::resource::RuntimeStatusResponse> {
@@ -987,46 +977,13 @@ impl TuiBackend {
     pub(crate) async fn refresh_config_sources(
         &self,
     ) -> Result<agena_api::resource::ConfigJsonSources> {
-        use agena_api::resource::ConfigJsonSources;
         let client = &self.inner.client;
         let global = client.settings_layer_value("global", "").await?;
         let workspace = client.settings_layer_value("workspace", "").await?;
         let resolved = client.resolved_config().await?;
         let (effective, applied_layers) = config_and_layers_from_resolved_response(resolved)?;
-        let config_path = global
-            .get("config_path")
-            .and_then(serde_json::Value::as_str)
-            .map(PathBuf::from)
-            .unwrap_or_default();
-        let config_found = global
-            .get("config_found")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        let project_config_path = workspace
-            .get("config_path")
-            .and_then(serde_json::Value::as_str)
-            .map(PathBuf::from)
-            .unwrap_or_default();
-        let project_config_found = workspace
-            .get("config_found")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
-        let sources = ConfigJsonSources {
-            config_path,
-            config_found,
-            project_config_path,
-            project_config_found,
-            applied_layers,
-            file: global
-                .get("value")
-                .cloned()
-                .unwrap_or(serde_json::Value::Null),
-            project_file: workspace
-                .get("value")
-                .cloned()
-                .unwrap_or(serde_json::Value::Null),
-            effective,
-        };
+        let sources =
+            config_sources_from_layer_responses(global, workspace, effective, applied_layers);
         *self.inner.config_sources.write().await = Some(sources.clone());
         Ok(sources)
     }
@@ -3274,6 +3231,91 @@ fn provider_model_from_resource(
     })
 }
 
+fn permission_base_from_layer_response(
+    layer: &str,
+    response: &serde_json::Value,
+) -> Result<agena_domain::PermissionConfig> {
+    let base = if layer == "global" {
+        response
+            .get("default_value")
+            .or_else(|| response.get("inherited_value"))
+    } else {
+        response.get("inherited_value")
+    }
+    .filter(|value| !value.is_null())
+    .context("server did not provide permission defaults or parent configuration")?;
+    let permission: agena_domain::PermissionConfig = serde_json::from_value(base.clone())
+        .context("invalid permission defaults or parent configuration")?;
+    permission
+        .network
+        .as_ref()
+        .context("server did not provide the base network configuration")?;
+    Ok(permission)
+}
+
+fn config_sources_from_layer_responses(
+    global: serde_json::Value,
+    workspace: serde_json::Value,
+    effective: serde_json::Value,
+    applied_layers: Vec<String>,
+) -> agena_api::resource::ConfigJsonSources {
+    let config_path = global
+        .get("config_path")
+        .and_then(serde_json::Value::as_str)
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    let config_found = global
+        .get("config_found")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let project_config_path = workspace
+        .get("config_path")
+        .and_then(serde_json::Value::as_str)
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    let project_config_found = workspace
+        .get("config_found")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    agena_api::resource::ConfigJsonSources {
+        config_path,
+        config_found,
+        project_config_path,
+        project_config_found,
+        applied_layers,
+        file: global
+            .get("value")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+        project_file: workspace
+            .get("value")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+        // The old protocol exposed built-in defaults as global inherited
+        // metadata. Only use it when the new key is absent: present null
+        // explicitly means the default projection is unavailable.
+        defaults: global
+            .get("default_value")
+            .or_else(|| global.get("inherited_value"))
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+        global_resolved: global
+            .get("layer_value")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+        workspace_resolved: workspace
+            .get("layer_value")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+        global_inherited: serde_json::Value::Null,
+        workspace_inherited: workspace
+            .get("inherited_value")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+        effective,
+    }
+}
+
 fn config_and_layers_from_resolved_response(
     value: serde_json::Value,
 ) -> Result<(serde_json::Value, Vec<String>)> {
@@ -3324,6 +3366,91 @@ fn provider_studio_transport_error(
         presentation,
     );
     agena_provider::draft::ProviderStudioSaveError::Other(failure.into())
+}
+
+#[cfg(test)]
+mod config_sources_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn config_sources_separate_defaults_raw_layer_and_runtime_values() {
+        let sources = config_sources_from_layer_responses(
+            json!({"value":{"sandbox":false},"default_value":{"sandbox":true},"layer_value":{"sandbox":false,"resource_guard":true}}),
+            json!({"value":{"resource_guard":false},"inherited_value":{"sandbox":false,"resource_guard":true},"layer_value":{"sandbox":false,"resource_guard":false}}),
+            json!({"sandbox":true,"resource_guard":false}),
+            vec!["environment".into()],
+        );
+        assert_eq!(sources.file, json!({"sandbox":false}));
+        assert_eq!(sources.defaults, json!({"sandbox":true}));
+        assert!(sources.global_inherited.is_null());
+        assert_eq!(sources.global_resolved, sources.workspace_inherited);
+        assert_eq!(
+            sources.workspace_resolved,
+            json!({"sandbox":false,"resource_guard":false})
+        );
+        assert_eq!(
+            sources.effective,
+            json!({"sandbox":true,"resource_guard":false})
+        );
+    }
+
+    #[test]
+    fn config_sources_only_use_legacy_default_metadata_when_new_key_is_absent() {
+        let global = json!({"value":{},"inherited_value":{"sandbox":false}});
+        let legacy = config_sources_from_layer_responses(
+            global.clone(),
+            json!({}),
+            json!({"sandbox":true}),
+            vec![],
+        );
+        assert_eq!(legacy.defaults, json!({"sandbox":false}));
+        assert!(legacy.global_inherited.is_null());
+        assert!(legacy.global_resolved.is_null());
+        let mut unavailable = global;
+        unavailable["default_value"] = serde_json::Value::Null;
+        unavailable["layer_value"] = serde_json::Value::Null;
+        let sources = config_sources_from_layer_responses(
+            unavailable,
+            json!({}),
+            json!({"sandbox":true}),
+            vec![],
+        );
+        assert!(sources.defaults.is_null());
+        assert!(sources.global_resolved.is_null());
+    }
+
+    #[test]
+    fn permission_bases_use_global_defaults_and_only_real_workspace_parent_values() {
+        let default = json!({"network":{"version":2,"default":"allow"}});
+        let parent = json!({"network":{"version":2,"default":"deny"}});
+        let response = json!({"default_value":default,"inherited_value":parent});
+        let global = permission_base_from_layer_response("global", &response).unwrap();
+        let workspace = permission_base_from_layer_response("workspace", &response).unwrap();
+        assert_eq!(
+            serde_json::to_value(global).unwrap()["network"]["default"],
+            "allow"
+        );
+        assert_eq!(
+            serde_json::to_value(workspace).unwrap()["network"]["default"],
+            "deny"
+        );
+        assert!(
+            permission_base_from_layer_response(
+                "global",
+                &json!({"default_value":null,"inherited_value":parent})
+            )
+            .is_err()
+        );
+        assert!(
+            permission_base_from_layer_response("workspace", &json!({"default_value":default}))
+                .is_err()
+        );
+        assert!(
+            permission_base_from_layer_response("global", &json!({"inherited_value":default}))
+                .is_ok()
+        );
+    }
 }
 
 #[cfg(test)]

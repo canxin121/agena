@@ -220,4 +220,10 @@ pub trait SessionExecutionCommandService: Send + Sync {
         session_id: i64,
         permission: agena_domain::PermissionConfig,
     ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError>;
+
+    async fn set_session_permission_profile(
+        &self,
+        session_id: i64,
+        profile: Option<String>,
+    ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError>;
 }

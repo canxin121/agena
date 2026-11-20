@@ -175,6 +175,8 @@ pub(crate) use agena_runtime_provider::{RUNTIME_CODEX_ORIGINATOR, runtime_codex_
 pub(crate) use agena_runtime_provider::{configured_enabled_adapter_ids, configured_local_models};
 pub(crate) use agena_runtime_session::ContextGovernor;
 pub use agena_runtime_session::RuntimeMetricsSnapshot;
+pub use agena_runtime_session::RuntimeSessionManagerConfig;
+pub(crate) use agena_runtime_session::SessionScopeReconfiguration;
 pub(crate) use agena_runtime_session::merge_system_prompts;
 pub(crate) use agena_runtime_session::resolve_installation_id;
 pub(crate) use agena_runtime_session::run_session_maintenance;
@@ -189,7 +191,6 @@ pub use agena_runtime_session::{
     SessionForkRequest, SessionPermissionReplyRequest, SessionRewindRequest, SessionRunOptions,
     SessionUserRunRequest,
 };
-pub(crate) use agena_runtime_session::{RuntimeSessionManagerConfig, SessionScopeReconfiguration};
 pub use agena_runtime_session::{
     SessionExecutionAttempt, SessionExecutionControl, SessionExecutionControlError,
 };

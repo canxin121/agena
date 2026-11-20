@@ -21,16 +21,42 @@ impl SessionManager {
         } else {
             self.global_state.load_full()
         };
+        let validate_mode =
+            requested.is_some() || (use_default && configuration.parent_session_id.is_none());
         if let Some(name) = requested {
+            let name = name.trim().to_owned();
             configuration.profile = (!name.is_empty()).then_some(name);
         } else if use_default && configuration.parent_session_id.is_none() {
-            configuration.profile = state.config.default_profile.clone();
+            configuration.profile = Some(
+                if configuration.relation_kind.is_subagent() {
+                    state
+                        .config
+                        .default_subagent_profile
+                        .as_deref()
+                        .unwrap_or(agena_runtime_config::DEFAULT_SUBAGENT_PROFILE)
+                } else {
+                    state
+                        .config
+                        .default_profile
+                        .as_deref()
+                        .unwrap_or(agena_runtime_config::MAIN_AGENT_PROFILE)
+                }
+                .to_owned(),
+            );
         }
         // Resolution fails closed when a saved profile was removed or renamed.
-        state
-            .config
-            .resolve_profile(configuration.profile.as_deref())
-            .map_err(AppError::Config)?;
+        if validate_mode {
+            state.config.validate_session_profile(
+                configuration.profile.as_deref(),
+                configuration.relation_kind,
+            )
+        } else {
+            state.config.resolve_session_profile(
+                configuration.profile.as_deref(),
+                configuration.relation_kind,
+            )
+        }
+        .map_err(AppError::Config)?;
         self.validate_session_permission_configuration(workspace_id, &configuration)
             .await?;
         Ok(configuration)
@@ -118,6 +144,7 @@ impl SessionManager {
             configuration.permission_ceiling = inherited.permission_ceiling.clone();
             configuration.permission_ceiling_layers = inherited.permission_ceiling_layers.clone();
             configuration.profile = inherited.profile.clone();
+            configuration.selection_defaults = inherited.selection_defaults.clone();
         }
         configuration = self
             .prepare_session_profile(Some(workspace), configuration, request.profile, true)
@@ -227,10 +254,7 @@ impl SessionManager {
         let state = self.state_for_session(session).await?;
         let selection = state
             .config
-            .session_selection(
-                snapshot.configuration.profile.as_deref(),
-                &ExecutionSelection::default(),
-            )
+            .session_selection(&snapshot.configuration, &ExecutionSelection::default())
             .map_err(AppError::Config)?;
         if let Some(model) = state
             .providers
@@ -447,6 +471,24 @@ impl SessionManager {
         id: i64,
         permission: agena_domain::PermissionConfig,
     ) -> Result<(), AppError> {
+        self.update_session_permission(id, Some(permission), None)
+            .await
+    }
+
+    pub async fn set_session_permission_profile(
+        &self,
+        id: i64,
+        profile: Option<String>,
+    ) -> Result<(), AppError> {
+        self.update_session_permission(id, None, profile).await
+    }
+
+    async fn update_session_permission(
+        &self,
+        id: i64,
+        permission: Option<agena_domain::PermissionConfig>,
+        profile: Option<String>,
+    ) -> Result<(), AppError> {
         let session = session_id(id)?;
         let metadata = self
             .kernel()
@@ -461,16 +503,36 @@ impl SessionManager {
             .await
             .map_err(kernel_error)?;
         let mut configuration = (*saved).clone();
-        configuration.permission = permission.clone();
-        self.validate_session_permission_configuration(metadata.workspace_id, &configuration)
-            .await?;
+        if let Some(custom) = &permission {
+            configuration.permission = custom.clone();
+        }
+        configuration.permission_profile.clone_from(&profile);
+        let state = if metadata.workspace_id.is_some() {
+            self.state.load_full()
+        } else {
+            self.global_state.load_full()
+        };
+        if let Some(id) = profile.as_deref() {
+            state
+                .config
+                .access_control
+                .standalone_permission(id)
+                .map_err(AppError::Config)?;
+        }
+        self.validate_session_permission_configuration_with_state(
+            metadata.workspace_id,
+            &configuration,
+            &state,
+        )
+        .await?;
         self.kernel()
             .sessions
             .configure(
                 RequestId::new(),
                 session,
                 SessionConfigurationChange {
-                    permission: Some(permission),
+                    permission,
+                    permission_profile: Some(profile),
                     ..Default::default()
                 },
             )
@@ -1499,6 +1561,16 @@ impl SessionExecutionCommandService for SessionManager {
         r: agena_domain::PermissionConfig,
     ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError> {
         SessionManager::set_session_permission(self, id, r)
+            .await
+            .map_err(command_error)?;
+        Ok(SessionExecutionCommandOutcome::completed(id))
+    }
+    async fn set_session_permission_profile(
+        &self,
+        id: i64,
+        profile: Option<String>,
+    ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError> {
+        SessionManager::set_session_permission_profile(self, id, profile)
             .await
             .map_err(command_error)?;
         Ok(SessionExecutionCommandOutcome::completed(id))

@@ -22,6 +22,17 @@ pub const MAX_BOT_INSTRUCTIONS_BYTES: usize = 256 * 1024;
 #[serde(deny_unknown_fields)]
 pub struct BotPersona {
     pub instructions: String,
+    /// An omitted selection keeps the existing references on update.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompts: Option<BotPromptSelection>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BotPromptSelection {
+    pub ids: Vec<String>,
+    #[serde(default)]
+    pub publish_to_channels: bool,
 }
 impl BotPersona {
     pub fn validate(&self, name: &str) -> Result<()> {
@@ -35,6 +46,13 @@ impl BotPersona {
             return Err(Error::Policy(format!(
                 "Bot additional system instructions must be at most {MAX_BOT_INSTRUCTIONS_BYTES} UTF-8 bytes"
             )));
+        }
+        if let Some(prompts) = &self.prompts {
+            if prompts.ids.len() > 256 || prompts.ids.iter().any(|id| id.len() > 64) {
+                return Err(Error::Invalid(
+                    "Bot prompt selection exceeds its size limit",
+                ));
+            }
         }
         Ok(())
     }
@@ -207,21 +225,24 @@ mod tests {
         assert!(prose.len() > 4096);
         assert!(
             BotPersona {
-                instructions: prose.clone()
+                instructions: prose.clone(),
+                ..Default::default()
             }
             .validate("Bot")
             .is_ok()
         );
         assert!(
             BotPersona {
-                instructions: "界".repeat(MAX_BOT_INSTRUCTIONS_BYTES / 3)
+                instructions: "界".repeat(MAX_BOT_INSTRUCTIONS_BYTES / 3),
+                ..Default::default()
             }
             .validate("Bot")
             .is_ok()
         );
         assert!(
             BotPersona {
-                instructions: "a".repeat(MAX_BOT_INSTRUCTIONS_BYTES + 1)
+                instructions: "a".repeat(MAX_BOT_INSTRUCTIONS_BYTES + 1),
+                ..Default::default()
             }
             .validate("Bot")
             .is_err()

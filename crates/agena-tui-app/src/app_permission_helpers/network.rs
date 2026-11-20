@@ -14,13 +14,8 @@ pub(crate) fn permission_studio_has_draft(dialog: &PermissionStudioOverlay) -> b
 
 pub(crate) fn permission_studio_network(
     dialog: &PermissionStudioOverlay,
-) -> &NetworkPermissionConfig {
-    dialog
-        .permission
-        .network
-        .as_ref()
-        .or(dialog.inherited_permission.network.as_ref())
-        .unwrap_or_else(|| permission_studio_default_network())
+) -> NetworkPermissionConfig {
+    super::PermissionStudioProjection::new(dialog).network()
 }
 
 pub(crate) fn permission_studio_default_network() -> &'static NetworkPermissionConfig {
@@ -32,14 +27,60 @@ pub(crate) fn permission_studio_default_network() -> &'static NetworkPermissionC
     &DEFAULT
 }
 
-pub(crate) fn permission_studio_custom_network(
+pub(crate) fn permission_studio_network_list_source_config(
+    i18n: &I18n,
     dialog: &PermissionStudioOverlay,
-) -> PermissionConfig {
+    deny: bool,
+    source: &str,
+) -> UiResult<PermissionConfig> {
     let mut permission = dialog.permission.clone();
-    permission
+    if source == "local"
+        && dialog.inherited_permission.network.is_none()
+        && !super::permission_studio_network_list_editable(dialog, deny)
+    {
+        return Err(UiFailure::message(
+            i18n.text("settings-inherited-unavailable"),
+        ));
+    }
+    let effective = permission_studio_network(dialog);
+    let list = match source {
+        "inherit" => None,
+        "local" => Some(
+            effective
+                .egress
+                .as_ref()
+                .and_then(|egress| {
+                    if deny {
+                        egress.deny.clone()
+                    } else {
+                        egress.allow.clone()
+                    }
+                })
+                .unwrap_or_default(),
+        ),
+        "empty" => Some(Vec::new()),
+        _ => return Err(UiFailure::internal("unknown network list source")),
+    };
+    let egress = permission
         .network
-        .get_or_insert_with(|| permission_studio_network(dialog).clone());
-    permission
+        .get_or_insert_with(Default::default)
+        .egress
+        .get_or_insert_with(Default::default);
+    if deny {
+        egress.deny = list;
+    } else {
+        egress.allow = list;
+    }
+    crate::normalize_permission_config(&mut permission);
+    Ok(permission)
+}
+
+pub(crate) fn permission_studio_network_list_label(i18n: &I18n, deny: bool) -> String {
+    i18n.text(if deny {
+        "permission-studio-network-deny-list"
+    } else {
+        "permission-studio-network-allow-list"
+    })
 }
 
 /// Preserve the exact submitted draft after host-side validation rejects it.
@@ -112,12 +153,12 @@ pub(crate) fn permission_studio_network_controls(
         items: vec![
             item(
                 i18n,
-                "permission-studio-network-source",
-                i18n.text(if dialog.permission.network.is_some() {
-                    "permission-studio-network-custom"
+                if matches!(dialog.source, crate::PermissionStudioSource::GlobalConfig) {
+                    "permission-studio-network-default-title"
                 } else {
-                    "permission-studio-network-inherited"
-                }),
+                    "permission-studio-network-inherit-title"
+                },
+                String::new(),
                 Action::Source,
             ),
             item(
@@ -135,7 +176,17 @@ pub(crate) fn permission_studio_network_controls(
             PermissionStudioItem {
                 label: i18n.text("permission-studio-network-json"),
                 value: String::new(),
-                source: None,
+                source: Some(
+                    if matches!(dialog.source, crate::PermissionStudioSource::GlobalConfig)
+                        && dialog.permission.network.is_none()
+                    {
+                        crate::PermissionStudioValueSource::Default
+                    } else if super::permission_studio_network_editable(dialog) {
+                        crate::PermissionStudioValueSource::Current
+                    } else {
+                        crate::PermissionStudioValueSource::Inherited
+                    },
+                ),
                 action: PermissionStudioAction::EditNetworkPolicy,
             },
         ],
@@ -211,27 +262,22 @@ pub(crate) fn permission_studio_network_rules(
             ],
         }];
     }
-    let mut items = Vec::new();
-    let source = if matches!(
-        dialog.source,
-        crate::PermissionStudioSource::EffectiveSession { .. }
-    ) {
-        crate::PermissionStudioValueSource::Effective
-    } else if dialog.permission.network.is_some() {
-        crate::PermissionStudioValueSource::Current
-    } else {
-        crate::PermissionStudioValueSource::Inherited
-    };
-    match serde_json::to_value(permission_studio_network(dialog)) {
-        Ok(policy) => {
-            for (deny, list) in [(false, "allow"), (true, "deny")] {
-                for (index, rule) in policy
-                    .get(list)
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                    .enumerate()
-                {
+    let projection = super::PermissionStudioProjection::new(dialog);
+    let policy = serde_json::to_value(projection.network()).unwrap_or_else(|_| json!({}));
+    [false, true]
+        .into_iter()
+        .map(|deny| {
+            let list = if deny { "deny" } else { "allow" };
+            let source = projection.network_list_origin(deny);
+            let rules = policy
+                .get(list)
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            let mut items = rules
+                .iter()
+                .enumerate()
+                .map(|(index, rule)| {
                     let target = rule.get("to").and_then(Value::as_str).unwrap_or("*");
                     let protocol = rule
                         .get("protocol")
@@ -240,15 +286,7 @@ pub(crate) fn permission_studio_network_rules(
                     let ports = joined_values(rule.get("ports"));
                     let except = joined_values(rule.get("except"));
                     let mut detail = format!(
-                        "{} {protocol}:{}",
-                        action_text(
-                            i18n,
-                            if deny {
-                                NetworkAction::Deny
-                            } else {
-                                NetworkAction::Allow
-                            }
-                        ),
+                        "{protocol}:{}",
                         if ports.is_empty() {
                             "*".to_string()
                         } else {
@@ -261,33 +299,52 @@ pub(crate) fn permission_studio_network_rules(
                             i18n.text("permission-studio-network-except")
                         ));
                     }
-                    items.push(PermissionStudioItem {
+                    PermissionStudioItem {
                         label: target.to_string(),
                         value: detail,
                         source: Some(source),
                         action: PermissionStudioAction::Network(Action::EditRule { deny, index }),
-                    });
-                }
+                    }
+                })
+                .collect::<Vec<_>>();
+            items.push(PermissionStudioItem {
+                label: i18n.text(
+                    if matches!(dialog.source, crate::PermissionStudioSource::GlobalConfig) {
+                        "settings-list-actions"
+                    } else {
+                        "settings-layer-source-title"
+                    },
+                ),
+                value: i18n.text_args(
+                    "value-rule-count",
+                    &agena_tui::fl_args!("count" => rules.len() as i64),
+                ),
+                source: Some(source),
+                action: PermissionStudioAction::Network(Action::ListSource { deny }),
+            });
+            if dialog.editable {
+                items.push(item(
+                    i18n,
+                    if deny {
+                        "permission-studio-network-add-deny"
+                    } else {
+                        "permission-studio-network-add-allow"
+                    },
+                    String::new(),
+                    Action::AddRule { deny },
+                ));
             }
-        }
-        Err(error) => items.push(PermissionStudioItem {
-            label: i18n.text("permission-studio-network-json"),
-            value: error.to_string(),
-            source: None,
-            action: PermissionStudioAction::EditNetworkPolicy,
-        }),
-    }
-    items.push(item(
-        i18n,
-        "permission-studio-add-network-rule",
-        String::new(),
-        Action::AddRule { deny: false },
-    ));
-    vec![PermissionStudioSection {
-        id: PermissionStudioSectionId::NetworkRules,
-        label: i18n.text("permission-studio-nav-network-rules"),
-        items,
-    }]
+            PermissionStudioSection {
+                id: if deny {
+                    PermissionStudioSectionId::NetworkDenyRules
+                } else {
+                    PermissionStudioSectionId::NetworkRules
+                },
+                label: permission_studio_network_list_label(i18n, deny),
+                items,
+            }
+        })
+        .collect()
 }
 
 fn joined_values(value: Option<&Value>) -> String {
@@ -313,10 +370,12 @@ pub(crate) fn permission_studio_network_rule_draft(
     deny: bool,
     index: Option<usize>,
 ) -> UiResult<PermissionStudioNetworkRuleDraft> {
-    let policy =
+    let policy = serde_json::to_value(dialog.permission.network.clone().unwrap_or_default())
+        .map_err(UiFailure::internal)?;
+    let effective_policy =
         serde_json::to_value(permission_studio_network(dialog)).map_err(UiFailure::internal)?;
     let rule = if let Some(index) = index {
-        policy
+        effective_policy
             .get(if deny { "deny" } else { "allow" })
             .and_then(Value::as_array)
             .and_then(|rules| rules.get(index))
@@ -327,6 +386,7 @@ pub(crate) fn permission_studio_network_rule_draft(
     };
     Ok(PermissionStudioNetworkRuleDraft {
         policy,
+        effective_policy,
         original: index.map(|index| (deny, index)),
         deny,
         to: rule
@@ -385,6 +445,20 @@ pub(crate) fn permission_studio_network_rule_policy(
         );
     }
     let mut policy = draft.policy.clone();
+    // Materialize only lists touched by this edit, including a move between them.
+    for deny in [Some(draft.deny), draft.original.map(|(deny, _)| deny)]
+        .into_iter()
+        .flatten()
+    {
+        let key = if deny { "deny" } else { "allow" };
+        if policy.get(key).is_none() {
+            policy[key] = draft
+                .effective_policy
+                .get(key)
+                .cloned()
+                .unwrap_or_else(|| json!([]));
+        }
+    }
     if let Some((deny, index)) = draft.original {
         let previous = policy
             .get_mut(if deny { "deny" } else { "allow" })
@@ -414,11 +488,16 @@ pub(crate) fn permission_studio_network_rule_policy(
 }
 
 pub(crate) fn permission_studio_network_delete_rule(
-    network: &NetworkPermissionConfig,
+    dialog: &PermissionStudioOverlay,
     deny: bool,
     index: usize,
 ) -> UiResult<NetworkPermissionConfig> {
-    let mut value = serde_json::to_value(network).map_err(UiFailure::internal)?;
+    let mut value = serde_json::to_value(dialog.permission.network.clone().unwrap_or_default())
+        .map_err(UiFailure::internal)?;
+    let key = if deny { "deny" } else { "allow" };
+    let effective =
+        serde_json::to_value(permission_studio_network(dialog)).map_err(UiFailure::internal)?;
+    value[key] = effective.get(key).cloned().unwrap_or_else(|| json!([]));
     let rules = value
         .get_mut(if deny { "deny" } else { "allow" })
         .and_then(Value::as_array_mut)
@@ -506,8 +585,37 @@ mod tests {
     }
 
     #[test]
+    fn inherited_network_keyboard_keeps_values_read_only_and_opens_list_source() {
+        let (_temp, mut app) = app();
+        let before = dialog(&app).permission.clone();
+        for (key, modifiers) in [
+            (KeyCode::Char('n'), KeyModifiers::CONTROL),
+            (KeyCode::Enter, KeyModifiers::NONE),
+            (KeyCode::Char('d'), KeyModifiers::CONTROL),
+        ] {
+            press(&mut app, key, modifiers);
+            assert!(dialog(&app).network_rule.is_none());
+            assert!(dialog(&app).editor.is_none());
+            assert_eq!(dialog(&app).permission, before);
+        }
+        press(&mut app, KeyCode::Char('o'), KeyModifiers::CONTROL);
+        assert!(matches!(
+            app.overlay,
+            Some(crate::Overlay::Choice(crate::ChoiceOverlay {
+                action: crate::ChoiceOverlayAction::PermissionStudioNetworkListSource { .. },
+                ..
+            }))
+        ));
+        assert_eq!(dialog(&app).permission, before);
+    }
+
+    #[test]
     fn network_form_keyboard_edits_protocol_and_keeps_rejected_fields() {
         let (_temp, mut app) = app();
+        if let crate::Route::PermissionStudio(page) = &mut app.current_route {
+            page.permission.network = Some(crate::PermissionStudioProjection::new(page).network());
+        }
+        let permission_before = dialog(&app).permission.clone();
         press(&mut app, KeyCode::Char('n'), KeyModifiers::CONTROL);
         assert_eq!(
             dialog(&app).state.selected_section().unwrap().id,
@@ -541,7 +649,7 @@ mod tests {
         press(&mut app, KeyCode::Char('s'), KeyModifiers::CONTROL);
         assert_eq!(dialog(&app).network_rule, before);
         assert!(dialog(&app).save_request.is_none());
-        assert!(dialog(&app).permission.network.is_none());
+        assert_eq!(dialog(&app).permission, permission_before);
         press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
         assert!(dialog(&app).network_rule.is_none());
 
@@ -592,7 +700,7 @@ mod tests {
             Edit::AddPathRule
         ));
         press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
-        for _ in 0..3 {
+        for _ in 0..4 {
             press(&mut app, KeyCode::Tab, KeyModifiers::NONE);
         }
         assert_eq!(
@@ -606,7 +714,7 @@ mod tests {
         press(&mut app, KeyCode::Char('n'), KeyModifiers::CONTROL);
         assert!(matches!(
             dialog(&app).editor.as_ref().unwrap().action,
-            Edit::AddToolRule
+            Edit::AddToolCommandPattern
         ));
         press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
         press(&mut app, KeyCode::BackTab, KeyModifiers::SHIFT);
@@ -629,6 +737,9 @@ mod tests {
     #[test]
     fn permission_access_network_draft_keeps_focus_and_blocks_hub_navigation() {
         let (_temp, mut app) = app();
+        if let crate::Route::PermissionStudio(page) = &mut app.current_route {
+            page.permission.network = Some(crate::PermissionStudioProjection::new(page).network());
+        }
         press(&mut app, KeyCode::Char('n'), KeyModifiers::CONTROL);
         let before = dialog(&app).network_rule.clone();
         for key in [
@@ -686,6 +797,7 @@ mod tests {
     fn permission_access_nested_return_preserves_all_drafts_and_selection() {
         let (_temp, mut app) = app();
         let mut parent = dialog(&app).clone();
+        parent.permission.network = Some(crate::PermissionStudioProjection::new(&parent).network());
         parent.permission.approval_model =
             Some(agena_domain::ApprovalModelSelection::from_model_ref(
                 &agena_domain::ModelRef::new("test", "approval"),
@@ -806,9 +918,54 @@ mod tests {
     }
 
     #[test]
+    fn global_network_json_opens_directly_with_a_sparse_missing_draft() {
+        let (_temp, mut app) = app();
+        for raw in [
+            json!({}),
+            json!({"network":{}}),
+            json!({"network":{"version":2,"allow":[]}}),
+        ] {
+            let mut page = inherited_dialog();
+            page.source = crate::PermissionStudioSource::GlobalConfig;
+            page.inherited_permission = PermissionConfig::global_default();
+            page.permission = serde_json::from_value(raw.clone()).unwrap();
+            let permission = page.permission.clone();
+            app.open_permission_studio_network_editor(&mut page);
+            let editor = page
+                .editor
+                .as_ref()
+                .expect("global JSON editor opens directly");
+            let draft: serde_json::Value = serde_json::from_str(&editor.input.text()).unwrap();
+            assert_eq!(
+                draft,
+                permission
+                    .network
+                    .as_ref()
+                    .map(|network| serde_json::to_value(network).unwrap())
+                    .unwrap_or_else(|| json!({"version":2}))
+            );
+            if raw.get("network") == Some(&json!({})) {
+                let network: agena_domain::NetworkPermissionConfig =
+                    serde_json::from_value(draft).unwrap();
+                assert_eq!(network, agena_domain::NetworkPermissionConfig::offline());
+            }
+            assert_eq!(
+                page.permission, permission,
+                "opening JSON must not create a setting"
+            );
+            app.current_route = crate::Route::PermissionStudio(page);
+            press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+            assert!(dialog(&app).editor.is_none());
+            assert_eq!(dialog(&app).permission, permission);
+        }
+    }
+
+    #[test]
     fn network_form_json_draft_survives_pending_keys_and_background_refresh() {
         let (_temp, mut app) = app();
         let mut dialog = inherited_dialog();
+        dialog.permission.network = Some(crate::PermissionStudioProjection::new(&dialog).network());
+        let before = dialog.permission.clone();
         app.open_permission_studio_network_editor(&mut dialog);
         let input = "{\"default\":\"deny\",\"allow\":[{\"to\":\"192.0.2.20\"}]}";
         dialog.editor.as_mut().unwrap().input = crate::Editor::from_text(input.to_owned());
@@ -830,7 +987,7 @@ mod tests {
         dialog.save_request = None;
         app.refresh_permission_studio_overlay(&mut dialog);
         assert_eq!(dialog.editor.as_ref().unwrap().input.text(), input);
-        assert!(dialog.permission.network.is_none());
+        assert_eq!(dialog.permission, before);
     }
 
     #[test]
@@ -962,6 +1119,11 @@ mod tests {
                 "permission-studio-network-controls",
                 "permission-studio-add-network-rule",
                 "permission-studio-inherited-rule-no-local-edit",
+                "settings-key-restore-default",
+                "settings-already-default",
+                "settings-list-actions",
+                "settings-list-actions-description",
+                "permission-studio-network-list-clear",
             ] {
                 let text = i18n.text(key);
                 assert!(
@@ -1022,6 +1184,20 @@ mod tests {
                 None,
                 None,
             );
+            let commands = page
+                .state
+                .sections()
+                .iter()
+                .find(|section| section.id == crate::PermissionStudioSectionId::ToolCommandRules)
+                .unwrap();
+            assert_eq!(
+                commands.items[..3]
+                    .iter()
+                    .map(|item| item.label.as_str())
+                    .collect::<Vec<_>>(),
+                ["no-op", "routine", "dangerous"]
+            );
+            assert_eq!(commands.items.len(), 4);
             for (width, height) in [(42, 18), (80, 24), (120, 35)] {
                 let (rendered, _) = render_access(&app, &page, width, height);
                 if locale == "en-US" {
@@ -1050,7 +1226,7 @@ mod tests {
                 let expected_counts = [
                     app.i18n.text_args("permission-studio-section-rule-count", &agena_tui::fl_args!("section" => app.i18n.text("permission-studio-nav-filesystem"), "count" => 1_i64)),
                     app.i18n.text_args("permission-studio-section-rule-count", &agena_tui::fl_args!("section" => app.i18n.text("permission-studio-nav-network"), "count" => 80_i64)),
-                    app.i18n.text_args("permission-studio-tools-rule-count", &agena_tui::fl_args!("names" => 4_i64, "commands" => 13_i64)),
+                    app.i18n.text_args("permission-studio-tools-rule-count", &agena_tui::fl_args!("names" => 4_i64, "commands" => 3_i64)),
                 ];
                 for (section, expected) in page.state.sections().iter().take(3).zip(expected_counts)
                 {
@@ -1131,7 +1307,7 @@ mod tests {
     }
 
     #[test]
-    fn permission_inherited_rows_block_delete_and_rename_but_allow_override() {
+    fn permission_inherited_rows_block_all_value_edits_but_allow_explicit_source() {
         use crate::PermissionStudioSectionId as Section;
         let (_temp, mut app) = app();
         let mut page = inherited_dialog();
@@ -1161,6 +1337,9 @@ mod tests {
             assert!(dialog(&app).editor.is_none());
             assert_eq!(dialog(&app).permission, page.permission);
             press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+            assert!(app.overlay.is_none());
+            assert_eq!(dialog(&app).permission, page.permission);
+            press(&mut app, KeyCode::Char('o'), KeyModifiers::CONTROL);
             assert!(matches!(app.overlay, Some(crate::Overlay::Choice(_))));
             press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
         }
@@ -1171,6 +1350,7 @@ mod tests {
         let (_temp, mut app) = app();
         let mut page = inherited_dialog();
         page.inherited_permission.network = Some(NetworkPermissionConfig::offline());
+        page.permission.network = Some(crate::PermissionStudioProjection::new(&page).network());
         crate::refresh_permission_studio_dialog(
             &app.i18n,
             &mut page,
@@ -1178,8 +1358,9 @@ mod tests {
             None,
             None,
         );
-        assert_eq!(page.state.selected_section().unwrap().items.len(), 1);
+        assert_eq!(page.state.selected_section().unwrap().items.len(), 2);
         app.current_route = crate::Route::PermissionStudio(page);
+        press(&mut app, KeyCode::Down, KeyModifiers::NONE);
         press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
         assert!(!dialog(&app).network_rule.as_ref().unwrap().deny);
         press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
@@ -1239,6 +1420,362 @@ mod tests {
     }
 
     #[test]
+    fn permission_mode_picker_distinguishes_inherited_and_identical_local_defaults() {
+        use crate::PermissionStudioModeTarget as Target;
+        use agena_tui::choice::ChoiceSelection;
+        let (_temp, mut app) = app();
+        for (locale, _) in agena_tui::i18n::SUPPORTED_LOCALES {
+            app.i18n = I18n::resolve(Some(locale), None);
+            for source in [
+                crate::PermissionStudioSource::GlobalConfig,
+                crate::PermissionStudioSource::WorkspaceConfig,
+                crate::PermissionStudioSource::Session { session_id: 10 },
+            ] {
+                let mut page = inherited_dialog();
+                page.source = source;
+                page.inherited_permission = PermissionConfig::global_default();
+                for (target, token) in [
+                    (Target::PathWorkspace, "readwrite"),
+                    (Target::PathExternal, "deny"),
+                    (Target::ToolDefault, "allow"),
+                ] {
+                    let original = page.permission.clone();
+                    let global = matches!(page.source, crate::PermissionStudioSource::GlobalConfig);
+                    app.overlay = None;
+                    app.open_permission_studio_mode_overlay(&page, target.clone());
+                    if global {
+                        let Some(crate::Overlay::Choice(picker)) = &app.overlay else {
+                            panic!("global value picker missing");
+                        };
+                        assert!(picker.presentation.clear_action.is_none());
+                        assert_eq!(
+                            agena_tui::choice::selection(&picker.presentation),
+                            Some(ChoiceSelection::Item {
+                                value: token.into()
+                            })
+                        );
+                    } else {
+                        assert!(
+                            app.overlay.is_none(),
+                            "inherited values must stay read-only: {locale}"
+                        );
+                    }
+                    assert_eq!(page.permission, original);
+                    page.permission =
+                        crate::permission_studio_source_config(&app.i18n, &page, &target, true)
+                            .unwrap();
+                    app.open_permission_studio_mode_overlay(&page, target.clone());
+                    let Some(crate::Overlay::Choice(picker)) = &app.overlay else {
+                        panic!("explicit local value picker missing");
+                    };
+                    assert_eq!(
+                        agena_tui::choice::selection(&picker.presentation),
+                        Some(ChoiceSelection::Item {
+                            value: token.into()
+                        })
+                    );
+                    if global {
+                        assert!(picker.presentation.clear_action.is_none());
+                    } else {
+                        assert!(!picker.presentation.clear_action.as_ref().unwrap().current);
+                    }
+                    page.permission =
+                        crate::permission_studio_source_config(&app.i18n, &page, &target, false)
+                            .unwrap();
+                    assert_eq!(page.permission, original);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn permission_mode_picker_read_only_distinguishes_local_fallback_auto_and_inheritance() {
+        use crate::PermissionStudioModeTarget as Target;
+        use agena_tui::choice::ChoiceSelection;
+        let (_temp, mut app) = app();
+        let target = Target::ToolCommandPattern {
+            tool_name: "*".into(),
+            pattern: "read-only".into(),
+        };
+        let mut page = inherited_dialog();
+        page.inherited_permission = serde_json::from_value(
+            json!({"tools":{"default":"deny","rules":{"*":{"read-only":"ask"}}}}),
+        )
+        .unwrap();
+        page.permission = serde_json::from_value(json!({"tools":{"rules":{"*":{}}}})).unwrap();
+        let original = page.permission.clone();
+        app.open_permission_studio_mode_overlay(&page, target.clone());
+        let Some(crate::Overlay::Choice(picker)) = &app.overlay else {
+            panic!("expected choice picker")
+        };
+        assert_eq!(
+            agena_tui::choice::selection(&picker.presentation),
+            Some(ChoiceSelection::Item {
+                value: "allow".into()
+            })
+        );
+        let clear = picker.presentation.clear_action.as_ref().unwrap();
+        assert!(!clear.current);
+        assert_eq!(
+            clear.label,
+            format!(
+                "{} · {}",
+                crate::settings_layer_reset_label(&app.i18n, true),
+                app.i18n.text("value-ask")
+            )
+        );
+        assert_eq!(page.permission, original);
+
+        page.permission = serde_json::from_value(
+            json!({"tools":{"default":"ask","rules":{"*":{"read-only":"auto"}}}}),
+        )
+        .unwrap();
+        app.open_permission_studio_mode_overlay(&page, target.clone());
+        let Some(crate::Overlay::Choice(picker)) = &app.overlay else {
+            panic!("expected choice picker")
+        };
+        assert_eq!(
+            agena_tui::choice::selection(&picker.presentation),
+            Some(ChoiceSelection::Item {
+                value: "auto".into()
+            })
+        );
+        let auto = picker
+            .presentation
+            .items
+            .iter()
+            .find(|item| item.value == "auto")
+            .unwrap();
+        assert_eq!(
+            auto.label,
+            app.i18n.text_args(
+                "permission-studio-read-only-follows-default",
+                &agena_tui::fl_args!("value" => app.i18n.text("value-ask"))
+            )
+        );
+        assert!(auto.current);
+        assert!(!picker.presentation.clear_action.as_ref().unwrap().current);
+    }
+
+    #[test]
+    fn permission_mode_picker_clear_preview_keeps_invalid_local_entries_visible() {
+        let (_temp, mut app) = app();
+        let target = crate::PermissionStudioModeTarget::ToolCommandPattern {
+            tool_name: "*".into(),
+            pattern: "read-only".into(),
+        };
+        let mut page = inherited_dialog();
+        page.inherited_permission =
+            serde_json::from_value(json!({"tools":{"rules":{"*":{"read-only":"ask"}}}})).unwrap();
+        page.permission = serde_json::from_value(json!({"path":{"workspace":"readonly"},"tools":{"rules":{"*":{"read-only":"deny","git *":"ask"}}}})).unwrap();
+        app.open_permission_studio_mode_overlay(&page, target.clone());
+        let Some(crate::Overlay::Choice(picker)) = &app.overlay else {
+            panic!("expected choice picker")
+        };
+        let clear = picker.presentation.clear_action.as_ref().unwrap();
+        assert!(!clear.current);
+        assert!(
+            !clear
+                .label
+                .contains(&app.i18n.text("permission-studio-origin-inherited"))
+        );
+        assert!(
+            clear
+                .label
+                .ends_with(&app.i18n.text("permission-studio-read-only-invalid"))
+        );
+        let path = page.permission.path.clone();
+        let mut reset = crate::permission_studio_mode_edit_config(&page, &target, true);
+        crate::apply_permission_studio_mode_input(&app.i18n, &mut reset, &target, "").unwrap();
+        assert_eq!(reset.path, path);
+        assert_eq!(
+            serde_json::to_value(&reset).unwrap()["tools"]["rules"]["*"],
+            json!({"git *":"ask"})
+        );
+        page.permission = reset;
+        let row = crate::PermissionStudioProjection::new(&page).mode_item(
+            &app.i18n,
+            String::new(),
+            target.clone(),
+        );
+        assert_eq!(
+            row.source,
+            Some(crate::PermissionStudioValueSource::Current)
+        );
+        assert_eq!(
+            row.value,
+            app.i18n.text("permission-studio-read-only-invalid")
+        );
+        app.open_permission_studio_mode_overlay(&page, target);
+        let Some(crate::Overlay::Choice(picker)) = &app.overlay else {
+            panic!("expected choice picker")
+        };
+        assert!(!picker.presentation.clear_action.as_ref().unwrap().current);
+        assert!(picker.presentation.items.iter().all(|item| !item.current));
+    }
+
+    #[test]
+    fn permission_mode_picker_tracks_each_network_field_and_global_defaults() {
+        use crate::PermissionStudioModeTarget as Target;
+        use agena_tui::choice::ChoiceSelection;
+        let (_temp, mut app) = app();
+        for (locale, _) in agena_tui::i18n::SUPPORTED_LOCALES {
+            app.i18n = I18n::resolve(Some(locale), None);
+            for global in [false, true] {
+                let mut page = inherited_dialog();
+                if global {
+                    page.source = crate::PermissionStudioSource::GlobalConfig;
+                }
+                page.inherited_permission = PermissionConfig::global_default();
+                for (target, key) in [
+                    (Target::NetworkEgressDefault, "default"),
+                    (Target::NetworkIngressDefault, "inbound"),
+                    (Target::NetworkHostLoopback, "hostLoopback"),
+                ] {
+                    for local in [false, true] {
+                        page.permission =
+                            serde_json::from_value(json!({"network":{"version":2,"allow":[]}}))
+                                .unwrap();
+                        if local {
+                            crate::apply_permission_studio_mode_input(
+                                &app.i18n,
+                                &mut page.permission,
+                                &target,
+                                "deny",
+                            )
+                            .unwrap();
+                        }
+                        let before = page.permission.clone();
+                        app.overlay = None;
+                        app.open_permission_studio_mode_overlay(&page, target.clone());
+                        if !global && !local {
+                            assert!(app.overlay.is_none());
+                            assert_eq!(page.permission, before);
+                            continue;
+                        }
+                        let Some(crate::Overlay::Choice(picker)) = &app.overlay else {
+                            panic!("expected choice picker")
+                        };
+                        if global {
+                            assert!(picker.presentation.clear_action.is_none());
+                        } else {
+                            let clear = picker.presentation.clear_action.as_ref().unwrap();
+                            assert!(
+                                clear.label.starts_with(&crate::settings_layer_reset_label(
+                                    &app.i18n, true
+                                ))
+                            );
+                            assert_eq!(clear.current, !local);
+                        }
+                        assert_eq!(
+                            picker
+                                .presentation
+                                .items
+                                .iter()
+                                .map(|item| item.value.as_str())
+                                .collect::<Vec<_>>(),
+                            vec!["allow", "deny"]
+                        );
+                        assert_eq!(
+                            agena_tui::choice::selection(&picker.presentation),
+                            Some(if local || global {
+                                ChoiceSelection::Item {
+                                    value: if local || key != "default" {
+                                        "deny"
+                                    } else {
+                                        "allow"
+                                    }
+                                    .into(),
+                                }
+                            } else {
+                                ChoiceSelection::Clear
+                            })
+                        );
+                        assert_eq!(page.permission, before, "{locale} {key}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn permission_source_shortcut_distinguishes_same_value_local_and_inherited_in_every_locale() {
+        let (_temp, mut app) = app();
+        for (locale, _) in agena_tui::i18n::SUPPORTED_LOCALES {
+            app.i18n = I18n::resolve(Some(locale), None);
+            for local in [false, true] {
+                app.overlay = None;
+                let mut page = inherited_dialog();
+                if local {
+                    page.permission =
+                        serde_json::from_value(json!({"path":{"workspace":"readwrite"}})).unwrap();
+                }
+                let before = page.permission.clone();
+                crate::refresh_permission_studio_dialog(
+                    &app.i18n,
+                    &mut page,
+                    Some(crate::PermissionStudioSectionId::PathDefaults),
+                    None,
+                    Some(crate::PermissionStudioFocus::Items),
+                );
+                app.current_route = crate::Route::PermissionStudio(page);
+                press(&mut app, KeyCode::Char('o'), KeyModifiers::CONTROL);
+                let Some(crate::Overlay::Choice(picker)) = &app.overlay else {
+                    panic!("expected source picker");
+                };
+                assert_eq!(
+                    agena_tui::choice::selection(&picker.presentation),
+                    Some(agena_tui::choice::ChoiceSelection::Item {
+                        value: if local { "local" } else { "inherit" }.into()
+                    })
+                );
+                assert_eq!(picker.presentation.items.len(), 2);
+                assert!(picker.presentation.items.iter().any(|item| {
+                    item.value == "inherit"
+                        && item
+                            .label
+                            .starts_with(&app.i18n.text("settings-layer-inherit"))
+                }));
+                assert!(picker.presentation.items.iter().any(|item| {
+                    item.value == "local"
+                        && item
+                            .label
+                            .starts_with(&app.i18n.text("settings-layer-local"))
+                }));
+                assert_eq!(dialog(&app).permission, before);
+            }
+        }
+    }
+
+    #[test]
+    fn permission_source_shortcut_preserves_network_drafts_and_effective_read_only_state() {
+        let (_temp, mut app) = app();
+        let mut page = inherited_dialog();
+        crate::refresh_permission_studio_dialog(
+            &app.i18n,
+            &mut page,
+            Some(crate::PermissionStudioSectionId::PathDefaults),
+            None,
+            Some(crate::PermissionStudioFocus::Items),
+        );
+        page.network_rule = Some(draft());
+        let before = page.network_rule.clone();
+        app.current_route = crate::Route::PermissionStudio(page.clone());
+        press(&mut app, KeyCode::Char('o'), KeyModifiers::CONTROL);
+        assert!(app.overlay.is_none());
+        assert_eq!(dialog(&app).network_rule, before);
+
+        page.network_rule = None;
+        page.editable = false;
+        page.source = crate::PermissionStudioSource::EffectiveSession { session_id: 10 };
+        let before = page.permission.clone();
+        app.current_route = crate::Route::PermissionStudio(page);
+        press(&mut app, KeyCode::Char('o'), KeyModifiers::CONTROL);
+        assert!(app.overlay.is_none());
+        assert_eq!(dialog(&app).permission, before);
+    }
+
+    #[test]
     fn built_in_permission_defaults_are_visible_without_creating_overrides() {
         let i18n = I18n::english();
         let mut dialog = inherited_dialog();
@@ -1253,7 +1790,7 @@ mod tests {
         assert_eq!(sections[0].items[1].value, i18n.text("value-deny"));
         assert_eq!(
             sections[0].items[0].source,
-            Some(crate::PermissionStudioValueSource::Inherited)
+            Some(crate::PermissionStudioValueSource::Default)
         );
         let tools = sections
             .iter()
@@ -1265,7 +1802,7 @@ mod tests {
                 .items
                 .iter()
                 .all(|item| item.value == i18n.text("value-allow")
-                    && item.source == Some(crate::PermissionStudioValueSource::Inherited))
+                    && item.source == Some(crate::PermissionStudioValueSource::Default))
         );
         let network = permission_studio_network(&dialog).resolved();
         assert_eq!(
@@ -1281,12 +1818,11 @@ mod tests {
             Some(NetworkAction::Deny)
         );
         assert_eq!(serde_json::to_value(&dialog.permission).unwrap(), json!({}));
-        let custom = permission_studio_custom_network(&dialog);
-        assert!(custom.path.is_none());
-        assert_eq!(custom.network, dialog.inherited_permission.network);
-        assert_eq!(
-            serde_json::to_value(custom).unwrap()["network"]["default"],
-            "allow"
+        assert!(
+            sections
+                .iter()
+                .flat_map(|section| &section.items)
+                .all(|item| item.source != Some(crate::PermissionStudioValueSource::Inherited))
         );
     }
 
@@ -1338,19 +1874,433 @@ mod tests {
     }
 
     #[test]
-    fn network_form_customization_copies_the_complete_parent_policy() {
+    fn network_form_customization_copies_only_the_edited_list() {
         let dialog = inherited_dialog();
-        let permission = permission_studio_custom_network(&dialog);
-        assert_eq!(permission.network, dialog.inherited_permission.network);
-        assert!(dialog.permission.network.is_none());
         let mut rule = permission_studio_network_rule_draft(&dialog, false, None).unwrap();
+        assert!(rule.policy.get("allow").is_none());
         rule.to = "192.0.2.11".into();
         rule.ports = "80".into();
         let network = permission_studio_network_rule_policy(&I18n::english(), &rule).unwrap();
         let value = serde_json::to_value(network).unwrap();
-        assert_eq!(value["deny"][0]["to"], "10.0.0.0/8");
+        assert_eq!(value["version"], 2);
+        assert!(value.get("deny").is_none());
+        assert!(value.get("default").is_none());
+        assert!(value.get("inbound").is_none());
+        assert!(value.get("hostLoopback").is_none());
         assert_eq!(value["allow"][0]["to"], "192.0.2.10");
         assert_eq!(value["allow"][1]["to"], "192.0.2.11");
+        assert!(dialog.permission.network.is_none());
+    }
+
+    #[test]
+    fn network_rule_move_pins_both_lists_without_pinning_defaults() {
+        let mut dialog = inherited_dialog();
+        dialog.permission =
+            serde_json::from_value(json!({"network":{"version":2,"inbound":"allow"}})).unwrap();
+        let mut draft = permission_studio_network_rule_draft(&dialog, false, Some(0)).unwrap();
+        draft.deny = true;
+        let policy = permission_studio_network_rule_policy(&I18n::english(), &draft).unwrap();
+        let raw = serde_json::to_value(&policy).unwrap();
+        assert_eq!(raw["allow"], json!([]));
+        assert_eq!(raw["deny"].as_array().unwrap().len(), 2);
+        assert_eq!(raw["inbound"], "allow");
+        assert!(raw.get("default").is_none());
+        assert!(raw.get("hostLoopback").is_none());
+        assert_eq!(raw["deny"][0]["to"], "10.0.0.0/8");
+        assert_eq!(raw["deny"][1]["to"], "192.0.2.10");
+    }
+
+    #[test]
+    fn network_delete_last_inherited_rule_sets_only_its_list_empty() {
+        let dialog = inherited_dialog();
+        let deleted = permission_studio_network_delete_rule(&dialog, false, 0).unwrap();
+        assert_eq!(
+            serde_json::to_value(deleted).unwrap(),
+            json!({"version":2,"allow":[]})
+        );
+        assert!(dialog.permission.network.is_none());
+    }
+
+    #[test]
+    fn network_lists_have_separate_sources_and_cancel_preserves_raw_values() {
+        let (_temp, mut app) = app();
+        for global in [false, true] {
+            let mut page = inherited_dialog();
+            if global {
+                page.source = crate::PermissionStudioSource::GlobalConfig;
+            }
+            page.permission =
+                serde_json::from_value(json!({"network":{"version":2,"allow":[]}})).unwrap();
+            let raw = page.permission.clone();
+            crate::refresh_permission_studio_dialog(
+                &app.i18n,
+                &mut page,
+                Some(PermissionStudioSectionId::NetworkDenyRules),
+                None,
+                Some(crate::PermissionStudioFocus::Items),
+            );
+            let allow = page
+                .state
+                .sections()
+                .iter()
+                .find(|section| section.id == PermissionStudioSectionId::NetworkRules)
+                .unwrap();
+            assert_eq!(
+                allow.items[0].source,
+                Some(crate::PermissionStudioValueSource::Current)
+            );
+            let deny = page.state.selected_section().unwrap();
+            assert_eq!(deny.id, PermissionStudioSectionId::NetworkDenyRules);
+            assert!(
+                deny.items
+                    .iter()
+                    .filter_map(|item| item.source)
+                    .all(|source| source
+                        == if global {
+                            crate::PermissionStudioValueSource::Default
+                        } else {
+                            crate::PermissionStudioValueSource::Inherited
+                        })
+            );
+            let list_actions = deny
+                .items
+                .iter()
+                .position(|item| {
+                    matches!(
+                        item.action,
+                        crate::PermissionStudioAction::Network(
+                            crate::PermissionStudioNetworkAction::ListSource { deny: true }
+                        )
+                    )
+                })
+                .unwrap();
+            assert_eq!(
+                deny.items[list_actions].label,
+                app.i18n.text(if global {
+                    "settings-list-actions"
+                } else {
+                    "settings-layer-source-title"
+                })
+            );
+            page.state
+                .set_indices(page.state.selected_section_index(), list_actions);
+            app.current_route = crate::Route::PermissionStudio(page);
+            press(&mut app, KeyCode::Char('o'), KeyModifiers::CONTROL);
+            if global {
+                assert!(
+                    app.overlay.is_none(),
+                    "an unchanged global list has no source picker"
+                );
+                press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+                let Some(crate::Overlay::Choice(picker)) = &app.overlay else {
+                    panic!("expected list actions")
+                };
+                assert_eq!(
+                    picker
+                        .presentation
+                        .items
+                        .iter()
+                        .map(|item| item.value.as_str())
+                        .collect::<Vec<_>>(),
+                    vec!["empty"]
+                );
+                assert!(picker.presentation.items.iter().all(|item| !item.current));
+                press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+                assert_eq!(dialog(&app).permission, raw);
+                continue;
+            }
+            let Some(crate::Overlay::Choice(picker)) = &app.overlay else {
+                panic!("expected list source picker")
+            };
+            assert!(matches!(
+                picker.action,
+                crate::ChoiceOverlayAction::PermissionStudioNetworkListSource { deny: true }
+            ));
+            assert_eq!(picker.presentation.items.len(), 3);
+            assert!(
+                picker.presentation.items[0]
+                    .label
+                    .starts_with(&crate::settings_layer_reset_label(&app.i18n, !global))
+            );
+            press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+            assert_eq!(dialog(&app).permission, raw);
+        }
+    }
+
+    #[test]
+    fn global_permission_reset_is_a_confirmation_and_cannot_pin_defaults() {
+        let (_temp, mut app) = app();
+        let mut page = inherited_dialog();
+        page.source = crate::PermissionStudioSource::GlobalConfig;
+        page.inherited_permission = PermissionConfig::global_default();
+        page.permission=serde_json::from_value(json!({"path":{"workspace":"readonly"},"network":{"version":2,"default":"deny","deny":[]}})).unwrap();
+        crate::refresh_permission_studio_dialog(
+            &app.i18n,
+            &mut page,
+            Some(PermissionStudioSectionId::PathDefaults),
+            None,
+            None,
+        );
+        let before = page.permission.clone();
+        app.current_route = crate::Route::PermissionStudio(page);
+        press(&mut app, KeyCode::Char('o'), KeyModifiers::CONTROL);
+        let Some(crate::Overlay::Confirm(confirm)) = &app.overlay else {
+            panic!("expected default reset confirmation")
+        };
+        assert!(matches!(
+            confirm.action,
+            crate::ConfirmAction::PermissionStudioRestoreDefault {
+                target: crate::PermissionStudioModeTarget::PathWorkspace
+            }
+        ));
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(dialog(&app).permission, before);
+        assert!(!app.commit_permission_studio_source(
+            crate::PermissionStudioModeTarget::PathWorkspace,
+            "local"
+        ));
+        assert_eq!(dialog(&app).permission, before);
+        press(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        let Some(crate::Overlay::Choice(picker)) = &app.overlay else {
+            panic!("expected direct value picker")
+        };
+        assert!(picker.presentation.clear_action.is_none());
+        assert_eq!(
+            agena_tui::choice::selection(&picker.presentation),
+            Some(agena_tui::choice::ChoiceSelection::Item {
+                value: "readonly".into()
+            })
+        );
+    }
+
+    #[test]
+    fn global_network_list_reset_targets_only_the_selected_list() {
+        let (_temp, mut app) = app();
+        let mut page = inherited_dialog();
+        page.source = crate::PermissionStudioSource::GlobalConfig;
+        page.permission =
+            serde_json::from_value(json!({"network":{"version":2,"allow":[],"default":"deny"}}))
+                .unwrap();
+        crate::refresh_permission_studio_dialog(
+            &app.i18n,
+            &mut page,
+            Some(PermissionStudioSectionId::NetworkRules),
+            None,
+            None,
+        );
+        let before = page.permission.clone();
+        app.current_route = crate::Route::PermissionStudio(page);
+        press(&mut app, KeyCode::Char('o'), KeyModifiers::CONTROL);
+        let Some(crate::Overlay::Confirm(confirm)) = &app.overlay else {
+            panic!("expected list reset confirmation")
+        };
+        assert!(matches!(
+            confirm.action,
+            crate::ConfirmAction::PermissionStudioRestoreNetworkList { deny: false }
+        ));
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(dialog(&app).permission, before);
+        assert!(!app.commit_permission_studio_network_list_source(false, "local"));
+        assert_eq!(dialog(&app).permission, before);
+        let reset = permission_studio_network_list_source_config(
+            &I18n::english(),
+            dialog(&app),
+            false,
+            "inherit",
+        )
+        .unwrap();
+        let value = serde_json::to_value(reset).unwrap();
+        assert_eq!(value["network"], json!({"version":2,"default":"deny"}));
+    }
+
+    #[test]
+    fn permission_section_columns_stay_compact_and_source_clicks_follow_rendered_position() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        let (_temp, mut app) = app();
+        let mut page = inherited_dialog();
+        page.inherited_permission
+            .path
+            .as_mut()
+            .unwrap()
+            .rules
+            .insert(
+                "/short".into(),
+                serde_json::from_value(json!("readonly")).unwrap(),
+            );
+        page.inherited_permission.tools = serde_json::from_value(
+            json!({"names":{"a.very.long.tool.name.in.another.section":"deny"}}),
+        )
+        .unwrap();
+        crate::refresh_permission_studio_dialog(
+            &app.i18n,
+            &mut page,
+            Some(PermissionStudioSectionId::PathRules),
+            None,
+            Some(crate::PermissionStudioFocus::Items),
+        );
+        let raw = page.permission.clone();
+        let mode = page.state.sections().iter().flat_map(|section| &section.items)
+            .find(|item|matches!(&item.action,PermissionStudioAction::EditMode(PermissionStudioModeTarget::PathRule {pattern}) if pattern=="/short"))
+            .unwrap().value.clone();
+        for width in [48, 80, 160] {
+            app.overlay = None;
+            let (text, pointer_map) = render_access(&app, &page, width, 38);
+            let (row, line) = text
+                .lines()
+                .enumerate()
+                .find(|(_, line)| line.contains("/short"))
+                .unwrap();
+            let label_end = line.find("/short").unwrap() + "/short".len();
+            let value_column = line
+                .find(&mode)
+                .unwrap_or_else(|| panic!("mode {mode:?} missing at {width}: {line}"));
+            assert!(
+                value_column.saturating_sub(label_end) <= 2,
+                "mode was pushed away at {width}: {line}"
+            );
+            let source_column = line.find("inherit").unwrap();
+            assert!(
+                source_column < 30,
+                "source was pushed to the terminal edge: {line}"
+            );
+            assert!(unicode_width::UnicodeWidthStr::width(line) <= usize::from(width));
+            let click = MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: source_column as u16,
+                row: row as u16,
+                modifiers: KeyModifiers::NONE,
+            };
+            assert!(matches!(
+                pointer_map.action(click),
+                Some(agena_tui_components::pointer::PointerAction::NamedIndex(
+                    "permission-source",
+                    _
+                ))
+            ));
+            app.current_route = crate::Route::PermissionStudio(page.clone());
+            app.pointer_targets = pointer_map;
+            assert!(app.handle_surface_pointer(click));
+            assert!(
+                matches!(&app.overlay,Some(crate::Overlay::Choice(crate::ChoiceOverlay {action:crate::ChoiceOverlayAction::PermissionStudioSource(crate::PermissionStudioModeTarget::PathRule {pattern}),..})) if pattern=="/short")
+            );
+            press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+            assert_eq!(dialog(&app).permission, raw);
+            let value_click = MouseEvent {
+                column: value_column as u16,
+                ..click
+            };
+            assert!(app.handle_surface_pointer(value_click));
+            assert!(app.overlay.is_none());
+            assert_eq!(dialog(&app).permission, raw);
+        }
+    }
+
+    #[test]
+    fn global_permission_reset_click_targets_its_own_row() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        let (_temp, mut app) = app();
+        let mut page = inherited_dialog();
+        page.source = crate::PermissionStudioSource::GlobalConfig;
+        page.inherited_permission = PermissionConfig::global_default();
+        page.permission = serde_json::from_value(json!({
+            "path":{"workspace":"readonly","external":"deny"}
+        }))
+        .unwrap();
+        let raw = page.permission.clone();
+        crate::refresh_permission_studio_dialog(
+            &app.i18n,
+            &mut page,
+            Some(PermissionStudioSectionId::PathDefaults),
+            None,
+            Some(crate::PermissionStudioFocus::Items),
+        );
+        let (text, pointer_map) = render_access(&app, &page, 120, 35);
+        let (row, line) = text
+            .lines()
+            .enumerate()
+            .find(|(_, line)| line.contains(&app.i18n.text("permission-studio-external-label")))
+            .unwrap();
+        let column = line.chars().position(|ch| ch == '↺').unwrap();
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: column as u16,
+            row: row as u16,
+            modifiers: KeyModifiers::NONE,
+        };
+        assert!(matches!(
+            pointer_map.action(click),
+            Some(agena_tui_components::pointer::PointerAction::NamedIndex(
+                "permission-source",
+                _
+            ))
+        ));
+        app.current_route = crate::Route::PermissionStudio(page);
+        app.pointer_targets = pointer_map;
+        assert!(app.handle_surface_pointer(click));
+        let Some(crate::Overlay::Confirm(confirm)) = &app.overlay else {
+            panic!("expected restore confirmation for clicked row")
+        };
+        assert!(matches!(
+            confirm.action,
+            crate::ConfirmAction::PermissionStudioRestoreDefault {
+                target: crate::PermissionStudioModeTarget::PathExternal
+            }
+        ));
+        press(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(dialog(&app).permission, raw);
+    }
+
+    #[test]
+    fn global_permission_rows_render_values_and_reset_without_source_states() {
+        let (_temp, mut app) = app();
+        for locale in ["en-US", "zh-CN"] {
+            app.i18n = I18n::resolve(Some(locale), None);
+            let mut page = inherited_dialog();
+            page.source = crate::PermissionStudioSource::GlobalConfig;
+            page.inherited_permission = PermissionConfig::global_default();
+            page.permission =
+                serde_json::from_value(json!({"path":{"workspace":"readonly"}})).unwrap();
+            crate::refresh_permission_studio_dialog(
+                &app.i18n,
+                &mut page,
+                Some(PermissionStudioSectionId::PathDefaults),
+                None,
+                None,
+            );
+            for (width, height) in [(80, 24), (120, 35)] {
+                let (text, _) = render_access(&app, &page, width, height);
+                let value_line = text
+                    .lines()
+                    .find(|line| {
+                        line.replace(' ', "").contains(
+                            &app.i18n
+                                .text("permission-studio-workspace-label")
+                                .replace(' ', ""),
+                        )
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("workspace row missing at {locale}/{width}:\n{text}")
+                    });
+                assert!(value_line.contains("[↺]"));
+                for key in [
+                    "permission-studio-origin-current",
+                    "permission-studio-origin-default",
+                    "permission-studio-origin-inherited",
+                ] {
+                    assert!(
+                        !value_line.contains(&app.i18n.text(key)),
+                        "global row exposed a source state: {value_line}"
+                    );
+                }
+                assert!(
+                    text.replace(' ', "").contains(
+                        &app.i18n
+                            .text("settings-key-restore-default")
+                            .replace(' ', "")
+                    )
+                );
+            }
+        }
     }
 
     #[test]
@@ -1379,7 +2329,8 @@ mod tests {
 
     fn draft() -> PermissionStudioNetworkRuleDraft {
         PermissionStudioNetworkRuleDraft {
-            policy: json!({"default":"deny","deny":[{"to":"10.0.0.0/8"}]}),
+            policy: json!({"version":2,"default":"deny","deny":[{"to":"10.0.0.0/8"}]}),
+            effective_policy: json!({"version":2,"default":"deny","deny":[{"to":"10.0.0.0/8"}]}),
             original: None,
             deny: false,
             to: "192.0.2.10".into(),
@@ -1423,7 +2374,9 @@ mod tests {
         let value = serde_json::to_value(&policy).unwrap();
         assert_eq!(value["allow"].as_array().unwrap().len(), 1);
         assert_eq!(value["deny"].as_array().unwrap().len(), 2);
-        let deleted = permission_studio_network_delete_rule(&policy, true, 1).unwrap();
+        let mut dialog = inherited_dialog();
+        dialog.permission.network = Some(policy);
+        let deleted = permission_studio_network_delete_rule(&dialog, true, 1).unwrap();
         let value = serde_json::to_value(deleted).unwrap();
         assert_eq!(value["deny"].as_array().unwrap().len(), 1);
         assert_eq!(value["allow"][0]["to"], "192.0.2.11");

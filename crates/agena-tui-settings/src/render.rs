@@ -427,13 +427,33 @@ fn render_items<A>(
             "false" => format!("○ {}", i18n.text("value-off")),
             _ => clean(&item.value),
         };
-        let value_style = if item.value == "true" && !(active && focused) {
+        let value_style = if !item.value_editable {
+            theme::muted_style().add_modifier(Modifier::DIM)
+        } else if item.value == "true" && !(active && focused) {
             Style::default().fg(palette.success)
         } else if active && focused {
             Style::default().fg(palette.modal_border)
         } else {
             Style::default().fg(palette.accent)
         };
+        // Reserve an independent source control so long values never hide
+        // whether this row inherits or belongs to the selected layer.
+        let source = if item.restore_default.is_some() {
+            Some("[↺]".to_owned())
+        } else {
+            item.source.as_ref().map(|source| format!("[{source}]"))
+        };
+        let source_width = source.as_ref().map_or(0, |source| {
+            (UnicodeWidthStr::width(source.as_str()) as u16).min(content.width / 3)
+        });
+        let main = Rect::new(
+            content.x,
+            content.y,
+            content
+                .width
+                .saturating_sub(source_width + u16::from(source_width > 0)),
+            content.height,
+        );
         if stacked {
             line(
                 frame,
@@ -441,13 +461,13 @@ fn render_items<A>(
                 &item.label,
                 style.add_modifier(Modifier::BOLD),
             );
-            line(frame, row(content, 1), &value, value_style);
+            line(frame, row(main, 1), &value, value_style);
         } else {
-            let value_width = (content.width * 2 / 5).max(12);
+            let value_width = (content.width * 2 / 5).max(12).min(main.width);
             let label = Rect::new(
-                content.x,
-                content.y,
-                content.width.saturating_sub(value_width + 2),
+                main.x,
+                main.y,
+                main.width.saturating_sub(value_width + 2),
                 1,
             );
             line(
@@ -456,12 +476,30 @@ fn render_items<A>(
                 &item.label,
                 style.add_modifier(Modifier::BOLD),
             );
-            let value_area = Rect::new(content.right() - value_width, content.y, value_width, 1);
+            let value_area = Rect::new(main.right() - value_width, main.y, value_width, 1);
             frame.render_widget(
                 Paragraph::new(truncate_display_text(&value, value_width as usize))
                     .alignment(Alignment::Right)
                     .style(value_style),
                 value_area,
+            );
+        }
+        if let Some(source) = source {
+            let source_area = Rect::new(
+                content.right() - source_width,
+                content.y + u16::from(stacked),
+                source_width,
+                1,
+            );
+            line(
+                frame,
+                source_area,
+                &source,
+                if item.restore_default == Some(false) {
+                    theme::muted_style()
+                } else {
+                    style
+                },
             );
         }
         // The row preview stays compact; the complete text and configuration
@@ -494,6 +532,27 @@ fn render_items<A>(
             }),
             None,
         );
+        let source_action = match item.restore_default {
+            Some(true) => Some(PointerAction::NamedIndex(
+                "settings-restore-default",
+                position,
+            )),
+            Some(false) => Some(PointerAction::Named("settings-restore-disabled")),
+            None if active && focused => Some(ctrl('o')),
+            None => None,
+        };
+        if source_width > 0 && source_action.is_some() {
+            pointer::register(
+                Rect::new(
+                    content.right() - source_width,
+                    content.y + u16::from(stacked),
+                    source_width,
+                    1,
+                ),
+                source_action,
+                None,
+            );
+        }
     }
     if indices.len() > capacity && list.width > 0 && list.height > 1 {
         let thumb = ((list.height as usize * capacity) / indices.len()).max(1) as u16;
@@ -540,7 +599,7 @@ fn render_footer<A>(
     let back_width = back_width.min(inner.width);
     let back = Rect::new(inner.right() - back_width, inner.y, back_width, 1);
     render_shortcut(frame, back, "Esc", &back_label, pointer::key(KeyCode::Esc));
-    let keys = if state.searching {
+    let mut keys = if state.searching {
         vec![(
             "Enter",
             "settings-key-results",
@@ -571,6 +630,28 @@ fn render_footer<A>(
             ),
         ]
     };
+    if !state.searching
+        && state.focus() == SettingsStudioFocus::Items
+        && state
+            .selected_item()
+            .is_some_and(|item| item.source.is_some() || item.restore_default == Some(true))
+    {
+        keys.insert(
+            0,
+            (
+                if inner.width >= 96 { "Ctrl+O" } else { "^O" },
+                if state
+                    .selected_item()
+                    .is_some_and(|item| item.restore_default.is_some())
+                {
+                    "settings-key-restore-default"
+                } else {
+                    "settings-key-source"
+                },
+                ctrl('o'),
+            ),
+        );
+    }
     let mut x = inner.x;
     for (key, label, action) in keys {
         let label = i18n.text(label);

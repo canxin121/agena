@@ -30,9 +30,12 @@ fn statement(sql: &str, values: Vec<Value>) -> Statement {
     Statement::from_sql_and_values(DatabaseBackend::Sqlite, sql, values)
 }
 
-const SELECT: &str = "SELECT b.id,b.name,b.name_folded,b.instructions,b.revision,b.archived,b.created_at_ms,b.updated_at_ms,a.avatar FROM agena_bots b LEFT JOIN agena_bot_avatars a ON a.bot_id=b.id";
+const SELECT: &str = "SELECT b.id,b.name,b.name_folded,b.instructions,b.revision,b.archived,b.created_at_ms,b.updated_at_ms,a.avatar,p.ids_json,p.publish_to_channels FROM agena_bots b LEFT JOIN agena_bot_avatars a ON a.bot_id=b.id LEFT JOIN agena_bot_prompts p ON p.bot_id=b.id";
 
 fn record(row: sea_orm::QueryResult) -> Result<BotRecord, BotRepositoryError> {
+    let prompt_ids = row
+        .try_get::<Option<String>>("", "ids_json")
+        .map_err(backend)?;
     Ok(BotRecord {
         id: row
             .try_get::<String>("", "id")
@@ -42,12 +45,48 @@ fn record(row: sea_orm::QueryResult) -> Result<BotRecord, BotRepositoryError> {
         name: row.try_get("", "name").map_err(backend)?,
         name_folded: row.try_get("", "name_folded").map_err(backend)?,
         instructions: row.try_get("", "instructions").map_err(backend)?,
+        prompt_ids: prompt_ids
+            .as_deref()
+            .map(serde_json::from_str)
+            .transpose()
+            .map_err(backend)?
+            .unwrap_or_default(),
+        publish_prompts: row
+            .try_get::<Option<i64>>("", "publish_to_channels")
+            .map_err(backend)?
+            == Some(1),
         avatar: row.try_get("", "avatar").map_err(backend)?,
         revision: row.try_get("", "revision").map_err(backend)?,
         archived: row.try_get::<i64>("", "archived").map_err(backend)? != 0,
         created_at_ms: row.try_get("", "created_at_ms").map_err(backend)?,
         updated_at_ms: row.try_get("", "updated_at_ms").map_err(backend)?,
     })
+}
+
+async fn write_prompts(
+    db: &impl ConnectionTrait,
+    value: &BotRecord,
+) -> Result<(), BotRepositoryError> {
+    let id = value.id.to_string();
+    let query = if value.prompt_ids.is_empty() {
+        statement(
+            "DELETE FROM agena_bot_prompts WHERE bot_id=?",
+            vec![id.into()],
+        )
+    } else {
+        statement(
+            "INSERT INTO agena_bot_prompts(bot_id,ids_json,publish_to_channels) VALUES(?,?,?) ON CONFLICT(bot_id) DO UPDATE SET ids_json=excluded.ids_json,publish_to_channels=excluded.publish_to_channels",
+            vec![
+                id.into(),
+                serde_json::to_string(&value.prompt_ids)
+                    .map_err(backend)?
+                    .into(),
+                i64::from(value.publish_prompts).into(),
+            ],
+        )
+    };
+    db.execute(query).await.map_err(backend)?;
+    Ok(())
 }
 
 async fn read(
@@ -119,6 +158,7 @@ impl BotRepository for SqliteBotRepository {
             .await
             .map_err(classify_write)?;
         write_avatar(&transaction, value).await?;
+        write_prompts(&transaction, value).await?;
         let created = read(&transaction, value.id)
             .await?
             .ok_or_else(|| BotRepositoryError::Backend("created Bot row is missing".into()))?;
@@ -151,6 +191,7 @@ impl BotRepository for SqliteBotRepository {
             return Err(BotRepositoryError::Conflict);
         }
         write_avatar(&transaction, value).await?;
+        write_prompts(&transaction, value).await?;
         let updated = read(&transaction, value.id)
             .await?
             .ok_or(BotRepositoryError::NotFound)?;

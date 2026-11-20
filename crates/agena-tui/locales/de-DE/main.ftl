@@ -340,7 +340,7 @@ permission-studio-catalog-custom-search = Benutzerdefinierter neuer manueller Ta
 
 overlay-settings-title = Einstellungen
 
-overlay-settings-footer = STRG+R Refresh · ←/→ Schaltflächen · Tab/Shift+ Tab-Zyklusscheiben · ↑/↓ select · Enter open · Esc close
+overlay-settings-footer = Ctrl+O Quelle · STRG+R Refresh · ←/→ Schaltflächen · Tab/Shift+ Tab-Zyklusscheiben · ↑/↓ select · Enter open · Esc close
 
 overlay-settings-sections = Bereiche
 
@@ -806,7 +806,7 @@ permission-studio-add-path-rule = Add Path Rule
 
 permission-studio-add-name = Name angeben
 
-permission-studio-add-tool-rule = Add Tool Rule
+permission-studio-add-command-rule = Befehlsregel hinzufügen
 
 permission-studio-rule-key = Schlüssel
 
@@ -1032,7 +1032,6 @@ settings-mcp-auth-mode-updated = Agena MCP-Authentifizierungsmodus eingestellt a
 settings-mcp-anonymous-access-updated = Agena MCP anonymer Toolzugriff auf {$policy}
 
 
-permission-studio-command-pattern-title = {$tool_name} Befehlsmuster
 
 settings-tool-api-list-description = Execution Tools aufzählen.
 
@@ -1174,7 +1173,7 @@ overlay-permission-rule-detail-session-id = Sitzungsbezogene Regeln erfordern ei
 overlay-permission-rule-detail-mode = „Zulassen“ lässt die Aktion durch, bittet um Genehmigung und „Verweigern“ blockiert sie.
 overlay-workbench-details = Einzelheiten
 overlay-permission-studio-title = Erlaubnis
-overlay-permission-studio-footer-nested = Ctrl+N hinzufügen · Enter bearbeiten · Ctrl+E umbenennen · Ctrl+D entfernen · Esc zurück
+overlay-permission-studio-footer-nested = Ctrl+O Quelle · Ctrl+N hinzufügen · Enter bearbeiten · Ctrl+E umbenennen · Ctrl+D entfernen · Esc zurück
 permission-studio-catalog-prompt = Durchsuchen Sie den Live-Tool-Katalog. Wählen Sie einen oder mehrere Einträge aus oder wählen Sie „Benutzerdefinierte Regel“ für einen Wert, der derzeit nicht registriert ist.
 permission-studio-catalog-custom-detail = Fügen Sie einen Tag- oder Werkzeugnamen hinzu, der nicht im aktuellen Live-Katalog enthalten ist.
 flash-permission-studio-catalog-empty = Wählen Sie mindestens einen Eintrag aus, bevor Sie Regeln hinzufügen.
@@ -1255,7 +1254,6 @@ provider-service-key-env-detail = Standard-Umgebungsvariable für den SAP-AI-Cor
 settings-provider-workbench-detail = Öffnen Sie die durchsuchbare Anbieterliste, bevor Sie Authentifizierung, Adapter, Modellrouting oder neue Anbieter konfigurieren.
 settings-provider-new-detail = Erstellen Sie einen neuen Anbieter, listen Sie Live-Adaptermodelle auf und bearbeiten Sie die Konfiguration des Anbieteradapters. Wählen Sie das Modell separat aus.
 settings-model-catalog-open-detail = Überprüfen Sie die Metadaten des aufgelösten Modells und aktualisieren Sie den Cache des lokalen Modellkatalogs.
-permission-studio-command-rules-shell-only = Befehlsregeln gelten für shell.exec, shell.spawn, shell.watch, shell.open und shell.write; verwenden Sie eine Namensregel oder die Standardeinstellung für andere Tools.
 permission-studio-detail-editable = Enter öffnet einen mehrzeiligen JSON-Editor für dieses Berechtigungssegment.
 permission-studio-detail-add-hint = Enter erstellt dieses Element und öffnet es sofort.
 permission-studio-detail-full-config-editable = Enter öffnet den erweiterten JSON-Editor für das gesamte Dokument.
@@ -2031,7 +2029,6 @@ flash-ui-backend-queue-full = Befehlswarteschlange des UI-Backends ist voll; auf
 flash-ui-backend-unavailable = Befehlsdienst des UI-Backends ist nicht verfügbar
 help-diagnostics-kitty-helper = Kitty-Helfer
 message-role-tool = Werkzeug
-permission-studio-command-pattern-suffix = + Befehlsmuster
 search-picker-preview-title = Vorschau
 search-picker-search-failed = Suche fehlgeschlagen
 search-picker-no-preview = Keine Vorschau verfügbar
@@ -2442,7 +2439,7 @@ overlay-permission-rule-preview-workspace-root = Arbeitsbereichsverzeichnis: {$p
 overlay-permission-rule-preview-session-id = Sitzungs-ID: {$session}
 overlay-permission-rule-preview-invalid = Ungültige Regel: {$error}
 overlay-workbench-overview = Übersicht
-overlay-permission-studio-footer = Links/Rechts oder Tab/Umschalt+Tab wechselt Bereiche · Pfeile wählen aus · Enter bearbeitet · Esc zurück
+overlay-permission-studio-footer = Ctrl+O Quelle · Links/Rechts oder Tab/Umschalt+Tab wechselt Bereiche · Pfeile wählen aus · Enter bearbeitet · Esc zurück
 overlay-permission-studio-sections = Berechtigungsbereiche
 overlay-permission-studio-nav = Navigation
 overlay-detail-current-value = Aktueller Wert
@@ -3458,7 +3455,7 @@ permission-studio-rule-duplicate = Die Regel besteht bereits.
 
 permission-studio-network-json = Erweitertes Netzwerk-JSON
 
-permission-studio-network-json-help = Vollständige Richtlinie mit default, allow, deny, inbound und hostLoopback bearbeiten. Regeln nutzen to, protocol, ports und except. Fehlende Felder bedeuten deny oder leere Listen. Zum Erben network entfernen.
+permission-studio-network-json-help = Netzwerkfelder mit version: 2 bearbeiten: default, inbound, hostLoopback, allow und deny. Fehlende Felder verwenden Standard- oder geerbte Werte; [] setzt eine explizit leere Liste. Regeln verwenden to, protocol, ports und except.
 
 permission-studio-network-invalid-action = Netzwerkaktionen müssen allow oder deny sein.
 
@@ -3480,7 +3477,7 @@ permission-studio-network-collapse = Einklappen
 
 permission-studio-network-expand = Ausklappen
 
-permission-studio-network-json-short = Vollständiges Netzwerk-JSON bearbeiten
+permission-studio-network-json-short = Netzwerk-JSON dieser Ebene bearbeiten
 
 permission-studio-network-rule-form = Netzwerkregel
 
@@ -3508,7 +3505,7 @@ permission-studio-network-saving = Berechtigungen werden gespeichert. Bitte wart
 
 permission-studio-network-save-or-cancel = Aktuelle Änderung zuerst speichern oder abbrechen.
 
-permission-studio-network-inherit-title = Übergeordnete Netzwerkrichtlinie erben
+permission-studio-network-inherit-title = Gesamte Netzwerkvererbung wiederherstellen
 
 permission-studio-network-inherit-help = Gesamte Netzwerkrichtlinie dieser Ebene entfernen und die übergeordnete Konfiguration erben.
 
@@ -3575,7 +3572,17 @@ permission-studio-loopback-label = Loopback
 permission-studio-network-controls = Netzwerkaktionen
 permission-studio-add-network-rule = + Netzwerkregel hinzufügen
 permission-studio-inherited-rule-no-local-edit = Bearbeiten erstellt eine lokale Überschreibung. Nur lokale Regeln können umbenannt oder entfernt werden.
+settings-agent-profile-none = Standardrolle wiederherstellen
+settings-agent-profile-none-detail = Normale Sitzungen verwenden main, Unteragenten worker. Explizite Sitzungseinstellungen bleiben erhalten.
+settings-agent-profile-mode-primary = Hauptsitzungen
+settings-agent-profile-mode-subagent = Unteragenten
+settings-agent-profile-mode-all = Hauptsitzungen und Unteragenten
+settings-agent-profile-source-builtin = Integriert
+settings-agent-profile-source-global = Global
+settings-agent-profile-source-workspace = Arbeitsbereich
+settings-agent-profile-effective = Wirksame Standardrolle: {$profile}
 
+# Gemessene Modellleistung
 usage-performance-title = Modellleistung · Mittelwerte
 usage-performance-tps = TPS (tok/s)
 usage-performance-ttft = TTFT
@@ -3595,3 +3602,55 @@ status-part-model-generation = letzte Generierung={$value}
 status-part-model-throughput = letzte E2E={$value} tok/s
 session-status-tps = {$value} tok/s
 session-status-latency = Anfrage {$value}
+settings-layer-source-title = Konfigurationsquelle
+settings-layer-parent-value = Übergeordneter Wert
+settings-layer-inherit = Von übergeordneter Ebene erben
+settings-layer-local = In dieser Ebene festlegen
+settings-layer-source-description = Geerbte Einstellungen folgen Änderungen der übergeordneten Ebene. Lokale Einstellungen behalten den aktuellen Wert.
+settings-layer-group-network = Diese Auswahl gilt für die gesamte Netzwerkrichtlinie.
+settings-layer-group-tool = Diese Auswahl gilt für alle Regeln dieses Werkzeugs.
+settings-layer-group-commands = Diese Auswahl gilt für die gemeinsamen Befehlsregeln.
+settings-layer-group-model = Diese Auswahl gilt für das Modell und seine Moduseinstellungen als Gruppe.
+settings-key-source = Quelle
+settings-layer-ancestor-override = Diese Auswahl gilt für die gesamte Einstellungsgruppe {$path}. Stellen Sie die Vererbung wieder her, um dieses Feld einzeln zu bearbeiten.
+settings-model-source-changed = Sitzung oder Modell wurde geändert. Öffnen Sie die Modelleinstellungen erneut.
+settings-model-source-needs-model = Wählen Sie ein konkretes Modell, um die Modellgruppe auf dieser Ebene festzulegen.
+permission-studio-origin-default = Standard
+settings-layer-default-value = Standardwert
+settings-layer-default = Standard wiederherstellen
+settings-layer-default-description = Die gewählte Einstellung auf den Anwendungsstandard zurücksetzen. Andere Einstellungen bleiben unverändert.
+settings-layer-ancestor-default = Diese Aktion betrifft die gesamte Gruppe {$path}. Stelle ihre Standards wieder her, bevor du dieses Feld einzeln bearbeitest.
+permission-studio-network-default-title = Alle Netzwerkstandards wiederherstellen
+permission-studio-network-default-help = Alle lokalen Netzwerkfelder entfernen und Anwendungsstandards verwenden.
+permission-studio-network-allow-list = Erlaubte Ziele
+permission-studio-network-deny-list = Gesperrte Ziele
+permission-studio-network-list-empty = Leere lokale Liste festlegen
+permission-studio-network-list-source-help = Diese Auswahl gilt nur für diese Liste. Eine leere lokale Liste ersetzt alle Standard- oder geerbten Einträge.
+permission-studio-default-rule-no-local-edit = Eine Standardregel bearbeiten, um eine lokale Einstellung anzulegen. Nur lokale Regeln können umbenannt oder gelöscht werden.
+
+settings-key-restore-default = Standard wiederherstellen
+
+settings-restore-default-title = Standardwerte für {$setting} wiederherstellen?
+
+settings-restore-default-preview = Nach Wiederherstellung: {$value}
+
+settings-already-default = Diese Einstellung verwendet bereits ihren Standardwert.
+
+settings-list-actions = Aktionen
+
+settings-list-actions-description = Diese Liste leeren oder ihre Standardeinträge wiederherstellen. Andere Netzwerkeinstellungen bleiben unverändert.
+
+permission-studio-network-list-clear = Liste leeren
+
+permission-studio-raw-title = {$scope} · Berechtigungs-JSON
+permission-studio-raw-unavailable = Die Standardberechtigungen oder die Berechtigungen der übergeordneten Ebene sind nicht verfügbar. Hier können Sie die gespeicherten Berechtigungen dieser Ebene bearbeiten.
+permission-studio-raw-help = Gespeichert wird nur das permission-Objekt dieser Ebene. Geben Sie ein JSON-Objekt ein oder null, um es zu entfernen.
+permission-studio-raw-invalid = Geben Sie ein gültiges Berechtigungs-JSON-Objekt oder null ein: {$error}
+
+settings-layer-parent-global = Global
+settings-layer-parent-config = Übergeordnete Konfiguration
+settings-layer-inherited-from = geerbt · {$source}
+settings-layer-inherited-locked = Von {$source} geerbt. Vor dem Bearbeiten mit Ctrl+O „Lokal“ wählen.
+settings-network-source-group = Diese Quellenauswahl gilt für alle Netzwerkstandardwerte und beide Regellisten. Vor dem Bearbeiten der gesamten Netzwerk-JSON „Lokal“ wählen.
+settings-inherited-unavailable = Der übergeordnete Wert ist nicht verfügbar. Einen lokalen Wert eingeben, statt ihn zu kopieren.
+settings-source-unavailable = Nicht verfügbar

@@ -649,10 +649,33 @@ impl App {
         &self,
         purpose: SessionModelChooserPurpose,
     ) -> SessionModelChooserOverlay {
+        let mut prompt = ui_text::t(&self.i18n, "overlay-session-model-prompt");
+        let mut footer = ui_text::t(&self.i18n, "overlay-session-model-footer");
+        if purpose != SessionModelChooserPurpose::RuntimeOverride
+            || self.transcript.session_id.is_some()
+        {
+            prompt.push('\n');
+            prompt.push_str(&self.settings_model_source_prompt(purpose, false));
+            footer = format!(
+                "Ctrl+O {} · {footer}",
+                self.i18n.text(
+                    if matches!(
+                        purpose,
+                        SessionModelChooserPurpose::GlobalDefault
+                            | SessionModelChooserPurpose::Auxiliary
+                            | SessionModelChooserPurpose::PermissionApproval
+                    ) {
+                        "settings-key-restore-default"
+                    } else {
+                        "settings-key-source"
+                    }
+                )
+            );
+        }
         agena_tui::model_chooser::new_presentation(
             ui_text::t(&self.i18n, "overlay-session-model-title"),
-            ui_text::t(&self.i18n, "overlay-session-model-prompt"),
-            ui_text::t(&self.i18n, "overlay-session-model-footer"),
+            prompt,
+            footer,
             ui_text::t(&self.i18n, "overlay-picker-loading"),
             purpose,
         )

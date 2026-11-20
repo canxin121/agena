@@ -1,4 +1,4 @@
-//! Declarative per-tool permission rule shapes.
+//! Declarative tool permission rule shapes.
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -7,7 +7,7 @@ use crate::PermissionMode;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
-/// Per-tool permission rules: a mode or an ordered name-to-mode map.
+/// A tool-level mode or an ordered rule group.
 pub enum ToolPermissionRules {
     Mode(PermissionMode),
     Ordered(IndexMap<String, PermissionMode>),
@@ -49,5 +49,38 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.to_string().contains("same tool"), "{error}");
+    }
+
+    #[test]
+    fn legacy_terminal_defaults_collapse_into_one_ordered_group() {
+        let classes = serde_json::json!({"no-op":"allow","routine":"allow","dangerous":"deny"});
+        let config: crate::PermissionConfig = serde_json::from_value(serde_json::json!({
+            "tools": {
+                "rules": {
+                    "shell.exec": classes,
+                    "agena_shell_spawn": classes,
+                    "agena.shell.open": classes,
+                    "agena.shell.watch": classes,
+                    "agena.shell.write": {"dangerous":"deny"},
+                    "agena.monitor.start": "ask",
+                    "*": {"read-only":"allow"},
+                }
+            }
+        }))
+        .unwrap();
+        let rules = &config.tools.as_ref().unwrap().rules;
+        assert_eq!(rules.len(), 3);
+        assert_eq!(
+            serde_json::to_value(&rules[crate::SHELL_COMMAND_RULE_GROUP]).unwrap(),
+            classes
+        );
+        assert_eq!(
+            rules["agena.monitor.start"],
+            ToolPermissionRules::Mode(PermissionMode::Ask)
+        );
+        assert_eq!(
+            config,
+            serde_json::from_value(serde_json::to_value(&config).unwrap()).unwrap()
+        );
     }
 }

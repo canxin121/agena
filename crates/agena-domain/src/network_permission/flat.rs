@@ -13,15 +13,36 @@ use super::{
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct NetworkDocument {
-    default: NetworkAction,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    allow: Vec<RuleDocument>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    deny: Vec<RuleDocument>,
-    #[serde(skip_serializing_if = "is_deny")]
-    inbound: NetworkAction,
-    #[serde(skip_serializing_if = "is_deny")]
-    host_loopback: NetworkAction,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
+    version: Option<u8>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
+    default: Option<NetworkAction>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
+    allow: Option<Vec<RuleDocument>>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
+    deny: Option<Vec<RuleDocument>>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
+    inbound: Option<NetworkAction>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present"
+    )]
+    host_loopback: Option<NetworkAction>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -51,16 +72,24 @@ enum PortDocument {
     Range(String),
 }
 
-fn is_deny(value: &NetworkAction) -> bool {
-    *value == NetworkAction::Deny
-}
-
 fn is_any(value: &NetworkProtocol) -> bool {
     *value == NetworkProtocol::Any
 }
 
 impl NetworkDocument {
     pub(super) fn into_native(self) -> Result<NetworkPermissionConfig, String> {
+        // Unversioned flat policies historically replaced the whole block.
+        // Materialize their omitted denies/empty lists so upgrading never
+        // reopens a permission through a newly inherited parent value.
+        let legacy = match self.version {
+            None => true,
+            Some(2) => false,
+            Some(version) => {
+                return Err(format!(
+                    "permission.network.version {version} is unsupported; expected 2"
+                ));
+            }
+        };
         let rules = |rules: Vec<RuleDocument>, kind| {
             rules
                 .into_iter()
@@ -70,16 +99,32 @@ impl NetworkDocument {
                 })
                 .collect::<Result<Vec<_>, String>>()
         };
+        let egress = NetworkEgressConfig {
+            default: self
+                .default
+                .or_else(|| legacy.then_some(NetworkAction::Deny)),
+            allow: self
+                .allow
+                .map(|value| rules(value, "allow"))
+                .transpose()?
+                .or_else(|| legacy.then(Vec::new)),
+            deny: self
+                .deny
+                .map(|value| rules(value, "deny"))
+                .transpose()?
+                .or_else(|| legacy.then(Vec::new)),
+        };
+        let ingress = NetworkIngressConfig {
+            default: self
+                .inbound
+                .or_else(|| legacy.then_some(NetworkAction::Deny)),
+            host_loopback: self
+                .host_loopback
+                .or_else(|| legacy.then_some(NetworkAction::Deny)),
+        };
         Ok(NetworkPermissionConfig {
-            egress: Some(NetworkEgressConfig {
-                default: Some(self.default),
-                allow: Some(rules(self.allow, "allow")?),
-                deny: Some(rules(self.deny, "deny")?),
-            }),
-            ingress: Some(NetworkIngressConfig {
-                default: Some(self.inbound),
-                host_loopback: Some(self.host_loopback),
-            }),
+            egress: (!egress.is_empty()).then_some(egress),
+            ingress: (!ingress.is_empty()).then_some(ingress),
         })
     }
 
@@ -87,21 +132,26 @@ impl NetworkDocument {
         config.validate()?;
         let egress = config.egress.as_ref();
         let ingress = config.ingress.as_ref();
-        let flatten = |rules: Option<&Vec<NetworkRuleConfig>>| {
+        let flatten = |rules: &Vec<NetworkRuleConfig>| {
             let mut result = Vec::new();
-            for rule in rules.into_iter().flatten() {
+            for rule in rules {
                 result.extend(RuleDocument::from_native(rule)?);
             }
             Ok::<_, String>(result)
         };
         Ok(Self {
-            default: egress.and_then(|value| value.default).unwrap_or_default(),
-            allow: flatten(egress.and_then(|value| value.allow.as_ref()))?,
-            deny: flatten(egress.and_then(|value| value.deny.as_ref()))?,
-            inbound: ingress.and_then(|value| value.default).unwrap_or_default(),
-            host_loopback: ingress
-                .and_then(|value| value.host_loopback)
-                .unwrap_or_default(),
+            version: Some(2),
+            default: egress.and_then(|value| value.default),
+            allow: egress
+                .and_then(|value| value.allow.as_ref())
+                .map(flatten)
+                .transpose()?,
+            deny: egress
+                .and_then(|value| value.deny.as_ref())
+                .map(flatten)
+                .transpose()?,
+            inbound: ingress.and_then(|value| value.default),
+            host_loopback: ingress.and_then(|value| value.host_loopback),
         })
     }
 }

@@ -206,6 +206,7 @@ pub(super) fn resolve(context: KeyContext, key: KeyEvent) -> Option<A> {
         },
         KeyContext::SessionModel => match key.code {
             K::Enter if unmodified(key) => Some(A::Accept),
+            K::Char('o') if only_ctrl(key) => Some(A::SettingsSource),
             _ => None,
         },
         KeyContext::Timeline => match key.code {

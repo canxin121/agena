@@ -59,17 +59,18 @@ impl App {
         } else {
             "global"
         };
+        let workspace = source == PermissionStudioSource::WorkspaceConfig;
         self.dispatch_backend_operation(
             move |application| async move {
                 application.refresh_config_sources().await?;
-                application.refresh_permission_parent(layer).await
+                Ok::<_, anyhow::Error>(application.refresh_permission_base(layer).await)
             },
             move |app, result| {
                 if !app.accept_permission_studio_load(request) {
                     return;
                 }
                 match result {
-                    Ok(()) => match app.build_permission_studio_overlay(
+                    Ok(Ok(())) => match app.build_permission_studio_overlay(
                         source,
                         PermissionStudioPage::Access,
                         Some(PermissionStudioSectionId::PathDefaults),
@@ -77,8 +78,15 @@ impl App {
                         PermissionStudioFocus::Items,
                     ) {
                         Ok(dialog) => app.current_route = Route::PermissionStudio(dialog),
-                        Err(error) => app.flash_error(error),
+                        Err(error) => {
+                            app.flash_error(error);
+                            app.open_permission_raw_editor(workspace);
+                        }
                     },
+                    Ok(Err(error)) => {
+                        app.flash_error(crate::UiFailure::internal(error));
+                        app.open_permission_raw_editor(workspace);
+                    }
                     Err(error) => app.flash_error(error),
                 }
             },
@@ -209,11 +217,11 @@ impl App {
         let inherited_permission = match &source {
             PermissionStudioSource::GlobalConfig => self
                 .application
-                .inherited_permission("global")
+                .permission_base("global")
                 .map_err(crate::UiFailure::internal)?,
             PermissionStudioSource::WorkspaceConfig => self
                 .application
-                .inherited_permission("workspace")
+                .permission_base("workspace")
                 .map_err(crate::UiFailure::internal)?,
             PermissionStudioSource::Session { session_id }
             | PermissionStudioSource::EffectiveSession { session_id } => self
@@ -223,7 +231,7 @@ impl App {
         };
         if inherited_permission.network.is_none() {
             return Err(crate::UiFailure::internal(
-                "server did not provide inherited network configuration",
+                "server did not provide the base network configuration",
             ));
         }
         let mut dialog = PermissionStudioOverlay {
@@ -293,6 +301,19 @@ impl App {
     }
 
     pub(crate) fn persist_permission_studio(
+        &mut self,
+        dialog: &mut PermissionStudioOverlay,
+        permission: PermissionConfig,
+    ) -> UiResult<()> {
+        if !crate::permission_studio_change_is_local(dialog, &permission) {
+            return Err(crate::UiFailure::message(
+                crate::permission_studio_inherited_message(&self.i18n, dialog),
+            ));
+        }
+        self.persist_permission_studio_source(dialog, permission)
+    }
+
+    pub(crate) fn persist_permission_studio_source(
         &mut self,
         dialog: &mut PermissionStudioOverlay,
         permission: PermissionConfig,

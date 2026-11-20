@@ -593,6 +593,11 @@ impl SettingsPlugin {
                     config_found,
                     source,
                     path: input.path,
+                    has_override: None,
+                    override_path: None,
+                    requires_group_reset: None,
+                    default_value: None,
+                    layer_value: None,
                     inherited_value: None,
                 }
             }

@@ -350,7 +350,7 @@ impl SessionManager {
         let effective = state
             .config
             .session_selection(
-                configuration.profile.as_deref(),
+                &configuration,
                 &metadata.selection.clone().unwrap_or_default(),
             )
             .map_err(AppError::Config)?;

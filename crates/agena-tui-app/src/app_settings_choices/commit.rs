@@ -104,6 +104,9 @@ impl App {
                 true
             }
             ChoiceOverlayAction::SettingsField(field) => {
+                if !self.require_settings_field_editable(&field) {
+                    return false;
+                }
                 let input = choice_selection_value(&selection);
                 match parse_settings_field_input(&self.i18n, &field, input.as_str()) {
                     Ok(Some(value)) => {
@@ -164,9 +167,83 @@ impl App {
                     }
                 }
             }
-            ChoiceOverlayAction::SessionModelMode(step) => {
+            ChoiceOverlayAction::SettingsFieldSource {
+                mut field,
+                local_value,
+                model_editor,
+            } => {
+                match choice_selection_value(&selection).as_str() {
+                    "inherit" => self.persist_settings_field_value(field, None),
+                    "local" if field.workspace => {
+                        if let Some(value) = local_value {
+                            self.persist_settings_field_value(field, Some(value));
+                        } else if let Some(purpose) = model_editor {
+                            self.open_settings_source_model_editor(purpose);
+                        } else {
+                            field.explicit_local = true;
+                            self.open_settings_field_editor(field, "");
+                        }
+                    }
+                    _ => return false,
+                }
+                true
+            }
+            ChoiceOverlayAction::SessionModelSource {
+                session_id,
+                model,
+                selected,
+                local_value,
+            } => self.commit_session_model_source(
+                session_id,
+                model,
+                selected,
+                local_value,
+                choice_selection_value(&selection).as_str(),
+            ),
+            ChoiceOverlayAction::SessionModelModeSource {
+                step,
+                session_id,
+                model,
+                selected,
+            } => self.commit_session_model_mode_source(
+                step,
+                session_id,
+                model,
+                selected,
+                choice_selection_value(&selection).as_str(),
+            ),
+            ChoiceOverlayAction::SessionModelMode {
+                step,
+                session_id,
+                model,
+                explicit_local,
+            } => {
+                if session_id.is_some()
+                    && !explicit_local
+                    && !super::session_sources::session_model_mode_is_local(
+                        &self.current_raw_model_selection(),
+                        step,
+                    )
+                {
+                    self.flash_warning(crate::settings_inherited_locked_message(&self.i18n, true));
+                    return false;
+                }
+                if !super::session_sources::model_source_context_matches(
+                    session_id,
+                    self.transcript.session_id,
+                    &model,
+                    &self.current_session_model_ref(),
+                ) {
+                    self.flash_warning(self.i18n.text("settings-model-source-changed"));
+                    return true;
+                }
+                if session_id.is_some_and(|id| self.session_is_busy(id)) {
+                    self.flash_warning(self.i18n.text("flash-session-busy"));
+                    return false;
+                }
                 let input = choice_selection_value(&selection);
                 let previous = self.run_options.clone();
+                self.run_options.raw_selection = Some(self.current_raw_model_selection());
                 self.run_options
                     .apply_model_mode_input(step, input.as_str());
                 if !self.persist_current_session_model_stack(previous.clone()) {
@@ -178,6 +255,7 @@ impl App {
             }
             ChoiceOverlayAction::ModelSelectionMode {
                 purpose,
+                explicit_local,
                 model,
                 step,
                 mut thinking_mode,
@@ -197,6 +275,7 @@ impl App {
                     SessionModelModeStep::ThinkingMode => self
                         .open_model_selection_mode_step_or_finish(
                             purpose,
+                            explicit_local,
                             model,
                             thinking_mode,
                             speed_mode,
@@ -206,6 +285,7 @@ impl App {
                     SessionModelModeStep::SpeedMode => self
                         .open_model_selection_mode_step_or_finish(
                             purpose,
+                            explicit_local,
                             model,
                             thinking_mode,
                             speed_mode,
@@ -215,6 +295,7 @@ impl App {
                     SessionModelModeStep::Verbosity => {
                         self.finish_model_selection(
                             purpose,
+                            explicit_local,
                             model,
                             thinking_mode,
                             speed_mode,
@@ -352,6 +433,13 @@ impl App {
                     ));
                     return true;
                 };
+                if !crate::permission_studio_target_editable(&parent, &target) {
+                    self.flash_warning(crate::permission_studio_inherited_message(
+                        &self.i18n, &parent,
+                    ));
+                    self.restore_permission_studio_dialog(host, parent);
+                    return false;
+                }
                 let projection = crate::PermissionStudioProjection::new(&parent);
                 let new_rule = match &target {
                     crate::PermissionStudioModeTarget::PathRule { pattern }
@@ -401,6 +489,20 @@ impl App {
                     }
                 }
             }
+            ChoiceOverlayAction::PermissionStudioSource(target) => self
+                .commit_permission_studio_source(
+                    target,
+                    choice_selection_value(&selection).as_str(),
+                ),
+            ChoiceOverlayAction::PermissionStudioNetworkSource => self
+                .commit_permission_studio_network_source(
+                    choice_selection_value(&selection).as_str(),
+                ),
+            ChoiceOverlayAction::PermissionStudioNetworkListSource { deny } => self
+                .commit_permission_studio_network_list_source(
+                    deny,
+                    choice_selection_value(&selection).as_str(),
+                ),
             ChoiceOverlayAction::PermissionStudioNetworkProtocol => {
                 let value = choice_selection_value(&selection);
                 let Some((host, mut parent)) = self.take_permission_studio_dialog() else {
@@ -514,15 +616,38 @@ impl App {
                 return;
             }
         };
-        let source = if field.workspace {
-            &sources.project_file
-        } else {
-            &sources.file
-        };
-        let file_value =
-            get_json_path(source, Some(field.path.as_str())).unwrap_or(JsonValue::Null);
-        let effective_value =
-            get_json_path(&sources.effective, Some(field.path.as_str())).unwrap_or(JsonValue::Null);
+        self.open_settings_field_editor_with_sources(field, &sources);
+    }
+
+    pub(crate) fn open_settings_field_editor_with_sources(
+        &mut self,
+        field: SettingsFieldSpec,
+        sources: &crate::ConfigJsonSources,
+    ) {
+        let projection = crate::SettingsFieldProjection::new(sources, &field);
+        if !crate::settings_field_value_editable(sources, &field) {
+            self.flash_warning(crate::settings_inherited_locked_message(&self.i18n, false));
+            return;
+        }
+        if projection.requires_group_reset {
+            self.open_settings_layer_source(field, None, sources);
+            return;
+        }
+        let mut prompt = settings_value_edit_prompt(
+            &self.i18n,
+            &field,
+            projection.local.as_ref(),
+            projection.effective.as_ref(),
+        );
+        if field.workspace && field.path != crate::MCP_SERVER_URL_SETTINGS_PATH {
+            prompt.push_str(&format!(
+                "\n{}: {} · {}: {}",
+                self.i18n.text("settings-layer-source-title"),
+                projection.source_label(&self.i18n),
+                projection.fallback_label(&self.i18n),
+                crate::settings_layer_value_label(&self.i18n, projection.fallback_value())
+            ));
+        }
         let prefill = if field.path == crate::MCP_SERVER_URL_SETTINGS_PATH {
             self.application
                 .cached_mcp_server_control()
@@ -533,26 +658,37 @@ impl App {
                         .map(|value| JsonValue::String(value.to_owned()))
                 })
                 .unwrap_or(JsonValue::Null)
-        } else if !file_value.is_null() {
-            file_value.clone()
         } else {
-            JsonValue::Null
+            projection.value.clone().unwrap_or(JsonValue::Null)
         };
         if let Some(all_items) = self.settings_field_choice_items(&field) {
-            let current_value = (!prefill.is_null()).then(|| setting_value_input_text(&prefill));
+            let current_value = if field.workspace {
+                projection.local.as_ref()
+            } else {
+                projection.value.as_ref()
+            }
+            .map(setting_value_input_text);
             let overlay_style = Self::settings_field_choice_overlay_style(&field);
-            self.open_choice_overlay(self.build_choice_overlay(
+            let mut picker = self.build_choice_overlay(
                 settings_edit_title(
                     &self.i18n,
                     settings_field_edit_title(&self.i18n, &field).as_str(),
                 ),
-                settings_value_edit_prompt(&self.i18n, &field, &file_value, &effective_value),
+                prompt,
                 current_value,
                 all_items,
                 ChoiceOverlayAction::SettingsField(field),
-                true,
+                projection.workspace,
                 overlay_style,
-            ));
+            );
+            if let Some(clear) = picker.presentation.clear_action.as_mut() {
+                clear.label = format!(
+                    "{} · {}",
+                    crate::settings_layer_reset_label(&self.i18n, projection.workspace),
+                    crate::settings_layer_value_label(&self.i18n, projection.fallback_value())
+                );
+            }
+            self.open_choice_overlay(picker);
             return;
         }
         self.overlay = Some(Overlay::SettingsValueEdit(SettingsValueEditOverlay::new(
@@ -560,7 +696,7 @@ impl App {
                 &self.i18n,
                 settings_field_edit_title(&self.i18n, &field).as_str(),
             ),
-            settings_value_edit_prompt(&self.i18n, &field, &file_value, &effective_value),
+            prompt,
             Editor::from_text(setting_value_input_text(&prefill)),
             field,
         )));
@@ -579,7 +715,7 @@ use crate::{
     PERMISSION_STUDIO_CUSTOM_ENTRY, PermissionMode, PermissionRuleStudioChoiceField,
     PermissionRuleSubjectKind, PermissionStudioEditorAction, Route, SessionModelModeStep,
     SettingsFieldSpec, SettingsValueEditOverlay, apply_permission_studio_entries_mode,
-    apply_permission_studio_mode_input, get_json_path, parse_settings_field_input,
+    apply_permission_studio_mode_input, parse_settings_field_input,
     refresh_permission_rule_studio_dialog, setting_value_input_text, settings_edit_title,
     settings_field_edit_title, settings_path_cleared_message, settings_path_updated_message,
     settings_value_edit_prompt, ui_text,

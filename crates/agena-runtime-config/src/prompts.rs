@@ -5,11 +5,12 @@
 //! truncate everything broader.
 
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use agena_prompt_layers::{
     FragmentId, LayerMode, MAX_FRAGMENT_BYTES, PromptFragment, PromptLayer, PromptScope,
+    validate_compositions,
 };
 
 use crate::ConfigError;
@@ -24,6 +25,9 @@ pub struct PromptScopeConfig {
     pub inline: Vec<PromptFragment>,
     /// Reusable saved prompts; these are NOT applied until an order references them.
     pub library: Vec<PromptFragment>,
+    /// Named categories can exist independently of their member fragments.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub categories: Vec<String>,
     /// Layers that participate only when the request route matches `match`.
     pub models: Vec<ModelPromptConfig>,
 }
@@ -35,6 +39,7 @@ impl PromptScopeConfig {
             && self.disabled.is_empty()
             && self.inline.is_empty()
             && self.library.is_empty()
+            && self.categories.is_empty()
             && self.models.is_empty()
     }
 
@@ -49,6 +54,17 @@ impl PromptScopeConfig {
 
     pub fn validate(&self) -> Result<(), String> {
         self.layer().validate().map_err(|error| error.to_string())?;
+        let mut categories = BTreeSet::new();
+        for name in &self.categories {
+            if name.is_empty() || name.trim() != name || name.chars().any(char::is_control) {
+                return Err("prompt categories need a non-empty, trimmed name".to_owned());
+            }
+            if !categories.insert(name) {
+                return Err(format!(
+                    "prompt category `{name}` is defined more than once"
+                ));
+            }
+        }
         let library_layer = PromptLayer {
             inline: self.library.clone(),
             ..PromptLayer::default()
@@ -164,22 +180,27 @@ impl PromptLayersConfig {
             (PromptScope::Global, &self.global),
             (PromptScope::Workspace, &self.workspace),
         ] {
-            let mut library = self.library(scope)?;
+            let mut library = inherited.clone();
             if scope == PromptScope::Workspace {
-                for (id, fragment) in &inherited {
-                    library
-                        .entry(id.clone())
-                        .or_insert_with(|| fragment.clone());
-                }
+                library.extend(self.library(scope)?);
             }
+            library.extend(
+                config
+                    .inline
+                    .iter()
+                    .cloned()
+                    .map(|fragment| (fragment.id.clone(), fragment)),
+            );
+            validate_compositions(&library, scope).map_err(|error| {
+                ConfigError::Validation(format!("{} prompts: {error}", scope.as_str()))
+            })?;
             let dir = if scope == PromptScope::Global {
                 &self.global_dir
             } else {
                 &self.workspace_dir
             };
             for id in &config.order {
-                let inline = config.inline.iter().any(|fragment| &fragment.id == id);
-                if !inline && !library.contains_key(id) {
+                if !library.contains_key(id) {
                     return Err(ConfigError::Validation(format!(
                         "{} prompts reference `{id}`, but {} does not exist",
                         scope.as_str(),
@@ -190,8 +211,7 @@ impl PromptLayersConfig {
             for model in &config.models {
                 for id in &model.order {
                     let inline = model.inline.iter().any(|fragment| &fragment.id == id);
-                    let own = config.inline.iter().any(|fragment| &fragment.id == id);
-                    if !inline && !own && !library.contains_key(id) {
+                    if !inline && !library.contains_key(id) {
                         return Err(ConfigError::Validation(format!(
                             "{} prompts for `{}` reference `{id}`, but no fragment file or inline fragment provides it",
                             scope.as_str(),
@@ -199,9 +219,6 @@ impl PromptLayersConfig {
                         )));
                     }
                 }
-            }
-            if scope == PromptScope::Workspace {
-                inherited = library;
             }
         }
         Ok(())
@@ -260,6 +277,8 @@ pub fn load_library(dir: &Path) -> Result<FragmentLibrary, ConfigError> {
 struct FragmentFrontMatter {
     title: Option<String>,
     category: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    parts: Vec<FragmentId>,
     when: Option<agena_prompt_layers::PromptCondition>,
 }
 
@@ -302,18 +321,24 @@ pub fn parse_fragment(
         title: meta.title.unwrap_or_default(),
         category: meta.category.unwrap_or_default(),
         body: body.to_owned(),
+        parts: meta.parts,
         when: meta.when.unwrap_or_default(),
     })
 }
 
 /// Render a fragment file, preserving front matter for title and conditions.
 pub fn render_fragment(fragment: &PromptFragment) -> String {
-    if fragment.title.is_empty() && fragment.category.is_empty() && fragment.when.is_empty() {
+    if fragment.title.is_empty()
+        && fragment.category.is_empty()
+        && fragment.parts.is_empty()
+        && fragment.when.is_empty()
+    {
         return fragment.body.clone();
     }
     let front = serde_yaml::to_string(&FragmentFrontMatter {
         title: (!fragment.title.is_empty()).then(|| fragment.title.clone()),
         category: (!fragment.category.is_empty()).then(|| fragment.category.clone()),
+        parts: fragment.parts.clone(),
         when: (!fragment.when.is_empty()).then(|| fragment.when.clone()),
     })
     .unwrap_or_default();
@@ -387,6 +412,7 @@ mod tests {
             title: "Round trip".to_owned(),
             category: "writing".to_owned(),
             body: "Body\n".to_owned(),
+            parts: Vec::new(),
             when: agena_prompt_layers::PromptCondition {
                 models: vec!["local/*".to_owned()],
                 requires_tools: None,

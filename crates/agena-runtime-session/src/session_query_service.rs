@@ -34,15 +34,21 @@ pub struct SessionPresentation {
 /// Execution context of a session.
 pub struct SessionExecutionContext {
     pub profile: Option<String>,
+    pub profile_is_default: bool,
     pub conversation: Option<agena_domain::SessionConversation>,
     pub prompts: agena_prompt_layers::PromptLayer,
     pub workflow_state: WorkflowState,
     pub agent_id: String,
     pub selected_permission: PermissionConfig,
+    pub permission_profile: Option<String>,
     pub inherited_permission: PermissionConfig,
     pub effective_permission: PermissionConfig,
     pub permission_ceiling: PermissionConfig,
     pub permission_ceiling_layers: Vec<PermissionConfig>,
+    /// Persisted session choices, before applying profile or runtime defaults.
+    pub selected_selection: agena_domain::ExecutionSelection,
+    /// Profile and runtime choices before this session's selection is applied.
+    pub inherited_selection: agena_domain::ExecutionSelection,
     pub model_provider_id: Option<String>,
     pub model_adapter_id: Option<String>,
     pub model_id: Option<String>,

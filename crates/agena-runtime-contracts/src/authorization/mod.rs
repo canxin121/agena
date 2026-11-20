@@ -10,7 +10,10 @@ pub(crate) use path_validation::{canonical_resource_path, same_existing_file};
 
 use std::path::Path;
 
-use agena_domain::{AccessKind, NetworkTarget, PermissionDecision, PermissionMode};
+use agena_domain::{
+    AccessKind, NetworkTarget, PermissionDecision, PermissionMode, SHELL_COMMAND_RULE_GROUP,
+    command_class_keyword,
+};
 pub use agena_domain::{
     NetworkPermissionConfig, PathAccessModes, PathPermissionConfig, PermissionConfig,
     ToolPermissionConfig, ToolPermissionRules,
@@ -19,6 +22,7 @@ use agena_plugin_sdk::ToolTag;
 use indexmap::IndexMap;
 
 use crate::command_class::CommandClass;
+use crate::permission::protected_paths::ProtectedPaths;
 use crate::permission::{
     NetworkPermissionPolicy, PermissionConfigError, PermissionPolicy, ToolPermissionPolicy,
 };
@@ -88,7 +92,7 @@ pub fn apply_tool_permission_config(
     mut base: ToolPermissionPolicy,
 ) -> Result<ToolPermissionPolicy, PermissionConfigError> {
     validate_tool_permission_names(value)?;
-    let value = value.clone().with_canonical_tool_names();
+    let value = value.clone().normalized();
     if let Some(mode) = value.default {
         base.default_mode = mode;
     }
@@ -130,7 +134,8 @@ fn validate_tool_permission_names(
             || name.trim() != name
             || name.chars().any(char::is_whitespace)
             || name.chars().any(char::is_control)
-            || (name.contains(['*', '?']) && !(is_rule && name == "*"))
+            || (name.contains(['*', '?'])
+                && !(is_rule && matches!(name.as_str(), "*" | SHELL_COMMAND_RULE_GROUP)))
         {
             return Err(PermissionConfigError::InvalidToolRule {
                 tool: name.clone(),
@@ -151,6 +156,15 @@ fn apply_tool_permission_rules(
 ) -> Result<ToolPermissionPolicy, PermissionConfigError> {
     match rules {
         ToolPermissionRules::Mode(mode) => {
+            if tool_name == SHELL_COMMAND_RULE_GROUP {
+                return Err(PermissionConfigError::InvalidToolRule {
+                    tool: tool_name.into(),
+                    pattern: "*".into(),
+                    reason:
+                        "the shared shell rule group must be an ordered map of command patterns"
+                            .into(),
+                });
+            }
             if tool_name == "*" {
                 return Err(PermissionConfigError::InvalidToolRule {
                     tool: tool_name.into(),
@@ -162,7 +176,9 @@ fn apply_tool_permission_rules(
             Ok(base)
         }
         ToolPermissionRules::Ordered(entries) => {
-            if let Some(tool_name) = crate::permission::normalized_shell_command_tool(tool_name) {
+            // Keep accepting historical command tables for the current
+            // WebSocket-only monitor.
+            if matches!(tool_name, SHELL_COMMAND_RULE_GROUP | "agena.monitor.start") {
                 for (pattern, mode) in ordered_rule_entries(entries) {
                     let trimmed = pattern.trim();
                     if trimmed.is_empty()
@@ -187,12 +203,22 @@ fn apply_tool_permission_rules(
                             reason: "numeric-only command keys cannot preserve rule order in JSON editors; use a command pattern with nonnumeric text or tools.names for a tool-level decision".into(),
                         });
                     }
-                    if let Some(class) = command_class_keyword(trimmed) {
-                        base.add_shell_tool_class(tool_name, class, trimmed, mode);
+                    if tool_name != SHELL_COMMAND_RULE_GROUP {
+                        continue;
+                    }
+                    let class = match command_class_keyword(trimmed) {
+                        Some(agena_domain::COMMAND_CLASS_NO_OP) => Some(CommandClass::NoOp),
+                        Some(agena_domain::COMMAND_CLASS_ROUTINE) => Some(CommandClass::Routine),
+                        Some(agena_domain::COMMAND_CLASS_DANGEROUS) => {
+                            Some(CommandClass::Dangerous)
+                        }
+                        _ => None,
+                    };
+                    if let Some(class) = class {
+                        base.add_bash_class_rule(class, trimmed, mode);
                     } else {
-                        // "*" is a command pattern too: preserve its position
-                        // instead of turning it into an overriding tool grant.
-                        base.add_shell_tool_pattern(tool_name, trimmed, mode);
+                        // "*" is a command pattern in the shared, ordered table.
+                        base.add_bash_overlay_rule(trimmed, mode);
                     }
                 }
                 Ok(base)
@@ -228,18 +254,6 @@ fn apply_tool_permission_rules(
                 Ok(base)
             }
         }
-    }
-}
-
-/// Recognize a `tools.rules.<shell tool>` entry that names a command class
-/// instead of a command pattern. The keywords are the ones the configuration
-/// schema documents under `tools.rules`.
-fn command_class_keyword(value: &str) -> Option<CommandClass> {
-    match normalized_keyword(value).as_str() {
-        "no-op" | "no_op" | "noop" => Some(CommandClass::NoOp),
-        "routine" => Some(CommandClass::Routine),
-        "dangerous" => Some(CommandClass::Dangerous),
-        _ => None,
     }
 }
 
@@ -435,6 +449,19 @@ impl ExecutionPrincipal {
             return PermissionDecision::Deny {
                 reason: "execution principal is blocked".to_owned(),
             };
+        }
+        let target = if target_path.is_absolute() || workspace_root.as_os_str().is_empty() {
+            target_path.to_path_buf()
+        } else {
+            workspace_root.join(target_path)
+        };
+        let protected = ProtectedPaths::for_workspace(
+            workspace_root,
+            &agena_storage_layout::StorageLayout::current(),
+            Some(&self.permission_policy),
+        );
+        if let Some(denial) = protected.check(access, &target) {
+            return denial;
         }
         let decision = self
             .permission_policy

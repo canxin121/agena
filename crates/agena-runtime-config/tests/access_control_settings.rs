@@ -52,20 +52,22 @@ fn input(value: Value) -> ConfigSettingsSetInput {
 }
 
 #[test]
-fn global_catalog_round_trips_and_retains_legacy_empty_default() {
+fn global_catalog_round_trips_and_supplies_the_factory_permission_profile() {
     let resolved = serde_json::from_value::<RawConfig>(json!({"access_control": catalog()}))
         .unwrap()
         .resolve()
         .unwrap();
     assert_eq!(resolved.access_control.profiles["reader"].revision, 1);
     assert_eq!(resolved.access_control.users[0].actor, "alice");
-    assert!(
-        RawConfig::default()
-            .resolve()
-            .unwrap()
-            .access_control
-            .is_empty()
+    let default = RawConfig::default().resolve().unwrap();
+    let id = agena_domain::DEFAULT_PERMISSION_PROFILE_ID;
+    assert_eq!(default.permission_profile.as_deref(), Some(id));
+    assert_eq!(default.access_control.profiles.len(), 1);
+    assert_eq!(
+        default.access_control.profiles[id].permission,
+        default.permission
     );
+    assert!(default.access_control.profiles[id].complete);
     let round_trip = serde_json::to_value(&resolved.access_control).unwrap();
     let parsed: agena_domain::AccessControlConfig = serde_json::from_value(round_trip).unwrap();
     assert_eq!(parsed, resolved.access_control);

@@ -1704,12 +1704,14 @@ impl agena_runtime::RuntimeConfigSettingsService for AgenaRuntime {
     fn read_project_file_settings(
         &self,
         input: agena_runtime::ConfigSettingsGetInput,
+        workspace_root: Option<&std::path::Path>,
     ) -> Result<agena_runtime::ConfigSettingsReadResponse, agena_runtime::RuntimeConfigSettingsError>
     {
         let snapshot = self.current_snapshot();
+        let workspace_path = settings_workspace_path(&snapshot, workspace_root)?;
         agena_runtime_config::read_runtime_layer_setting(
             snapshot.config_path(),
-            snapshot.project_config_path(),
+            &workspace_path,
             agena_runtime::ConfigSettingsLayer::Workspace,
             input,
         )
@@ -1732,7 +1734,8 @@ impl agena_runtime::RuntimeConfigSettingsService for AgenaRuntime {
     ) -> Result<agena_runtime::ConfigSettingsEditResponse, agena_runtime::RuntimeConfigSettingsError>
     {
         let snapshot = self.current_snapshot();
-        let validator = runtime_settings_schema_validator(&snapshot);
+        let validator =
+            runtime_settings_schema_validator(&snapshot, snapshot.project_config_path());
         agena_runtime::set_runtime_file_setting(
             snapshot.config_path().to_path_buf(),
             input,
@@ -1743,15 +1746,16 @@ impl agena_runtime::RuntimeConfigSettingsService for AgenaRuntime {
     fn set_project_file_setting(
         &self,
         input: agena_runtime::ConfigSettingsSetInput,
+        workspace_root: Option<&std::path::Path>,
     ) -> Result<agena_runtime::ConfigSettingsEditResponse, agena_runtime::RuntimeConfigSettingsError>
     {
         let snapshot = self.current_snapshot();
-        let validator = runtime_settings_schema_validator(&snapshot);
-        agena_runtime::set_runtime_file_setting(
-            snapshot.project_config_path().to_path_buf(),
-            input,
-            Some(&validator),
-        )
+        let workspace_path = settings_workspace_path(&snapshot, workspace_root)?;
+        let validator = runtime_settings_schema_validator(&snapshot, &workspace_path);
+        let mut response =
+            agena_runtime::set_runtime_file_setting(workspace_path, input, Some(&validator))?;
+        response.reload_required &= workspace_root.is_none();
+        Ok(response)
     }
 
     fn patch_file_settings(
@@ -1760,7 +1764,8 @@ impl agena_runtime::RuntimeConfigSettingsService for AgenaRuntime {
     ) -> Result<agena_runtime::ConfigSettingsEditResponse, agena_runtime::RuntimeConfigSettingsError>
     {
         let snapshot = self.current_snapshot();
-        let validator = runtime_settings_schema_validator(&snapshot);
+        let validator =
+            runtime_settings_schema_validator(&snapshot, snapshot.project_config_path());
         agena_runtime::patch_runtime_file_settings(
             snapshot.config_path().to_path_buf(),
             input,
@@ -1774,7 +1779,8 @@ impl agena_runtime::RuntimeConfigSettingsService for AgenaRuntime {
     ) -> Result<agena_runtime::ConfigSettingsEditResponse, agena_runtime::RuntimeConfigSettingsError>
     {
         let snapshot = self.current_snapshot();
-        let validator = runtime_settings_schema_validator(&snapshot);
+        let validator =
+            runtime_settings_schema_validator(&snapshot, snapshot.project_config_path());
         agena_runtime::delete_runtime_file_setting(
             snapshot.config_path().to_path_buf(),
             input,
@@ -1785,15 +1791,16 @@ impl agena_runtime::RuntimeConfigSettingsService for AgenaRuntime {
     fn delete_project_file_setting(
         &self,
         input: agena_runtime::ConfigSettingsDeleteInput,
+        workspace_root: Option<&std::path::Path>,
     ) -> Result<agena_runtime::ConfigSettingsEditResponse, agena_runtime::RuntimeConfigSettingsError>
     {
         let snapshot = self.current_snapshot();
-        let validator = runtime_settings_schema_validator(&snapshot);
-        agena_runtime::delete_runtime_file_setting(
-            snapshot.project_config_path().to_path_buf(),
-            input,
-            Some(&validator),
-        )
+        let workspace_path = settings_workspace_path(&snapshot, workspace_root)?;
+        let validator = runtime_settings_schema_validator(&snapshot, &workspace_path);
+        let mut response =
+            agena_runtime::delete_runtime_file_setting(workspace_path, input, Some(&validator))?;
+        response.reload_required &= workspace_root.is_none();
+        Ok(response)
     }
 
     fn validate_file_settings(
@@ -1804,12 +1811,63 @@ impl agena_runtime::RuntimeConfigSettingsService for AgenaRuntime {
         agena_runtime::RuntimeConfigSettingsError,
     > {
         let snapshot = self.current_snapshot();
-        let validator = runtime_settings_schema_validator(&snapshot);
+        let validator =
+            runtime_settings_schema_validator(&snapshot, snapshot.project_config_path());
         agena_runtime::validate_runtime_file_settings(
             snapshot.config_path().to_path_buf(),
             &validator,
         )
     }
+}
+
+fn settings_workspace_path(
+    snapshot: &RuntimeSnapshot,
+    workspace_root: Option<&std::path::Path>,
+) -> Result<std::path::PathBuf, agena_runtime::RuntimeConfigSettingsError> {
+    use agena_runtime::RuntimeConfigSettingsError as Error;
+    use std::fs;
+
+    let Some(root) = workspace_root else {
+        return Ok(snapshot.project_config_path().to_path_buf());
+    };
+    let root = root.canonicalize().map_err(|error| {
+        Error::invalid_input_with_diagnostic("The workspace directory is unavailable.", error)
+    })?;
+    if !root.is_dir() {
+        return Err(Error::invalid_input(
+            "The workspace root is not a directory.",
+        ));
+    }
+    let path = crate::project_config_path(&root);
+    let directory = path
+        .parent()
+        .expect("project configuration has a directory");
+    for (target, is_directory) in [(directory, true), (path.as_path(), false)] {
+        match fs::symlink_metadata(target) {
+            Ok(metadata)
+                if (is_directory && metadata.is_dir()) || (!is_directory && metadata.is_file()) => {
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(Error::invalid_input_with_diagnostic(
+                    "The workspace configuration path is unavailable.",
+                    error,
+                ));
+            }
+            Ok(_) => {
+                return Err(Error::invalid_input(
+                    "The workspace configuration must be in a regular file inside the workspace.",
+                ));
+            }
+        }
+    }
+    let global = snapshot.config_path();
+    if path == global || global.canonicalize().is_ok_and(|global| global == path) {
+        return Err(Error::invalid_input(
+            "The selected workspace configuration belongs to the global layer.",
+        ));
+    }
+    Ok(path)
 }
 
 /// Build the schema validator used by settings edits.
@@ -1822,10 +1880,11 @@ impl agena_runtime::RuntimeConfigSettingsService for AgenaRuntime {
 /// configuration is perfectly valid.
 fn runtime_settings_schema_validator(
     snapshot: &Arc<RuntimeSnapshot>,
+    workspace_path: &std::path::Path,
 ) -> impl Fn(&std::path::Path, &str) -> Result<(), agena_runtime::RuntimeConfigSettingsError> + 'static
 {
     let global_path = snapshot.config_path().to_path_buf();
-    let workspace_path = snapshot.project_config_path().to_path_buf();
+    let workspace_path = workspace_path.to_path_buf();
     move |config_path: &std::path::Path, text: &str| {
         let edited_layer = if config_path == global_path {
             agena_runtime_config::ConfigSettingsLayer::Global

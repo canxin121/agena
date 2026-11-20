@@ -64,9 +64,12 @@
       }
     ]
   },
-  "default_profile": null,
+  "default_profile": "main",
+  "default_subagent_profile": "worker",
   "profiles": {
     "developer": {
+      "extends": "main",
+      "mode": "primary",
       "title": "Developer",
       "description": "Implement and verify changes in the current workspace.",
       "prompts": {
@@ -89,6 +92,7 @@
       }
     },
     "reviewer": {
+      "mode": "all",
       "title": "Reviewer",
       "description": "Inspect code and explain actionable findings.",
       "extends": "developer",
@@ -149,27 +153,9 @@
         "agena.web.fetch": "allow"
       },
       "rules": {
-        "agena.shell.exec": {
+        "shell.*": {
           "no-op": "allow",
           "routine": "allow",
-          "dangerous": "deny"
-        },
-        "agena.shell.spawn": {
-          "no-op": "allow",
-          "routine": "allow",
-          "dangerous": "deny"
-        },
-        "agena.shell.watch": {
-          "no-op": "allow",
-          "routine": "allow",
-          "dangerous": "deny"
-        },
-        "agena.shell.open": {
-          "no-op": "allow",
-          "routine": "allow",
-          "dangerous": "deny"
-        },
-        "agena.shell.write": {
           "dangerous": "deny"
         },
         "*": {

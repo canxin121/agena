@@ -233,16 +233,22 @@ pub struct ResolvedConfig {
     /// Resource declarations and command hints used only without MXC isolation.
     pub resource_guard: bool,
     pub session: SessionConfig,
-    /// Named session defaults; resolved when a session selects a profile.
+    /// Factory role definitions, exposed separately so editors can reset overrides.
+    pub builtin_profiles: BTreeMap<String, crate::AgentProfileConfig>,
+    /// Complete role catalog after built-in, global and workspace composition.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub profiles: BTreeMap<String, crate::AgentProfileConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_subagent_profile: Option<String>,
     /// Both configuration prompt layers plus their fragment directories.
     #[serde(default, skip_serializing_if = "PromptLayersConfig::is_empty")]
     pub prompts: PromptLayersConfig,
     #[serde(default, skip_serializing_if = "PermissionConfig::is_empty")]
     pub permission: PermissionConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission_profile: Option<String>,
     #[serde(
         default,
         skip_serializing_if = "agena_domain::AccessControlConfig::is_empty"

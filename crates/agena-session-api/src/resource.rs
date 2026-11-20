@@ -244,6 +244,8 @@ pub struct RunOptions {
     pub speed_mode: Option<String>,
     #[serde(default)]
     pub verbosity: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallel_tool_calls: Option<bool>,
     /// Temporary additional instructions; an empty string overrides inherited values.
     #[serde(default)]
     pub system: Option<String>,
@@ -577,6 +579,9 @@ pub struct SessionAutomationResource {
 pub struct SessionExecutionContextResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    /// No explicit saved selection; profile is the effective fallback role.
+    #[serde(default)]
+    pub profile_is_default: bool,
     /// The session prompt layer: inline fragments that apply to this session.
     #[serde(
         default,
@@ -590,6 +595,8 @@ pub struct SessionExecutionContextResource {
     pub agent_id: String,
     #[serde(default, skip_serializing_if = "PermissionConfigResource::is_empty")]
     pub selected_permission: PermissionConfigResource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_profile: Option<String>,
     /// Complete policy inherited before applying this session's override.
     #[serde(default)]
     pub inherited_permission: PermissionConfigResource,
@@ -600,6 +607,12 @@ pub struct SessionExecutionContextResource {
     /// Additional inherited delegation boundaries; every layer applies.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub permission_ceiling_layers: Vec<PermissionConfigResource>,
+    /// Raw persisted selection; an empty object inherits profile/runtime choices.
+    #[serde(default)]
+    pub selected_selection: agena_domain::ExecutionSelection,
+    /// Profile/runtime selection before applying this session's raw override.
+    #[serde(default)]
+    pub inherited_selection: agena_domain::ExecutionSelection,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_provider_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -802,11 +815,10 @@ pub struct ScheduledJobRunResource {
 /// Tool permission configuration of a session.
 ///
 /// The built-in classes are ordinary entries: the interaction tool by name in
-/// `names`, the command classes as keywords inside a shell tool's `rules`, and
-/// the read-only class as the `read-only` keyword under the `*` tool. A user
+/// `names`, shared terminal commands under `rules."shell.*"`, and the read-only
+/// class as the `read-only` keyword under `*`. A user
 /// entry of the same key replaces the built-in one.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(default, deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Default)]
 pub struct ToolPermissionConfigResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<PermissionMode>,
@@ -814,6 +826,14 @@ pub struct ToolPermissionConfigResource {
     pub names: BTreeMap<String, PermissionMode>,
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub rules: IndexMap<String, ToolPermissionRulesResource>,
+}
+
+impl<'de> Deserialize<'de> for ToolPermissionConfigResource {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let tools = agena_domain::ToolPermissionConfig::deserialize(deserializer)?;
+        tools.validate_aliases().map_err(serde::de::Error::custom)?;
+        Ok(Self::from(&tools.normalized()))
+    }
 }
 
 /// A path resource serializes as `readonly`, `readwrite`, or `deny`.
@@ -1070,47 +1090,7 @@ impl From<&agena_domain::PermissionConfig> for PermissionConfigResource {
                         .collect(),
                 }),
             network: value.network.clone(),
-            tools: value
-                .tools
-                .as_ref()
-                .map(|tools| ToolPermissionConfigResource {
-                    default: tools.default.map(permission_mode_resource_from_domain),
-                    names: tools
-                        .names
-                        .iter()
-                        .chain(tools.plugin.iter())
-                        .map(|(name, mode)| {
-                            (name.clone(), permission_mode_resource_from_domain(*mode))
-                        })
-                        .collect(),
-                    rules: tools
-                        .rules
-                        .iter()
-                        .map(|(name, rules)| {
-                            let rules = match rules {
-                                agena_domain::ToolPermissionRules::Mode(mode) => {
-                                    ToolPermissionRulesResource::Mode(
-                                        permission_mode_resource_from_domain(*mode),
-                                    )
-                                }
-                                agena_domain::ToolPermissionRules::Ordered(rules) => {
-                                    ToolPermissionRulesResource::Ordered(
-                                        rules
-                                            .iter()
-                                            .map(|(pattern, mode)| {
-                                                (
-                                                    pattern.clone(),
-                                                    permission_mode_resource_from_domain(*mode),
-                                                )
-                                            })
-                                            .collect(),
-                                    )
-                                }
-                            };
-                            (name.clone(), rules)
-                        })
-                        .collect(),
-                }),
+            tools: value.tools.as_ref().map(ToolPermissionConfigResource::from),
             approval_model: value.approval_model.as_ref().map(|model| {
                 ApprovalModelSelectionResource {
                     provider: model.provider.clone(),
@@ -1121,6 +1101,47 @@ impl From<&agena_domain::PermissionConfig> for PermissionConfigResource {
                     verbosity: model.verbosity.clone(),
                 }
             }),
+        }
+    }
+}
+
+impl From<&agena_domain::ToolPermissionConfig> for ToolPermissionConfigResource {
+    fn from(tools: &agena_domain::ToolPermissionConfig) -> Self {
+        Self {
+            default: tools.default.map(permission_mode_resource_from_domain),
+            names: tools
+                .names
+                .iter()
+                .chain(tools.plugin.iter())
+                .map(|(name, mode)| (name.clone(), permission_mode_resource_from_domain(*mode)))
+                .collect(),
+            rules: tools
+                .rules
+                .iter()
+                .map(|(name, rules)| {
+                    let rules = match rules {
+                        agena_domain::ToolPermissionRules::Mode(mode) => {
+                            ToolPermissionRulesResource::Mode(permission_mode_resource_from_domain(
+                                *mode,
+                            ))
+                        }
+                        agena_domain::ToolPermissionRules::Ordered(rules) => {
+                            ToolPermissionRulesResource::Ordered(
+                                rules
+                                    .iter()
+                                    .map(|(pattern, mode)| {
+                                        (
+                                            pattern.clone(),
+                                            permission_mode_resource_from_domain(*mode),
+                                        )
+                                    })
+                                    .collect(),
+                            )
+                        }
+                    };
+                    (name.clone(), rules)
+                })
+                .collect(),
         }
     }
 }
@@ -1465,6 +1486,31 @@ pub struct ServerIdentityResource {
 }
 
 #[cfg(test)]
+mod model_selection_wire_tests {
+    use super::RunOptions;
+    use serde_json::json;
+
+    #[test]
+    fn optional_parallel_selection_preserves_false() {
+        let inherited: RunOptions = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(inherited.parallel_tool_calls, None);
+        assert!(
+            serde_json::to_value(inherited)
+                .unwrap()
+                .get("parallel_tool_calls")
+                .is_none()
+        );
+        let selected: RunOptions =
+            serde_json::from_value(json!({"parallel_tool_calls": false})).unwrap();
+        assert_eq!(selected.parallel_tool_calls, Some(false));
+        assert_eq!(
+            serde_json::to_value(selected).unwrap()["parallel_tool_calls"],
+            json!(false)
+        );
+    }
+}
+
+#[cfg(test)]
 mod permission_path_wire_tests {
     use super::{
         PermissionConfigResource, PermissionMode, ToolPermissionConfigResource,
@@ -1501,7 +1547,7 @@ mod permission_path_wire_tests {
         let network = resource.network.clone();
         let command_keys = |value: &PermissionConfigResource| {
             let ToolPermissionRulesResource::Ordered(rules) =
-                &value.tools.as_ref().unwrap().rules["agena.shell.exec"]
+                &value.tools.as_ref().unwrap().rules[agena_domain::SHELL_COMMAND_RULE_GROUP]
             else {
                 panic!("expected ordered command rules")
             };
@@ -1542,7 +1588,14 @@ mod permission_path_wire_tests {
         assert!(!domain.is_empty());
         assert_eq!(
             serde_json::to_value(PermissionConfigResource::from(&domain)).unwrap(),
-            json!({"network":{"default":"deny"}})
+            json!({"network":{
+                "version":2,
+                "default":"deny",
+                "allow":[],
+                "deny":[],
+                "inbound":"deny",
+                "hostLoopback":"deny"
+            }})
         );
     }
 

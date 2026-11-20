@@ -4,6 +4,12 @@ impl App {
         key: KeyEvent,
         dialog: &mut ChoiceOverlay,
     ) -> bool {
+        if resolve_tui_key(KeyContext::SessionModel, key) == Some(KeyAction::SettingsSource)
+            && let crate::ChoiceOverlayAction::SessionModelMode { step, .. } = dialog.action
+        {
+            self.open_session_model_mode_source(step);
+            return false;
+        }
         let action = match resolve_tui_key(KeyContext::Choice, key) {
             Some(KeyAction::Accept) => agena_tui::choice::ChoicePresentationAction::Accept,
             _ => agena_tui::choice::ChoicePresentationAction::Input(key),
@@ -403,29 +409,43 @@ impl App {
         key: KeyEvent,
         dialog: &mut SessionModelChooserOverlay,
     ) -> bool {
+        dialog.meta.editable =
+            self.settings_model_editable(dialog.meta.purpose, dialog.meta.explicit_local);
+        for item in &mut dialog.items {
+            item.disabled = !dialog.meta.editable;
+        }
         match agena_tui::model_chooser::reduce(
             dialog,
             agena_tui::model_chooser::SessionModelChooserAction::Input(key),
         ) {
             agena_tui::model_chooser::SessionModelChooserReducerEffect::Close => true,
             agena_tui::model_chooser::SessionModelChooserReducerEffect::KeepOpen => false,
+            agena_tui::model_chooser::SessionModelChooserReducerEffect::Source => {
+                self.open_settings_model_source(dialog.meta.purpose);
+                false
+            }
             agena_tui::model_chooser::SessionModelChooserReducerEffect::Select {
                 purpose,
                 identity,
             } => {
                 if purpose == SessionModelChooserPurpose::RuntimeOverride {
-                    return self
-                        .apply_model_override(model_ref_from_session_model_identity(identity));
+                    return self.apply_model_override_from_source(
+                        model_ref_from_session_model_identity(identity),
+                        dialog.meta.explicit_local,
+                    );
                 }
                 // Every other purpose persists the picked model (and its modes)
                 // through the settings studio's own layer write.
                 let model = model_ref_from_session_model_identity(identity);
+                let (thinking_mode, speed_mode, verbosity) =
+                    self.settings_model_initial_modes(purpose, &model);
                 self.open_model_selection_mode_step_or_finish(
                     purpose,
+                    dialog.meta.explicit_local,
                     model,
-                    None,
-                    None,
-                    None,
+                    thinking_mode,
+                    speed_mode,
+                    verbosity,
                     SessionModelModeStep::ThinkingMode,
                 );
                 false

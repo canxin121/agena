@@ -185,6 +185,14 @@ impl SessionManager {
     }
 
     pub async fn get_session(&self, id: i64) -> Result<Session, AppError> {
+        self.get_session_with_state(id, None).await
+    }
+
+    pub(super) async fn get_session_with_state(
+        &self,
+        id: i64,
+        state_override: Option<Arc<ExecutionState>>,
+    ) -> Result<Session, AppError> {
         let session = session_id(id)?;
         let snapshot = self
             .kernel()
@@ -196,19 +204,24 @@ impl SessionManager {
         let summary = &snapshot.summary;
         let configuration = &snapshot.configuration;
         let (root_id, depth) = (summary.root_session_id.get(), i64::from(summary.depth));
-        let state = if summary.workspace_id.is_none() {
-            self.global_state.load_full()
-        } else {
-            self.state.load_full()
-        };
+        let state = state_override.unwrap_or_else(|| {
+            if summary.workspace_id.is_none() {
+                self.global_state.load_full()
+            } else {
+                self.state.load_full()
+            }
+        });
         let profile = state
             .config
-            .resolve_profile(configuration.profile.as_deref())
+            .resolve_session_profile(
+                configuration.profile.as_deref(),
+                configuration.relation_kind,
+            )
             .map_err(AppError::Config)?;
         let selection = state
             .config
             .session_selection(
-                configuration.profile.as_deref(),
+                configuration,
                 &metadata.selection.clone().unwrap_or_default(),
             )
             .map_err(AppError::Config)?;
@@ -219,21 +232,23 @@ impl SessionManager {
             relation_kind: configuration.relation_kind,
             conversation: configuration.conversation.clone(),
             prompts: configuration.prompts.clone(),
-            profile: configuration.profile.clone(),
-            profile_prompts: profile
-                .as_ref()
-                .map(|p| p.prompts.clone())
-                .unwrap_or_default(),
-            max_turns: profile
-                .as_ref()
-                .and_then(|p| p.max_turns)
-                .or(state.config.max_turns),
+            profile: Some(
+                state
+                    .config
+                    .effective_profile_name(
+                        configuration.profile.as_deref(),
+                        configuration.relation_kind,
+                    )
+                    .to_owned(),
+            ),
+            profile_is_default: configuration.profile.is_none(),
+            profile_prompts: profile.prompts,
+            max_turns: profile.max_turns.or(state.config.max_turns),
             selection,
             effective_permission: state
                 .config
-                .inherited_permission(configuration.profile.as_deref())
-                .map_err(AppError::Config)?
-                .merged_with(&configuration.permission),
+                .effective_permission(configuration)
+                .map_err(AppError::Config)?,
             permission_ceiling: configuration.permission_ceiling.clone(),
             permission_ceiling_layers: configuration.permission_ceiling_layers.clone(),
             channel_authority: configuration.channel_authority.clone(),
@@ -254,7 +269,10 @@ impl SessionManager {
                 configuration.relation_kind == agena_domain::SessionRelationKind::Subagent,
             )
             .await?;
-        Self::apply_channel_execution_context(&mut context);
+        Self::apply_channel_execution_context(
+            &mut context,
+            configuration.permission_profile.is_some(),
+        );
         let agent = configuration.agent.as_ref();
         Ok(Session {
             id,
@@ -322,12 +340,19 @@ impl SessionManager {
             .unwrap_or_default();
         let profile = state
             .config
-            .resolve_profile(configuration.profile.as_deref())
+            .resolve_session_profile(
+                configuration.profile.as_deref(),
+                configuration.relation_kind,
+            )
             .map_err(AppError::Config)?;
-        let profile_prompts = profile.map(|p| p.prompts).unwrap_or_default();
+        let profile_prompts = profile.prompts;
+        let bot = self
+            .bot_prompt_layer(configuration.owner.as_ref(), configuration.relation_kind)
+            .await?;
         let inputs = super::session_prompt::PromptInputs {
             profile: &profile_prompts,
             session: &configuration.prompts,
+            bot: bot.as_ref(),
             request_layer: None,
             model,
             session_id: id.get(),
@@ -531,6 +556,7 @@ impl SessionManager {
             authority.profile_ids.clear();
             authority.profile_fingerprint.clear();
             authority.permission_overlay = Default::default();
+            authority.permission_complete = false;
             authority.expires_at_ms = 0;
         }
         Ok(Some(authority))
@@ -581,13 +607,22 @@ impl SessionManager {
         Ok(())
     }
 
-    fn apply_channel_execution_context(context: &mut ToolContext) {
+    fn apply_channel_execution_context(context: &mut ToolContext, named_session_permission: bool) {
         let Some(authority) = context.channel_authority.as_ref() else {
             return;
         };
-        context.effective_permission = context
-            .effective_permission
-            .merged_with(&authority.permission_overlay);
+        if named_session_permission {
+            context
+                .permission_ceiling_layers
+                .push(context.effective_permission.clone());
+        }
+        context.effective_permission = if authority.permission_complete {
+            authority.permission_overlay.clone()
+        } else {
+            context
+                .effective_permission
+                .merged_with(&authority.permission_overlay)
+        };
         if authority.source_admin || authority.grant.source_workspace {
             if let Some(root) = &authority.source_workspace_root {
                 context.effective_workspace_root = Some(root.clone());
@@ -682,31 +717,44 @@ impl SessionManager {
             relation_kind: configuration.relation_kind,
             conversation: configuration.conversation.clone(),
             prompts: configuration.prompts.clone(),
-            profile: configuration.profile.clone(),
+            profile: Some(
+                state
+                    .config
+                    .effective_profile_name(
+                        configuration.profile.as_deref(),
+                        configuration.relation_kind,
+                    )
+                    .to_owned(),
+            ),
+            profile_is_default: configuration.profile.is_none(),
             profile_prompts: state
                 .config
-                .resolve_profile(configuration.profile.as_deref())
+                .resolve_session_profile(
+                    configuration.profile.as_deref(),
+                    configuration.relation_kind,
+                )
                 .map_err(AppError::Config)?
-                .map(|p| p.prompts)
-                .unwrap_or_default(),
+                .prompts,
             max_turns: state
                 .config
-                .resolve_profile(configuration.profile.as_deref())
+                .resolve_session_profile(
+                    configuration.profile.as_deref(),
+                    configuration.relation_kind,
+                )
                 .map_err(AppError::Config)?
-                .and_then(|p| p.max_turns)
+                .max_turns
                 .or(state.config.max_turns),
             selection: state
                 .config
                 .session_selection(
-                    configuration.profile.as_deref(),
+                    &configuration,
                     &metadata.selection.clone().unwrap_or_default(),
                 )
                 .map_err(AppError::Config)?,
             effective_permission: state
                 .config
-                .inherited_permission(configuration.profile.as_deref())
-                .map_err(AppError::Config)?
-                .merged_with(&configuration.permission),
+                .effective_permission(&configuration)
+                .map_err(AppError::Config)?,
             permission_ceiling: configuration.permission_ceiling.clone(),
             permission_ceiling_layers: configuration.permission_ceiling_layers.clone(),
             channel_authority: authority,
@@ -719,7 +767,10 @@ impl SessionManager {
                 )
                 .await?,
         };
-        Self::apply_channel_execution_context(&mut context);
+        Self::apply_channel_execution_context(
+            &mut context,
+            configuration.permission_profile.is_some(),
+        );
         Ok(context)
     }
     pub async fn list_session_summaries(
@@ -1394,32 +1445,45 @@ impl SessionQueryService for SessionManager {
             self.state.load_full()
         };
         let configuration = &snapshot.configuration;
+        let selected_selection = snapshot.metadata.selection.clone().unwrap_or_default();
+        let inherited_selection = state
+            .config
+            .session_selection(configuration, &agena_domain::ExecutionSelection::default())
+            .map_err(|error| query_error(AppError::Config(error)))?;
         let selection = state
             .config
-            .session_selection(
-                configuration.profile.as_deref(),
-                &snapshot.metadata.selection.clone().unwrap_or_default(),
-            )
+            .session_selection(configuration, &selected_selection)
             .map_err(|error| query_error(AppError::Config(error)))?;
         let agent = configuration.agent.as_ref();
         Ok(SessionExecutionContext {
-            profile: configuration.profile.clone(),
+            profile: Some(
+                state
+                    .config
+                    .effective_profile_name(
+                        configuration.profile.as_deref(),
+                        configuration.relation_kind,
+                    )
+                    .to_owned(),
+            ),
+            profile_is_default: configuration.profile.is_none(),
             conversation: configuration.conversation.clone(),
             prompts: configuration.prompts.clone(),
             workflow_state: workflow_from_snapshot(snapshot),
             agent_id: crate::identity::AGENA_AGENT_ID.into(),
             selected_permission: configuration.permission.clone(),
+            permission_profile: configuration.permission_profile.clone(),
             inherited_permission: state
                 .config
-                .inherited_permission(configuration.profile.as_deref())
+                .inherited_permission(configuration)
                 .map_err(|error| query_error(AppError::Config(error)))?,
             effective_permission: state
                 .config
-                .inherited_permission(configuration.profile.as_deref())
-                .map_err(|error| query_error(AppError::Config(error)))?
-                .merged_with(&configuration.permission),
+                .effective_permission(configuration)
+                .map_err(|error| query_error(AppError::Config(error)))?,
             permission_ceiling: configuration.permission_ceiling.clone(),
             permission_ceiling_layers: configuration.permission_ceiling_layers.clone(),
+            selected_selection,
+            inherited_selection,
             model_provider_id: selection.provider,
             model_adapter_id: selection.adapter,
             model_id: selection.model,

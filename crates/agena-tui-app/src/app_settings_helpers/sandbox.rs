@@ -14,18 +14,25 @@ pub(crate) fn settings_studio_sandbox_items(
     sources: &ConfigJsonSources,
 ) -> Vec<SettingsStudioItem<SettingsPickerAction>> {
     let configured = |key: &str, workspace: bool| {
-        workspace
-            .then(|| execution_boolean(&sources.project_file, key))
-            .flatten()
-            .or_else(|| execution_boolean(&sources.file, key))
-            .unwrap_or(true)
+        super::SettingsFieldProjection::at_path(sources, key, workspace)
+            .value
+            .as_ref()
+            .and_then(JsonValue::as_bool)
     };
-    let effective = |key: &str| {
-        execution_boolean(&sources.effective, key).unwrap_or_else(|| configured(key, true))
+    let effective =
+        |key: &str| execution_boolean(&sources.effective, key).or_else(|| configured(key, true));
+    let value_label = |value: Option<bool>| {
+        value
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| ui_text::t(i18n, "settings-source-unset"))
     };
     let isolated = effective("sandbox");
-    let resource_guard = !isolated && effective("resource_guard");
-    let environment_disabled = !isolated && configured("sandbox", true);
+    let resource_guard = match isolated {
+        Some(true) => Some(false),
+        Some(false) => effective("resource_guard"),
+        None => None,
+    };
+    let environment_disabled = isolated == Some(false) && configured("sandbox", true) == Some(true);
     let fields = [
         (
             "sandbox",
@@ -55,7 +62,10 @@ pub(crate) fn settings_studio_sandbox_items(
             let mut description = ui_text::t(i18n, description_key);
             let inactive_reason = if key == "sandbox" && environment_disabled {
                 Some("settings-sandbox-environment-disabled")
-            } else if key == "resource_guard" && isolated && effective("resource_guard") {
+            } else if key == "resource_guard"
+                && isolated == Some(true)
+                && effective("resource_guard") == Some(true)
+            {
                 Some("settings-sandbox-inactive-isolated")
             } else {
                 None
@@ -72,21 +82,29 @@ pub(crate) fn settings_studio_sandbox_items(
             let current_summary = execution_boolean(file, key)
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| ui_text::t(i18n, "settings-source-unset"));
-            let status = ui_text::t(
-                i18n,
-                if active {
-                    "settings-sandbox-active"
-                } else {
-                    "settings-sandbox-inactive"
-                },
-            );
+            let display_value = value_label(configured(key, workspace));
+            let display_value = match active {
+                Some(active) => format!(
+                    "{} · {}",
+                    display_value,
+                    ui_text::t(
+                        i18n,
+                        if active {
+                            "settings-sandbox-active"
+                        } else {
+                            "settings-sandbox-inactive"
+                        }
+                    )
+                ),
+                None => display_value,
+            };
             let source_rows = if workspace {
                 settings_source_rows_for_workspace_config_path(
                     i18n,
                     sources,
                     &path,
                     &current_summary,
-                    effective(key).to_string(),
+                    value_label(effective(key)),
                 )
             } else {
                 settings_source_rows_for_config_path(
@@ -94,10 +112,11 @@ pub(crate) fn settings_studio_sandbox_items(
                     sources,
                     &path,
                     &current_summary,
-                    effective(key).to_string(),
+                    value_label(effective(key)),
                 )
             };
             let field = SettingsFieldSpec {
+                explicit_local: false,
                 section: SettingsStudioSectionId::Permissions,
                 workspace,
                 path: path.clone(),
@@ -107,16 +126,19 @@ pub(crate) fn settings_studio_sandbox_items(
                 label_override: Some(label.clone()),
                 description_override: Some(description.clone()),
             };
-            items.push(SettingsStudioItem::from_parts(
-                label,
-                format!("{} · {status}", configured(key, workspace)),
-                description,
-                Some(path),
-                Some(current_summary),
-                Some(effective(key).to_string()),
-                source_rows,
-                SettingsPickerAction::EditField(field),
-            ));
+            items.push(
+                SettingsStudioItem::from_parts(
+                    label,
+                    display_value,
+                    description,
+                    Some(path),
+                    Some(current_summary),
+                    Some(value_label(effective(key))),
+                    source_rows,
+                    SettingsPickerAction::EditField(field.clone()),
+                )
+                .with_control(super::SettingsFieldProjection::new(sources, &field).control(i18n)),
+            );
         }
     }
     items
@@ -134,6 +156,14 @@ mod tests {
             project_config_path: "/test/workspace.json".into(),
             project_config_found: true,
             applied_layers: vec!["global".into(), "workspace".into()],
+            defaults: json!({"sandbox":true,"resource_guard":true}),
+            global_resolved: JsonValue::Null,
+            workspace_resolved: JsonValue::Null,
+            global_inherited: JsonValue::Null,
+            workspace_inherited: json!({
+                "sandbox": global.get("sandbox").and_then(JsonValue::as_bool).unwrap_or(true),
+                "resource_guard": global.get("resource_guard").and_then(JsonValue::as_bool).unwrap_or(true),
+            }),
             file: global,
             project_file: workspace,
             effective,
@@ -213,5 +243,28 @@ mod tests {
         assert_eq!(items[0].effective_value.as_deref(), Some("false"));
         assert_eq!(items[1].effective_value.as_deref(), Some("false"));
         assert!(items[1].value.starts_with("false"));
+    }
+    #[test]
+    fn sandbox_fields_take_authoritative_layer_defaults_without_guessing_missing_values() {
+        let mut state = sources(json!({}), json!({}), JsonValue::Null);
+        state.defaults = json!({"sandbox":false,"resource_guard":false});
+        state.global_resolved = state.defaults.clone();
+        state.workspace_inherited = state.defaults.clone();
+        state.workspace_resolved = state.defaults.clone();
+        let items = settings_studio_sandbox_items(&I18n::english(), &state);
+        assert!(items.iter().all(|item| item.value.starts_with("false")));
+
+        state.defaults = JsonValue::Null;
+        state.global_resolved = JsonValue::Null;
+        state.workspace_inherited = JsonValue::Null;
+        state.workspace_resolved = JsonValue::Null;
+        let items = settings_studio_sandbox_items(&I18n::english(), &state);
+        let unset = I18n::english().text("settings-source-unset");
+        assert!(items.iter().all(|item| item.value == unset));
+        assert!(
+            items
+                .iter()
+                .all(|item| item.effective_value.as_deref() == Some(unset.as_str()))
+        );
     }
 }

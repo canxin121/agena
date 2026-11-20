@@ -50,15 +50,14 @@ fn config() -> RuntimeSessionManagerConfig {
 #[tokio::test]
 async fn profile_changes_the_actual_executor_and_preserves_a_stricter_ceiling() {
     let (manager, session) = fixture_with_config(config()).await;
-    // Existing sessions are not silently changed by default_profile.
+    // Legacy sessions use the fixed main role, not the configured new-session default.
     assert!(
         manager
             .get_session(session.get())
             .await
             .unwrap()
             .execution
-            .profile
-            .is_none()
+            .profile_is_default
     );
     manager
         .set_session_profile(session.get(), Some("review".into()))
@@ -161,6 +160,7 @@ async fn profile_prompt_reaches_final_system_assembly_and_request_override_keeps
     let mut inputs = super::super::session_prompt::PromptInputs {
         profile: &context.profile_prompts,
         session: &context.prompts,
+        bot: None,
         request_layer: None,
         model: &model,
         session_id: session.get(),
@@ -189,11 +189,19 @@ async fn profile_prompt_reaches_final_system_assembly_and_request_override_keeps
         resolution.text.find("PROFILE_REVIEW_INSTRUCTION").unwrap()
             < resolution.text.find("SESSION_INSTRUCTION").unwrap()
     );
-    let builtin = manager.assemble_session_system_prompt_with_executor(&executor, None, false);
+    let builtin = manager.assemble_session_system_prompt_with_executor(
+        &executor,
+        None,
+        false,
+        context.profile.as_deref(),
+        &state.config,
+    );
     let final_system = manager.assemble_session_system_prompt_with_executor(
         &executor,
         Some(&resolution.text),
         false,
+        context.profile.as_deref(),
+        &state.config,
     );
     assert!(!builtin.is_empty());
     assert!(final_system.starts_with(&builtin));
@@ -201,8 +209,13 @@ async fn profile_prompt_reaches_final_system_assembly_and_request_override_keeps
     let request = super::super::session_prompt::request_system_layer(Some("REQUEST_INSTRUCTION"));
     inputs.request_layer = request.as_ref();
     let replacement = super::super::session_prompt::resolve_configured_prompts(&state, &inputs);
-    let final_system =
-        manager.assemble_session_system_prompt_with_executor(&executor, Some(&replacement), false);
+    let final_system = manager.assemble_session_system_prompt_with_executor(
+        &executor,
+        Some(&replacement),
+        false,
+        context.profile.as_deref(),
+        &state.config,
+    );
     assert!(final_system.starts_with(&builtin));
     assert!(final_system.contains("REQUEST_INSTRUCTION"));
     assert!(!final_system.contains("PROFILE_REVIEW_INSTRUCTION"));
@@ -216,7 +229,7 @@ async fn profile_prompt_reaches_final_system_assembly_and_request_override_keeps
 }
 
 #[tokio::test]
-async fn new_roots_use_defaults_children_inherit_and_empty_opts_out() {
+async fn new_roots_use_defaults_children_inherit_and_empty_restores_main() {
     let (manager, _) = fixture_with_config(config()).await;
     let workspace = std::env::temp_dir().join(format!(
         "agena-profile-session-workspace-{}",
@@ -259,7 +272,8 @@ async fn new_roots_use_defaults_children_inherit_and_empty_opts_out() {
         })
         .await
         .unwrap();
-    assert!(unprofiled.execution.profile.is_none());
+    assert_eq!(unprofiled.execution.profile.as_deref(), Some("main"));
+    assert!(unprofiled.execution.profile_is_default);
     let child = manager
         .create_session(SessionCreateRequest {
             profile: None,
@@ -269,7 +283,8 @@ async fn new_roots_use_defaults_children_inherit_and_empty_opts_out() {
         })
         .await
         .unwrap();
-    assert!(child.execution.profile.is_none());
+    assert_eq!(child.execution.profile.as_deref(), Some("main"));
+    assert!(child.execution.profile_is_default);
     let unknown = manager
         .create_session(SessionCreateRequest {
             profile: Some("missing".into()),
@@ -334,8 +349,7 @@ async fn profile_reload_is_live_and_a_deleted_selection_can_be_cleared() {
             .execution_context_value(session)
             .await
             .unwrap()
-            .profile
-            .is_none()
+            .profile_is_default
     );
     manager
         .kernel_runtime

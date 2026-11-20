@@ -114,6 +114,7 @@ pub(super) const AWS_REGION_CHOICES: &[&str] = &[
 pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
     vec![
         SettingsFieldSpec {
+            explicit_local: false,
             workspace: false,
             section: SettingsStudioSectionId::Interface,
             path: "ui.locale".to_string(),
@@ -124,6 +125,7 @@ pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
             description_override: None,
         },
         SettingsFieldSpec {
+            explicit_local: false,
             workspace: false,
             section: SettingsStudioSectionId::Interface,
             path: "ui.tui.color_scheme".to_string(),
@@ -134,6 +136,7 @@ pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
             description_override: None,
         },
         SettingsFieldSpec {
+            explicit_local: false,
             workspace: false,
             section: SettingsStudioSectionId::Interface,
             path: "ui.tui.graphics".to_string(),
@@ -144,6 +147,7 @@ pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
             description_override: None,
         },
         SettingsFieldSpec {
+            explicit_local: false,
             workspace: false,
             section: SettingsStudioSectionId::Interface,
             path: "ui.tui.theme".to_string(),
@@ -154,6 +158,7 @@ pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
             description_override: None,
         },
         SettingsFieldSpec {
+            explicit_local: false,
             workspace: false,
             section: SettingsStudioSectionId::Interface,
             path: "ui.transcript.activity.default_expanded".to_string(),
@@ -164,6 +169,7 @@ pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
             description_override: None,
         },
         SettingsFieldSpec {
+            explicit_local: false,
             workspace: false,
             section: SettingsStudioSectionId::Diagnostics,
             path: "tracing.filter".to_string(),
@@ -174,6 +180,7 @@ pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
             description_override: None,
         },
         SettingsFieldSpec {
+            explicit_local: false,
             workspace: false,
             section: SettingsStudioSectionId::Diagnostics,
             path: "tracing.database".to_string(),
@@ -184,6 +191,7 @@ pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
             description_override: None,
         },
         SettingsFieldSpec {
+            explicit_local: false,
             workspace: false,
             section: SettingsStudioSectionId::Diagnostics,
             path: "tracing.adapter".to_string(),
@@ -194,6 +202,7 @@ pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
             description_override: None,
         },
         SettingsFieldSpec {
+            explicit_local: false,
             workspace: false,
             section: SettingsStudioSectionId::ProviderClientVersions,
             path: "runtime.providers.client_versions.codex".to_string(),
@@ -204,6 +213,7 @@ pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
             description_override: None,
         },
         SettingsFieldSpec {
+            explicit_local: false,
             workspace: false,
             section: SettingsStudioSectionId::ProviderClientVersions,
             path: "runtime.providers.client_versions.claude".to_string(),
@@ -214,6 +224,7 @@ pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
             description_override: None,
         },
         SettingsFieldSpec {
+            explicit_local: false,
             workspace: false,
             section: SettingsStudioSectionId::ProviderClientVersions,
             path: "runtime.providers.client_versions.gemini".to_string(),
@@ -224,6 +235,7 @@ pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
             description_override: None,
         },
         SettingsFieldSpec {
+            explicit_local: false,
             workspace: false,
             section: SettingsStudioSectionId::RuntimeSession,
             path: "session.compaction.auto".to_string(),
@@ -234,6 +246,7 @@ pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
             description_override: None,
         },
         SettingsFieldSpec {
+            explicit_local: false,
             workspace: false,
             section: SettingsStudioSectionId::RuntimeSession,
             path: "session.auto_title.enabled".to_string(),
@@ -244,6 +257,7 @@ pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
             description_override: None,
         },
         SettingsFieldSpec {
+            explicit_local: false,
             workspace: false,
             section: SettingsStudioSectionId::RuntimeSession,
             path: "session.auto_title.message_interval".to_string(),
@@ -254,6 +268,7 @@ pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
             description_override: None,
         },
         SettingsFieldSpec {
+            explicit_local: false,
             workspace: false,
             section: SettingsStudioSectionId::RuntimeSession,
             path: "session.auto_title.cooldown_seconds".to_string(),
@@ -264,6 +279,7 @@ pub(super) fn settings_fields() -> Vec<SettingsFieldSpec> {
             description_override: None,
         },
         SettingsFieldSpec {
+            explicit_local: false,
             workspace: false,
             section: SettingsStudioSectionId::RuntimeSession,
             path: "session.compaction.reserved_tokens".to_string(),
@@ -482,6 +498,7 @@ pub struct App {
     pub(super) settings_session_permission: Option<(i64, SessionPermissionStudioState)>,
     pub(super) permission_studio_load_request: Option<uuid::Uuid>,
     pub(super) session_selection_revision: u64,
+    pub(super) pending_session_model_write: Option<(i64, u64)>,
     pub(super) launch: LaunchOptions,
     pub(super) math_renderer: Option<MathGraphicsRenderer>,
     pub(super) math_render_context: MathRenderContext,
@@ -1114,6 +1131,7 @@ pub(super) enum Overlay {
     SessionRename(LineInputOverlay),
     HubProject(crate::app_hub::HubProjectDialog),
     SettingsValueEdit(SettingsValueEditOverlay),
+    PermissionRawEdit(crate::app_permission_raw::PermissionRawEditOverlay),
     SessionPromptEdit(PromptStudioOverlay),
     Choice(ChoiceOverlay),
     QueueEditor(crate::app_queue_editor::QueueEditorOverlay),

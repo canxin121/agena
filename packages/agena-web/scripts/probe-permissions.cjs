@@ -999,10 +999,12 @@ async function run({ cdp, base, evidence, wait, check, visible, permissionFixtur
   await select(defaultTrigger('network.default'), 'Allow')
   check(
     (await defaultSourcesMatch('local', ['network.default'])) &&
-      (await withNetworkSources(() => defaultSourcesMatch(
-        'inherit',
-        networkKeys.filter((key) => key !== 'network.default'),
-      ))),
+      (await withNetworkSources(() =>
+        defaultSourcesMatch(
+          'inherit',
+          networkKeys.filter((key) => key !== 'network.default'),
+        ),
+      )),
     'editing outbound creates only an outbound override',
   )
   await save()
@@ -1042,12 +1044,9 @@ async function run({ cdp, base, evidence, wait, check, visible, permissionFixtur
   check(
     JSON.stringify(fixture.values.session.network.allow) === JSON.stringify(networkParent.allow) &&
       Object.keys(fixture.values.session.network).length === 2 &&
-      (await withNetworkSources(() => defaultSourcesMatch('inherit', [
-        'network.default',
-        'network.inbound',
-        'network.hostLoopback',
-        'network.deny',
-      ]))),
+      (await withNetworkSources(() =>
+        defaultSourcesMatch('inherit', ['network.default', 'network.inbound', 'network.hostLoopback', 'network.deny']),
+      )),
     'pinning the allow list stores that list alone',
   )
   check(
@@ -1072,9 +1071,10 @@ async function run({ cdp, base, evidence, wait, check, visible, permissionFixtur
   check(
     !Object.hasOwn(fixture.values.session.network, 'allow') &&
       fixture.values.session.network.deny.length === 0 &&
-      (await withNetworkSources(async () =>
-        (await defaultSourcesMatch('inherit', ['network.allow'])) &&
-        (await defaultSourcesMatch('local', ['network.deny'])),
+      (await withNetworkSources(
+        async () =>
+          (await defaultSourcesMatch('inherit', ['network.allow'])) &&
+          (await defaultSourcesMatch('local', ['network.deny'])),
       )),
     'allow-list inheritance can be restored while deny remains explicitly empty',
   )
@@ -1477,7 +1477,10 @@ async function run({ cdp, base, evidence, wait, check, visible, permissionFixtur
   await cdp.send('Emulation.setDeviceMetricsOverride', { width: 320, height: 740, deviceScaleFactor: 1, mobile: true })
   await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 })
   await frame()
-  check(await bulkFits(approvals + ' .saved-rules-bulk', true), 'saved-rule bulk actions stack at 320 px without overflow')
+  check(
+    await bulkFits(approvals + ' .saved-rules-bulk', true),
+    'saved-rule bulk actions stack at 320 px without overflow',
+  )
   await cdp.click(approvals + ' button[aria-label="全不选"]')
   await scrollTo(approvals)
   await checkSecondaryLayout(false)

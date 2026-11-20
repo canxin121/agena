@@ -290,9 +290,7 @@ function clearSearch() {
       </tbody>
     </table>
     <div v-else-if="kind !== 'network' || query" class="rule-table-empty">
-      <span>{{
-        query ? $st('No matching rules.') : $st('No exceptions in this scope. Default policies apply.')
-      }}</span>
+      <span>{{ query ? $st('No matching rules.') : $st('No exceptions in this scope. Default policies apply.') }}</span>
       <Button v-if="query" type="button" variant="ghost" size="sm" @click="clearSearch">{{
         $st('Clear search')
       }}</Button>

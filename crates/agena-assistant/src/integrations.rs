@@ -4,8 +4,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
-    ChannelAccessAudit, ChannelOutputRoute, ChannelPolicyUpdate, ChannelSessionRecord, Error,
-    Result, validate_key,
+    ChannelAccessAudit, ChannelOutputRoute, ChannelParticipantPage, ChannelParticipantsQuery,
+    ChannelPolicyUpdate, ChannelSessionRecord, Error, ObservedChannelRoom, Result, validate_key,
 };
 pub use agena_domain::{
     ChannelAccessPolicy, ChannelAuthority, ChannelEnvelope, ChannelGrant, ChannelIdentity,
@@ -605,12 +605,15 @@ impl IntegrationBinding {
         if self.spec.mode == IntegrationMode::Channel && event.bot {
             return Some("bot_echo");
         }
-        if event.occurred_at_ms < self.activated_at_ms.unwrap_or(self.created_at_ms)
-            || event.occurred_at_ms > now + 300000
-        {
+        if !self.event_in_activation(event, now) {
             return Some("event_outside_authorized_time");
         }
         None
+    }
+
+    pub(crate) fn event_in_activation(&self, event: &ExternalEvent, now: i64) -> bool {
+        event.occurred_at_ms >= self.activated_at_ms.unwrap_or(self.created_at_ms)
+            && event.occurred_at_ms <= now.saturating_add(300000)
     }
 }
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
@@ -772,8 +775,8 @@ pub struct PlatformAccount {
 
 /// One externally visible conversation and the session it maps to.
 ///
-/// A conversation that has never received a message has no session yet; the
-/// session fields stay `None` rather than inventing a placeholder id.
+/// A room can be observed before any of its messages create a session. Its
+/// session fields stay `None` until a session exists.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ConversationEntry {
@@ -786,6 +789,9 @@ pub struct ConversationEntry {
     pub session_id: Option<i64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Label of the external conversation when its binding names a single room.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub room_title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -795,14 +801,23 @@ pub struct ConversationEntry {
 }
 
 impl PlatformInventory {
-    /// Group flat bindings plus their sessions into per-platform entries.
-    ///
-    /// Pure and deterministic so it can be unit tested without a runtime.
-    /// `titles` maps session id to a display title; unknown ids keep `None`.
     pub fn build(
         bindings: &[IntegrationBinding],
         channel_sessions: &[ChannelSessionRecord],
         titles: &BTreeMap<i64, String>,
+    ) -> Self {
+        Self::build_with_observed_rooms(bindings, channel_sessions, titles, &BTreeMap::new())
+    }
+
+    /// Group configured rooms, session mappings and verified observations by platform.
+    ///
+    /// Pure and deterministic so it can be unit tested without a runtime.
+    /// `titles` maps session id to a display title; unknown ids keep `None`.
+    pub fn build_with_observed_rooms(
+        bindings: &[IntegrationBinding],
+        channel_sessions: &[ChannelSessionRecord],
+        titles: &BTreeMap<i64, String>,
+        observed_rooms: &BTreeMap<Uuid, Vec<ObservedChannelRoom>>,
     ) -> Self {
         let mut platforms: BTreeMap<String, PlatformEntry> = BTreeMap::new();
         for binding in bindings
@@ -821,6 +836,10 @@ impl PlatformInventory {
                     conversation_count: 0,
                     conversation_counts: ConversationCounts::default(),
                 });
+            let room_title = |resource: &str| {
+                (binding.spec.resource.single() == Some(resource))
+                    .then(|| binding.spec.title.clone())
+            };
             let mut conversations = channel_sessions
                 .iter()
                 .filter(|s| s.binding_id == binding.id)
@@ -830,21 +849,70 @@ impl PlatformInventory {
                     thread: s.authority.thread.clone(),
                     session_id: Some(s.session_id),
                     title: titles.get(&s.session_id).cloned(),
+                    room_title: room_title(&s.authority.resource),
                     actor: Some(s.authority.actor.clone()),
                     role: Some(s.authority.role),
                     created_at_ms: Some(s.created_at_ms),
                 })
                 .collect::<Vec<_>>();
+            let mut rooms = conversations
+                .iter()
+                .map(|entry| (entry.kind, entry.resource.clone()))
+                .collect::<BTreeSet<_>>();
+            let mut known_rooms = observed_rooms
+                .get(&binding.id)
+                .into_iter()
+                .flatten()
+                .map(|room| (room.kind, room.resource.as_str()))
+                .collect::<BTreeSet<_>>();
+            if let Some(kind) = policy
+                .kinds
+                .iter()
+                .next()
+                .copied()
+                .filter(|_| policy.kinds.len() == 1)
+            {
+                match &binding.spec.resource {
+                    ResourceSelector::Exact(resource) => {
+                        if agena_domain::valid_channel_id(resource) {
+                            known_rooms.insert((kind, resource.as_str()));
+                        }
+                    }
+                    ResourceSelector::Explicit(resources) => known_rooms.extend(
+                        resources
+                            .iter()
+                            .filter(|resource| agena_domain::valid_channel_id(resource))
+                            .map(|resource| (kind, resource.as_str())),
+                    ),
+                    ResourceSelector::All(_) => {}
+                }
+            }
+            for (kind, resource) in known_rooms {
+                if rooms.insert((kind, resource.to_owned())) {
+                    conversations.push(ConversationEntry {
+                        resource: resource.to_owned(),
+                        kind,
+                        thread: None,
+                        session_id: None,
+                        title: None,
+                        room_title: room_title(resource),
+                        actor: None,
+                        role: None,
+                        created_at_ms: None,
+                    });
+                }
+            }
             conversations.sort_by(|a, b| {
                 a.resource
                     .cmp(&b.resource)
+                    .then_with(|| a.kind.cmp(&b.kind))
                     .then_with(|| a.thread.cmp(&b.thread))
                     .then_with(|| a.session_id.cmp(&b.session_id))
             });
-            for conversation in &conversations {
-                entry.conversation_counts.record(conversation.kind);
+            entry.conversation_count += rooms.len();
+            for (kind, _) in rooms {
+                entry.conversation_counts.record(kind);
             }
-            entry.conversation_count += conversations.len();
             entry.accounts.push(PlatformAccount {
                 binding_id: binding.id,
                 tenant: policy.identity.tenant.clone(),
@@ -895,6 +963,12 @@ pub trait IntegrationRepository: Send + Sync {
     async fn channel_audit(&self, id: Uuid) -> Result<Vec<ChannelAccessAudit>>;
     async fn channel_execution_actor(&self, id: Uuid, execution: &str) -> Result<Option<String>>;
     async fn channel_sessions(&self, id: Uuid) -> Result<Vec<ChannelSessionRecord>>;
+    async fn observed_channel_rooms(&self, id: Uuid) -> Result<Vec<ObservedChannelRoom>>;
+    async fn channel_participants(
+        &self,
+        id: Uuid,
+        query: ChannelParticipantsQuery,
+    ) -> Result<ChannelParticipantPage>;
     async fn save_channel_session(
         &self,
         record: ChannelSessionRecord,
@@ -1215,7 +1289,25 @@ mod tests {
         ];
         let mut titles = BTreeMap::new();
         titles.insert(10, "Team".to_string());
-        let inventory = PlatformInventory::build(&[a.clone(), b], &sessions, &titles);
+        let observed = BTreeMap::from([(
+            a.id,
+            vec![
+                ObservedChannelRoom {
+                    resource: "chat-1".into(),
+                    kind: ConversationKind::Group,
+                },
+                ObservedChannelRoom {
+                    resource: "observed-only".into(),
+                    kind: ConversationKind::Broadcast,
+                },
+            ],
+        )]);
+        let inventory = PlatformInventory::build_with_observed_rooms(
+            &[a.clone(), b],
+            &sessions,
+            &titles,
+            &observed,
+        );
         assert_eq!(inventory.platforms.len(), 2);
         let telegram = inventory
             .platforms
@@ -1223,10 +1315,17 @@ mod tests {
             .find(|p| p.platform == "telegram")
             .unwrap();
         assert_eq!(telegram.accounts.len(), 1);
-        assert_eq!(telegram.accounts[0].conversations.len(), 3);
-        assert_eq!(telegram.conversation_count, 3);
+        assert_eq!(telegram.accounts[0].conversations.len(), 4);
+        assert_eq!(telegram.conversation_count, 4);
         assert_eq!(telegram.conversation_counts.group, 2);
         assert_eq!(telegram.conversation_counts.direct, 1);
+        assert_eq!(telegram.conversation_counts.broadcast, 1);
+        assert!(
+            telegram.accounts[0]
+                .conversations
+                .iter()
+                .any(|entry| { entry.resource == "observed-only" && entry.session_id.is_none() })
+        );
         // Titles come from the supplied session-title map.
         let team = telegram.accounts[0]
             .conversations
@@ -1241,6 +1340,22 @@ mod tests {
             .find(|p| p.platform == "feishu")
             .unwrap();
         assert_eq!(feishu.conversation_counts.broadcast, 1);
+    }
+
+    #[test]
+    fn platform_inventory_exposes_configured_rooms_before_their_first_message() {
+        let mut spec = channel_spec("telegram", "chat-1");
+        spec.title = "Engineering".into();
+        spec.channel_policy.as_mut().unwrap().kinds = BTreeSet::from([ConversationKind::Group]);
+        let binding =
+            IntegrationBinding::new(Some(1), None, 1, "room".into(), spec, "fp".into(), 1000)
+                .unwrap();
+        let inventory = PlatformInventory::build(&[binding], &[], &BTreeMap::new());
+        let room = &inventory.platforms[0].accounts[0].conversations[0];
+        assert_eq!(room.resource, "chat-1");
+        assert_eq!(room.room_title.as_deref(), Some("Engineering"));
+        assert_eq!(room.kind, ConversationKind::Group);
+        assert!(room.session_id.is_none());
     }
 
     #[test]

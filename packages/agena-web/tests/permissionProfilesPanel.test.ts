@@ -28,11 +28,13 @@ const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value))
 async function editor(
   initial = permissionProfiles.emptyPermissionCatalog(),
   defaults?: permissionProfiles.PermissionCatalog,
+  assignment?: string,
 ) {
   let state = clone(initial)
   let revision = 1
   let failure = ''
   let raceNextWrite = false
+  const route = vue.reactive({ query: { assignment } })
   const writes: Array<{ path: string; value: permissionProfiles.PermissionCatalog; expected_revision?: string }> = []
   const requests: Array<{ url: string; method: string; body?: Record<string, unknown> }> = []
   const api = {
@@ -78,7 +80,8 @@ async function editor(
   )
   const modules: Record<string, unknown> = {
     vue: { ...vue, onMounted() {}, onBeforeUnmount() {} },
-    'vue-router': { onBeforeRouteLeave() {}, onBeforeRouteUpdate() {} },
+    'vue-i18n': { useI18n: () => ({ t: (key: string) => key }) },
+    'vue-router': { onBeforeRouteLeave() {}, onBeforeRouteUpdate() {}, useRoute: () => route },
     '@remixicon/vue': {},
     '@/lib/appConfirm': { confirmAction: async () => true },
     '@/lib/permissionConfig': permissionConfig,
@@ -101,12 +104,15 @@ async function editor(
   )
   const scope = vue.effectScope()
   scopes.push(scope)
-  const panel = scope.run(() => component.exports.default!.setup({}, { expose() {} }))!
+  const panel = scope.run(() =>
+    component.exports.default!.setup({ assignments: assignment !== undefined }, { expose() {} }),
+  )!
   await panel.load()
   return {
     panel,
     writes,
     requests,
+    route,
     transport: transport.exports,
     current: () => clone(state),
     fail(message: string) {
@@ -119,6 +125,52 @@ async function editor(
 }
 
 describe('permission configuration management', () => {
+  test('opens the chat directory by default and saves through the same revision guard', async () => {
+    const catalog = permissionProfiles.emptyPermissionCatalog()
+    const { panel, writes, race, current } = await editor(catalog, undefined, '')
+    expect(panel.section.value).toBe('channels')
+    const next = { ...catalog, groups: { staff: { name: 'Staff', priority: 0 } } }
+    race()
+    await expect(panel.saveChannelAssignments(next)).rejects.toThrow('revision conflict')
+    expect(current()).toEqual(catalog)
+    expect(writes).toHaveLength(0)
+    await panel.load()
+    await panel.saveChannelAssignments(next)
+    expect(writes[0]?.expected_revision).toBe('r2')
+    expect(current()).toEqual(next)
+  })
+
+  test('opens assignments from observed member and room links with their exact identities', async () => {
+    const catalog = permissionProfiles.emptyPermissionCatalog()
+    const room = { platform: 'custom.chat', tenant: 'team', account: 'bot', resource: 'channel/研发?&=2' }
+    const actor = 'person-1'
+    const other = { ...room, resource: 'other-room', actor, group_ids: [], overrides: {} }
+    catalog.users.push(other)
+    catalog.profiles.reader = { name: 'Reader', description: '', revision: 1, permission: {} }
+    catalog.groups.readers = { name: 'Readers', priority: 0, profile_id: 'reader' }
+    const member = permissionProfiles.channelPermissionSettings({ ...room, actor }).query.assignment
+    const { panel, route, current, writes } = await editor(catalog, undefined, member)
+    expect(panel.section.value).toBe('users')
+    expect(clone(panel.draft.value)).toMatchObject({ ...room, actor, group_ids: [] })
+    expect(writes).toHaveLength(0)
+    panel.draft.value.group_ids = ['readers']
+    await panel.save()
+    expect(current().users).toEqual([other, { ...room, actor, group_ids: ['readers'], overrides: {} }])
+
+    route.query.assignment = permissionProfiles.channelPermissionSettings(room).query.assignment
+    await vue.nextTick()
+    expect(panel.section.value).toBe('conversations')
+    expect(clone(panel.draft.value)).toMatchObject(room)
+    panel.draft.value.profile_id = 'reader'
+    await panel.save()
+    expect(current().conversations).toEqual([{ ...room, default_profile_id: 'reader' }])
+
+    route.query.assignment = member
+    await vue.nextTick()
+    expect(clone(panel.draft.value)).toMatchObject({ ...room, actor, group_ids: ['readers'] })
+    expect(writes.map((write) => write.expected_revision)).toEqual(['r1', 'r2'])
+  })
+
   test('the default profile is present and editable before it has an authored record', async () => {
     const id = permissionProfiles.DEFAULT_PERMISSION_PROFILE_ID
     const defaults = permissionProfiles.emptyPermissionCatalog()

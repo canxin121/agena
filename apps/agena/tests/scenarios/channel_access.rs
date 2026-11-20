@@ -1,12 +1,12 @@
 //! Multi-user channel security at the real signed HTTP / plugin / model / tool
 //! boundary. Each test owns its isolated process, workspace and gateway.
-#[cfg(not(target_os = "macos"))]
 mod native_mcp_fixture;
 
 use super::fixture;
 use agena_api::integrations::*;
 use agena_testkit::{
-    Reply, RequestMatch, SettingsLayer, TestAgenaBuilder, TestCase, TestResult, UserSession,
+    EditOptions, Reply, RequestMatch, SettingsLayer, TestAgenaBuilder, TestCase, TestResult,
+    UserSession,
 };
 use anyhow::{Context, Result, ensure};
 use axum::{Json, Router, extract::State, routing::post};
@@ -208,6 +208,69 @@ async fn reply(messages: &Replies, marker: &str) -> Result<Value> {
             .cloned())
     })
     .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bot_lists_verified_participants_and_applies_their_room_permission_groups() -> TestResult {
+    let replies: Replies = Default::default();
+    native_mcp_fixture::fixture(replies.clone())
+        .run(move |case| async move {
+            let bot = case.client().await.ensure_bot_session().await?;
+            let source = case.user().attach_session(bot.session_id).await?;
+            let client = source.client();
+            let mut group = policy(ConversationKind::Group);
+            let binding = bind(&source, "participant-directory", group.clone()).await?;
+            let now = Utc::now().timestamp_millis();
+            signed_channel_event(&case, json!({
+                "id":"first-contact", "event_type":"message", "resource":"room", "actor":"newcomer",
+                "actor_display_name":"New member", "thread":"first-thread", "occurred_at_ms":now,
+                "text":"A new member's first contact",
+                "channel":{"identity":group.identity,"kind":"group","actor_verified":true,
+                    "is_member":true,"addressed_to_bot":true,"verified_at_ms":now}
+            })).await?;
+            let query = ChannelParticipantsQuery { resource: "room".into(), kind: ConversationKind::Group, after: None, search: None };
+            let page = wait(|| async {
+                let page = client.channel_participants(source.id(), binding.id, &query).await?;
+                Ok((!page.participants.is_empty()).then_some(page))
+            }).await?;
+            ensure!(page.participants.len() == 1);
+            let newcomer = &page.participants[0];
+            ensure!(newcomer.actor == "newcomer" && newcomer.display_name.as_deref() == Some("New member"));
+            let inventory = client.platform_inventory(source.id()).await?;
+            let entry = &inventory.platforms[0].accounts[0].conversations[0];
+            ensure!(entry.resource == "room" && entry.session_id.is_none());
+            let other_source = case.user().new_session().await?;
+            let path = |source| format!("/api/v1/sessions/{source}/integrations/{}/participants?resource=room&kind=group", binding.id);
+            let http = case.http().await;
+            ensure!(http.get(&path(other_source.id())).await?.status.as_u16() == 404);
+            ensure!(http.anonymous().get(&path(source.id())).await?.status.as_u16() == 401);
+
+            case.settings().set(SettingsLayer::Global, "access_control", json!({
+                "profiles":{"reader":{"name":"Room reader","permission":{"network":{"default":"deny"}}}},
+                "groups":{"room-readers":{"name":"Room readers","profile_id":"reader"}},
+                "users":[{"platform":binding.spec.provider,"tenant":group.identity.tenant,
+                    "account":group.identity.account,"resource":query.resource,"actor":newcomer.actor,
+                    "group_ids":["room-readers"]}]
+            }), EditOptions::default()).await?.require_success()?;
+
+            group.members.push(ChannelMember { actor: newcomer.actor.clone(), role: ChannelRole::Member, expires_at_ms: None });
+            let current = client.integration_detail(source.id(), binding.id).await?.binding;
+            client.update_channel_access(source.id(), binding.id, &ChannelPolicyUpdate {
+                expected_revision: current.revision, request_key: "admit-newcomer".into(), policy: group.clone(),
+            }).await?;
+            case.model().expect(RequestMatch::user_text("ROOM-PERMISSION-REQUEST"))
+                .check(|request| {
+                    ensure!(request.body.to_string().contains("room-readers"));
+                    Ok(())
+                })
+                .reply(Reply::text("room-permission-ack"));
+            message(&case, &group, "next-contact", &newcomer.actor, Some("second-thread"), "ROOM-PERMISSION-REQUEST").await?;
+            reply(&replies, "room-permission-ack").await?;
+            let page = client.channel_participants(source.id(), binding.id, &query).await?;
+            ensure!(page.participants.len() == 1 && page.participants[0].first_seen_at_ms == now);
+            Ok(())
+        })
+        .await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

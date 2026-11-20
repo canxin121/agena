@@ -7,6 +7,8 @@ import type {
   CreateIntegration,
   ChannelPolicyUpdate,
   PlatformInventory,
+  ChannelParticipantPage,
+  ConversationKind,
 } from '@/generated/agenaState'
 export type {
   IntegrationsSnapshot,
@@ -41,6 +43,20 @@ export const integrationApi = {
   list: (source: number, signal?: AbortSignal) => request<IntegrationsSnapshot>(base(source), { signal }),
   platforms: (source: number, signal?: AbortSignal) =>
     request<PlatformInventory>(`/api/v1/sessions/${source}/platforms`, { signal }),
+  participants: (
+    source: number,
+    id: string,
+    resource: string,
+    kind: ConversationKind,
+    options: { after?: string; search?: string; signal?: AbortSignal } = {},
+  ) => {
+    const query = new URLSearchParams({ resource, kind })
+    if (options.after !== undefined) query.set('after', options.after)
+    if (options.search) query.set('search', options.search)
+    return request<ChannelParticipantPage>(`${base(source)}/${encodeURIComponent(id)}/participants?${query}`, {
+      signal: options.signal,
+    })
+  },
   create: (source: number, body: CreateIntegration) => request<IntegrationBinding>(base(source), post(body)),
   detail: (source: number, id: string, signal?: AbortSignal) =>
     request<IntegrationDetail>(`${base(source)}/${encodeURIComponent(id)}`, { signal }),

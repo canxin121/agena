@@ -1,5 +1,6 @@
 use agena_assistant::*;
 use agena_storage_sqlite::{SqliteIntegrationRepository, open_kernel_runtime};
+use sea_orm::ConnectionTrait;
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, path::PathBuf};
 
@@ -232,6 +233,184 @@ async fn user_quota_does_not_block_other_members_and_replays_do_not_spend_again(
             .any(|e| e.event.id == "b" && e.note.as_deref() == Some("per_user_daily_limit"))
     );
     assert_eq!(repo.binding(b.id).await.unwrap().admitted, 2);
+}
+
+fn group_participants() -> ChannelParticipantsQuery {
+    ChannelParticipantsQuery {
+        resource: "room".into(),
+        kind: ConversationKind::Group,
+        after: None,
+        search: None,
+    }
+}
+
+#[tokio::test]
+async fn recorded_participants_require_verified_interactions_and_keep_room_identity() {
+    let db = open_kernel_runtime("sqlite::memory:").await.unwrap();
+    let repo = SqliteIntegrationRepository::new(db.database.clone());
+    let mut b = enabled(&repo).await;
+    b.spec.resource = ResourceSelector::Explicit(BTreeSet::from(["room".into(), "news".into()]));
+    let revision = b.revision;
+    let b = repo.save_binding(b, revision).await.unwrap();
+    let mut newest = event("alice-new", "alice");
+    newest.actor_display_name = Some("Alice".into());
+    newest.occurred_at_ms = 2500;
+    let mut oldest = event("alice-old", "alice");
+    oldest.actor_display_name = Some("Old display name".into());
+    oldest.thread = Some("another-topic".into());
+    let mut passive = event("passive", "not-addressing-the-bot");
+    passive.channel.as_mut().unwrap().addressed_to_bot = false;
+    let mut foreign = event("foreign", "different-account");
+    foreign.channel.as_mut().unwrap().identity.account = "other-bot".into();
+    let mut unverified = event("unverified", "unverified-actor");
+    unverified.channel.as_mut().unwrap().actor_verified = false;
+    let mut other_room = event("wrong-room", "other-room-actor");
+    other_room.resource = "another-room".into();
+    let mut historical = event("historical", "pre-activation");
+    historical.occurred_at_ms = 1000;
+    let mut bot = event("echo", "bot");
+    bot.bot = true;
+    let mut broadcast = event("broadcast", "alice");
+    broadcast.resource = "news".into();
+    broadcast.channel.as_mut().unwrap().kind = ConversationKind::Broadcast;
+    repo.accept_batch(
+        b.id,
+        revision,
+        AdapterBatch {
+            events: vec![
+                newest.clone(),
+                oldest,
+                event("unknown-member", "unlisted"),
+                passive,
+                foreign,
+                unverified,
+                other_room,
+                historical,
+                bot,
+                broadcast,
+            ],
+            cursor: json!(1),
+            retry_after_seconds: None,
+        },
+        3000,
+    )
+    .await
+    .unwrap();
+    newest.actor_display_name = Some("Replayed display name".into());
+    newest.occurred_at_ms = 2900;
+    repo.accept_batch(
+        b.id,
+        revision,
+        AdapterBatch {
+            events: vec![newest],
+            cursor: json!(2),
+            retry_after_seconds: None,
+        },
+        3100,
+    )
+    .await
+    .unwrap();
+
+    let page = repo
+        .channel_participants(b.id, group_participants())
+        .await
+        .unwrap();
+    assert_eq!(
+        page.participants,
+        [
+            ChannelParticipant {
+                actor: "alice".into(),
+                display_name: Some("Alice".into()),
+                first_seen_at_ms: 2000,
+                last_seen_at_ms: 2500
+            },
+            ChannelParticipant {
+                actor: "unlisted".into(),
+                display_name: None,
+                first_seen_at_ms: 2000,
+                last_seen_at_ms: 2000
+            },
+        ]
+    );
+    assert!(page.next_after.is_none());
+    let mut search = group_participants();
+    search.search = Some("ALI".into());
+    let result = repo.channel_participants(b.id, search).await.unwrap();
+    assert_eq!(result.participants, page.participants[..1]);
+    let news = repo
+        .channel_participants(
+            b.id,
+            ChannelParticipantsQuery {
+                resource: "news".into(),
+                kind: ConversationKind::Broadcast,
+                after: None,
+                search: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(news.participants.len(), 1);
+    assert_eq!(news.participants[0].actor, "alice");
+    assert_eq!(repo.observed_channel_rooms(b.id).await.unwrap().len(), 2);
+    assert!(repo.channel_sessions(b.id).await.unwrap().is_empty());
+    assert!(repo.events(b.id).await.unwrap().iter().any(|row| {
+        row.event.actor == "unlisted" && row.note.as_deref() == Some("member_not_authorized")
+    }));
+}
+
+#[tokio::test]
+async fn upgrading_an_existing_database_backfills_verified_participants() {
+    let directory = tempfile::tempdir().unwrap();
+    let url = format!(
+        "sqlite://{}?mode=rwc",
+        directory.path().join("agena.db").display()
+    );
+    let id = {
+        let db = open_kernel_runtime(&url).await.unwrap();
+        let repo = SqliteIntegrationRepository::new(db.database.clone());
+        let b = enabled(&repo).await;
+        let mut passive = event("passive", "unlisted-passive");
+        passive.channel.as_mut().unwrap().addressed_to_bot = false;
+        let mut unknown = event("unknown", "unlisted");
+        unknown.actor_display_name = Some("New participant".into());
+        repo.accept_batch(
+            b.id,
+            b.revision,
+            AdapterBatch {
+                events: vec![event("known", "alice"), unknown, passive],
+                cursor: json!(1),
+                retry_after_seconds: None,
+            },
+            3000,
+        )
+        .await
+        .unwrap();
+        db.database
+            .execute_unprepared("DROP TABLE agena_channel_participants")
+            .await
+            .unwrap();
+        db.ports.clone().shutdown().await.unwrap();
+        b.id
+    };
+    let db = open_kernel_runtime(&url).await.unwrap();
+    let repo = SqliteIntegrationRepository::new(db.database.clone());
+    let page = repo
+        .channel_participants(id, group_participants())
+        .await
+        .unwrap();
+    assert_eq!(
+        page.participants
+            .iter()
+            .map(|member| member.actor.as_str())
+            .collect::<Vec<_>>(),
+        ["alice", "unlisted"]
+    );
+    assert_eq!(
+        page.participants[1].display_name.as_deref(),
+        Some("New participant")
+    );
+    assert_eq!(repo.binding(id).await.unwrap().cursor, json!(1));
+    assert!(repo.channel_audit(id).await.unwrap().is_empty());
 }
 
 #[tokio::test]

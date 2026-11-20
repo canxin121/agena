@@ -186,6 +186,7 @@ git 属于目录，不属于会话，也不要求目录已被登记。
 | GET | `/api/v1/sessions/{id}/integrations/{binding_id}` |
 | PUT | `/api/v1/sessions/{id}/integrations/{binding_id}/state` |
 | PUT | `/api/v1/sessions/{id}/integrations/{binding_id}/access` |
+| GET | `/api/v1/sessions/{id}/integrations/{binding_id}/participants?resource={conversation_id}&kind={kind}` |
 | GET | `/api/v1/sessions/{id}/platforms` |
 
 ---

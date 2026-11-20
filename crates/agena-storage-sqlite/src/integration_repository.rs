@@ -9,7 +9,9 @@ use sea_orm::{
 use std::sync::Arc;
 use uuid::Uuid;
 mod channel_access;
+mod channel_participants;
 pub(crate) use channel_access::DECLARATIONS as CHANNEL_DECLARATIONS;
+pub(crate) use channel_participants::{PARTICIPANTS_TABLE, backfill_channel_participants};
 
 pub(crate) const DECLARATIONS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS agena_integration_bindings (id TEXT PRIMARY KEY, workspace_id INTEGER NULL CHECK(workspace_id IS NULL OR workspace_id>0), owner_bot_id TEXT NULL CHECK(owner_bot_id IS NULL OR length(owner_bot_id)=36), source_session_id INTEGER NOT NULL CHECK(source_session_id>0), request_key TEXT NOT NULL, revision INTEGER NOT NULL CHECK(revision>0), state TEXT NOT NULL, next_poll_ms INTEGER NOT NULL, binding_json TEXT NOT NULL CHECK(json_valid(binding_json)), UNIQUE(source_session_id,request_key), CHECK((workspace_id IS NULL) <> (owner_bot_id IS NULL)))",
@@ -125,6 +127,16 @@ impl IntegrationRepository for SqliteIntegrationRepository {
     }
     async fn channel_sessions(&self, id: Uuid) -> Result<Vec<ChannelSessionRecord>> {
         self.channel_sessions_read(id).await
+    }
+    async fn observed_channel_rooms(&self, id: Uuid) -> Result<Vec<ObservedChannelRoom>> {
+        self.observed_channel_rooms_read(id).await
+    }
+    async fn channel_participants(
+        &self,
+        id: Uuid,
+        query: ChannelParticipantsQuery,
+    ) -> Result<ChannelParticipantPage> {
+        self.channel_participants_read(id, query).await
     }
     async fn save_channel_session(
         &self,
@@ -260,6 +272,7 @@ impl IntegrationRepository for SqliteIntegrationRepository {
                     ));
                 }
             }
+            channel_participants::record_interaction(&tx, &b, &event, now).await?;
             let row = IntegrationEvent {
                 binding_id: id,
                 epoch: b.epoch,

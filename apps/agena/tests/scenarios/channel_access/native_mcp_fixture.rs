@@ -1,4 +1,4 @@
-//! HTTP channel infrastructure owned by the MCP authorization scenario.
+//! Signed HTTP channel fixture for authorization and participant scenarios.
 //! Incoming signed messages still pass through the production integration
 //! service, channel principal, model execution and outbound delivery paths.
 

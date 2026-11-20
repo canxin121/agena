@@ -223,6 +223,9 @@ fn declarations() -> impl Iterator<Item = String> {
                 .iter()
                 .copied(),
         )
+        .chain(std::iter::once(
+            crate::integration_repository::PARTICIPANTS_TABLE,
+        ))
         .map(str::to_owned)
         .chain(std::iter::once(crate::schema::instance_table()))
         .chain(summary_triggers())
@@ -292,6 +295,7 @@ struct MissingExtensions {
     local_sessions: bool,
     avatars: bool,
     prompts: bool,
+    channel_participants: bool,
 }
 
 async fn validate_objects(
@@ -304,10 +308,12 @@ async fn validate_objects(
     let local_sessions = ("table".into(), "agena_bot_local_sessions".into());
     let avatars = ("table".into(), "agena_bot_avatars".into());
     let prompts = ("table".into(), "agena_bot_prompts".into());
+    let channel_participants = ("table".into(), "agena_channel_participants".into());
     let missing = MissingExtensions {
         local_sessions: !actual.contains_key(&local_sessions),
         avatars: !actual.contains_key(&avatars),
         prompts: !actual.contains_key(&prompts),
+        channel_participants: !actual.contains_key(&channel_participants),
     };
     if missing.local_sessions {
         expected.remove(&local_sessions);
@@ -317,6 +323,9 @@ async fn validate_objects(
     }
     if missing.prompts {
         expected.remove(&prompts);
+    }
+    if missing.channel_participants {
+        expected.remove(&channel_participants);
     }
     if expected != actual {
         return Err(incompatible_database(
@@ -341,9 +350,13 @@ pub(crate) async fn initialize(database: &DatabaseConnection) -> Result<(), DbEr
     let actual = schema_objects(database).await?;
     if !actual.is_empty() {
         let missing = validate_objects(database, actual).await?;
-        if missing.local_sessions || missing.avatars || missing.prompts {
+        if missing.local_sessions
+            || missing.avatars
+            || missing.prompts
+            || missing.channel_participants
+        {
             // Only exact known predecessors reach this path. Install missing
-            // extensions atomically, and adopt history only for a new mapping.
+            // extensions and their initial projections atomically.
             let transaction = database.begin().await?;
             if missing.local_sessions {
                 for sql in BOT_LOCAL_SESSION_EXTENSION
@@ -375,6 +388,17 @@ pub(crate) async fn initialize(database: &DatabaseConnection) -> Result<(), DbEr
                         ))
                         .await?;
                 }
+            }
+            if missing.channel_participants {
+                transaction
+                    .execute(Statement::from_string(
+                        database.get_database_backend(),
+                        crate::integration_repository::PARTICIPANTS_TABLE,
+                    ))
+                    .await?;
+                crate::integration_repository::backfill_channel_participants(&transaction)
+                    .await
+                    .map_err(|error| DbErr::Custom(error.to_string()))?;
             }
             transaction.commit().await?;
             validate_objects(database, schema_objects(database).await?).await?;

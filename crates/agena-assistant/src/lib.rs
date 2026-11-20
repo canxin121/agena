@@ -47,6 +47,12 @@ pub trait AssistantService: Send + Sync {
     /// Read-only per-platform inventory: platforms, their accounts, the
     /// conversations seen through them, and the session each maps to.
     async fn platform_inventory(&self, source: i64) -> Result<PlatformInventory>;
+    async fn channel_participants(
+        &self,
+        source: i64,
+        id: Uuid,
+        query: ChannelParticipantsQuery,
+    ) -> Result<ChannelParticipantPage>;
     async fn control_integration(
         &self,
         source: i64,

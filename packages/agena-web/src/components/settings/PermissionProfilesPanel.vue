@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref } from 'vue'
-import { onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 import { RiAddLine, RiDeleteBinLine, RiRefreshLine, RiShieldCheckLine } from '@remixicon/vue'
 import SettingsDisclosureRow from './SettingsDisclosureRow.vue'
 import SettingsSaveBar from './SettingsSaveBar.vue'
+import ChannelAssignmentsPanel from './ChannelAssignmentsPanel.vue'
 import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import SearchInput from '@/components/ui/SearchInput.vue'
@@ -23,7 +25,9 @@ import {
   permissionProfileDisplayName,
   permissionProfileReferences,
   permissionUserKey,
+  readChannelPermissionTarget,
   readPermissionCatalog,
+  type ChannelPermissionTarget,
   type PermissionCatalog,
   type PermissionCatalogSection,
 } from '@/lib/permissionProfiles'
@@ -53,12 +57,22 @@ type Draft = {
   sourceWorkspace: boolean
 }
 
+type EditorSection = PermissionCatalogSection | 'channels'
+
 const props = defineProps<{ assignments?: boolean }>()
+const route = useRoute()
+const { t } = useI18n()
+const channelTarget = computed(() => (props.assignments ? readChannelPermissionTarget(route.query.assignment) : null))
+const channelSource = computed(() => {
+  const value = typeof route.query.channelSource === 'string' ? Number(route.query.channelSource) : 0
+  return channelTarget.value && Number.isSafeInteger(value) && value > 0 ? value : null
+})
+const channelPanel = ref<InstanceType<typeof ChannelAssignmentsPanel> | null>(null)
 const catalog = ref<PermissionCatalog>(emptyPermissionCatalog())
 const factoryProfiles = ref<PermissionCatalog['profiles']>({})
 const profiles = computed(() => ({ ...factoryProfiles.value, ...catalog.value.profiles }))
 const revision = ref<string | undefined>()
-const section = ref<PermissionCatalogSection>(props.assignments ? 'groups' : 'profiles')
+const section = ref<EditorSection>(props.assignments ? 'channels' : 'profiles')
 const selectedId = ref<string | null>(null)
 const draft = ref<Draft | null>(null)
 const original = ref('')
@@ -74,14 +88,20 @@ const editorKey = ref(0)
 let generation = 0
 
 const tabs = computed(() => [
+  { id: 'channels' as const, label: t('channelAssignments.title') },
   { id: 'groups' as const, label: st('User groups') },
+  { id: 'users' as const, label: t('channelAssignments.advanced') },
+])
+const manualTabs = computed(() => [
   { id: 'users' as const, label: st('Users') },
   { id: 'conversations' as const, label: st('Conversations') },
 ])
-const dirty = computed(
-  () =>
-    draft.value !== null &&
-    (JSON.stringify(draft.value) !== original.value || permissionEditors.value[0]?.pendingRule === true),
+const manual = computed(() => section.value === 'users' || section.value === 'conversations')
+const dirty = computed(() =>
+  section.value === 'channels'
+    ? channelPanel.value?.dirty === true
+    : draft.value !== null &&
+      (JSON.stringify(draft.value) !== original.value || permissionEditors.value[0]?.pendingRule === true),
 )
 const identityFields = computed(() => [
   { key: 'platform' as const, label: st('Platform') },
@@ -93,6 +113,8 @@ const identityFields = computed(() => [
 ])
 const entries = computed(() => {
   switch (section.value) {
+    case 'channels':
+      return []
     case 'profiles':
       return Object.entries(profiles.value).map(([id, profile]) => ({
         id,
@@ -230,6 +252,38 @@ function showEntry(id: string | null) {
   original.value = JSON.stringify(next)
 }
 
+function showChannelTarget(target: ChannelPermissionTarget) {
+  const { actor, ...room } = target
+  section.value = actor ? 'users' : 'conversations'
+  search.value = ''
+  error.value = ''
+  const id = actor ? permissionUserKey({ ...room, actor }) : permissionIdentityKey(room, room.resource)
+  if (entries.value.some((entry) => entry.id === id)) {
+    showEntry(id)
+  } else {
+    showEntry(null)
+    const next = { ...blankDraft(), ...room, actor: actor ?? '' }
+    draft.value = next
+    original.value = JSON.stringify(next)
+  }
+}
+
+async function editChannelBinding(target: ChannelPermissionTarget) {
+  if (!(await canDiscard())) return
+  channelPanel.value?.discard()
+  showChannelTarget(target)
+}
+
+function showRoutedTarget(target: ChannelPermissionTarget) {
+  if (channelSource.value) {
+    section.value = 'channels'
+    channelPanel.value?.discard()
+    showEntry(null)
+    return
+  }
+  showChannelTarget(target)
+}
+
 async function canDiscard(): Promise<boolean> {
   if (saving.value) return false
   if (!dirty.value) return true
@@ -251,8 +305,20 @@ async function load() {
     catalog.value = readPermissionCatalog(response.value)
     factoryProfiles.value = readPermissionCatalog(response.default_value).profiles
     revision.value = response.revision
+    const target = channelTarget.value
+    if (target && !loaded.value) {
+      showRoutedTarget(target)
+    } else if (
+      target &&
+      !channelSource.value &&
+      selectedId.value === null &&
+      section.value === (target.actor ? 'users' : 'conversations')
+    ) {
+      showChannelTarget(target)
+    } else if (section.value !== 'channels') {
+      showEntry(entries.value.some((entry) => entry.id === selectedId.value) ? selectedId.value : null)
+    }
     loaded.value = true
-    showEntry(entries.value.some((entry) => entry.id === selectedId.value) ? selectedId.value : null)
   } catch (reason) {
     if (token === generation) error.value = permissionConfigErrorMessage(reason, st)
   } finally {
@@ -261,11 +327,15 @@ async function load() {
 }
 
 async function refresh() {
-  if (await canDiscard()) await load()
+  if (!(await canDiscard())) return
+  const channel = section.value === 'channels' ? channelPanel.value : null
+  channel?.discard()
+  await Promise.all([load(), channel?.refresh()])
 }
 
-async function selectSection(next: PermissionCatalogSection) {
+async function selectSection(next: EditorSection) {
   if (next === section.value || !(await canDiscard())) return
+  if (section.value === 'channels') channelPanel.value?.discard()
   section.value = next
   search.value = ''
   error.value = ''
@@ -401,7 +471,7 @@ function updatedCatalog(): { value: PermissionCatalog; id: string } {
   return { value: next, id }
 }
 
-async function persist(next: PermissionCatalog, id: string | null) {
+async function persist(next: PermissionCatalog) {
   const latest = readPermissionCatalog((await getRuntimeSettingLayer('global', 'access_control')).value)
   if (permissionCatalogSnapshot(latest) !== permissionCatalogSnapshot(catalog.value))
     throw new Error(
@@ -416,8 +486,17 @@ async function persist(next: PermissionCatalog, id: string | null) {
   )
   catalog.value = response.current === undefined ? next : readPermissionCatalog(response.current)
   revision.value = response.after_revision
-  showEntry(id)
-  saved.value = true
+}
+
+async function saveChannelAssignments(next: PermissionCatalog) {
+  if (saving.value || loading.value) throw new Error(saving.value ? st('Saving changes…') : st('Loading…'))
+  saving.value = true
+  error.value = ''
+  try {
+    await persist(next)
+  } finally {
+    saving.value = false
+  }
 }
 
 async function save() {
@@ -428,7 +507,9 @@ async function save() {
   saved.value = false
   try {
     const next = updatedCatalog()
-    await persist(next.value, next.id)
+    await persist(next.value)
+    showEntry(next.id)
+    saved.value = true
   } catch (reason) {
     error.value = permissionConfigErrorMessage(reason, st)
   } finally {
@@ -463,7 +544,9 @@ async function removeEntry() {
     else if (section.value === 'groups') delete next.groups[id]
     else if (section.value === 'users') next.users = next.users.filter((user) => permissionUserKey(user) !== id)
     else next.conversations = next.conversations.filter((item) => permissionIdentityKey(item, item.resource) !== id)
-    await persist(next, null)
+    await persist(next)
+    showEntry(null)
+    saved.value = true
   } catch (reason) {
     error.value = permissionConfigErrorMessage(reason, st)
   } finally {
@@ -487,6 +570,9 @@ onBeforeUnmount(() => {
 })
 onBeforeRouteLeave(canDiscard)
 onBeforeRouteUpdate(canDiscard)
+watch([channelTarget, channelSource], ([target]) => {
+  if (target && loaded.value) showRoutedTarget(target)
+})
 defineExpose({ refresh })
 </script>
 
@@ -497,6 +583,35 @@ defineExpose({ refresh })
         v-for="tab in tabs"
         :key="tab.id"
         size="sm"
+        :variant="section === tab.id || (tab.id === 'users' && manual) ? 'secondary' : 'ghost'"
+        :disabled="saving"
+        :aria-pressed="section === tab.id || (tab.id === 'users' && manual)"
+        @click="tab.id !== 'users' || !manual ? selectSection(tab.id) : undefined"
+        >{{ tab.label }}</Button
+      >
+    </div>
+    <ChannelAssignmentsPanel
+      v-if="assignments && loaded"
+      v-show="section === 'channels'"
+      ref="channelPanel"
+      :active="section === 'channels'"
+      :catalog="catalog"
+      :profiles="profiles"
+      :target="channelTarget"
+      :target-source="channelSource"
+      :disabled="loading"
+      :saving="saving"
+      :save="saveChannelAssignments"
+      :can-discard="canDiscard"
+      @refresh="refresh"
+      @groups="selectSection('groups')"
+      @edit="editChannelBinding"
+    />
+    <div v-if="manual" class="settings-toolbar" role="group" :aria-label="t('channelAssignments.advanced')">
+      <Button
+        v-for="tab in manualTabs"
+        :key="tab.id"
+        size="sm"
         :variant="section === tab.id ? 'secondary' : 'ghost'"
         :disabled="saving"
         :aria-pressed="section === tab.id"
@@ -504,7 +619,7 @@ defineExpose({ refresh })
         >{{ tab.label }}</Button
       >
     </div>
-    <div class="settings-toolbar rounded-lg border border-border/70 bg-card/30 p-2.5">
+    <div v-if="section !== 'channels'" class="settings-toolbar rounded-lg border border-border/70 bg-card/30 p-2.5">
       <SearchInput
         v-model="search"
         class="settings-toolbar-search"
@@ -528,14 +643,14 @@ defineExpose({ refresh })
       </Button>
     </div>
     <p
-      v-if="error && !dirty"
+      v-if="error && (!dirty || section === 'channels')"
       class="break-words rounded-md border border-destructive/40 p-2.5 text-sm text-destructive"
       role="alert"
     >
       {{ error }}
     </p>
     <p v-if="loading && !loaded" class="text-sm text-muted-foreground" role="status">{{ $st('Loading…') }}</p>
-    <div v-else-if="loaded" class="grid min-w-0 gap-2">
+    <div v-else-if="loaded && section !== 'channels'" class="grid min-w-0 gap-2">
       <SettingsDisclosureRow
         v-for="row in rows"
         :key="row.key"
@@ -784,9 +899,9 @@ defineExpose({ refresh })
         {{ $st('No configurations found. Add one to get started.') }}
       </p>
     </div>
-    <Button v-else-if="!loading" size="sm" variant="outline" @click="load">{{ $st('Retry') }}</Button>
+    <Button v-else-if="!loaded && !loading" size="sm" variant="outline" @click="load">{{ $st('Retry') }}</Button>
     <SettingsSaveBar
-      v-if="dirty || saving"
+      v-if="section !== 'channels' && (dirty || saving)"
       :dirty="dirty"
       :saving="saving"
       :disabled="loading"

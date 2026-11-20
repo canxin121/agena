@@ -267,6 +267,7 @@
 //! | POST | `/api/v1/sessions/{session_id}/integrations/{binding_id}/control` | `control_integration()` |
 //! | PUT | `/api/v1/sessions/{session_id}/integrations/{binding_id}/access` | `update_channel_access()` |
 //! | GET | `/api/v1/sessions/{session_id}/platforms` | `platform_inventory()` |
+//! | GET | `/api/v1/sessions/{session_id}/integrations/{binding_id}/participants` | `channel_participants()` |
 //! | GET | `/api/v1/sessions/{session_id}/media` | `download_session_media_file()` |
 //! | POST | `/api/v1/sessions/{session_id}/attachments` | `upload_session_file()` |
 //! | GET,POST | `/api/v1/sessions` | `list_sessions()`, `create_session()` |

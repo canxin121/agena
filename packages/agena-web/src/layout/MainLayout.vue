@@ -611,7 +611,8 @@ async function handleWorkspacePaneDrop(event: DragEvent, paneId: string, positio
 }
 
 async function syncRouteToActiveWorkspaceWindow() {
-  if (isEmbeddedWorkspacePane.value || hasEmbeddedWorkspacePaneQuery(route.query)) return
+  if (isConversationSettings.value || isEmbeddedWorkspacePane.value || hasEmbeddedWorkspacePaneQuery(route.query))
+    return
 
   const target = ui.activeWorkspaceWindow || ui.workspaceWindows[0] || null
   if (!target) return

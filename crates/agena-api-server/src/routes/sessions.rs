@@ -37,6 +37,10 @@ pub(super) fn routes() -> Router<AppState> {
             axum::routing::put(rest::update_channel_access),
         )
         .route(
+            "/api/v1/sessions/{session_id}/integrations/{binding_id}/participants",
+            get(rest::channel_participants),
+        )
+        .route(
             "/api/v1/sessions/{session_id}/platforms",
             get(rest::platform_inventory),
         )

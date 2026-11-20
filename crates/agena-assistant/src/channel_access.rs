@@ -31,6 +31,39 @@ pub struct ChannelSessionRecord {
     pub authority: ChannelAuthority,
     pub created_at_ms: i64,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObservedChannelRoom {
+    pub resource: String,
+    pub kind: ConversationKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ChannelParticipant {
+    pub actor: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    pub first_seen_at_ms: i64,
+    pub last_seen_at_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ChannelParticipantPage {
+    pub participants: Vec<ChannelParticipant>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_after: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChannelParticipantsQuery {
+    pub resource: String,
+    pub kind: ConversationKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ChannelOutputRoute {
@@ -63,56 +96,92 @@ impl ChannelOutputRoute {
     }
 }
 impl IntegrationBinding {
-    pub fn channel_rejection(&self, event: &ExternalEvent, now: i64) -> Option<&'static str> {
+    fn verified_channel_message<'event>(
+        &self,
+        event: &'event ExternalEvent,
+        now: i64,
+    ) -> std::result::Result<(&ChannelAccessPolicy, &'event ChannelEnvelope), &'static str> {
         if !agena_domain::valid_channel_id(&event.actor) {
-            return Some("invalid_or_reserved_sender_identity");
+            return Err("invalid_or_reserved_sender_identity");
         }
         let Some(policy) = &self.spec.channel_policy else {
-            return Some("channel_policy_required");
+            return Err("channel_policy_required");
         };
         let Some(channel) = &event.channel else {
-            return Some("verified_channel_context_required");
+            return Err("verified_channel_context_required");
         };
         if channel.identity != policy.identity {
-            return Some("tenant_or_account_mismatch");
+            return Err("tenant_or_account_mismatch");
         }
         let kind = channel.kind;
         if !policy.serves(kind) {
-            return Some("conversation_kind_not_authorized");
+            return Err("conversation_kind_not_authorized");
         }
         if !self.spec.resource.matches(&event.resource) {
-            return Some("conversation_not_authorized");
+            return Err("conversation_not_authorized");
         }
         if policy.thread_mode == ChannelThreadMode::Exact && event.thread != self.spec.thread {
-            return Some("thread_not_authorized");
+            return Err("thread_not_authorized");
         }
         if kind == ConversationKind::Direct
             && (event.thread.is_some() || policy.thread_mode != ChannelThreadMode::Exact)
         {
-            return Some("direct_message_thread_invalid");
+            return Err("direct_message_thread_invalid");
         }
         if kind == ConversationKind::Direct && policy.allow_unlisted_chat {
-            return Some("direct_message_open_membership_invalid");
+            return Err("direct_message_open_membership_invalid");
         }
         if !channel.actor_verified || !channel.is_member {
-            return Some("platform_membership_not_verified");
+            return Err("platform_membership_not_verified");
         }
-        if channel.verified_at_ms < now - 300000 || channel.verified_at_ms > now + 30000 {
-            return Some("membership_evidence_expired");
+        if channel.verified_at_ms < now.saturating_sub(300000)
+            || channel.verified_at_ms > now.saturating_add(30000)
+        {
+            return Err("membership_evidence_expired");
         }
         if event.bot {
-            return Some("bot_echo");
+            return Err("bot_echo");
         }
+        Ok((policy, channel))
+    }
+
+    fn matches_channel_trigger(policy: &ChannelAccessPolicy, channel: &ChannelEnvelope) -> bool {
+        channel.kind == ConversationKind::Direct
+            || policy.trigger == ChannelTrigger::EveryMessage
+            || channel.addressed_to_bot
+    }
+
+    /// An interaction is evidence for the directory independently of the
+    /// local role and execution quota that decide whether the Bot will answer.
+    pub fn observed_channel_kind(
+        &self,
+        event: &ExternalEvent,
+        now: i64,
+    ) -> Option<ConversationKind> {
+        if self.spec.mode != IntegrationMode::Channel
+            || event.event_type != "message"
+            || !agena_domain::valid_channel_id(&event.resource)
+            || self.spec.expired_at(now)
+            || !self.event_in_activation(event, now)
+        {
+            return None;
+        }
+        let (policy, channel) = self.verified_channel_message(event, now).ok()?;
+        Self::matches_channel_trigger(policy, channel).then_some(channel.kind)
+    }
+
+    pub fn channel_rejection(&self, event: &ExternalEvent, now: i64) -> Option<&'static str> {
+        let (policy, channel) = match self.verified_channel_message(event, now) {
+            Ok(message) => message,
+            Err(reason) => return Some(reason),
+        };
         if policy.grant.validate().is_err() {
             return Some("channel_grant_invalid");
         }
         if let Err(reason) = policy.member(&event.actor, now) {
             return Some(reason);
         }
-        if kind != ConversationKind::Direct
-            && policy.trigger == ChannelTrigger::DirectOrMention
-            && !channel.addressed_to_bot
-        {
+        if !Self::matches_channel_trigger(policy, channel) {
             return Some("message_not_addressed_to_assistant");
         }
         None

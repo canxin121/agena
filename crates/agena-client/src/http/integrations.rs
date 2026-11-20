@@ -46,6 +46,30 @@ impl AgenaClient {
         self.parse_json(response).await
     }
 
+    pub async fn channel_participants(
+        &self,
+        source: i64,
+        id: Uuid,
+        query: &ChannelParticipantsQuery,
+    ) -> Result<ChannelParticipantPage, ClientError> {
+        let mut url = self.endpoint(&format!(
+            "/api/v1/sessions/{source}/integrations/{id}/participants"
+        ));
+        url.query_pairs_mut()
+            .append_pair("resource", &query.resource)
+            .append_pair("kind", query.kind.as_str());
+        if let Some(after) = &query.after {
+            url.query_pairs_mut().append_pair("after", after);
+        }
+        if let Some(search) = &query.search {
+            url.query_pairs_mut().append_pair("search", search);
+        }
+        let response = self
+            .send_request(reqwest::Method::GET, url, None, None)
+            .await?;
+        self.parse_json(response).await
+    }
+
     pub async fn create_integration(
         &self,
         source: i64,

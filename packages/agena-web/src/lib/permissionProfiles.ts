@@ -23,6 +23,7 @@ export type PermissionProfile = {
 }
 export type PermissionGroup = { name: string; priority: number; profile_id?: string }
 export type AccessIdentity = { platform: string; tenant: string; account: string }
+export type ChannelPermissionTarget = AccessIdentity & { resource: string; actor?: string }
 export type PermissionUser = AccessIdentity & {
   actor: string
   resource?: string
@@ -110,6 +111,46 @@ export function permissionUserKey(user: AccessIdentity & { actor: string; resour
   return user.resource
     ? JSON.stringify([user.platform, user.tenant, user.account, user.actor, user.resource])
     : permissionIdentityKey(user, user.actor)
+}
+
+export function channelPermissionSettings(
+  { platform, tenant, account, resource, actor }: ChannelPermissionTarget,
+  source?: number,
+) {
+  const assignment =
+    actor === undefined ? [platform, tenant, account, resource] : [platform, tenant, account, resource, actor]
+  return {
+    path: '/settings/permissions',
+    query: {
+      view: 'assignments',
+      scope: 'global',
+      assignment: JSON.stringify(assignment),
+      ...(source != null ? { channelSource: String(source) } : {}),
+    },
+  }
+}
+
+export function readChannelPermissionTarget(value: unknown): ChannelPermissionTarget | null {
+  if (typeof value !== 'string') return null
+  try {
+    const parts: unknown = JSON.parse(value)
+    if (
+      !Array.isArray(parts) ||
+      (parts.length !== 4 && parts.length !== 5) ||
+      parts.some((part) => typeof part !== 'string' || !part || part !== part.trim())
+    )
+      return null
+    const [platform, tenant, account, resource, actor] = parts as string[]
+    return {
+      platform: platform!,
+      tenant: tenant!,
+      account: account!,
+      resource: resource!,
+      ...(actor === undefined ? {} : { actor }),
+    }
+  } catch {
+    return null
+  }
 }
 
 export function permissionProfileReferences(catalog: PermissionCatalog, id: string): string[] {

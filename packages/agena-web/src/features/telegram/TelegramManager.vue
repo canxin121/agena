@@ -13,6 +13,7 @@ import Button from '@/components/ui/Button.vue'
 import BotEditor from './BotEditor.vue'
 import ManualChatEditor from './ManualChatEditor.vue'
 import BindingDetail from './BindingDetail.vue'
+import ConversationMembersPanel from '@/features/integrations/ConversationMembersPanel.vue'
 import { useTelegramCopy } from './copy'
 import { telegramApi } from './api'
 import {
@@ -141,6 +142,19 @@ const filtered = computed(() =>
 const pageCount = computed(() => Math.max(1, Math.ceil(filtered.value.length / 20)))
 const visibleRows = computed(() => filtered.value.slice((page.value - 1) * 20, page.value * 20))
 const activeRow = computed(() => rows.value.find((row) => row.id === selectedRoom.value))
+const participantRoom = computed(() => {
+  const room = activeRow.value
+  if (!room || (room.kind !== 'direct' && room.kind !== 'group' && room.kind !== 'broadcast')) return null
+  const binding = room.bindings.find((entry) => entry.id === selectedBinding.value) ?? room.bindings[0]
+  const policy = binding?.spec.channel_policy
+  if (!binding || !policy) return null
+  return {
+    bindingId: binding.id,
+    identity: { platform: binding.spec.provider, ...policy.identity },
+    resource: room.id,
+    kind: room.kind,
+  }
+})
 const activityQuery = ref('')
 const recent = computed(() =>
   (inventory.value?.recent || []).filter(
@@ -1086,6 +1100,7 @@ onBeforeUnmount(() => {
             <p v-if="!activeRow.bindings.length" class="text-xs text-muted-foreground">
               {{ allowed(activeRow) ? tx('waitingBinding') : tx('blocked') }}
             </p>
+            <ConversationMembersPanel v-if="source && participantRoom" :source="source" v-bind="participantRoom" />
             <details v-if="activeRow.bindings.length" :open="!!detail">
               <summary class="cursor-pointer text-sm font-medium">{{ tx('advancedBinding') }}</summary>
               <div class="mt-3 space-y-3">

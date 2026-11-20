@@ -266,6 +266,7 @@ async fn partial_schema_missing_integration_bundles_is_rejected() {
         .await
         .unwrap();
     for table in [
+        "agena_channel_participants",
         "agena_channel_access_audit",
         "agena_channel_user_budget",
         "agena_channel_sessions",

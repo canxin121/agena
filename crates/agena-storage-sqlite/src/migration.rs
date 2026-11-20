@@ -384,10 +384,18 @@ pub async fn migrate_database(old: &Path, new: &Path) -> Result<BTreeMap<String,
     exec(database, "PRAGMA legacy.read_uncommitted=1").await?;
     let copy = async {
         let bots = legacy_bots(database).await?;
-        copy_shared_tables(database, database).await?;
+        let copied = copy_shared_tables(database, database).await?;
         rewrite_sessions(database, &bots).await?;
         migrated_bot_registry(database, database, &bots).await?;
         rebuild_integration_bindings(database).await?;
+        if !copied
+            .iter()
+            .any(|table| table == "agena_channel_participants")
+        {
+            crate::integration_repository::backfill_channel_participants(database)
+                .await
+                .map_err(|error| DbErr::Custom(error.to_string()))?;
+        }
         Ok::<(), DbErr>(())
     }
     .await;

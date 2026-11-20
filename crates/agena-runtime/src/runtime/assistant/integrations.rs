@@ -442,18 +442,22 @@ impl AssistantRuntime {
 
     /// Read-only inventory of every chat platform this workspace serves.
     ///
-    /// Nothing here polls an adapter or dispatches work: bindings, their
-    /// channel sessions and the session titles come from persisted state only.
+    /// Bindings, observed rooms, and channel sessions come from persisted state.
     pub(super) async fn read_platform_inventory(&self, source: i64) -> Result<PlatformInventory> {
         let scope = self.integration_scope(source).await?;
         let bindings = self.integrations.bindings(Some(scope)).await?;
         let host = self.integration_host().ok();
         let mut channel_sessions = Vec::new();
+        let mut observed_rooms = std::collections::BTreeMap::new();
         for binding in bindings
             .iter()
             .filter(|b| b.spec.mode == IntegrationMode::Channel)
         {
             channel_sessions.extend(self.integrations.channel_sessions(binding.id).await?);
+            observed_rooms.insert(
+                binding.id,
+                self.integrations.observed_channel_rooms(binding.id).await?,
+            );
         }
         let mut titles = std::collections::BTreeMap::new();
         let manager = self.manager()?;
@@ -466,7 +470,12 @@ impl AssistantRuntime {
                 titles.insert(session_id, session.title);
             }
         }
-        let mut inventory = PlatformInventory::build(&bindings, &channel_sessions, &titles);
+        let mut inventory = PlatformInventory::build_with_observed_rooms(
+            &bindings,
+            &channel_sessions,
+            &titles,
+            &observed_rooms,
+        );
         // Fill in adapter titles when the plugin is loaded. An unloaded or
         // failed adapter leaves the platform id as the display name.
         if let Some(host) = host {
@@ -480,6 +489,20 @@ impl AssistantRuntime {
             }
         }
         Ok(inventory)
+    }
+    pub(super) async fn read_channel_participants(
+        &self,
+        source: i64,
+        id: Uuid,
+        query: ChannelParticipantsQuery,
+    ) -> Result<ChannelParticipantPage> {
+        let binding = self.scoped_binding(source, id).await?;
+        if binding.spec.mode != IntegrationMode::Channel
+            || !binding.spec.resource.matches(&query.resource)
+        {
+            return Err(Error::NotFound);
+        }
+        self.integrations.channel_participants(id, query).await
     }
     pub(super) async fn change_integration(
         &self,

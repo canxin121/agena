@@ -9,8 +9,9 @@ use agena_api::resource::{
 };
 use agena_assistant::{
     AssistantMemory, AssistantMemoryUpdate, AssistantProfile, AssistantSnapshot, AssistantUpdate,
-    ChannelPolicyUpdate, CreateIntegration, IntegrationBinding, IntegrationControl,
-    IntegrationDetail, IntegrationsSnapshot, PlatformInventory, Reminder, ReminderControl,
+    ChannelParticipantPage, ChannelParticipantsQuery, ChannelPolicyUpdate, CreateIntegration,
+    IntegrationBinding, IntegrationControl, IntegrationDetail, IntegrationsSnapshot,
+    PlatformInventory, Reminder, ReminderControl,
 };
 use agena_notification::NotificationService;
 use agena_notification::service::NotificationError;
@@ -258,6 +259,18 @@ impl Application {
     ) -> Result<PlatformInventory, ApplicationError> {
         self.assistant_service()?
             .platform_inventory(source)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn channel_participants(
+        &self,
+        source: i64,
+        id: Uuid,
+        query: ChannelParticipantsQuery,
+    ) -> Result<ChannelParticipantPage, ApplicationError> {
+        self.assistant_service()?
+            .channel_participants(source, id, query)
             .await
             .map_err(Into::into)
     }

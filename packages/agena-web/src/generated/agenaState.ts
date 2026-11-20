@@ -271,6 +271,13 @@ export type ChannelOutputRoute = {
   thread?: string | null
 }
 
+export type ChannelParticipant = {
+  actor: string
+  display_name?: string | null
+  first_seen_at_ms: number
+  last_seen_at_ms: number
+}
+
 export type ChannelRole = 'blocked' | 'member' | 'operator' | 'administrator' | 'owner'
 
 /** How one conversation's sessions are partitioned. `PerConversation` is the default: a group is one session shared by all of its members, a direct chat is one session per participant, and a channel is one session per channel. Context is never merged across conversations or across platform accounts. `PerActor` additionally splits a single conversation by speaker. It is an explicit opt-in for rooms whose members must not share a transcript. */
@@ -300,13 +307,14 @@ export type ConversationCounts = {
   group: number
 }
 
-/** One externally visible conversation and the session it maps to. A conversation that has never received a message has no session yet; the session fields stay `None` rather than inventing a placeholder id. */
+/** One externally visible conversation and the session it maps to. A room can be observed before any of its messages create a session. Its session fields stay `None` until a session exists. */
 export type ConversationEntry = {
   kind: ConversationKind
   actor?: string | null
   created_at_ms?: number | null
   resource: string
   role?: ChannelRole
+  room_title?: string | null
   session_id?: number | null
   thread?: string | null
   title?: string | null
@@ -743,6 +751,11 @@ export type IntegrationDetail = {
 /** Read-only inventory of every chat platform this instance serves. The shape mirrors how an operator thinks about the deployment: a platform (one adapter account), the conversations seen through it, and the sessions those conversations map to. Nothing here triggers work or sends a message. */
 export type PlatformInventory = {
   platforms: PlatformEntry[]
+}
+
+export type ChannelParticipantPage = {
+  next_after?: string | null
+  participants: ChannelParticipant[]
 }
 
 export type CreateIntegration = {

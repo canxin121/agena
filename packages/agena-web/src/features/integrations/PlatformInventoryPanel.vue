@@ -4,7 +4,9 @@ import { RouterLink, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useChatStore } from '@/stores/chat'
 import { usePaneVisibility } from '@/composables/usePaneVisibility'
-import { integrationApi, type PlatformInventory, type ConversationEntry } from '@/lib/integrationApi'
+import { integrationApi, type PlatformInventory } from '@/lib/integrationApi'
+import type { ConversationEntry } from '@/generated/agenaState'
+import ConversationMembersPanel from './ConversationMembersPanel.vue'
 
 const route = useRoute(),
   chat = useChatStore(),
@@ -18,6 +20,28 @@ const inventory = ref<PlatformInventory | null>(null),
   loading = ref(false),
   error = ref('')
 const collapsed = ref<Record<string, boolean>>({})
+const platforms = computed(() =>
+  (inventory.value?.platforms ?? []).map((platform) => ({
+    ...platform,
+    accounts: platform.accounts.map((account) => {
+      const rooms = new Map<
+        string,
+        { resource: string; kind: ConversationEntry['kind']; sessions: ConversationEntry[] }
+      >()
+      for (const conversation of account.conversations) {
+        const { resource, kind, session_id } = conversation
+        const key = JSON.stringify([kind, resource])
+        let room = rooms.get(key)
+        if (!room) {
+          room = { resource, kind, sessions: [] }
+          rooms.set(key, room)
+        }
+        if (session_id != null) room.sessions.push(conversation)
+      }
+      return { ...account, rooms }
+    }),
+  })),
+)
 let generation = 0,
   disposed = false,
   reading: AbortController | null = null
@@ -53,10 +77,16 @@ async function load() {
   }
 }
 watch(
-  () => [visible.value, source.value] as const,
-  ([isVisible]) => {
+  [visible, source],
+  ([isVisible, id], [, previousId]) => {
+    ++generation
+    reading?.abort()
+    loading.value = false
+    if (id !== previousId) {
+      inventory.value = null
+      error.value = ''
+    }
     if (isVisible) void load()
-    else reading?.abort()
   },
   { immediate: true },
 )
@@ -95,7 +125,7 @@ defineExpose({ reload: load })
       {{ t('platforms.empty') }}
     </p>
     <article
-      v-for="entry in inventory?.platforms || []"
+      v-for="entry in platforms"
       :key="entry.platform"
       class="rounded border border-border p-3"
       :data-testid="`platform-${entry.platform}`"
@@ -130,38 +160,41 @@ defineExpose({ reload: load })
             <span v-if="account.last_error" class="text-destructive break-words">{{ account.last_error }}</span>
           </div>
           <p
-            v-if="!account.conversations.length"
+            v-if="!account.rooms.size"
             class="mt-2 text-xs text-muted-foreground"
             data-testid="account-no-conversations"
           >
             {{ t('platforms.noConversations') }}
           </p>
-          <ul v-else class="mt-2 space-y-1">
+          <ul v-else class="mt-2 divide-y divide-border/60">
             <li
-              v-for="conversation in account.conversations"
-              :key="`${conversation.resource}:${conversation.thread || ''}:${conversation.session_id || ''}`"
-              class="rounded px-2 py-1 text-sm hover:bg-muted"
-              :data-testid="`conversation-${conversation.resource}`"
+              v-for="[key, room] in account.rooms"
+              :key="key"
+              class="px-2 py-2 text-sm"
+              :data-testid="`conversation-${room.resource}`"
             >
               <div class="flex flex-wrap items-center gap-2">
-                <span class="rounded bg-muted px-1.5 py-0.5 text-xs">{{ kindLabel(conversation.kind) }}</span>
-                <span class="font-mono text-xs break-all">{{ conversation.resource }}</span>
-                <span v-if="conversation.thread" class="text-xs text-muted-foreground">
-                  {{ t('platforms.thread', { thread: conversation.thread }) }}
-                </span>
-                <span v-if="conversation.role" class="text-xs text-muted-foreground">
-                  {{ t(`channelAccess.role_${conversation.role}`) }}
-                </span>
+                <span class="rounded bg-muted px-1.5 py-0.5 text-xs">{{ kindLabel(room.kind) }}</span>
+                <span class="font-mono text-xs break-all">{{ room.resource }}</span>
               </div>
-              <div class="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                <RouterLink
-                  v-if="conversation.session_id"
-                  :to="`/chat?sessionId=${conversation.session_id}`"
-                  class="underline"
-                  >{{ conversation.title || t('platforms.untitled') }}</RouterLink
-                >
-                <span v-else>{{ t('platforms.noSession') }}</span>
-              </div>
+              <ul v-if="room.sessions.length" class="mt-1 space-y-1 text-xs text-muted-foreground">
+                <li v-for="conversation in room.sessions" :key="conversation.session_id" class="flex flex-wrap gap-2">
+                  <RouterLink :to="`/chat?sessionId=${conversation.session_id}`" class="underline">
+                    {{ conversation.title || t('platforms.untitled') }}
+                  </RouterLink>
+                  <span v-if="conversation.thread">{{ t('platforms.thread', { thread: conversation.thread }) }}</span>
+                  <span v-if="conversation.role">{{ t(`channelAccess.role_${conversation.role}`) }}</span>
+                </li>
+              </ul>
+              <p v-else class="mt-1 text-xs text-muted-foreground">{{ t('platforms.noSession') }}</p>
+              <ConversationMembersPanel
+                v-if="source"
+                :source="source"
+                :binding-id="account.binding_id"
+                :identity="{ platform: entry.platform, tenant: account.tenant, account: account.account }"
+                :resource="room.resource"
+                :kind="room.kind"
+              />
             </li>
           </ul>
         </div>

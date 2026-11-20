@@ -10,6 +10,7 @@ pub use agena_assistant::{
 
 pub use agena_assistant::{
     ChannelAccessAudit, ChannelAccessPolicy, ChannelGrant, ChannelIdentity, ChannelMember,
-    ChannelOutputRoute, ChannelPolicyUpdate, ChannelRole, ChannelSessionMode, ChannelSessionRecord,
-    ChannelThreadMode, ChannelTrigger, ConversationKind,
+    ChannelOutputRoute, ChannelParticipant, ChannelParticipantPage, ChannelParticipantsQuery,
+    ChannelPolicyUpdate, ChannelRole, ChannelSessionMode, ChannelSessionRecord, ChannelThreadMode,
+    ChannelTrigger, ConversationKind,
 };

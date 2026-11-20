@@ -2,7 +2,7 @@ use crate::{error::ServerError, state::AppState};
 use agena_api::integrations::*;
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
 };
 use uuid::Uuid;
 
@@ -77,6 +77,19 @@ pub async fn platform_inventory(
     state
         .application()
         .platform_inventory(source)
+        .await
+        .map(Json)
+        .map_err(Into::into)
+}
+
+pub async fn channel_participants(
+    State(state): State<AppState>,
+    Path((source, id)): Path<(i64, Uuid)>,
+    Query(query): Query<ChannelParticipantsQuery>,
+) -> Result<Json<ChannelParticipantPage>, ServerError> {
+    state
+        .application()
+        .channel_participants(source, id, query)
         .await
         .map(Json)
         .map_err(Into::into)

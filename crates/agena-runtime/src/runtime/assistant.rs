@@ -108,6 +108,14 @@ impl AssistantService for AssistantRuntime {
     async fn platform_inventory(&self, source: i64) -> Result<agena_assistant::PlatformInventory> {
         self.read_platform_inventory(source).await
     }
+    async fn channel_participants(
+        &self,
+        source: i64,
+        id: Uuid,
+        query: agena_assistant::ChannelParticipantsQuery,
+    ) -> Result<agena_assistant::ChannelParticipantPage> {
+        self.read_channel_participants(source, id, query).await
+    }
     async fn control_integration(
         &self,
         source: i64,

@@ -35,6 +35,7 @@ pub mod main_focus;
 pub mod model_catalog;
 pub mod model_chooser;
 pub mod path_browser;
+pub mod performance;
 pub mod permission_prompt;
 pub mod plan_viewer;
 pub mod presentation_config;

@@ -3425,3 +3425,23 @@ permission-studio-loopback-label = 호스트 루프백
 permission-studio-network-controls = 네트워크 작업
 permission-studio-add-network-rule = + 네트워크 규칙 추가
 permission-studio-inherited-rule-no-local-edit = 상속된 규칙을 편집하면 현재 범위에서 재정의됩니다. 현재 범위의 규칙만 이름을 바꾸거나 삭제할 수 있습니다.
+
+usage-performance-title = 모델 성능 · 평균
+usage-performance-tps = TPS (tok/s)
+usage-performance-ttft = 첫 출력
+usage-performance-latency = 요청 시간
+usage-performance-generation = 생성 시간
+usage-performance-e2e = E2E (tok/s)
+usage-performance-p95-latency = P95 요청
+usage-performance-p95-ttft = P95 첫 출력
+usage-performance-coverage = 표본: 시간 {$count} · 첫 출력 {$ttft} · TPS {$speed} · E2E {$throughput}
+usage-column-tps = TPS
+usage-column-ttft = 첫 출력
+usage-column-latency = 요청 시간
+status-part-model-tps = 최근 TPS={$value} tok/s
+status-part-model-ttft = 최근 첫 출력={$value}
+status-part-model-latency = 최근 요청 시간={$value}
+status-part-model-generation = 최근 생성 시간={$value}
+status-part-model-throughput = 최근 E2E={$value} tok/s
+session-status-tps = {$value} tok/s
+session-status-latency = 요청 {$value}

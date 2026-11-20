@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use agena_domain::{
     ModelUsageBreakdown, ProviderUsageBreakdown, SessionUsageBreakdown, UsageBillableUnitTotal,
-    UsageDailyBreakdown, UsageStats, UsageStatsQuery, UsageTotals,
+    UsageDailyBreakdown, UsagePerformanceTotals, UsageStats, UsageStatsQuery, UsageTotals,
 };
 use chrono::{DateTime, FixedOffset, Utc};
 
@@ -111,9 +111,84 @@ fn for_each_usage_observation(
 }
 
 #[derive(Debug, Clone, Default)]
+struct PerformanceAccumulator {
+    totals: UsagePerformanceTotals,
+    durations: Vec<u64>,
+    first_outputs: Vec<u64>,
+}
+
+impl PerformanceAccumulator {
+    fn observe(&mut self, sample: &agena_domain::RequestPerformance) {
+        let totals = &mut self.totals;
+        totals.request_count = totals.request_count.saturating_add(1);
+        totals.total_duration_ms = totals.total_duration_ms.saturating_add(sample.duration_ms);
+        self.durations.push(sample.duration_ms);
+
+        // Reject inconsistent imported timings without losing the other useful
+        // measurements on the request. A real zero-millisecond TTFT is valid.
+        let ttft = sample.ttft_ms.filter(|value| *value <= sample.duration_ms);
+        if let Some(ttft) = ttft {
+            totals.ttft_count = totals.ttft_count.saturating_add(1);
+            totals.total_ttft_ms = totals.total_ttft_ms.saturating_add(ttft);
+            self.first_outputs.push(ttft);
+        }
+        let Some(tokens) = sample.generated_tokens.filter(|tokens| *tokens > 0) else {
+            return;
+        };
+        if sample.duration_ms > 0 {
+            totals.throughput_count = totals.throughput_count.saturating_add(1);
+            totals.timed_tokens = totals.timed_tokens.saturating_add(tokens);
+            totals.timed_duration_ms = totals.timed_duration_ms.saturating_add(sample.duration_ms);
+        }
+        if let Some(duration) = sample.generation_ms.filter(|duration| {
+            tokens > 1
+                && *duration > 0
+                && ttft.is_some_and(|ttft| *duration <= sample.duration_ms - ttft)
+        }) {
+            totals.generation_count = totals.generation_count.saturating_add(1);
+            totals.generation_tokens = totals.generation_tokens.saturating_add(tokens);
+            totals.total_generation_ms = totals.total_generation_ms.saturating_add(duration);
+        }
+    }
+
+    fn finish(mut self) -> UsagePerformanceTotals {
+        let totals = &mut self.totals;
+        totals.average_duration_ms = measured_ratio(totals.total_duration_ms, totals.request_count);
+        totals.average_ttft_ms = measured_ratio(totals.total_ttft_ms, totals.ttft_count);
+        totals.tokens_per_second =
+            measured_ratio(totals.generation_tokens, totals.total_generation_ms)
+                .map(|tokens_per_ms| tokens_per_ms * 1_000.0);
+        totals.end_to_end_tokens_per_second =
+            measured_ratio(totals.timed_tokens, totals.timed_duration_ms)
+                .map(|tokens_per_ms| tokens_per_ms * 1_000.0);
+        self.durations.sort_unstable();
+        self.first_outputs.sort_unstable();
+        totals.p50_duration_ms = percentile(&self.durations, 50);
+        totals.p95_duration_ms = percentile(&self.durations, 95);
+        totals.p50_ttft_ms = percentile(&self.first_outputs, 50);
+        totals.p95_ttft_ms = percentile(&self.first_outputs, 95);
+        self.totals
+    }
+}
+
+fn measured_ratio(total: u64, count: u64) -> Option<f64> {
+    (count > 0).then(|| total as f64 / count as f64)
+}
+
+/// Nearest rank: at least this percentage of measurements is at or below it.
+fn percentile(sorted: &[u64], percent: usize) -> Option<u64> {
+    if sorted.is_empty() {
+        return None;
+    }
+    let rank = (sorted.len() as u128 * percent as u128).div_ceil(100) as usize;
+    sorted.get(rank.saturating_sub(1)).copied()
+}
+
+#[derive(Debug, Clone, Default)]
 struct TotalsAccumulator {
     totals: UsageTotals,
     sessions: BTreeSet<i64>,
+    performance: PerformanceAccumulator,
 }
 
 impl TotalsAccumulator {
@@ -126,6 +201,9 @@ impl TotalsAccumulator {
     ) {
         self.sessions.insert(session_id);
         fold(&mut self.totals, provider_id, model_id, usage);
+        for sample in &usage.performance {
+            self.performance.observe(sample);
+        }
     }
 
     fn into_totals(mut self) -> UsageTotals {
@@ -152,6 +230,7 @@ impl TotalsAccumulator {
                 .cmp(&right.kind)
                 .then_with(|| left.unit.cmp(&right.unit))
         });
+        self.totals.performance = self.performance.finish();
         self.totals
     }
 }
@@ -370,3 +449,6 @@ fn ratio(numerator: u64, denominator: u64) -> f64 {
         numerator as f64 / denominator as f64
     }
 }
+
+#[cfg(test)]
+mod tests;

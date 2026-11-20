@@ -1357,6 +1357,15 @@ pub struct CompletionUsage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_usage: Option<agena_domain::PromptTokenUsageSnapshot>,
 
+    /// Measurements for all completed physical requests billed by this usage,
+    /// including internal protocol-repair attempts. Kept as observations so
+    /// aggregate rates pair each token numerator with its measured interval.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub performance: Vec<agena_domain::RequestPerformance>,
+    /// The final physical request, before discarded attempts are added.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_performance: Option<agena_domain::RequestPerformance>,
+
     /// Explicit provider-reported cost and provenance. A recorded zero is
     /// distinguishable from a provider that returned no cost.
     pub recorded_cost: f64,
@@ -1422,6 +1431,7 @@ impl CompletionUsage {
             || self.recorded_cost_available
             || self.estimated_cost > 0.0
             || !self.billable_items.is_empty()
+            || !self.performance.is_empty()
     }
 
     /// Best available cost for this request. Provider-recorded cost wins over
@@ -1475,6 +1485,8 @@ impl CompletionUsage {
         self.cost_estimate_incomplete |= additional.cost_estimate_incomplete;
         self.billable_items
             .extend(additional.billable_items.iter().cloned());
+        self.performance.extend_from_slice(&additional.performance);
+        self.request_performance = self.request_performance.or(additional.request_performance);
     }
 
     pub fn add_assign(&mut self, additional: &Self) {
@@ -1495,6 +1507,27 @@ impl CompletionUsage {
     }
 
     pub fn saturating_sub(&self, earlier: &Self) -> Self {
+        // Observations are normally appended to a running aggregate. Match
+        // individual occurrences as well, so identical-duration requests
+        // remain distinct samples and reordered billing merges do not repeat
+        // measurements already reported by an earlier delta.
+        let mut remaining = earlier.performance.clone();
+        let performance = self
+            .performance
+            .iter()
+            .copied()
+            .filter(|sample| {
+                if let Some(index) = remaining.iter().position(|previous| previous == sample) {
+                    remaining.remove(index);
+                    false
+                } else {
+                    true
+                }
+            })
+            .collect::<Vec<_>>();
+        let request_performance = (!performance.is_empty())
+            .then_some(self.request_performance)
+            .flatten();
         let attributed_usage = self
             .attributed_usage
             .iter()
@@ -1551,9 +1584,15 @@ impl CompletionUsage {
             },
             attributed_usage,
             request_usage: self.request_usage.clone(),
+            performance,
+            request_performance,
         }
     }
 }
+
+#[cfg(test)]
+#[path = "usage_performance_tests.rs"]
+mod usage_performance_tests;
 
 fn attributed_identity(item: &AttributedCompletionUsage) -> (&str, &str, &str, Option<&str>) {
     (

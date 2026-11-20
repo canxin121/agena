@@ -409,6 +409,7 @@ impl ModelRuntime for PluginRegisteredProvider {
 
 mod completion;
 mod listing;
+mod performance;
 mod resolution;
 
 impl Default for ProviderRegistry {

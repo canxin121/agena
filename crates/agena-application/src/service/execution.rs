@@ -490,6 +490,7 @@ async fn session_usage_resource(
         last_cache_read_tokens: usage.last_cache_read_tokens,
         last_cache_input_tokens: usage.last_cache_input_tokens,
         last_cache_hit_rate: usage.last_cache_hit_rate,
+        last_performance: usage.last_performance,
     })
 }
 

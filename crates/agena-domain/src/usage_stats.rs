@@ -14,6 +14,37 @@ pub struct UsageBillableUnitTotal {
     pub estimated_cost_usd: f64,
 }
 
+/// Performance of completed physical provider requests with local timing.
+///
+/// Each rate uses tokens and time from the same measured requests. Historical
+/// token usage without timing never contributes to a rate's numerator.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct UsagePerformanceTotals {
+    pub request_count: u64,
+    pub ttft_count: u64,
+    pub generation_count: u64,
+    pub throughput_count: u64,
+    pub total_duration_ms: u64,
+    pub total_ttft_ms: u64,
+    /// Time between the first and last effective output, for valid TPS samples.
+    pub total_generation_ms: u64,
+    pub timed_tokens: u64,
+    pub timed_duration_ms: u64,
+    pub generation_tokens: u64,
+    pub average_duration_ms: Option<f64>,
+    pub average_ttft_ms: Option<f64>,
+    /// Nearest-rank percentiles over the measured physical requests.
+    pub p50_duration_ms: Option<u64>,
+    pub p95_duration_ms: Option<u64>,
+    pub p50_ttft_ms: Option<u64>,
+    pub p95_ttft_ms: Option<u64>,
+    /// Provider-reported output plus reasoning tokens per generation second.
+    pub tokens_per_second: Option<f64>,
+    /// Provider-reported output plus reasoning tokens per whole-request second.
+    pub end_to_end_tokens_per_second: Option<f64>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 /// Aggregate usage totals.
 pub struct UsageTotals {
@@ -40,6 +71,8 @@ pub struct UsageTotals {
     pub estimated_cost_usd: f64,
     pub unpriced_requests: u64,
     pub billable_units: Vec<UsageBillableUnitTotal>,
+    #[serde(default)]
+    pub performance: UsagePerformanceTotals,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

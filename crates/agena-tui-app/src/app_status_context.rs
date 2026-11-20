@@ -339,6 +339,48 @@ impl App {
                 ),
             ));
         }
+        if let Some(performance) = execution.usage.last_performance.as_ref() {
+            use agena_tui::performance::{format_duration_ms, format_token_rate};
+            let ttft = performance
+                .ttft_ms
+                .filter(|value| *value <= performance.duration_ms);
+            let generation = performance
+                .generation_ms
+                .filter(|value| ttft.is_some_and(|ttft| *value <= performance.duration_ms - ttft));
+            for (kind, key, value) in [
+                (
+                    "session-performance",
+                    "status-part-model-tps",
+                    format_token_rate(performance.tokens_per_second()),
+                ),
+                (
+                    "session-ttft",
+                    "status-part-model-ttft",
+                    format_duration_ms(ttft.map(|value| value as f64)),
+                ),
+                (
+                    "session-latency",
+                    "status-part-model-latency",
+                    format_duration_ms(Some(performance.duration_ms as f64)),
+                ),
+                (
+                    "session-generation",
+                    "status-part-model-generation",
+                    format_duration_ms(generation.map(|value| value as f64)),
+                ),
+                (
+                    "session-throughput",
+                    "status-part-model-throughput",
+                    format_token_rate(performance.end_to_end_tokens_per_second()),
+                ),
+            ] {
+                parts.push(StatusRow::normal(
+                    kind,
+                    self.i18n
+                        .text_args(key, &agena_tui::fl_args!("value" => value)),
+                ));
+            }
+        }
         let (permission_count, user_input_count) =
             pending_interactive_counts_for_execution(execution);
         if permission_count > 0 {
@@ -428,9 +470,7 @@ impl App {
             default_speed.as_deref(),
         );
 
-        // Order: model, think, speed, then the context percentage at the
-        // far right — think/speed stay directly adjacent to the model name
-        // instead of having the usage percentage between them.
+        // Keep model options adjacent, then measured speed and context usage.
         let mut parts =
             agena_tui::session_status::session_summary_status_parts(model_part, None, None)
                 .into_iter()
@@ -466,6 +506,25 @@ impl App {
             ));
         }
         if let Some(execution) = self.transcript.execution.as_ref() {
+            if let Some(performance) = execution.usage.last_performance.as_ref() {
+                let (key, value) = match performance.tokens_per_second() {
+                    Some(rate) => (
+                        "session-status-tps",
+                        agena_tui::performance::format_token_rate(Some(rate)),
+                    ),
+                    None => (
+                        "session-status-latency",
+                        agena_tui::performance::format_duration_ms(Some(
+                            performance.duration_ms as f64,
+                        )),
+                    ),
+                };
+                parts.push(StatusRow::normal(
+                    "session-performance",
+                    self.i18n
+                        .text_args(key, &agena_tui::fl_args!("value" => value)),
+                ));
+            }
             let token_usage = agena_tui::session_status::token_usage_status(
                 execution.usage.current_tokens,
                 execution.usage.input_limit_tokens,

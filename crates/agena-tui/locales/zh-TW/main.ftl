@@ -3480,3 +3480,23 @@ permission-studio-loopback-label = 主機回環
 permission-studio-network-controls = 網路操作
 permission-studio-add-network-rule = + 新增網路規則
 permission-studio-inherited-rule-no-local-edit = 編輯繼承規則可建立本層覆寫；重新命名和刪除僅適用於本層規則。
+
+usage-performance-title = 模型效能 · 平均值
+usage-performance-tps = TPS (tok/s)
+usage-performance-ttft = 首次輸出
+usage-performance-latency = 請求耗時
+usage-performance-generation = 生成耗時
+usage-performance-e2e = 端對端 (tok/s)
+usage-performance-p95-latency = P95 請求
+usage-performance-p95-ttft = P95 首次輸出
+usage-performance-coverage = 樣本：{$count} 次計時 · {$ttft} 次首次輸出 · {$speed} 次 TPS · {$throughput} 次 E2E
+usage-column-tps = TPS
+usage-column-ttft = 首次輸出
+usage-column-latency = 請求耗時
+status-part-model-tps = 最近生成速度={$value} tok/s
+status-part-model-ttft = 最近首次輸出={$value}
+status-part-model-latency = 最近請求耗時={$value}
+status-part-model-generation = 最近生成耗時={$value}
+status-part-model-throughput = 最近端對端速度={$value} tok/s
+session-status-tps = {$value} tok/s
+session-status-latency = 請求 {$value}

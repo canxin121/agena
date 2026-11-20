@@ -501,7 +501,7 @@ impl KernelBackend for Backend {
             .try_acquire_owned()
             .map_err(|_| KernelError::Busy)?;
         let id: Option<i64> = sqlx::query_scalar(
-            "SELECT r.id FROM agena_rounds r JOIN agena_executions e ON e.id=r.execution_id WHERE r.session_id=? AND r.phase!='running' AND json_extract(r.provider_state_json,'$.usage') IS NOT NULL AND EXISTS(SELECT 1 FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id WHERE s.session_id=? AND m.entry_id=e.message_id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal) ORDER BY r.id DESC LIMIT 1",
+            "SELECT r.id FROM agena_rounds r JOIN agena_executions e ON e.id=r.execution_id WHERE r.session_id=? AND r.phase!='running' AND json_extract(r.provider_state_json,'$.usage') IS NOT NULL AND (json_extract(r.provider_state_json,'$.usage.request_performance') IS NULL OR json_extract(r.provider_state_json,'$.usage.request_performance.generated_tokens') IS NOT NULL) AND EXISTS(SELECT 1 FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id WHERE s.session_id=? AND m.entry_id=e.message_id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal) ORDER BY r.id DESC LIMIT 1",
         )
         .bind(session.get())
         .bind(session.get())

@@ -196,7 +196,11 @@ impl<'a> Service<'a> {
                 },
             );
         }
-        Ok(ProviderHttpResponse { value, request_id })
+        Ok(ProviderHttpResponse {
+            value,
+            request_id,
+            request_duration_ms: None,
+        })
     }
     pub async fn analyze(
         &self,

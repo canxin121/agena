@@ -3444,3 +3444,23 @@ permission-studio-loopback-label = Bucle local
 permission-studio-network-controls = Acciones de red
 permission-studio-add-network-rule = + Añadir regla de red
 permission-studio-inherited-rule-no-local-edit = Editar la regla heredada crea una anulación local. Solo las reglas locales se pueden renombrar o eliminar.
+
+usage-performance-title = Rendimiento del modelo · medias
+usage-performance-tps = TPS (tok/s)
+usage-performance-ttft = TTFT
+usage-performance-latency = Solicitud
+usage-performance-generation = Generación
+usage-performance-e2e = E2E (tok/s)
+usage-performance-p95-latency = P95 solicitud
+usage-performance-p95-ttft = P95 TTFT
+usage-performance-coverage = Muestras: {$count} duración · {$ttft} TTFT · {$speed} TPS · {$throughput} E2E
+usage-column-tps = TPS
+usage-column-ttft = TTFT
+usage-column-latency = duración
+status-part-model-tps = últimos TPS={$value} tok/s
+status-part-model-ttft = último TTFT={$value}
+status-part-model-latency = última solicitud={$value}
+status-part-model-generation = última generación={$value}
+status-part-model-throughput = último E2E={$value} tok/s
+session-status-tps = {$value} tok/s
+session-status-latency = solicitud {$value}

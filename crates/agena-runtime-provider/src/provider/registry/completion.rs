@@ -5,6 +5,8 @@ use std::sync::Arc;
 use agena_provider::{CompletionToolCall, CompletionUsage, ProviderCompactionOutput};
 use agena_tool_api::normalize_tool_call_input;
 
+use super::performance::{RequestPerformanceTracker, record_non_streaming_performance};
+
 use super::{
     CompletionRequest, CompletionResponse, CompletionStreamEvent, Instant, ModelRef, ModelRuntime,
     ProviderError, ProviderRegistry, Stream, breaker_open, breaker_record_failure,
@@ -315,6 +317,7 @@ fn merge_completion_usage(
         // No usage was reported for the final attempt. Retain the billable
         // discarded attempts, but do not invent a prompt measurement for it.
         additional.request_usage = Some(Default::default());
+        additional.request_performance = None;
         *target = Some(additional);
         return;
     };
@@ -903,9 +906,12 @@ impl ProviderRegistry {
                 let model_id = model_id.clone();
                 let request = request.clone();
                 async move {
-                    provider
+                    let started_at = Instant::now();
+                    let mut response = provider
                         .execute_image_for_adapter(adapter_id.as_ref(), &model_id, request)
-                        .await
+                        .await?;
+                    record_non_streaming_performance(&mut response.usage, started_at);
+                    Ok(response)
                 }
             }
         })
@@ -938,9 +944,12 @@ impl ProviderRegistry {
                         let request = request.clone();
                         let adapter_id = adapter_id.clone();
                         async move {
-                            provider
+                            let started_at = Instant::now();
+                            let mut response = provider
                                 .complete_for_adapter(adapter_id.as_ref(), request)
-                                .await
+                                .await?;
+                            record_non_streaming_performance(&mut response.usage, started_at);
+                            Ok(response)
                         }
                     }
                 })
@@ -1133,6 +1142,9 @@ impl ProviderRegistry {
                     };
                 }
 
+                // Start after retry notifications have been delivered; consumer
+                // processing/backoff is not part of this physical request.
+                let mut performance = Some(RequestPerformanceTracker::new(Instant::now()));
                 let mut inner_stream = match provider
                     .complete_stream_for_adapter(adapter_id.as_ref(), request.clone())
                     .await
@@ -1264,7 +1276,14 @@ impl ProviderRegistry {
                 while let Some(item) = inner_stream.next().await {
                     match item {
                         Ok(mut event) => {
+                            let observed_at = Instant::now();
+                            if let Some(tracker) = performance.as_mut() {
+                                tracker.observe(&event, observed_at);
+                            }
                             if let CompletionStreamEvent::Completed { usage, .. } = &mut event {
+                                if let Some(tracker) = performance.take() {
+                                    tracker.finish(usage, observed_at);
+                                }
                                 hydrate_usage_cost_from_provider_metadata(
                                     provider_for_usage.as_ref(),
                                     &model_ref,
@@ -1536,6 +1555,19 @@ impl ProviderRegistry {
                                     }
                                     None => {}
                                 }
+                                if !emitted_content_in_attempt
+                                    && buffered_tool_api_turn.is_empty()
+                                    && retry_index < retry_policy.max_retries
+                                {
+                                    // This successful but empty physical request
+                                    // will be resampled below. Its usage must
+                                    // survive without emitting an intermediate
+                                    // terminal event that consumers overwrite.
+                                    if let CompletionStreamEvent::Completed { usage, .. } = &mut event {
+                                        merge_completion_usage(&mut discarded_usage, usage.take());
+                                    }
+                                    continue;
+                                }
                                 if let CompletionStreamEvent::Completed { usage, .. } = &mut event {
                                     merge_completion_usage(usage, discarded_usage.take());
                                 }
@@ -1791,9 +1823,52 @@ impl ProviderRegistry {
 }
 
 #[cfg(test)]
+#[path = "performance_retry_tests.rs"]
+mod performance_retry_tests;
+
+#[cfg(test)]
 mod tool_input_boundary_tests {
     use super::*;
     use serde_json::{Value, json};
+
+    #[test]
+    fn performance_repair_merge_keeps_final_attempt_tokens_and_measurements() {
+        let final_sample = agena_domain::RequestPerformance {
+            duration_ms: 1_000,
+            ttft_ms: Some(100),
+            generation_ms: Some(800),
+            generated_tokens: Some(20),
+        };
+        let rejected_sample = agena_domain::RequestPerformance {
+            duration_ms: 2_000,
+            ttft_ms: Some(300),
+            generation_ms: Some(1_000),
+            generated_tokens: Some(100),
+        };
+        let mut target = Some(CompletionUsage {
+            requests: 1,
+            input_tokens: 50,
+            output_tokens: 20,
+            performance: vec![final_sample],
+            request_performance: Some(final_sample),
+            ..Default::default()
+        });
+        let rejected = CompletionUsage {
+            requests: 1,
+            input_tokens: 25,
+            output_tokens: 100,
+            performance: vec![rejected_sample],
+            request_performance: Some(rejected_sample),
+            ..Default::default()
+        };
+        merge_completion_usage(&mut target, Some(rejected));
+        let target = target.unwrap();
+        assert_eq!(target.requests, 2);
+        assert_eq!(target.output_tokens, 120);
+        assert_eq!(target.request_usage_snapshot().output_tokens, 20);
+        assert_eq!(target.request_performance, Some(final_sample));
+        assert_eq!(target.performance, vec![final_sample, rejected_sample]);
+    }
 
     fn declared_functions() -> BTreeSet<String> {
         ["tools_call", "tools_help", "approve_action", "block_action"]

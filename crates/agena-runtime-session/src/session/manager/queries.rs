@@ -891,6 +891,21 @@ impl SessionManager {
             .and_then(|s| s.usage);
         let measured = usage.as_ref().map(context_usage::prompt_tokens);
         let current = usage.as_ref().map_or(0, context_usage::context_tokens);
+        // Performance is useful even when the provider omitted token usage.
+        // Read it independently so an unmeasured request cannot erase the last
+        // known context size, or reuse an older request's speed.
+        let latest_round = self
+            .kernel()
+            .reader
+            .latest_round(session_id(session.id)?)
+            .await
+            .map_err(kernel_error)?;
+        let last_performance = latest_round
+            .as_ref()
+            .and_then(|round| round.provider_state.as_ref())
+            .and_then(KernelProviderState::decode_lossy)
+            .and_then(|state| state.usage)
+            .and_then(|usage| usage.request_performance);
         let output = crate::session_output_token_budget(
             metadata.limits.context_window_tokens,
             metadata.limits.max_output_tokens,
@@ -903,13 +918,9 @@ impl SessionManager {
         );
         // Cache efficiency of the last request, using the same definition as the
         // cost report so both surfaces describe one number.
-        let cache_input = usage.as_ref().map(|usage| {
-            usage
-                .input_tokens
-                .saturating_add(usage.cache_write_tokens)
-                .saturating_add(usage.cache_read_tokens)
-        });
-        let cache_read = usage.as_ref().map(|usage| usage.cache_read_tokens);
+        let cache_usage = usage.as_ref().map(|usage| usage.request_usage_snapshot());
+        let cache_input = cache_usage.as_ref().map(|usage| usage.prompt_tokens());
+        let cache_read = cache_usage.as_ref().map(|usage| usage.cache_read_tokens);
         let cache_hit_rate = cache_input
             .filter(|input| *input > 0)
             .map(|input| cache_read.unwrap_or_default() as f64 / input as f64);
@@ -927,6 +938,7 @@ impl SessionManager {
             last_cache_read_tokens: cache_read,
             last_cache_input_tokens: cache_input,
             last_cache_hit_rate: cache_hit_rate,
+            last_performance,
         })
     }
     pub fn session_model_status(
@@ -1063,12 +1075,10 @@ impl SessionManager {
         }
         {
             for session in &sessions {
-                let config = self
-                    .kernel()
-                    .reader
-                    .configuration(session.id)
-                    .await
-                    .map_err(kernel_error)?;
+                // Reporting needs only the persisted relation, already included
+                // in the summary. Loading execution configuration here would
+                // make historical usage depend on today's permission schema.
+                let is_subagent = session.relation_kind.is_subagent();
                 let mut after = None;
                 loop {
                     let rounds = self
@@ -1093,7 +1103,7 @@ impl SessionManager {
                                     &crate::UsageStatRecord {
                                         session_id: session.id.get(),
                                         session_title: session.title.clone(),
-                                        is_subagent: config.relation_kind.is_subagent(),
+                                        is_subagent,
                                         created_at: timestamp(round.created_at_ms),
                                         provider_id: state.model.provider_id.to_string(),
                                         model_id: state.model.model_id.to_string(),
@@ -1123,7 +1133,7 @@ impl SessionManager {
                                 &crate::UsageStatRecord {
                                     session_id: session.id.get(),
                                     session_title: session.title.clone(),
-                                    is_subagent: config.relation_kind.is_subagent(),
+                                    is_subagent,
                                     created_at: timestamp(tool.created_at_ms),
                                     provider_id: attributed.provider_id,
                                     model_id: attributed.model_id,

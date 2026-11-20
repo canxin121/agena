@@ -1,6 +1,8 @@
 use super::*;
 use agena_domain::{AgentStatus, PermissionReplyKind, SessionRelationKind};
 
+mod usage_legacy_permissions;
+
 async fn fixture() -> (SessionManager, SessionId) {
     let kernel = Arc::new(
         agena_storage_sqlite::open_kernel_runtime("sqlite::memory:")
@@ -349,4 +351,128 @@ async fn session_tool_context_defaults_to_its_owning_workspace() {
         manager.tool_executor().workspace_root(),
         std::path::Path::new("/query-tests")
     );
+}
+
+#[tokio::test]
+async fn performance_survives_storage_and_missing_tokens_preserve_context_measurements() {
+    use agena_domain::{ModelRef, PromptTokenUsageSnapshot, RequestPerformance, UsageStatsQuery};
+    use agena_provider::CompletionUsage;
+
+    async fn persist_usage(manager: &SessionManager, session: SessionId, usage: CompletionUsage) {
+        let input = send(manager, session).await;
+        let attempt = manager
+            .kernel()
+            .executor
+            .claim_next(RequestId::new(), session, input.id)
+            .await
+            .unwrap()
+            .value;
+        let round = attempt
+            .begin_current_round(RequestId::new())
+            .await
+            .unwrap()
+            .value;
+        let mut state =
+            KernelProviderState::new(ModelRef::new("provider", "model"), serde_json::json!({}));
+        state.usage = Some(usage);
+        round
+            .finish(
+                RequestId::new(),
+                Some(serde_json::to_value(state).unwrap()),
+                true,
+            )
+            .await
+            .unwrap();
+        attempt
+            .finish(RequestId::new(), ExecutionPhase::Succeeded)
+            .await
+            .unwrap();
+    }
+
+    let (manager, session_id) = fixture().await;
+    // The fixture owns an in-memory workspace identity, not a directory on disk.
+    let workspace_id = manager
+        .kernel()
+        .reader
+        .metadata(session_id)
+        .await
+        .unwrap()
+        .workspace_id
+        .unwrap();
+    manager.workspace.set(workspace_id).unwrap();
+    let measured = RequestPerformance {
+        duration_ms: 1_000,
+        ttft_ms: Some(100),
+        generation_ms: Some(800),
+        generated_tokens: Some(50),
+    };
+    let discarded = RequestPerformance {
+        duration_ms: 2_000,
+        ttft_ms: Some(200),
+        generation_ms: Some(1_000),
+        generated_tokens: Some(100),
+    };
+    persist_usage(
+        &manager,
+        session_id,
+        CompletionUsage {
+            requests: 2,
+            input_tokens: 1_000,
+            output_tokens: 140,
+            reasoning_tokens: 10,
+            cache_read_tokens: 900,
+            request_usage: Some(PromptTokenUsageSnapshot {
+                input_tokens: 100,
+                output_tokens: 40,
+                reasoning_tokens: 10,
+                cache_write_tokens: 0,
+                cache_read_tokens: 50,
+            }),
+            performance: vec![measured, discarded],
+            request_performance: Some(measured),
+            ..Default::default()
+        },
+    )
+    .await;
+    let session = manager.get_session(session_id.get()).await.unwrap();
+    let first = manager.session_usage_async(&session).await.unwrap();
+    assert_eq!(first.last_performance, Some(measured));
+    assert_eq!(first.measured_prompt_tokens, Some(150));
+    assert_eq!(first.current_tokens, 200);
+    assert_eq!(first.last_cache_read_tokens, Some(50));
+    assert_eq!(first.last_cache_input_tokens, Some(150));
+
+    let timing_only = RequestPerformance {
+        duration_ms: 5_000,
+        ttft_ms: Some(500),
+        generation_ms: Some(3_000),
+        generated_tokens: None,
+    };
+    persist_usage(
+        &manager,
+        session_id,
+        CompletionUsage {
+            requests: 1,
+            performance: vec![timing_only],
+            request_performance: Some(timing_only),
+            cost_estimate_incomplete: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let latest = manager.session_usage_async(&session).await.unwrap();
+    assert_eq!(latest.last_performance, Some(timing_only));
+    assert_eq!(latest.current_tokens, first.current_tokens);
+    assert_eq!(latest.measured_prompt_tokens, first.measured_prompt_tokens);
+
+    let stats = manager
+        .usage_stats(UsageStatsQuery::custom(None, None))
+        .await
+        .unwrap();
+    assert_eq!(stats.totals.performance.request_count, 3);
+    assert_eq!(stats.totals.performance.generation_count, 2);
+    assert_eq!(stats.totals.performance.generation_tokens, 150);
+    assert_eq!(stats.totals.performance.p95_duration_ms, Some(5_000));
+    assert_eq!(stats.by_model[0].model_id, "model");
+    manager.kernel().clone().shutdown().await.unwrap();
 }

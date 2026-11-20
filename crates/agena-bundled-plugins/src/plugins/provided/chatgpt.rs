@@ -1556,7 +1556,11 @@ impl ChatGptToolsPlugin {
             model.as_str(),
             "ChatGPT image edit",
             ProviderUsageKind::OpenAiImage,
-            ProviderHttpResponse { value, request_id },
+            ProviderHttpResponse {
+                value,
+                request_id,
+                request_duration_ms: None,
+            },
             &connection,
         )
         .await

@@ -3125,3 +3125,23 @@ permission-studio-loopback-label = 宿主回环
 permission-studio-network-controls = 网络操作
 permission-studio-add-network-rule = + 添加网络规则
 permission-studio-inherited-rule-no-local-edit = 编辑继承规则可创建本层覆盖；重命名和删除仅适用于本层规则。
+
+usage-performance-title = 模型性能 · 平均值
+usage-performance-tps = TPS (tok/s)
+usage-performance-ttft = 首输出
+usage-performance-latency = 请求耗时
+usage-performance-generation = 生成耗时
+usage-performance-e2e = 端到端 (tok/s)
+usage-performance-p95-latency = P95 请求
+usage-performance-p95-ttft = P95 首输出
+usage-performance-coverage = 样本：{$count} 次计时 · {$ttft} 次首输出 · {$speed} 次 TPS · {$throughput} 次 E2E
+usage-column-tps = TPS
+usage-column-ttft = 首输出
+usage-column-latency = 请求耗时
+status-part-model-tps = 最近生成速度={$value} tok/s
+status-part-model-ttft = 最近首输出={$value}
+status-part-model-latency = 最近请求耗时={$value}
+status-part-model-generation = 最近生成耗时={$value}
+status-part-model-throughput = 最近端到端速度={$value} tok/s
+session-status-tps = {$value} tok/s
+session-status-latency = 请求 {$value}

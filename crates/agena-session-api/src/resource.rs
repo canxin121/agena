@@ -659,6 +659,9 @@ pub struct SessionUsageResource {
     /// `last_cache_read_tokens / last_cache_input_tokens` (0.0–1.0).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_cache_hit_rate: Option<f64>,
+    /// Local timing for the latest completed provider request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_performance: Option<agena_domain::RequestPerformance>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]

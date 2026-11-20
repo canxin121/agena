@@ -7,6 +7,8 @@
 pub(crate) mod hosted;
 mod network;
 mod outcome;
+#[cfg(test)]
+mod performance_tests;
 
 pub(crate) use network::{authorized_provider_addresses, authorized_provider_http_client};
 
@@ -61,6 +63,8 @@ impl ProviderUsageKind {
 pub(crate) struct ProviderHttpResponse {
     pub value: serde_json::Value,
     pub request_id: Option<String>,
+    /// Observed only for the synchronous request that produced this response.
+    pub request_duration_ms: Option<u64>,
 }
 
 pub(crate) fn configured_model(
@@ -605,6 +609,7 @@ pub(crate) async fn post_json(
     for (name, value) in headers {
         request = request.header(name, value);
     }
+    let request_started_at = std::time::Instant::now();
     let response = client.send(request).await.map_err(|error| {
         provider_transport_error(provider, operation, &error, Some(connection))
             .with_remote_effect_unknown()
@@ -630,7 +635,16 @@ pub(crate) async fn post_json(
             },
         );
     }
-    Ok(ProviderHttpResponse { value, request_id })
+    Ok(ProviderHttpResponse {
+        value,
+        request_id,
+        request_duration_ms: Some(
+            request_started_at
+                .elapsed()
+                .as_millis()
+                .min(u128::from(u64::MAX)) as u64,
+        ),
+    })
 }
 
 pub(crate) async fn provider_output(
@@ -645,6 +659,7 @@ pub(crate) async fn provider_output(
 ) -> SdkResult<ToolInvokeOutput> {
     let provider = usage_kind.provider();
     let request_id = response.request_id;
+    let request_duration_ms = response.request_duration_ms;
     let response = Arc::new(response.value);
     let cloud_tool = agena_tool::provider_tools::cloud_operation(provider, tool);
     let public_tool_name = cloud_tool.map(|entry| entry.name).unwrap_or(tool);
@@ -733,6 +748,9 @@ pub(crate) async fn provider_output(
         .flatten();
     let sources = compact_sources(&response);
     let mut usage = parse_provider_usage(usage_kind, provider, tool, model, &response);
+    if matches!(base_outcome, outcome::Outcome::Completed) && !continuation_required {
+        record_request_performance(&mut usage, &response, request_duration_ms);
+    }
     finalize_usage_estimate(provider, model, &mut usage);
     let attributed = AttributedCompletionUsage {
         provider_id: connection.provider_id.clone(),
@@ -1061,6 +1079,46 @@ pub(crate) fn stable_cache_key(
         tool.trim()
     );
     format!("agena:{}", hex::encode(Sha256::digest(material.as_bytes())))
+}
+
+/// Attach one synchronous HTTP observation without treating an absent output
+/// counter as zero tokens, or inferring streamed timing from a JSON response.
+pub(crate) fn record_request_performance(
+    usage: &mut CompletionUsage,
+    response: &serde_json::Value,
+    request_duration_ms: Option<u64>,
+) {
+    let Some(duration_ms) = request_duration_ms else {
+        return;
+    };
+    let raw = response
+        .get("usage")
+        .or_else(|| response.get("usageMetadata"))
+        .or_else(|| response.get("usage_metadata"));
+    let output_reported = raw
+        .and_then(|raw| {
+            json_u64(
+                raw,
+                &[
+                    "output_tokens",
+                    "completion_tokens",
+                    "total_output_tokens",
+                    "totalOutputTokens",
+                    "candidatesTokenCount",
+                    "candidates_token_count",
+                ],
+            )
+        })
+        .is_some();
+    let sample = agena_domain::RequestPerformance {
+        duration_ms,
+        ttft_ms: None,
+        generation_ms: None,
+        generated_tokens: output_reported
+            .then(|| usage.output_tokens.saturating_add(usage.reasoning_tokens)),
+    };
+    usage.performance.push(sample);
+    usage.request_performance = Some(sample);
 }
 
 fn parse_provider_usage(

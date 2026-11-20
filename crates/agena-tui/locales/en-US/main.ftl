@@ -3125,3 +3125,23 @@ permission-studio-loopback-label = Loopback
 permission-studio-network-controls = Network controls
 permission-studio-add-network-rule = + Add network rule
 permission-studio-inherited-rule-no-local-edit = Edit the inherited rule to create an override. Only local rules can be renamed or removed.
+
+usage-performance-title = Model performance · averages
+usage-performance-tps = TPS (tok/s)
+usage-performance-ttft = TTFT
+usage-performance-latency = Request
+usage-performance-generation = Generation
+usage-performance-e2e = E2E (tok/s)
+usage-performance-p95-latency = P95 request
+usage-performance-p95-ttft = P95 TTFT
+usage-performance-coverage = Samples: {$count} timed · {$ttft} TTFT · {$speed} TPS · {$throughput} E2E
+usage-column-tps = TPS
+usage-column-ttft = TTFT
+usage-column-latency = request
+status-part-model-tps = last TPS={$value} tok/s
+status-part-model-ttft = last TTFT={$value}
+status-part-model-latency = last request={$value}
+status-part-model-generation = last generation={$value}
+status-part-model-throughput = last E2E={$value} tok/s
+session-status-tps = {$value} tok/s
+session-status-latency = request {$value}

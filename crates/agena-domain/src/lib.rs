@@ -75,6 +75,7 @@ mod prompt_compaction;
 mod prompt_tokens;
 mod provider_retry;
 mod reasoning;
+mod request_performance;
 mod role;
 mod session_conversation;
 mod session_cost;
@@ -221,6 +222,7 @@ pub use prompt_compaction::{
 pub use prompt_tokens::PromptTokenUsageSnapshot;
 pub use provider_retry::{ProviderRetryEvent, ProviderRetryResolvedEvent, ProviderRetryStatus};
 pub use reasoning::AssistantReasoningField;
+pub use request_performance::RequestPerformance;
 pub use role::Role;
 pub use session_conversation::{ConversationMode, SessionConversation};
 pub use session_cost::{ModelCostBreakdown, SessionCostSummary};
@@ -251,7 +253,7 @@ pub use usage_period::UsagePeriod;
 pub use usage_query::UsageStatsQuery;
 pub use usage_stats::{
     ModelUsageBreakdown, ProviderUsageBreakdown, SessionUsageBreakdown, UsageBillableUnitTotal,
-    UsageDailyBreakdown, UsageStats, UsageTotals,
+    UsageDailyBreakdown, UsagePerformanceTotals, UsageStats, UsageTotals,
 };
 pub use user_input::{
     PendingInteractiveRequestKind, UserInputKind, UserInputReplyKind, UserInputSource,

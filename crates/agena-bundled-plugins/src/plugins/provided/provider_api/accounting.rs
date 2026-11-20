@@ -8,6 +8,7 @@ pub(super) async fn metadata(
     family: Family,
     input: &ResourceInput,
     response: &Value,
+    request_duration_ms: Option<u64>,
     warnings: &mut Vec<String>,
 ) -> Result<BTreeMap<String, String>> {
     if !matches!(
@@ -46,6 +47,7 @@ pub(super) async fn metadata(
     let values = entries
         .map(|entries| entries.iter().collect::<Vec<_>>())
         .unwrap_or_else(|| vec![raw]);
+    let request_duration_ms = (values.len() == 1).then_some(request_duration_ms).flatten();
     let mut attributed = Vec::new();
     for value in values {
         let has_usage = ["usage", "usageMetadata", "usage_metadata"]
@@ -102,6 +104,13 @@ pub(super) async fn metadata(
             .and_then(Value::as_u64)
         {
             usage.usage.requests = count;
+        }
+        if usage.usage.requests == 1 {
+            official_service::record_request_performance(
+                &mut usage.usage,
+                value,
+                request_duration_ms,
+            );
         }
         let resource = if family == Family::Batches {
             raw.get("id")

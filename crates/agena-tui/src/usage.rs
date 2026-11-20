@@ -9,10 +9,11 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Paragraph, Wrap},
 };
 
 use crate::i18n::I18n;
+use crate::performance::{PerformanceSummary, format_duration_ms, format_token_rate};
 use agena_tui_components::text::{format_fixed_columns, truncate_display_text_with_suffix};
 use unicode_width::UnicodeWidthStr;
 
@@ -121,6 +122,7 @@ pub struct UsageDashboardTotals {
     pub unpriced_requests: u64,
     pub billable_unit_kinds: u64,
     pub unpriced_billable_units: f64,
+    pub performance: PerformanceSummary,
 }
 
 /// An optional application navigation target carried by an otherwise
@@ -369,19 +371,111 @@ pub fn render_usage_dashboard(
         return;
     }
     let metric_height = if inner.width >= 96 { 5 } else { 4 };
+    let performance_lines = data
+        .map(|data| {
+            performance_lines(
+                &data.totals.performance,
+                inner.width.saturating_sub(2),
+                i18n,
+            )
+        })
+        .unwrap_or_default();
+    let performance_height = if data.is_some() && presentation.view == UsageDashboardView::Overview
+    {
+        (performance_lines.len() as u16 + 2).min(inner.height.saturating_sub(14))
+    } else {
+        0
+    };
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(4),
             Constraint::Length(metric_height),
+            Constraint::Length(performance_height),
             Constraint::Min(4),
             Constraint::Length(2),
         ])
         .split(inner);
     render_usage_header(frame, sections[0], period_label, presentation, i18n);
     render_usage_metrics(frame, sections[1], data, i18n);
-    render_usage_content(frame, sections[2], presentation, data, error, i18n);
-    render_usage_footer(frame, sections[3], presentation, data, i18n);
+    if performance_height > 0 {
+        frame.render_widget(
+            Paragraph::new(performance_lines).block(
+                Block::default()
+                    .title(format!(" {} ", i18n.text("usage-performance-title")))
+                    .borders(Borders::ALL),
+            ),
+            sections[2],
+        );
+    }
+    render_usage_content(frame, sections[3], presentation, data, error, i18n);
+    render_usage_footer(frame, sections[4], presentation, data, i18n);
+}
+
+fn performance_lines(
+    performance: &PerformanceSummary,
+    width: u16,
+    i18n: &I18n,
+) -> Vec<Line<'static>> {
+    let metrics = [
+        (
+            "usage-performance-tps",
+            format_token_rate(performance.tokens_per_second),
+        ),
+        (
+            "usage-performance-ttft",
+            format_duration_ms(performance.average_ttft_ms),
+        ),
+        (
+            "usage-performance-latency",
+            format_duration_ms(performance.average_duration_ms),
+        ),
+        (
+            "usage-performance-generation",
+            format_duration_ms(performance.average_generation_ms),
+        ),
+        (
+            "usage-performance-e2e",
+            format_token_rate(performance.end_to_end_tokens_per_second),
+        ),
+        (
+            "usage-performance-p95-latency",
+            format_duration_ms(performance.p95_duration_ms),
+        ),
+        (
+            "usage-performance-p95-ttft",
+            format_duration_ms(performance.p95_ttft_ms),
+        ),
+    ];
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for (key, value) in metrics {
+        let metric = format!("{} {value}", i18n.text(key));
+        if !line.is_empty() && line.width() + 3 + metric.width() > usize::from(width) {
+            lines.push(Line::from(std::mem::take(&mut line)));
+        }
+        if !line.is_empty() {
+            line.push_str(" · ");
+        }
+        line.push_str(&metric);
+    }
+    if !line.is_empty() {
+        lines.push(Line::from(line));
+    }
+    let coverage = i18n.text_args(
+        "usage-performance-coverage",
+        &crate::fl_args!(
+            "count" => performance.request_count,
+            "ttft" => performance.ttft_count,
+            "speed" => performance.generation_count,
+            "throughput" => performance.throughput_count,
+        ),
+    );
+    lines.push(Line::from(Span::styled(
+        truncate_display_text_with_suffix(&coverage, usize::from(width), "…"),
+        Style::default().fg(agena_tui_components::theme::muted_color()),
+    )));
+    lines
 }
 
 fn render_usage_header(
@@ -587,6 +681,7 @@ fn render_usage_metrics(
         frame.render_widget(
             Paragraph::new(Line::from(spans))
                 .alignment(Alignment::Center)
+                .wrap(Wrap { trim: true })
                 .block(Block::default().borders(Borders::ALL)),
             area,
         );
@@ -805,15 +900,27 @@ fn render_usage_table(
     presentation: &UsageDashboardPresentation,
     i18n: &I18n,
 ) {
-    let visible = area.height.saturating_sub(4) as usize;
+    let detail_lines = rows
+        .get(presentation.selected)
+        .map(|row| performance_lines(&row.totals.performance, area.width.saturating_sub(2), i18n))
+        .unwrap_or_default();
+    let detail_height = (detail_lines.len() as u16).min(area.height.saturating_sub(4));
+    let visible = area.height.saturating_sub(3 + detail_height) as usize;
     let start = presentation
         .selected
         .saturating_sub(visible.saturating_sub(1) / 2)
         .min(rows.len().saturating_sub(visible));
-    let name_width = area.width.saturating_sub(59).max(10) as usize;
+    let wide = area.width >= 112;
+    let compact = area.width < 78;
+    let extra_width = if wide { 31 } else { 0 };
+    let name_width = if compact {
+        area.width.saturating_sub(21).max(4) as usize
+    } else {
+        area.width.saturating_sub(59 + extra_width).max(10) as usize
+    };
     let bar_width = area
         .width
-        .saturating_sub((name_width + 43) as u16)
+        .saturating_sub((name_width + 43) as u16 + extra_width)
         .clamp(4, 18) as usize;
     let max_metric = rows
         .iter()
@@ -824,17 +931,33 @@ fn render_usage_table(
         format!("{}{label}", " ".repeat(width.saturating_sub(label.width())))
     };
     let name = i18n.text("usage-column-name");
-    let header = [
-        format_fixed_columns(&[(&name, name_width)], name_width as u16, str::to_owned),
-        " ".repeat(bar_width),
-        right_aligned_header("usage-column-cost", 10),
-        right_aligned_header("usage-column-tokens", 10),
-        right_aligned_header("usage-column-requests", 7),
-        right_aligned_header("usage-column-cache", 7),
-    ]
-    .join(" ");
+    let mut header = vec![format_fixed_columns(
+        &[(&name, name_width)],
+        name_width as u16,
+        str::to_owned,
+    )];
+    if !compact {
+        header.push(" ".repeat(bar_width));
+    }
+    header.push(right_aligned_header("usage-column-cost", 10));
+    if compact {
+        header.push(right_aligned_header("usage-column-tps", 7));
+    } else {
+        header.extend([
+            right_aligned_header("usage-column-tokens", 10),
+            right_aligned_header("usage-column-requests", 7),
+            right_aligned_header("usage-column-cache", 7),
+        ]);
+        if wide {
+            header.extend([
+                right_aligned_header("usage-column-tps", 9),
+                right_aligned_header("usage-column-ttft", 9),
+                right_aligned_header("usage-column-latency", 10),
+            ]);
+        }
+    }
     let mut lines = vec![Line::from(Span::styled(
-        header,
+        header.join(" "),
         Style::default().fg(agena_tui_components::theme::muted_color()),
     ))];
     for (index, row) in rows.iter().enumerate().skip(start).take(visible) {
@@ -865,8 +988,15 @@ fn render_usage_table(
         let label_width = name_width.saturating_sub(2);
         let name = truncate_display_text_with_suffix(&row.label, label_width, "…");
         let name = format_fixed_columns(&[(&name, label_width)], label_width as u16, str::to_owned);
-        lines.push(Line::from(Span::styled(
+        let text = if compact {
             format!(
+                "{} {name} {:>10} {:>7}",
+                if selected { "›" } else { " " },
+                format_cost(row.totals.total_cost_usd),
+                format_token_rate(row.totals.performance.tokens_per_second),
+            )
+        } else {
+            let mut text = format!(
                 "{} {name} {} {:>10} {:>10} {:>7} {:>7}",
                 if selected { "›" } else { " " },
                 bar(
@@ -878,9 +1008,18 @@ fn render_usage_table(
                 format_tokens(row.totals.total_tokens),
                 format_count(row.totals.requests),
                 format_percent(row.totals.cache_hit_rate),
-            ),
-            style,
-        )));
+            );
+            if wide {
+                text.push_str(&format!(
+                    " {:>9} {:>9} {:>10}",
+                    format_token_rate(row.totals.performance.tokens_per_second),
+                    format_duration_ms(row.totals.performance.average_ttft_ms),
+                    format_duration_ms(row.totals.performance.average_duration_ms),
+                ));
+            }
+            text
+        };
+        lines.push(Line::from(Span::styled(text, style)));
     }
     if rows.is_empty() {
         lines.push(Line::from(i18n.text("usage-empty-filtered")));
@@ -889,6 +1028,18 @@ fn render_usage_table(
         Paragraph::new(lines).block(Block::default().title(title).borders(Borders::ALL)),
         area,
     );
+    if detail_height > 0 {
+        frame.render_widget(
+            Paragraph::new(detail_lines)
+                .style(Style::default().fg(agena_tui_components::theme::muted_color())),
+            Rect::new(
+                area.x.saturating_add(1),
+                area.bottom().saturating_sub(1 + detail_height),
+                area.width.saturating_sub(2),
+                detail_height,
+            ),
+        );
+    }
 }
 
 fn render_usage_footer(
@@ -1004,6 +1155,95 @@ fn compact_date(value: &str) -> &str {
 mod usage_width_tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
+
+    #[test]
+    fn measured_performance_remains_visible_in_narrow_and_wide_tables() {
+        let row = UsageDashboardRow {
+            label: "模型 👩‍💻".repeat(12),
+            totals: UsageDashboardTotals {
+                performance: PerformanceSummary {
+                    request_count: 4,
+                    ttft_count: 2,
+                    generation_count: 1,
+                    throughput_count: 3,
+                    average_duration_ms: Some(2_500.0),
+                    average_ttft_ms: Some(450.0),
+                    average_generation_ms: Some(2_000.0),
+                    tokens_per_second: Some(45.6),
+                    end_to_end_tokens_per_second: Some(36.4),
+                    p95_duration_ms: Some(3_000.0),
+                    p95_ttft_ms: Some(600.0),
+                },
+                ..Default::default()
+            },
+            session: None,
+        };
+        for width in [32_u16, 80, 120] {
+            for locale in ["en-US", "zh-CN", "zh-TW"] {
+                let i18n = I18n::resolve(Some(locale), None);
+                let mut terminal = Terminal::new(TestBackend::new(width, 14)).unwrap();
+                terminal
+                    .draw(|frame| {
+                        render_usage_table(
+                            frame,
+                            frame.area(),
+                            "",
+                            &[&row],
+                            &UsageDashboardPresentation::default(),
+                            &i18n,
+                        );
+                    })
+                    .unwrap();
+                let buffer = terminal.backend().buffer();
+                let text = (0..14)
+                    .map(|y| {
+                        (0..width)
+                            .map(|x| buffer[(x, y)].symbol())
+                            .collect::<String>()
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                for value in [
+                    "45.6", "450 ms", "2.50 s", "2.00 s", "36.4", "3.00 s", "600 ms",
+                ] {
+                    assert!(
+                        text.contains(value),
+                        "{locale} width {width}: missing {value}\n{text}"
+                    );
+                }
+                assert!(!text.contains("Unknown localization key"));
+                if locale == "en-US" && width >= 80 {
+                    let without_isolates = text.replace(['\u{2068}', '\u{2069}'], "");
+                    for sample in ["4 timed", "2 TTFT", "1 TPS", "3 E2E"] {
+                        assert!(without_isolates.contains(sample), "{sample}: {text}");
+                    }
+                }
+                for y in 1..13 {
+                    assert_eq!(
+                        buffer[(width - 1, y)].symbol(),
+                        "│",
+                        "{locale} width {width}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn missing_performance_has_placeholders_in_every_locale() {
+        for &(locale, _) in crate::i18n::SUPPORTED_LOCALES {
+            let i18n = I18n::resolve(Some(locale), None);
+            let lines = performance_lines(&PerformanceSummary::default(), 78, &i18n);
+            let text = lines
+                .iter()
+                .map(agena_tui_components::line_plain_text)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert_eq!(text.matches('—').count(), 7, "{locale}: {text}");
+            assert!(!text.contains("Unknown localization key"), "{locale}");
+            assert!(lines.iter().all(|line| line.width() <= 78), "{locale}");
+        }
+    }
 
     #[test]
     fn localized_usage_headers_align_with_metric_columns_and_clip_long_titles() {

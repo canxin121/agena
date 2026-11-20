@@ -4,6 +4,8 @@ mod accounting;
 mod multipart;
 pub(crate) mod realtime;
 pub(crate) use realtime::execute_worker as execute_realtime_worker;
+#[cfg(test)]
+mod performance_tests;
 mod routes;
 #[cfg(test)]
 mod tests;
@@ -172,6 +174,20 @@ pub(super) struct Route {
     binary: bool,
 }
 
+struct ResourceResponse {
+    value: Value,
+    request_duration_ms: Option<u64>,
+}
+
+impl ResourceResponse {
+    fn unmeasured(value: Value) -> Self {
+        Self {
+            value,
+            request_duration_ms: None,
+        }
+    }
+}
+
 fn invalid(message: impl Into<String>) -> PluginError {
     PluginError::invalid_params(message.into())
 }
@@ -257,7 +273,7 @@ pub async fn invoke(
                 match tokio::time::timeout_at(deadline, request(&service, family, &input, &route))
                     .await
                 {
-                    Ok(Ok(response)) => response,
+                    Ok(Ok(response)) => response.value,
                     Ok(Err(error)) => {
                         if let Some(mut response) = last {
                             response["poll_warning"] = json!(error.failure.user.fallback);
@@ -281,10 +297,17 @@ pub async fn invoke(
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
             tokio::time::sleep(remaining.min(std::time::Duration::from_secs(2))).await;
         };
-        return output(&service, family, &input, response).await;
+        return output(&service, family, &input, response, None).await;
     }
     let response = request(&service, family, &input, &route).await?;
-    output(&service, family, &input, response).await
+    output(
+        &service,
+        family,
+        &input,
+        response.value,
+        response.request_duration_ms,
+    )
+    .await
 }
 
 fn validate_input(input: &ResourceInput) -> Result<()> {
@@ -343,7 +366,7 @@ async fn request(
     family: Family,
     input: &ResourceInput,
     route: &Route,
-) -> Result<Value> {
+) -> Result<ResourceResponse> {
     let path = if route.path.contains("{model}") {
         let model = official_service::configured_model(
             input.model.clone(),
@@ -379,7 +402,9 @@ async fn request(
     official_service::validate_provider_endpoint(service.host, url.as_str()).await?;
     if family == Family::Knowledge && service.provider == "gemini" && input.action == Action::Upload
     {
-        return uploads::file_search(service, input, &url).await;
+        return uploads::file_search(service, input, &url)
+            .await
+            .map(ResourceResponse::unmeasured);
     }
     let mut body = Value::Object(input.parameters.clone().into_iter().collect());
     if family == Family::Batches && service.provider == "claude" && input.action == Action::Create {
@@ -658,6 +683,7 @@ async fn request(
     } else if route.method != reqwest::Method::GET && route.method != reqwest::Method::DELETE {
         req = req.json(&body);
     }
+    let request_started_at = std::time::Instant::now();
     let response = client.send(req).await.map_err(|error| {
         request_error(
             family,
@@ -680,7 +706,9 @@ async fn request(
         if !(1..=50).contains(&input.wait_seconds) {
             return Err(invalid("wait_seconds must be 1..50 for event streams"));
         }
-        return read_events(response, input.wait_seconds).await;
+        return read_events(response, input.wait_seconds)
+            .await
+            .map(ResourceResponse::unmeasured);
     }
     let textual_transcription = family == Family::Transcription
         && response.status().is_success()
@@ -701,10 +729,10 @@ async fn request(
             .await
             .map_err(|error| request_error(family, &route.method, error))?;
         let attachment = save_binary(service, input.output_path.as_deref(), &mime, bytes).await?;
-        return Ok(json!({"download":attachment}));
+        return Ok(ResourceResponse::unmeasured(json!({"download":attachment})));
     }
     if response.status() == reqwest::StatusCode::NO_CONTENT {
-        return Ok(json!({"deleted":true}));
+        return Ok(ResourceResponse::unmeasured(json!({"deleted":true})));
     }
     // Batch results are often JSONL, not a JSON object.
     if input.action == Action::Results && response.status().is_success() {
@@ -723,7 +751,9 @@ async fn request(
             Vec::new()
         };
         let attachment = save_binary(service, input.output_path.as_deref(), &mime, bytes).await?;
-        return Ok(json!({"download":attachment,"usage_entries":usage_entries}));
+        return Ok(ResourceResponse::unmeasured(
+            json!({"download":attachment,"usage_entries":usage_entries}),
+        ));
     }
     let (status, request_id, value) = official_service::read_json_response_bounded(
         response,
@@ -744,7 +774,15 @@ async fn request(
         );
         return Err(request_error(family, &route.method, error));
     }
-    Ok(json!({"request_id":request_id,"response":value}))
+    Ok(ResourceResponse {
+        value: json!({"request_id":request_id,"response":value}),
+        request_duration_ms: Some(
+            request_started_at
+                .elapsed()
+                .as_millis()
+                .min(u128::from(u64::MAX)) as u64,
+        ),
+    })
 }
 
 // A tool invocation cannot keep a live event stream open indefinitely. Retain
@@ -1023,14 +1061,123 @@ fn pending(value: &Value) -> bool {
     )
 }
 
+/// Distinguish a successful synchronous result from a stopped, failed or
+/// incomplete job. Some APIs (Claude messages, Gemini content, embeddings)
+/// have no status field, while Google operations wrap the result again.
+fn performance_response_succeeded(mut value: &Value) -> bool {
+    loop {
+        if !value.is_object()
+            || value.get("error").is_some_and(|error| !error.is_null())
+            || value
+                .get("incomplete_details")
+                .is_some_and(|details| !details.is_null())
+            || value.get("done").and_then(Value::as_bool) == Some(false)
+        {
+            return false;
+        }
+        let state = value
+            .get("status")
+            .or_else(|| value.get("processing_status"))
+            .or_else(|| value.get("state"))
+            .or_else(|| value.pointer("/metadata/state"));
+        if let Some(state) = state.filter(|state| !state.is_null())
+            && !matches!(
+                state.as_str(),
+                Some("completed" | "succeeded" | "JOB_STATE_SUCCEEDED" | "BATCH_STATE_SUCCEEDED")
+            )
+        {
+            return false;
+        }
+        if value
+            .get("stop_reason")
+            .and_then(Value::as_str)
+            .is_some_and(|reason| !matches!(reason, "end_turn" | "stop_sequence"))
+            || value
+                .pointer("/promptFeedback/blockReason")
+                .and_then(Value::as_str)
+                .is_some_and(|reason| reason != "BLOCK_REASON_UNSPECIFIED")
+            || value
+                .get("candidates")
+                .and_then(Value::as_array)
+                .is_some_and(|candidates| {
+                    candidates.iter().any(|candidate| {
+                        candidate
+                            .get("finishReason")
+                            .or_else(|| candidate.get("finish_reason"))
+                            .and_then(Value::as_str)
+                            .is_some_and(|reason| reason != "STOP")
+                    })
+                })
+            || value
+                .get("choices")
+                .and_then(Value::as_array)
+                .is_some_and(|choices| {
+                    choices.iter().any(|choice| {
+                        choice
+                            .get("finish_reason")
+                            .and_then(Value::as_str)
+                            .is_some_and(|reason| {
+                                !matches!(reason, "stop" | "tool_calls" | "function_call")
+                            })
+                    })
+                })
+        {
+            return false;
+        }
+        match value.get("response") {
+            Some(response) => value = response,
+            None => return true,
+        }
+    }
+}
+
+/// A status poll or a batch result returns another request's usage. Only the
+/// successful terminal response to one synchronous model-operation creation is paired.
+fn synchronous_request_duration(
+    family: Family,
+    input: &ResourceInput,
+    response: &Value,
+    duration_ms: Option<u64>,
+) -> Option<u64> {
+    (input.action == Action::Create
+        && !input.stream
+        && !pending(response)
+        && performance_response_succeeded(response)
+        && matches!(
+            family,
+            Family::Inference
+                | Family::Tasks
+                | Family::Images
+                | Family::Transcription
+                | Family::Speech
+                | Family::Video
+                | Family::Music
+                | Family::Embeddings
+                | Family::Moderation
+        ))
+    .then_some(duration_ms)
+    .flatten()
+}
+
 async fn output(
     service: &Service<'_>,
     family: Family,
     input: &ResourceInput,
     mut response: Value,
+    request_duration_ms: Option<u64>,
 ) -> Result<ToolInvokeOutput> {
     let mut warnings = Vec::new();
-    let usage = accounting::metadata(service, family, input, &response, &mut warnings).await?;
+    let request_duration_ms =
+        synchronous_request_duration(family, input, &response, request_duration_ms);
+    let usage = accounting::metadata(
+        service,
+        family,
+        input,
+        &response,
+        request_duration_ms,
+        &mut warnings,
+    )
+    .await?;
     if let Some(object) = response.as_object_mut() {
         object.remove("usage_entries");
     }

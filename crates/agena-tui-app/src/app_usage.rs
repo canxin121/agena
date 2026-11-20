@@ -287,6 +287,22 @@ fn usage_dashboard_totals(totals: &UsageTotals) -> UsageDashboardTotals {
             .iter()
             .map(|item| item.unpriced_quantity)
             .sum(),
+        performance: agena_tui::performance::PerformanceSummary {
+            request_count: totals.performance.request_count,
+            ttft_count: totals.performance.ttft_count,
+            generation_count: totals.performance.generation_count,
+            throughput_count: totals.performance.throughput_count,
+            average_duration_ms: totals.performance.average_duration_ms,
+            average_ttft_ms: totals.performance.average_ttft_ms,
+            average_generation_ms: (totals.performance.generation_count > 0).then(|| {
+                totals.performance.total_generation_ms as f64
+                    / totals.performance.generation_count as f64
+            }),
+            tokens_per_second: totals.performance.tokens_per_second,
+            end_to_end_tokens_per_second: totals.performance.end_to_end_tokens_per_second,
+            p95_duration_ms: totals.performance.p95_duration_ms.map(|value| value as f64),
+            p95_ttft_ms: totals.performance.p95_ttft_ms.map(|value| value as f64),
+        },
     }
 }
 

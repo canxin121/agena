@@ -30,4 +30,6 @@ pub struct SessionUsage {
     pub last_cache_input_tokens: Option<u64>,
     /// `last_cache_read_tokens / last_cache_input_tokens` (0.0–1.0).
     pub last_cache_hit_rate: Option<f64>,
+    /// Local timing for the latest completed provider request.
+    pub last_performance: Option<crate::RequestPerformance>,
 }

@@ -3429,3 +3429,23 @@ permission-studio-loopback-label = ホストループ
 permission-studio-network-controls = ネットワーク操作
 permission-studio-add-network-rule = + ネットワークルールを追加
 permission-studio-inherited-rule-no-local-edit = 継承ルールを編集するとこの層で上書きできます。名前変更と削除はこの層のルールに適用されます。
+
+usage-performance-title = モデル性能 · 平均値
+usage-performance-tps = TPS (tok/s)
+usage-performance-ttft = 初回出力
+usage-performance-latency = リクエスト
+usage-performance-generation = 生成時間
+usage-performance-e2e = E2E (tok/s)
+usage-performance-p95-latency = P95 応答時間
+usage-performance-p95-ttft = P95 初回出力
+usage-performance-coverage = サンプル：計測 {$count} · 初回出力 {$ttft} · TPS {$speed} · E2E {$throughput}
+usage-column-tps = TPS
+usage-column-ttft = 初回出力
+usage-column-latency = 応答時間
+status-part-model-tps = 直近のTPS={$value} tok/s
+status-part-model-ttft = 直近の初回出力={$value}
+status-part-model-latency = 直近の応答時間={$value}
+status-part-model-generation = 直近の生成時間={$value}
+status-part-model-throughput = 直近のE2E={$value} tok/s
+session-status-tps = {$value} tok/s
+session-status-latency = 応答 {$value}

@@ -3575,3 +3575,23 @@ permission-studio-loopback-label = Loopback
 permission-studio-network-controls = Netzwerkaktionen
 permission-studio-add-network-rule = + Netzwerkregel hinzufügen
 permission-studio-inherited-rule-no-local-edit = Bearbeiten erstellt eine lokale Überschreibung. Nur lokale Regeln können umbenannt oder entfernt werden.
+
+usage-performance-title = Modellleistung · Mittelwerte
+usage-performance-tps = TPS (tok/s)
+usage-performance-ttft = TTFT
+usage-performance-latency = Anfrage
+usage-performance-generation = Generierung
+usage-performance-e2e = E2E (tok/s)
+usage-performance-p95-latency = P95 Anfrage
+usage-performance-p95-ttft = P95 TTFT
+usage-performance-coverage = Messwerte: {$count} Dauer · {$ttft} TTFT · {$speed} TPS · {$throughput} E2E
+usage-column-tps = TPS
+usage-column-ttft = TTFT
+usage-column-latency = Dauer
+status-part-model-tps = letzte TPS={$value} tok/s
+status-part-model-ttft = letzte TTFT={$value}
+status-part-model-latency = letzte Anfrage={$value}
+status-part-model-generation = letzte Generierung={$value}
+status-part-model-throughput = letzte E2E={$value} tok/s
+session-status-tps = {$value} tok/s
+session-status-latency = Anfrage {$value}

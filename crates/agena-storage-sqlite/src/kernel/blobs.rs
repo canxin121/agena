@@ -61,6 +61,16 @@ impl Pins {
             pin.families = pin.families.saturating_sub(1);
         }
     }
+    pub fn active_tokens(&self) -> Vec<String> {
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .filter(|pin| !pin.revoked && (!pin.claimed || pin.families > 0))
+            .map(|pin| pin.lease.token.to_string())
+            .collect()
+    }
+
     fn revoke_abandoned(&self) -> Vec<BlobLease> {
         self.0
             .lock()

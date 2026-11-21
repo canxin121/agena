@@ -17,8 +17,11 @@ agena-scheduler = { workspace = true }
 agena-storage = { workspace = true }
 agena-storage-layout = { workspace = true }
 async-trait = { workspace = true }
+cap-std = { workspace = true }
+cap-fs-ext = { workspace = true }
 chrono = { workspace = true }
 futures-util = { workspace = true }
+fs4 = { workspace = true }
 hex = { workspace = true }
 path-clean = { workspace = true }
 sea-orm = { workspace = true }

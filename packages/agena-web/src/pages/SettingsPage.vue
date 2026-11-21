@@ -36,7 +36,7 @@ import {
 } from '@/components/settings/settingsDestination'
 import { pluginTabForSettingsView } from '@/components/settings/pluginSettingsNavigation'
 import { legacyPermissionAccessScope, permissionAccessHash } from '@/components/settings/permissions/permissionNavigation'
-import { useSettingsSessionTarget } from '@/components/settings/settingsSessionScope'
+import { settingsSessionId, useSettingsSessionTarget } from '@/components/settings/settingsSessionScope'
 import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSectionWorkbench.vue'
 import {
   normalizeSettingsSubpageId,
@@ -84,6 +84,7 @@ const SkillsPanel = defineAsyncComponent(() => import('@/components/settings/Ski
 const McpConnectionsPanel = defineAsyncComponent(() => import('@/components/settings/McpConnectionsPanel.vue'))
 const McpServerControlPanel = defineAsyncComponent(() => import('@/components/settings/McpServerControlPanel.vue'))
 const RuntimeSessionPanel = defineAsyncComponent(() => import('@/components/settings/RuntimeSessionPanel.vue'))
+const SessionStoragePanel = defineAsyncComponent(() => import('@/components/settings/SessionStoragePanel.vue'))
 const InterfaceSettingsPanel = defineAsyncComponent(() => import('@/components/settings/InterfaceSettingsPanel.vue'))
 const DiagnosticsWorkbenchPanel = defineAsyncComponent(
   () => import('@/components/settings/DiagnosticsWorkbenchPanel.vue'),
@@ -932,6 +933,12 @@ const dirtyHint = computed(
           </SettingsSectionWorkbench>
 
           <!-- Runtime & Session -->
+          <SessionStoragePanel
+            v-else-if="activeSection === 'runtime-session' && activeView === 'storage'"
+            :target-session-id="settingsSessionId(route.query.targetSessionId)"
+            :target-bot-id="typeof route.query.storageBot === 'string' ? route.query.storageBot : undefined"
+            @select="sessionTarget.selectSession"
+          />
           <RuntimeSessionPanel
             ref="runtimeSessionPanel"
             :active-page="activeView"

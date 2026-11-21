@@ -21,6 +21,8 @@ mod import;
 pub use import::SessionImportValidator;
 mod lifecycle;
 pub use lifecycle::*;
+mod session_storage;
+pub use session_storage::*;
 
 mod blob;
 mod history_views;

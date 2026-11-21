@@ -6,6 +6,27 @@ use crate::{AppState, rest};
 
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
+        .route("/api/v1/session-storage", get(rest::list_session_storage))
+        .route(
+            "/api/v1/session-storage/reclaim-database",
+            post(rest::reclaim_database_storage),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/storage",
+            get(rest::session_storage),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/storage/operation",
+            get(rest::session_storage_operation),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/storage/preview",
+            post(rest::preview_session_storage).layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/storage/cleanup",
+            post(rest::confirm_session_storage).layer(DefaultBodyLimit::max(16 * 1024)),
+        )
         .route(
             "/api/v1/sessions/{session_id}/browser",
             get(rest::list_browser_tabs)

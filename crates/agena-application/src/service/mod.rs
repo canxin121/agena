@@ -46,6 +46,7 @@ pub(crate) mod execution;
 mod git;
 mod memory;
 mod permissions;
+mod session_storage;
 pub(crate) mod sessions;
 mod workspaces;
 

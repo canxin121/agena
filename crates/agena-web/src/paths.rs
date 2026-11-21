@@ -44,8 +44,7 @@ pub struct CrawlDir {
 }
 
 impl CrawlDir {
-    #[cfg(test)]
-    pub(crate) fn for_test_directory(path: &Path) -> Self {
+    pub(crate) fn at(path: &Path) -> Self {
         Self {
             path: path.to_owned(),
         }

@@ -51,6 +51,7 @@ pub use read_cache::ReadCacheSnapshot;
 
 pub(crate) mod schema;
 
+mod session_storage;
 mod snapshots;
 
 mod stop;
@@ -94,9 +95,16 @@ struct Backend {
     snapshot_opens: Arc<Semaphore>,
     exports: archive::Exports,
     imports: Arc<Semaphore>,
+    storage_inventory: session_storage::InventoryCache,
 }
 
 enum Work {
+    ConfirmStorage {
+        session: SessionId,
+        confirmation: ConfirmStorageCleanup,
+        response: oneshot::Sender<Result<StorageOperation>>,
+    },
+    ReclaimDatabase(oneshot::Sender<Result<DatabaseReclaimResult>>),
     ImportArchive(Box<import::Job>),
     OpenHistorySnapshot {
         session: SessionId,
@@ -198,6 +206,7 @@ async fn compose_database(
     let live = Arc::new(content::LiveContent::new(diagnostics));
     let blob_pins = Arc::new(blobs::Pins::default());
     let history_pins = Arc::new(snapshots::Pins::default());
+    let frame_reads = Arc::new(Semaphore::new(2));
     let backend = Arc::new(Backend {
         reader: database.reader.clone(),
         sender,
@@ -212,7 +221,7 @@ async fn compose_database(
         // reader pool still admits at most four actual SQL operations.
         control_reads: Arc::new(Semaphore::new(8)),
         frame_budget: Arc::new(Semaphore::new(content::events::FRAME_BUDGET_BYTES)),
-        frame_reads: Arc::new(Semaphore::new(2)),
+        frame_reads: frame_reads.clone(),
         blob_pins: blob_pins.clone(),
         blob_uploads: Arc::new(Semaphore::new(2)),
         cache: cache.clone(),
@@ -221,6 +230,7 @@ async fn compose_database(
         snapshot_opens: Arc::new(Semaphore::new(8)),
         exports: archive::Exports::default(),
         imports: Arc::new(Semaphore::new(2)),
+        storage_inventory: Default::default(),
     });
     let maintenance = port::KernelMaintenance::new(backend.clone());
     tokio::spawn(writer(
@@ -231,6 +241,7 @@ async fn compose_database(
         blob_pins,
         cache,
         history_pins,
+        frame_reads,
     ));
     Ok((port::session_kernel(backend, epoch), maintenance))
 }
@@ -384,6 +395,64 @@ impl Backend {
 
 #[async_trait]
 impl KernelBackend for Backend {
+    async fn storage_list(&self, query: SessionStorageQuery) -> Result<SessionStorageList> {
+        session_storage::list(
+            &self.reader,
+            &self.storage_inventory,
+            query,
+            &self.blob_pins,
+        )
+        .await
+    }
+
+    async fn storage_detail(
+        &self,
+        session: SessionId,
+        query: SessionStorageDetailQuery,
+    ) -> Result<SessionStorageDetail> {
+        session_storage::detail(&self.reader, session, query, &self.blob_pins).await
+    }
+
+    async fn storage_operation(&self, session: SessionId) -> Result<Option<StorageOperation>> {
+        session_storage::operation(&self.reader, session).await
+    }
+
+    async fn storage_preview(
+        &self,
+        session: SessionId,
+        selection: StorageSelection,
+    ) -> Result<StorageCleanupPreview> {
+        session_storage::preview(&self.reader, session, selection, &self.blob_pins).await
+    }
+
+    async fn storage_confirm(
+        &self,
+        session: SessionId,
+        confirmation: ConfirmStorageCleanup,
+    ) -> Result<StorageOperation> {
+        let (response, reply) = oneshot::channel();
+        self.sender
+            .send(Work::ConfirmStorage {
+                session,
+                confirmation,
+                response,
+            })
+            .await
+            .map_err(|_| KernelError::Closed)?;
+        let operation = reply.await.map_err(|_| KernelError::Closed)??;
+        self.storage_inventory.invalidate().await;
+        Ok(operation)
+    }
+
+    async fn storage_reclaim_database(&self) -> Result<DatabaseReclaimResult> {
+        let (response, reply) = oneshot::channel();
+        self.sender
+            .send(Work::ReclaimDatabase(response))
+            .await
+            .map_err(|_| KernelError::Closed)?;
+        reply.await.map_err(|_| KernelError::Closed)?
+    }
+
     async fn prompt_window_status(
         &self,
         session: SessionId,
@@ -1452,17 +1521,30 @@ async fn writer(
     blob_pins: Arc<blobs::Pins>,
     cache: Arc<read_cache::ReadCache>,
     history_pins: Arc<snapshots::Pins>,
+    frame_reads: Arc<Semaphore>,
 ) {
     let mut shutdown = Vec::new();
     let mut carry = None;
     let mut fatal = None;
     let mut retry_after = tokio::time::Instant::now();
+    let mut storage_due = tokio::time::Instant::now();
     loop {
         let work = if let Some(work) = carry.take() {
             work
         } else {
             tokio::select! {
                 work = receiver.recv() => match work { Some(work) => work, None => break },
+                _ = tokio::time::sleep_until(storage_due), if fatal.is_none() => {
+                    let delay = match session_storage::step(&database, &feed, &cache, &frame_reads, &blob_pins).await {
+                        Ok(delay) => delay.unwrap_or(Duration::from_secs(10)),
+                        Err(error) => {
+                            tracing::warn!(%error, "session storage cleanup could not advance");
+                            Duration::from_secs(5)
+                        }
+                    };
+                    storage_due = tokio::time::Instant::now() + delay;
+                    continue;
+                }
                 _ = live.admission_changed(), if fatal.is_none() => { continue; }
                 _ = tokio::time::sleep_until(live.next_checkpoint().max(retry_after)), if fatal.is_none() => {
                     if tokio::time::Instant::now() >= retry_after {
@@ -1497,6 +1579,12 @@ async fn writer(
         };
         if fatal.is_some() {
             match work {
+                Work::ConfirmStorage { response, .. } => {
+                    let _ = response.send(Err(KernelError::Closed));
+                }
+                Work::ReclaimDatabase(response) => {
+                    let _ = response.send(Err(KernelError::Closed));
+                }
                 Work::ImportArchive(job) => {
                     let _ = job.response.send(Err(KernelError::Closed));
                 }
@@ -1526,6 +1614,31 @@ async fn writer(
             continue;
         }
         let first = match work {
+            Work::ConfirmStorage {
+                session,
+                confirmation,
+                response,
+            } => {
+                let result = session_storage::confirm(
+                    &database,
+                    session,
+                    confirmation,
+                    &feed,
+                    &cache,
+                    &blob_pins,
+                )
+                .await;
+                if result.is_ok() {
+                    storage_due = tokio::time::Instant::now();
+                }
+                let _ = response.send(result);
+                continue;
+            }
+            Work::ReclaimDatabase(response) => {
+                let result = session_storage::reclaim_database(&database, &blob_pins).await;
+                let _ = response.send(result);
+                continue;
+            }
             Work::ImportArchive(job) => {
                 let result = import::publish(&database, &job.staged, &feed, &cache).await;
                 if matches!(

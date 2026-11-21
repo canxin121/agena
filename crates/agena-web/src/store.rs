@@ -68,8 +68,12 @@ impl Drop for SharedMetadata {
 impl CrawlStore {
     #[cfg(test)]
     pub(crate) fn for_test_directory(path: &Path) -> Self {
+        Self::at(path)
+    }
+
+    pub fn at(path: &Path) -> Self {
         Self {
-            dir: CrawlDir::for_test_directory(path),
+            dir: CrawlDir::at(path),
             metadata: Default::default(),
         }
     }

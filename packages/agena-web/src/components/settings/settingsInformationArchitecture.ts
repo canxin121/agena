@@ -43,6 +43,13 @@ const SETTINGS_CATEGORIES: readonly SettingsCategory[] = [
         label: () => st('Session settings'),
       },
       {
+        id: 'storage',
+        section: 'runtime-session',
+        view: 'storage',
+        label: () => st('Storage management'),
+        keywords: ['storage', 'disk', 'cleanup', '存储', '磁盘', '清理'],
+      },
+      {
         id: 'provider-studio',
         section: 'models-providers',
         view: 'provider-studio',

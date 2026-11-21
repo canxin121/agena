@@ -996,15 +996,20 @@ impl WebPlugin {
     }
 
     fn store(&self, context: &ToolInvokeContext<'_>) -> SdkResult<CrawlStore> {
-        let root = web_storage_root(
-            context,
-            if context.is_global() {
-                Path::new("")
-            } else {
-                self.workspace_root()?
-            },
-        );
-        Ok(CrawlStore::for_workspace(&root))
+        let project = if context.is_global() {
+            Path::new("")
+        } else {
+            self.workspace_root()?
+        };
+        let legacy = CrawlStore::for_workspace(&web_storage_root(context, project));
+        if context.is_global() {
+            let root = agena_storage_layout::StorageLayout::current()
+                .session_web_cache_dir(context.session_id);
+            if root.is_dir() || !legacy.dir().is_dir() {
+                return Ok(CrawlStore::at(&root));
+            }
+        }
+        Ok(legacy)
     }
 
     fn web_fetch_options(&self) -> SdkResult<WebFetchOptions> {

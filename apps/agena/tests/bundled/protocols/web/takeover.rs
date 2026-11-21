@@ -1,6 +1,7 @@
 use super::*;
 use agena_testkit::{EditOptions, Reply, RequestMatch, UserSession};
 use axum::{http::Method, response::Html};
+use base64::Engine as _;
 use std::{
     net::{IpAddr, Ipv4Addr},
     os::unix::fs::PermissionsExt,
@@ -127,10 +128,19 @@ exec google-chrome --proxy-server={} "$@"
             assert_eq!(initial_frame.headers["cache-control"], "no-store");
             assert!(initial_frame.json::<Value>()?["jpeg"].as_str().is_some_and(|image| !image.is_empty()));
 
+            let thumbnail = json!({"kind":"frame","page_id":page,"thumbnail":true});
+            let preview: Value = command(thumbnail.clone()).await?.require_success()?.json()?;
+            let jpeg = base64::engine::general_purpose::STANDARD.decode(preview["jpeg"].as_str().context("thumbnail JPEG")?)?;
+            let pixels = imagesize::blob_size(&jpeg)?;
+            assert_eq!(preview["width"], pixels.width);
+            assert_eq!(preview["height"], pixels.height);
+            assert!(preview["width"].as_u64().is_some_and(|width| (1..=192).contains(&width)));
+            assert!(preview["height"].as_u64().is_some_and(|height| (1..=108).contains(&height)));
             let take = json!({"kind":"take_control","page_id":page});
             let manual: Value = command(take.clone()).await?.require_success()?.json()?;
             let token = manual["control_id"].as_str().context("operator control ID")?;
             assert_eq!(command(take.clone()).await?.status, StatusCode::FORBIDDEN);
+            assert_eq!(command(thumbnail).await?.status, StatusCode::FORBIDDEN);
             let blocked = user.call_tool("browser.snapshot", json!({"session_id":page})).await?;
             blocked.assert_failure_kind(ModelFeedbackKind::PermissionDenied)?;
             let list = user.call_tool("browser.list", json!({})).await?;
@@ -248,9 +258,13 @@ exec google-chrome --proxy-server={} "$@"
             reload.assert_text_contains("Signed in to fixture")?;
             let logs = user.call_tool("browser.diagnostics", json!({"session_id":page, "query":{"kind":"logs"}})).await?;
             assert!(!logs.data()?.to_string().contains(PASSWORD));
-            let activity_logs = http.get(&format!("/api/v1/activities/browser_{page}/logs")).await?.require_success()?;
-            assert!(!activity_logs.text()?.contains(PASSWORD));
-            assert!(!serde_json::to_string(&user.parts().await?)?.contains(PASSWORD));
+            let parts = user.parts().await?;
+            assert!(parts.iter().any(|part| part.presentation.as_ref().is_some_and(|view| {
+                view.blocks.iter().any(|block| matches!(block, agena_domain::ViewBlock::BrowserPage {
+                    page_id, ..
+                } if page_id == &page))
+            })));
+            assert!(!serde_json::to_string(&parts)?.contains(PASSWORD));
             Ok(())
         }).await
 }

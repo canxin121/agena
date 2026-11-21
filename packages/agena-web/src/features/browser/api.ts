@@ -2,7 +2,7 @@ import type { InjectionKey } from 'vue'
 import { apiJson } from '@/lib/api'
 
 export const browserTakeoverKind = 'browser_takeover'
-export const openBrowserKey: InjectionKey<(sessionId: string) => void> = Symbol('openBrowser')
+export const openBrowserKey: InjectionKey<(sessionId: string, pageId?: string) => void> = Symbol('openBrowser')
 
 export type BrowserState = {
   kind: 'state'
@@ -35,7 +35,7 @@ export type BrowserInput =
   | { kind: 'dialog'; accept: boolean; text?: string }
 
 type BrowserCommand =
-  | { kind: 'frame'; page_id: string; control_id?: string }
+  | { kind: 'frame'; page_id: string; control_id?: string; thumbnail?: boolean }
   | { kind: 'take_control'; page_id: string }
   | { kind: 'input'; page_id: string; control_id: string; events: BrowserInput[] }
   | { kind: 'return_control'; control_id: string; page_id: string }

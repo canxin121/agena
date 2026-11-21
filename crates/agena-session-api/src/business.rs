@@ -121,15 +121,6 @@ pub enum BusinessCommand {
         notification_id: String,
         action_id: String,
     },
-    PauseActivity {
-        activity_id: String,
-    },
-    ResumeActivity {
-        activity_id: String,
-    },
-    DeleteActivity {
-        activity_id: String,
-    },
 }
 
 impl BusinessCommand {

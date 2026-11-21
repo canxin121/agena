@@ -27,15 +27,6 @@
 //!
 //! | Method | Path | Handlers |
 //! |---|---|---|
-//! | GET | `/api/v1/activities` | `list_activities()` |
-//! | POST | `/api/v1/activities/clear-finished` | `clear_finished_activities()` |
-//! | GET | `/api/v1/activities/{activity_id}` | `get_activity()` |
-//! | GET | `/api/v1/activities/{activity_id}/logs` | `get_activity_logs()` |
-//! | POST | `/api/v1/activities/{activity_id}/stop` | `stop_activity()` |
-//! | POST | `/api/v1/activities/{activity_id}/pause` | `pause_activity()` |
-//! | POST | `/api/v1/activities/{activity_id}/resume` | `resume_activity()` |
-//! | POST | `/api/v1/activities/{activity_id}/delete` | `delete_activity()` |
-//! | POST | `/api/v1/activities/{activity_id}/dismiss` | `dismiss_activity()` |
 //!
 //! ### `auth`
 //!
@@ -253,6 +244,7 @@
 //! | GET | `/api/v1/runtime` | `get_runtime_status()` |
 //! | POST | `/api/v1/runtime/reload` | `reload_runtime()` |
 //! | GET | `/api/v1/runtime/tasks` | `list_runtime_background_tasks()` |
+//! | GET | `/api/v1/runtime/tasks/{task_id}` | `get_runtime_background_task()` |
 //! | POST | `/api/v1/runtime/tasks/{task_id}/cancel` | `cancel_runtime_background_task()` |
 //!
 //! ### `sessions`
@@ -266,6 +258,12 @@
 //! | POST | `/api/v1/sessions/{session_id}/storage/preview` | `preview_session_storage()` |
 //! | POST | `/api/v1/sessions/{session_id}/storage/cleanup` | `confirm_session_storage()` |
 //! | GET,POST | `/api/v1/sessions/{session_id}/browser` | `list_browser_tabs()`, `control_browser()` |
+//! | GET | `/api/v1/sessions/{session_id}/shell/processes` | `list_shell_processes()` |
+//! | GET | `/api/v1/sessions/{session_id}/monitor/subscriptions` | `list_monitor_subscriptions()` |
+//! | GET,DELETE | `/api/v1/sessions/{session_id}/shell/processes/{process_id}` | `get_shell_process()`, `stop_shell_process()` |
+//! | GET,DELETE | `/api/v1/sessions/{session_id}/monitor/subscriptions/{subscription_id}` | `get_monitor_subscription()`, `stop_monitor_subscription()` |
+//! | GET | `/api/v1/sessions/{session_id}/schedules` | `list_session_schedules()` |
+//! | PATCH,DELETE | `/api/v1/sessions/{session_id}/schedules/{schedule_id}` | `set_session_schedule_paused()`, `delete_session_schedule()` |
 //! | GET,PUT | `/api/v1/sessions/{session_id}/assistant` | `get_assistant()`, `put_assistant()` |
 //! | POST | `/api/v1/sessions/{session_id}/assistant/reminders/{reminder_id}` | `control_assistant_reminder()` |
 //! | POST | `/api/v1/sessions/{session_id}/assistant/memory` | `edit_assistant_memory()` |

@@ -92,8 +92,20 @@ impl Scheduler {
     }
 
     pub async fn remove(&self, id: uuid::Uuid) -> SchedulerResult<bool> {
+        self.remove_matching(id, None).await
+    }
+
+    pub async fn remove_session_job(
+        &self,
+        id: uuid::Uuid,
+        session_id: i64,
+    ) -> SchedulerResult<bool> {
+        self.remove_matching(id, Some(session_id)).await
+    }
+
+    async fn remove_matching(&self, id: uuid::Uuid, owner: Option<i64>) -> SchedulerResult<bool> {
         let _commit = self.changes.commit.lock().await;
-        let Some(expected) = self.store.get(id).await? else {
+        let Some(expected) = self.job_for_control(id, owner).await? else {
             return Ok(false);
         };
         if !self.store.remove_checked(&expected).await? {
@@ -169,22 +181,47 @@ impl Scheduler {
     }
 
     pub async fn pause(&self, id: uuid::Uuid) -> SchedulerResult<Option<ScheduledJob>> {
-        let Some(expected) = self.store.get(id).await? else {
-            return Ok(None);
-        };
-        let mut job = expected.job.clone();
-        if job.pause() {
-            return self.persist_edit(&expected, job).await.map(Some);
-        }
-        Ok(Some(job))
+        self.set_job_paused(id, None, true).await
     }
 
     pub async fn resume(&self, id: uuid::Uuid) -> SchedulerResult<Option<ScheduledJob>> {
-        let Some(expected) = self.store.get(id).await? else {
+        self.set_job_paused(id, None, false).await
+    }
+
+    pub async fn set_session_job_paused(
+        &self,
+        id: uuid::Uuid,
+        session_id: i64,
+        paused: bool,
+    ) -> SchedulerResult<Option<ScheduledJob>> {
+        self.set_job_paused(id, Some(session_id), paused).await
+    }
+
+    async fn job_for_control(
+        &self,
+        id: uuid::Uuid,
+        owner: Option<i64>,
+    ) -> SchedulerResult<Option<JobSnapshot>> {
+        Ok(self
+            .store
+            .get(id)
+            .await?
+            .filter(|entry| owner.is_none_or(|id| entry.job.owner_session_id == Some(id))))
+    }
+
+    async fn set_job_paused(
+        &self,
+        id: uuid::Uuid,
+        owner: Option<i64>,
+        paused: bool,
+    ) -> SchedulerResult<Option<ScheduledJob>> {
+        let Some(expected) = self.job_for_control(id, owner).await? else {
             return Ok(None);
         };
         let mut job = expected.job.clone();
-        let changed = if expected.claim_key().is_some() && job.paused && !job.completed {
+        let changed = if paused {
+            job.pause()
+        } else if expected.claim_key().is_some() && job.paused && !job.completed {
             // A running (or abandoned) occurrence keeps its pending delivery.
             // Clearing it would invalidate completion or lose crash recovery.
             job.paused = false;

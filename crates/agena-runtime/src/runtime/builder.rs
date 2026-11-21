@@ -1,11 +1,6 @@
 #![allow(unused_imports)]
 
-use std::{
-    collections::{BTreeMap, HashMap},
-    path::Path,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashMap, path::Path, sync::Arc, time::Duration};
 
 use agena_plugin_sdk::CommandTarget;
 use agena_storage::MemoryStore;
@@ -366,7 +361,11 @@ impl AgenaRuntime {
     /// Publish just the changed cron descriptor. Install before admission so
     /// startup recovery cannot finish without advancing the resource clocks.
     fn start_scheduler_activity_bridge(&self) {
-        let Ok(scheduler) = activity_scheduler(self) else {
+        let Some(scheduler) = self
+            .current_snapshot()
+            .session_manager()
+            .and_then(|manager| manager.tool_executor().scheduler().cloned())
+        else {
             return;
         };
         let registry = self.activities.registry.clone();
@@ -384,74 +383,6 @@ impl AgenaRuntime {
         }));
         scheduler.start();
     }
-}
-
-fn durable_operation_activity(
-    live: &BTreeMap<String, agena_domain::BackgroundActivity>,
-    operation: agena_storage::kernel::BackgroundActivityView,
-) -> agena_domain::BackgroundActivity {
-    use agena_domain::{BackgroundActivity, BackgroundActivityKind, BackgroundActivityStatus};
-    use agena_storage::kernel::{
-        BackgroundActivityKind as Kind, BackgroundActivityOutcome as Outcome,
-    };
-    let external_id = agena_runtime_tools::managed_process_id(
-        operation.origin_session_id.get(),
-        operation.launch_tool.get(),
-    );
-    let kind = match operation.start.kind {
-        Kind::Process | Kind::Terminal => BackgroundActivityKind::Shell,
-        Kind::Monitor => BackgroundActivityKind::Monitor,
-        Kind::Agent => BackgroundActivityKind::Agent,
-    };
-    let id = if kind == BackgroundActivityKind::Agent {
-        format!("activity_{}", operation.id)
-    } else {
-        external_id
-    };
-    let status = match operation.outcome {
-        None => BackgroundActivityStatus::Running,
-        Some(Outcome::Succeeded { .. }) => BackgroundActivityStatus::Succeeded,
-        Some(Outcome::Failed { .. }) => BackgroundActivityStatus::Failed,
-        Some(Outcome::Stopped) => BackgroundActivityStatus::Stopped,
-        Some(Outcome::Interrupted { .. }) => BackgroundActivityStatus::Cancelled,
-    };
-    let mut view = live
-        .get(&id)
-        .cloned()
-        .unwrap_or_else(|| BackgroundActivity {
-            id: id.clone(),
-            kind,
-            status,
-            title: operation.start.label.clone(),
-            description: operation.start.label.clone(),
-            command: None,
-            workdir: None,
-            session_id: Some(operation.origin_session_id.get()),
-            parent_session_id: None,
-            operation_id: Some(operation.id.to_string()),
-            source_part_id: Some(operation.launch_entry.get()),
-            created_at_ms: operation.created_at_ms,
-            started_at_ms: operation.created_at_ms,
-            finished_at_ms: operation.finished_at_ms,
-            next_event_at_ms: None,
-            exit_code: None,
-            message: None,
-            failure: None,
-            last_seq: 0,
-            has_more: false,
-            dropped_lines: 0,
-            cancellable: status.is_active(),
-            dismissible: status.is_terminal(),
-        });
-    view.kind = kind;
-    view.status = status;
-    view.operation_id = Some(operation.id.to_string());
-    view.source_part_id = Some(operation.launch_entry.get());
-    view.session_id = Some(operation.origin_session_id.get());
-    view.finished_at_ms = operation.finished_at_ms;
-    view.cancellable = status.is_active();
-    view.dismissible = status.is_terminal();
-    view
 }
 
 fn scheduled_job_activity(
@@ -530,41 +461,13 @@ fn cron_source_part_id(job: &agena_scheduler::ScheduledJob) -> Option<i64> {
         .map(|provenance| provenance.tool_part_id)
 }
 
-fn cron_activity_job_id(
-    activity_id: &str,
-) -> Result<uuid::Uuid, agena_runtime::ActivityControlError> {
-    activity_id
-        .strip_prefix("cron_")
-        .ok_or_else(|| agena_runtime::ActivityControlError::not_stoppable(activity_id))
-        .and_then(|id| {
-            uuid::Uuid::parse_str(id)
-                .map_err(|_| agena_runtime::ActivityControlError::not_found(activity_id))
-        })
-}
-
-fn activity_scheduler(
-    runtime: &AgenaRuntime,
-) -> Result<Arc<agena_scheduler::Scheduler>, agena_runtime::ActivityControlError> {
-    let manager = runtime
-        .current_snapshot()
-        .session_manager()
-        .ok_or_else(|| {
-            agena_runtime::ActivityControlError::internal("session runtime unavailable")
-        })?;
-    manager
-        .tool_executor()
-        .scheduler()
-        .cloned()
-        .ok_or_else(|| agena_runtime::ActivityControlError::internal("scheduler unavailable"))
-}
-
 struct BrowserOperatorNetwork {
     manager: std::sync::Weak<SessionManager>,
     session_id: i64,
 }
 
 #[async_trait::async_trait]
-impl agena_plugin_sdk::activity::browser::BrowserNetworkAuthority for BrowserOperatorNetwork {
+impl agena_plugin_sdk::browser::BrowserNetworkAuthority for BrowserOperatorNetwork {
     async fn require(
         &self,
         target: &str,
@@ -606,471 +509,6 @@ impl agena_plugin_sdk::activity::browser::BrowserNetworkAuthority for BrowserOpe
         }
         Ok(())
     }
-}
-
-#[async_trait::async_trait]
-impl agena_runtime::RuntimeActivityService for AgenaRuntime {
-    async fn browser_control(
-        &self,
-        session_id: i64,
-        command: agena_plugin_sdk::activity::browser::BrowserControlCommand,
-    ) -> agena_plugin_sdk::error::Result<agena_plugin_sdk::activity::browser::BrowserControlResult>
-    {
-        use agena_plugin_sdk::activity::browser::{BrowserControlCommand, BrowserControlResult};
-        use agena_plugin_sdk::{PluginError, PluginErrorKind};
-
-        let adapter = self.activities.source_for(
-            agena_domain::BackgroundActivityKind::Browser,
-            Some(session_id),
-        );
-        let Some(adapter) = adapter else {
-            return match command {
-                BrowserControlCommand::List => Ok(BrowserControlResult::State {
-                    tabs: Vec::new(),
-                    human_control: false,
-                    help: None,
-                }),
-                _ => Err(PluginError::from_kind(
-                    PluginErrorKind::Disconnected,
-                    "The browser is no longer running",
-                )),
-            };
-        };
-        let network = if matches!(command, BrowserControlCommand::TakeControl { .. }) {
-            let manager = self.session_manager().ok_or_else(|| {
-                PluginError::from_kind(
-                    PluginErrorKind::HostUnavailable,
-                    "Session runtime unavailable",
-                )
-            })?;
-            Some(Arc::new(BrowserOperatorNetwork {
-                manager: Arc::downgrade(&manager),
-                session_id,
-            })
-                as Arc<
-                    dyn agena_plugin_sdk::activity::browser::BrowserNetworkAuthority,
-                >)
-        } else {
-            None
-        };
-        adapter.browser_control(session_id, command, network).await
-    }
-
-    async fn list_activities(
-        &self,
-        filter: &agena_domain::BackgroundActivityFilter,
-    ) -> Result<Vec<agena_domain::BackgroundActivity>, agena_runtime::ActivityControlError> {
-        let mut projected = self
-            .activities
-            .registry
-            .list(filter)
-            .into_iter()
-            .map(|activity| (activity.id.clone(), activity))
-            .collect::<BTreeMap<_, _>>();
-
-        if let Some(manager) = self.current_snapshot().session_manager() {
-            let kernel = manager.session_kernel();
-            let owner = filter
-                .session_id
-                .map(agena_storage::kernel::SessionId::try_from)
-                .transpose()
-                .map_err(|error| agena_runtime::ActivityControlError::internal_error(&error))?;
-            // Reconcile live records by identity even for an active-only
-            // query, so a durable terminal outcome removes a stale live run.
-            for id in projected.keys().cloned().collect::<Vec<_>>() {
-                let Some((session, tool)) = managed_process_scope(&id) else {
-                    continue;
-                };
-                match kernel.reader.tool(session, tool).await {
-                    Ok(tool) => {
-                        if let Some(activity) = tool.activities.last() {
-                            let operation =
-                                kernel.reader.activity(session, *activity).await.map_err(
-                                    |error| {
-                                        agena_runtime::ActivityControlError::internal_error(&error)
-                                    },
-                                )?;
-                            let activity =
-                                durable_operation_activity(&projected, (*operation).clone());
-                            projected.insert(activity.id.clone(), activity);
-                        }
-                    }
-                    Err(agena_storage::kernel::KernelError::NotFound(_)) => {
-                        projected.remove(&id);
-                    }
-                    Err(error) => {
-                        return Err(agena_runtime::ActivityControlError::internal_error(&error));
-                    }
-                }
-            }
-            let mut after = None;
-            let mut observed = 0usize;
-            loop {
-                let operations = kernel
-                    .reader
-                    .background_activities(owner, after, filter.active_only, 256)
-                    .await
-                    .map_err(|error| agena_runtime::ActivityControlError::internal_error(&error))?;
-                if observed + operations.len() > 4096 {
-                    return Err(agena_runtime::ActivityControlError::internal(
-                        "activity query exceeds 4096 records; narrow the session filter",
-                    ));
-                }
-                observed += operations.len();
-                for operation in operations.iter() {
-                    if operation.start.kind == agena_storage::kernel::BackgroundActivityKind::Agent
-                    {
-                        continue;
-                    }
-                    let activity = durable_operation_activity(&projected, operation.clone());
-                    projected.insert(activity.id.clone(), activity);
-                }
-                if operations.len() < 256 {
-                    break;
-                }
-                after = operations.last().map(|operation| operation.id);
-            }
-
-            if (filter.kinds.is_empty()
-                || filter
-                    .kinds
-                    .contains(&agena_domain::BackgroundActivityKind::Cron))
-                && let Some(scheduler) = manager.tool_executor().scheduler().cloned()
-            {
-                // Persistent schedules are authoritative even after another
-                // process removed a row that remains in this live cache.
-                projected.retain(|_, activity| {
-                    activity.kind != agena_domain::BackgroundActivityKind::Cron
-                });
-                for job in scheduler
-                    .list_filtered(filter.session_id, filter.active_only)
-                    .await
-                    .map_err(|error| agena_runtime::ActivityControlError::internal_error(&error))?
-                {
-                    if filter.active_only && job.completed {
-                        continue;
-                    }
-                    if filter
-                        .session_id
-                        .is_some_and(|session_id| job.owner_session_id != Some(session_id))
-                    {
-                        continue;
-                    }
-                    let source_part_id = cron_source_part_id(&job);
-                    let activity = scheduled_job_activity(job, source_part_id);
-                    projected.insert(activity.id.clone(), activity);
-                }
-            }
-        }
-
-        let mut activities = projected
-            .into_values()
-            .filter(|activity| filter.matches(activity))
-            .collect::<Vec<_>>();
-        activities.sort_by(|left, right| {
-            right
-                .is_active()
-                .cmp(&left.is_active())
-                .then_with(|| right.started_at_ms.cmp(&left.started_at_ms))
-                .then_with(|| left.id.cmp(&right.id))
-        });
-        Ok(activities)
-    }
-
-    async fn get_activity(
-        &self,
-        activity_id: &str,
-    ) -> Result<agena_domain::BackgroundActivity, agena_runtime::ActivityControlError> {
-        let live = self.activities.registry.get(activity_id);
-        let snapshot = self.current_snapshot();
-        if let Some(manager) = snapshot.session_manager() {
-            if let Some(job_id) = activity_id
-                .strip_prefix("cron_")
-                .and_then(|id| uuid::Uuid::parse_str(id).ok())
-                && let Some(scheduler) = manager.tool_executor().scheduler()
-            {
-                let job = scheduler
-                    .get(job_id)
-                    .await
-                    .map_err(|error| agena_runtime::ActivityControlError::internal_error(&error))?
-                    .ok_or_else(|| agena_runtime::ActivityControlError::not_found(activity_id))?;
-                let source = cron_source_part_id(&job);
-                return Ok(scheduled_job_activity(job, source));
-            }
-            if let Some((session, tool)) = managed_process_scope(activity_id) {
-                let kernel = manager.session_kernel();
-                let tool = kernel
-                    .reader
-                    .tool(session, tool)
-                    .await
-                    .map_err(|e| agena_runtime::ActivityControlError::internal_error(&e))?;
-                if let Some(id) = tool.activities.last() {
-                    let operation = kernel
-                        .reader
-                        .activity(session, *id)
-                        .await
-                        .map_err(|e| agena_runtime::ActivityControlError::internal_error(&e))?;
-                    let current = live
-                        .as_ref()
-                        .map(|activity| BTreeMap::from([(activity.id.clone(), activity.clone())]))
-                        .unwrap_or_default();
-                    return Ok(durable_operation_activity(&current, (*operation).clone()));
-                }
-            }
-        }
-        live.ok_or_else(|| agena_runtime::ActivityControlError::not_found(activity_id))
-    }
-
-    async fn activity_logs(
-        &self,
-        activity_id: &str,
-        since_seq: u64,
-        limit: Option<u32>,
-        wait_ms: u64,
-    ) -> Result<agena_domain::BackgroundActivityLogRead, agena_runtime::ActivityControlError> {
-        let activity = self.get_activity(activity_id).await?;
-        // Plugin-registered activity sources own their log stream; dispatch
-        // to them before any built-in behavior.
-        if let Some(adapter) = self
-            .activities
-            .source_for(activity.kind, activity.session_id)
-        {
-            return adapter
-                .read_logs(activity_id, since_seq, limit, wait_ms)
-                .await
-                .map_err(|error| agena_runtime::ActivityControlError::internal_error(&error));
-        }
-        match activity.kind {
-            agena_domain::BackgroundActivityKind::Shell
-            | agena_domain::BackgroundActivityKind::Monitor => {
-                let Some(monitor) = self.activities.monitor.as_ref() else {
-                    return Err(agena_runtime::ActivityControlError::no_log_source(
-                        activity_id,
-                    ));
-                };
-                let monitor = Arc::clone(monitor);
-                let activity_id = activity_id.to_string();
-                crate::blocking::PROCESS_LOG_READS
-                    .run(move || {
-                        crate::activity::read_shell_logs(
-                            monitor.as_ref(),
-                            activity_id.as_str(),
-                            since_seq,
-                            limit,
-                            wait_ms,
-                        )
-                    })
-                    .await
-                    .map_err(|error| {
-                        agena_runtime::ActivityControlError::internal(format!(
-                            "shell log worker failed: {error}"
-                        ))
-                    })?
-                    .map_err(|err| agena_runtime::ActivityControlError::internal_error(&err))
-            }
-            // Kinds without a registered source adapter (runtime maintenance
-            // tasks and closed browser sessions) have no incremental log stream.
-            agena_domain::BackgroundActivityKind::Agent
-            | agena_domain::BackgroundActivityKind::Cron
-            | agena_domain::BackgroundActivityKind::Runtime
-            | agena_domain::BackgroundActivityKind::Browser => {
-                Ok(agena_domain::BackgroundActivityLogRead {
-                    activity_id: activity_id.to_string(),
-                    status: activity.status,
-                    lines: Vec::new(),
-                    last_seq: 0,
-                    has_more: false,
-                    dropped_lines: 0,
-                    exit_code: activity.exit_code,
-                    completion_reason: activity.message.clone(),
-                })
-            }
-        }
-    }
-
-    async fn stop_activity(
-        &self,
-        activity_id: &str,
-    ) -> Result<agena_domain::BackgroundActivity, agena_runtime::ActivityControlError> {
-        let activity = self.get_activity(activity_id).await?;
-        if activity.kind == agena_domain::BackgroundActivityKind::Cron {
-            return self.pause_activity(activity_id).await;
-        }
-        if !activity.is_active() {
-            return Err(agena_runtime::ActivityControlError::not_running(
-                activity_id,
-            ));
-        }
-        if !activity.cancellable {
-            return Err(agena_runtime::ActivityControlError::not_stoppable(
-                activity_id,
-            ));
-        }
-        // Plugin-registered activity sources implement stop themselves (e.g.
-        // the Browser plugin closes the matching tab); the adapter
-        // publishes the terminal record so the refreshed activity reflects it.
-        if let Some(adapter) = self
-            .activities
-            .source_for(activity.kind, activity.session_id)
-        {
-            adapter
-                .stop(activity_id)
-                .await
-                .map_err(|error| agena_runtime::ActivityControlError::internal_error(&error))?;
-            return self.get_activity(activity_id).await;
-        }
-        match activity.kind {
-            agena_domain::BackgroundActivityKind::Shell
-            | agena_domain::BackgroundActivityKind::Monitor => {
-                let Some(monitor) = self.activities.monitor.as_ref() else {
-                    return Err(agena_runtime::ActivityControlError::not_stoppable(
-                        activity_id,
-                    ));
-                };
-                monitor
-                    .stop(activity_id)
-                    .map_err(|err| agena_runtime::ActivityControlError::internal_error(&err))?;
-            }
-            agena_domain::BackgroundActivityKind::Runtime => {
-                self.inner
-                    .control_state
-                    .background_tasks()
-                    .cancel(activity_id)
-                    .map_err(|err| agena_runtime::ActivityControlError::internal_error(&err))?;
-            }
-            agena_domain::BackgroundActivityKind::Agent => {
-                let Some((parent, child)) = activity.parent_session_id.zip(activity.session_id)
-                else {
-                    return Err(agena_runtime::ActivityControlError::not_stoppable(
-                        activity_id,
-                    ));
-                };
-                let Some(manager) = self.current_snapshot().session_manager() else {
-                    return Err(agena_runtime::ActivityControlError::not_stoppable(
-                        activity_id,
-                    ));
-                };
-                manager
-                    .cancel_agent(
-                        parent,
-                        None,
-                        agena_plugin_host::sdk::host_api::AgentTargetRequest {
-                            target: child.to_string(),
-                        },
-                    )
-                    .await
-                    .map_err(|err| agena_runtime::ActivityControlError::internal_error(&err))?;
-            }
-            // Without a registered source adapter there is nothing to stop;
-            // the record's `cancellable` flag is the source's responsibility.
-            agena_domain::BackgroundActivityKind::Cron
-            | agena_domain::BackgroundActivityKind::Browser => {
-                return Err(agena_runtime::ActivityControlError::not_stoppable(
-                    activity_id,
-                ));
-            }
-        }
-        self.get_activity(activity_id).await
-    }
-
-    async fn pause_activity(
-        &self,
-        activity_id: &str,
-    ) -> Result<agena_domain::BackgroundActivity, agena_runtime::ActivityControlError> {
-        let scheduler = activity_scheduler(self)?;
-        let job_id = cron_activity_job_id(activity_id)?;
-        let job = scheduler
-            .pause(job_id)
-            .await
-            .map_err(|error| agena_runtime::ActivityControlError::internal_error(&error))?
-            .ok_or_else(|| agena_runtime::ActivityControlError::not_found(activity_id))?;
-        let source_part_id = cron_source_part_id(&job);
-        let activity = scheduled_job_activity(job, source_part_id);
-        Ok(activity)
-    }
-
-    async fn resume_activity(
-        &self,
-        activity_id: &str,
-    ) -> Result<agena_domain::BackgroundActivity, agena_runtime::ActivityControlError> {
-        let scheduler = activity_scheduler(self)?;
-        let job_id = cron_activity_job_id(activity_id)?;
-        let job = scheduler
-            .resume(job_id)
-            .await
-            .map_err(|error| agena_runtime::ActivityControlError::internal_error(&error))?
-            .ok_or_else(|| agena_runtime::ActivityControlError::not_found(activity_id))?;
-        let source_part_id = cron_source_part_id(&job);
-        let activity = scheduled_job_activity(job, source_part_id);
-        Ok(activity)
-    }
-
-    async fn delete_activity(
-        &self,
-        activity_id: &str,
-    ) -> Result<agena_domain::BackgroundActivity, agena_runtime::ActivityControlError> {
-        let mut activity = self.get_activity(activity_id).await?;
-        let scheduler = activity_scheduler(self)?;
-        let job_id = cron_activity_job_id(activity_id)?;
-        if !scheduler
-            .remove(job_id)
-            .await
-            .map_err(|error| agena_runtime::ActivityControlError::internal_error(&error))?
-        {
-            return Err(agena_runtime::ActivityControlError::not_found(activity_id));
-        }
-        activity.status = agena_domain::BackgroundActivityStatus::Stopped;
-        activity.finished_at_ms = Some(chrono::Utc::now().timestamp_millis());
-        activity.next_event_at_ms = None;
-        activity.cancellable = false;
-        activity.dismissible = true;
-        activity.message = Some("Deleted".to_owned());
-        Ok(activity)
-    }
-
-    fn dismiss_activity(
-        &self,
-        activity_id: &str,
-    ) -> Result<agena_domain::BackgroundActivity, agena_runtime::ActivityControlError> {
-        self.activities
-            .registry
-            .dismiss(activity_id)
-            .ok_or_else(|| agena_runtime::ActivityControlError::not_found(activity_id))
-    }
-
-    async fn clear_finished(&self) -> Result<usize, agena_runtime::ActivityControlError> {
-        let mut removed = 0;
-        if let Ok(scheduler) = activity_scheduler(self) {
-            for job in scheduler
-                .list()
-                .await
-                .map_err(|error| agena_runtime::ActivityControlError::internal_error(&error))?
-            {
-                if job.completed
-                    && scheduler.remove(job.id).await.map_err(|error| {
-                        agena_runtime::ActivityControlError::internal_error(&error)
-                    })?
-                {
-                    removed += 1;
-                }
-            }
-        }
-        removed += self.activities.registry.clear_finished().len();
-        Ok(removed)
-    }
-}
-
-fn managed_process_scope(
-    id: &str,
-) -> Option<(
-    agena_storage::kernel::SessionId,
-    agena_storage::kernel::ToolId,
-)> {
-    let mut pieces = id.strip_prefix("proc_")?.split('_');
-    let session =
-        agena_storage::kernel::SessionId::try_from(pieces.next()?.parse::<i64>().ok()?).ok()?;
-    let tool = agena_storage::kernel::ToolId::try_from(pieces.next()?.parse::<i64>().ok()?).ok()?;
-    pieces.next().is_none().then_some((session, tool))
 }
 
 impl agena_runtime::ModelCatalogRuntimeService for AgenaRuntime {
@@ -2031,6 +1469,101 @@ impl agena_runtime::RuntimeControlService for AgenaRuntime {
         Ok(())
     }
 
+    async fn browser_control(
+        &self,
+        session_id: i64,
+        command: agena_plugin_sdk::browser::BrowserControlCommand,
+    ) -> agena_plugin_sdk::error::Result<agena_plugin_sdk::browser::BrowserControlResult> {
+        use agena_plugin_sdk::browser::{BrowserControlCommand, BrowserControlResult};
+        use agena_plugin_sdk::{PluginError, PluginErrorKind};
+
+        let Some(controller) = self.activities.browser_controller(session_id) else {
+            return match command {
+                BrowserControlCommand::List => Ok(BrowserControlResult::State {
+                    tabs: Vec::new(),
+                    human_control: false,
+                    help: None,
+                }),
+                _ => Err(PluginError::from_kind(
+                    PluginErrorKind::Disconnected,
+                    "The browser is no longer running",
+                )),
+            };
+        };
+        let network = if matches!(command, BrowserControlCommand::TakeControl { .. }) {
+            let manager = self.session_manager().ok_or_else(|| {
+                PluginError::from_kind(
+                    PluginErrorKind::HostUnavailable,
+                    "Session runtime unavailable",
+                )
+            })?;
+            Some(Arc::new(BrowserOperatorNetwork {
+                manager: Arc::downgrade(&manager),
+                session_id,
+            })
+                as Arc<
+                    dyn agena_plugin_sdk::browser::BrowserNetworkAuthority,
+                >)
+        } else {
+            None
+        };
+        controller
+            .browser_control(session_id, command, network)
+            .await
+    }
+
+    fn session_processes(
+        &self,
+        session_id: i64,
+        websocket: bool,
+    ) -> Vec<agena_domain::ProcessSummary> {
+        self.activities
+            .monitor
+            .as_ref()
+            .map_or_else(Vec::new, |service| {
+                service.list_session(session_id, websocket)
+            })
+    }
+
+    fn session_process(
+        &self,
+        session_id: i64,
+        id: &str,
+        websocket: bool,
+    ) -> Option<agena_domain::ProcessSummary> {
+        self.activities
+            .monitor
+            .as_ref()?
+            .summary(id)
+            .filter(|process| {
+                process.owner_session_id == Some(session_id) && process.websocket == websocket
+            })
+    }
+
+    async fn stop_session_process(
+        &self,
+        session_id: i64,
+        id: &str,
+        websocket: bool,
+    ) -> Result<Option<agena_domain::ProcessSummary>, agena_runtime::RuntimeControlServiceError>
+    {
+        let Some(process) = self.session_process(session_id, id, websocket) else {
+            return Ok(None);
+        };
+        if process.status != agena_domain::ProcessStatus::Running {
+            return Ok(Some(process));
+        }
+        let Some(service) = self.activities.monitor.clone() else {
+            return Ok(None);
+        };
+        let id = id.to_owned();
+        let outcome = tokio::task::spawn_blocking(move || service.stop(&id))
+            .await
+            .map_err(|error| agena_runtime::RuntimeControlServiceError::from_error(&error))?
+            .map_err(|error| agena_runtime::RuntimeControlServiceError::from_error(&error))?;
+        Ok(Some(outcome.summary))
+    }
+
     async fn reload(
         &self,
     ) -> Result<agena_runtime::RuntimeReloadReport, agena_runtime::RuntimeControlServiceError> {
@@ -2508,9 +2041,6 @@ impl AgenaRuntime {
                 draft_authentication: Arc::new(self.clone()),
                 status: Arc::new(self.clone()),
                 tools: Arc::new(self.clone()),
-                activities: Some(
-                    Arc::new(self.clone()) as Arc<dyn agena_runtime::RuntimeActivityService>
-                ),
                 live_signals: {
                     struct Adapter(Arc<agena_runtime::LiveSignalHub>);
                     impl agena_runtime::RuntimeLiveSignalService for Adapter {

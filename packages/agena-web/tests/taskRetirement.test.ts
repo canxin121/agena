@@ -25,7 +25,7 @@ test('retired Task routes and command actions cannot become Web destinations', (
   expect(isConversationSettingsPath('/tasks')).toBe(false)
   expect(isWorkspaceMainTabPath('/tasks')).toBe(false)
   expect(normalizeMainTabPath('chat', '/tasks')).toBe('/chat')
-  for (const action of ['task', 'tasks']) {
+  for (const action of ['task', 'tasks', 'activities']) {
     expect(
       clientCommandFromCatalog({
         id: action,
@@ -36,6 +36,17 @@ test('retired Task routes and command actions cannot become Web destinations', (
       } as PluginCommandCatalogItem),
     ).toBeNull()
   }
+})
+
+test('the Web command catalog recognizes the schedules action without arguments', () => {
+  const command = clientCommandFromCatalog({
+    id: 'schedules',
+    slash: '/schedules',
+    target: { kind: 'client', action: 'schedules' },
+    accepts_empty_input: true,
+  } as PluginCommandCatalogItem)
+  expect(command?.action).toBe('schedules')
+  expect(command?.requiresArguments).toBe(false)
 })
 
 test('restoring old workspace state discards Task tabs and keeps canonical Bot and project sessions', () => {

@@ -1105,6 +1105,10 @@ pub(crate) fn render_operation_blocks<'a>(
                     push_collapsible_text(out, DETAIL_PREFIX, text, style, width, i18n);
                 }
             }
+            ViewBlock::ShellProcess { .. }
+            | ViewBlock::MonitorSubscription { .. }
+            | ViewBlock::AgentSession { .. }
+            | ViewBlock::BrowserPage { .. } => {}
             ViewBlock::Custom { presentation, .. } => {
                 let text = operation_block_copy_text(block, i18n);
                 if expanded {

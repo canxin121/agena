@@ -57,9 +57,11 @@ function scrollBody(event: KeyboardEvent) {
         :aria-label="hint || title"
         :aria-expanded="open"
       >
-        <slot name="icon" />
-        <span v-if="label" class="max-w-32 truncate font-mono text-[11px] font-medium">{{ label }}</span>
-        <RiLoader4Line v-if="busy" class="h-3 w-3 shrink-0 animate-spin" />
+        <slot name="trigger">
+          <slot name="icon" />
+          <span v-if="label" class="max-w-32 truncate font-mono text-[11px] font-medium">{{ label }}</span>
+          <RiLoader4Line v-if="busy" class="h-3 w-3 shrink-0 animate-spin" />
+        </slot>
       </button>
     </PopoverTrigger>
     <PopoverPortal>

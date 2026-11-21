@@ -137,6 +137,35 @@ pub trait SessionExecutionControl: Send + Sync {
         &self,
     ) -> Result<Vec<agena_scheduler::ScheduledJob>, SessionExecutionControlError>;
 
+    async fn list_session_schedules(
+        &self,
+        session_id: i64,
+    ) -> Result<Vec<agena_scheduler::ScheduledJob>, SessionExecutionControlError> {
+        Ok(self
+            .list_scheduled_jobs()
+            .await?
+            .into_iter()
+            .filter(|job| job.owner_session_id == Some(session_id))
+            .collect())
+    }
+
+    async fn set_session_schedule_paused(
+        &self,
+        _session_id: i64,
+        _schedule_id: uuid::Uuid,
+        _paused: bool,
+    ) -> Result<Option<agena_scheduler::ScheduledJob>, SessionExecutionControlError> {
+        Ok(None)
+    }
+
+    async fn delete_session_schedule(
+        &self,
+        _session_id: i64,
+        _schedule_id: uuid::Uuid,
+    ) -> Result<bool, SessionExecutionControlError> {
+        Ok(false)
+    }
+
     /// Whether the composed service currently has scheduler support.
     fn scheduler_available(&self) -> bool;
 

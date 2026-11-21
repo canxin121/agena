@@ -224,7 +224,6 @@ function createFixture() {
     latest_event_seq: 1,
     queued_messages: [],
     queue_paused: false,
-    background_activities: [],
   })
   const body = async (req) => {
     let text = ''
@@ -288,6 +287,9 @@ function createFixture() {
           page: { has_more: false },
           version: 1,
         })
+      if (/^\/api\/v1\/sessions\/\d+\/(shell\/processes|monitor\/subscriptions|schedules)$/.test(p)) return json([])
+      if (/^\/api\/v1\/sessions\/\d+\/browser$/.test(p))
+        return json({ kind: 'state', tabs: [], human_control: false, help: null })
       if (p === '/api/v1/sessions')
         return json({ items: [session(7), session(42)], total: 2, page: { has_more: false } })
       if (p === '/auth/session') return json({ authenticated: true, disabled: true })
@@ -303,7 +305,6 @@ function createFixture() {
       if (p === '/api/v1/workspaces')
         return json({ items: [{ id: 7, path: '/fixture/project' }], page: { has_more: false } })
       if (p === '/api/v1/workbench/fs/home') return json({ home: '/fixture' })
-      if (p === '/api/v1/activities') return json({ items: [], activities: [] })
       if (p.endsWith('/events')) {
         res.setHeader('Content-Type', 'text/event-stream')
         return res.end(': keepalive\n\n')

@@ -37,8 +37,8 @@ extern crate self as agena_plugin_sdk;
 pub extern crate serde;
 pub extern crate serde_json;
 
-pub mod activity;
 pub mod attachment;
+pub mod browser;
 pub mod cancellation;
 pub mod configuration;
 pub mod error;
@@ -71,7 +71,6 @@ pub mod cdylib_abi;
 #[cfg(any(feature = "cdylib", feature = "stdio", feature = "http"))]
 pub mod drivers;
 
-pub use activity::ActivitySourceAdapter;
 pub use agena_macros::{ToolInput, agena_plugin};
 pub use async_trait::async_trait;
 pub use attachment::{AttachmentItem, AttachmentKind, AttachmentPart, AttachmentSource};

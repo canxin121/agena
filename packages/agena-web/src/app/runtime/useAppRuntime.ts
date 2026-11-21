@@ -3,7 +3,6 @@ import { useRoute } from 'vue-router'
 
 import { useHealthStore } from '@/stores/health'
 import { useSettingsStore } from '@/stores/settings'
-import { useSessionActivityStore } from '@/stores/sessionActivity'
 import { useChatStore } from '@/stores/chat'
 import { useUiStore } from '@/stores/ui'
 import { useDirectoryStore } from '@/stores/directory'
@@ -28,7 +27,6 @@ export function useAppRuntime() {
   const ui = useUiStore()
   const health = useHealthStore()
   const settings = useSettingsStore()
-  const activity = useSessionActivityStore()
   const chat = useChatStore()
   const directory = useDirectoryStore()
   const directorySessions = useDirectorySessionStore()
@@ -56,7 +54,6 @@ export function useAppRuntime() {
       chat.reconcileLiveState()
       invalidateResources()
       if (route.path !== '/bot') directorySessions.scheduleSidebarRecoverySync('stream-connected', 0, { force: true })
-      activity.invalidate()
       await settings.refresh()
     },
     { intervalMs: 10_000, retryMs: 10_000, enabled: () => !disposed && isDocumentVisible() },
@@ -214,7 +211,6 @@ export function useAppRuntime() {
             recovery.invalidate(0)
             return
           }
-          activity.applyEvent(evt)
           applyResourceEvent(evt)
           chat.applyEvent(evt)
           if (route.path !== '/bot') {
@@ -281,11 +277,7 @@ export function useAppRuntime() {
     cleanupShortcuts = installKeyboardShortcuts()
     cleanupKeyboardTapFix = installKeyboardTapFix({ enabled: true })
 
-    await Promise.all([
-      health.refresh().catch(() => {}),
-      settings.refresh().catch(() => {}),
-      activity.refresh().catch(() => {}),
-    ])
+    await Promise.all([health.refresh().catch(() => {}), settings.refresh().catch(() => {})])
 
     if (disposed) return
     notifications.offerPermission()

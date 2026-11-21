@@ -44,7 +44,6 @@ pub struct Application {
     runtime_status: Arc<dyn agena_runtime::RuntimeStatusService>,
     runtime_tools: Arc<dyn agena_runtime::RuntimeToolExecutionService>,
     assistant_service: Option<Arc<dyn agena_assistant::AssistantService>>,
-    runtime_activities: Option<Arc<dyn agena_runtime::RuntimeActivityService>>,
     live_signals: Option<Arc<dyn agena_runtime::RuntimeLiveSignalService>>,
     service: ApplicationService,
     notifications: Arc<agena_runtime_notifications::store::InMemoryNotificationStore>,
@@ -146,7 +145,6 @@ impl Application {
             authentication,
             draft_authentication,
             status,
-            activities,
             tools,
             live_signals,
             session_kernel,
@@ -180,7 +178,6 @@ impl Application {
             runtime_status: status,
             runtime_tools: tools,
             assistant_service,
-            runtime_activities: activities,
             live_signals,
             workspace_root: workspace_root.clone(),
             service: ApplicationService::new(
@@ -612,16 +609,6 @@ impl Application {
 
     pub fn runtime_control(&self) -> &Arc<dyn agena_runtime::RuntimeControlService> {
         &self.runtime_control
-    }
-
-    /// Unified background-activity service, when the composed runtime exposes
-    /// one.
-    pub fn runtime_activities(
-        &self,
-    ) -> Result<Arc<dyn agena_runtime::RuntimeActivityService>, ApplicationError> {
-        self.runtime_activities
-            .clone()
-            .ok_or_else(|| ApplicationError::internal("background activity service is unavailable"))
     }
 
     /// Unified notification store shared by API transports and the TUI.

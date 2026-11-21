@@ -13,14 +13,6 @@ impl App {
         Some(files.total_files)
     }
 
-    /// Background activities attached to the current session execution.
-    pub(crate) fn session_work_task_count(&self) -> usize {
-        self.transcript
-            .execution
-            .as_ref()
-            .map_or(0, |execution| execution.background_activities.len())
-    }
-
     /// Open the full-screen session work surface on `tab`.
     pub(crate) fn open_session_work_panel(&mut self, tab: Tab) {
         let Some(id) = self.current_or_selected_session_id() else {
@@ -37,6 +29,7 @@ impl App {
         state.select_detail(None);
         state.detail_at = None;
         state.file_at = None;
+        state.schedules_at = None;
         self.route_stack.clear();
         self.current_route = Route::SessionWork(id);
         self.focus = Focus::Transcript;
@@ -71,12 +64,6 @@ impl App {
         let Some(id) = self.transcript.session_id else {
             return;
         };
-        let activities = self
-            .transcript
-            .execution
-            .as_ref()
-            .map(|e| e.background_activities.clone())
-            .unwrap_or_default();
         let retry = self
             .transcript
             .execution
@@ -84,16 +71,7 @@ impl App {
             .and_then(|e| e.execution.provider_retry.clone());
         let has_files = self.session_work_has_files();
         let state = self.session_work.entry(id).or_default();
-        if let Some(Detail::Task(task)) = &state.detail
-            && let Some(activity) = activities.iter().find(|a| &a.id == task)
-        {
-            state.detail_activity = Some(activity.clone());
-        }
-        let tasks_label = format!(
-            "{} {}",
-            self.i18n.text("session-work-tasks"),
-            activities.len()
-        );
+        let schedules_label = self.i18n.text("session-work-schedules");
         let files_label = match state.files.as_ref() {
             Some(files) => format!(
                 "{} {}",
@@ -114,9 +92,7 @@ impl App {
         let header = Rect { height: 1, ..area };
         frame.render_widget(Paragraph::new("").style(theme::status_chip_style()), header);
         let mut header_buttons = vec![(back.as_str(), PointerAction::Named("work-leave"))];
-        if !activities.is_empty() {
-            header_buttons.push((&tasks_label, PointerAction::Named("work-tasks")));
-        }
+        header_buttons.push((&schedules_label, PointerAction::Named("work-schedules")));
         if has_files {
             header_buttons.push((&files_label, PointerAction::Named("work-files")));
         }
@@ -125,7 +101,7 @@ impl App {
         }
         pointer::render_buttons(frame, header, &header_buttons);
         let mut title = self.i18n.text(match state.tab {
-            Tab::Tasks => "session-work-tasks",
+            Tab::Schedules => "session-work-schedules",
             Tab::Files => "session-work-workspace",
             Tab::Status => "session-work-status",
         });
@@ -139,31 +115,24 @@ impl App {
         if state.detail.is_some() {
             actions.insert(0, (&back, PointerAction::Named("work-back")));
         }
-        let control_labels: Vec<_> = if let Some(Detail::Task(task)) = &state.detail {
-            activities
-                .iter()
-                .find(|a| &a.id == task)
-                .map(|a| {
-                    a.controls
-                        .iter()
-                        .filter_map(|action| {
-                            control_action(action).map(|name| {
-                                (self.i18n.text(&format!("session-work-{action}")), name)
-                            })
-                        })
-                        .collect()
-                })
-                .unwrap_or_default()
-        } else {
-            Vec::new()
+        let schedule = match &state.detail {
+            Some(Detail::Schedule(id)) => state.schedules.iter().find(|job| &job.id == id),
+            _ => None,
         };
-        if state.control_request == 0 {
-            for (label, action) in &control_labels {
-                actions.push((label, PointerAction::Named(action)));
+        let pause = self.i18n.text("session-work-pause");
+        let resume = self.i18n.text("session-work-resume");
+        let delete = self.i18n.text("session-work-delete");
+        if state.schedule_request == 0
+            && let Some(job) = schedule
+        {
+            if !job.completed {
+                actions.push((
+                    if job.paused { &resume } else { &pause },
+                    PointerAction::Named("work-schedule-toggle"),
+                ));
             }
+            actions.push((&delete, PointerAction::Named("work-schedule-delete")));
         }
-        // Keep task controls and diff source reachable before utility actions
-        // when a narrow terminal cannot fit every button on this row.
         actions.push((&switch, PointerAction::Named("work-next-tab")));
         actions.push((&refresh, PointerAction::Named("work-refresh")));
         pointer::render_buttons(
@@ -185,68 +154,23 @@ impl App {
                 PointerAction::Named("work-down"),
             )),
         );
-        let error = state
-            .control_error
-            .as_ref()
-            .or(state.detail_error.as_ref())
-            .or(if state.tab == Tab::Files {
-                state.file_error.as_ref()
-            } else {
-                None
-            });
+        let error = match state.tab {
+            Tab::Schedules => state.schedule_error.as_ref(),
+            Tab::Files => state.detail_error.as_ref().or(state.file_error.as_ref()),
+            Tab::Status => None,
+        };
         let text = if let Some(error) = error {
             Some(error.clone())
-        } else if state.detail.is_some() {
-            Some(match &state.detail {
-                Some(Detail::Task(_)) => state
-                    .logs
-                    .as_ref()
-                    .map(|l| {
-                        let mut heading = String::new();
-                        if let Some(activity) = &state.detail_activity {
-                            heading.push_str(&activity.title);
-                            if !activity.description.is_empty()
-                                && activity.description != activity.title
-                            {
-                                heading.push_str(&format!("\n{}", activity.description));
-                            }
-                            if let Some(failure) = &activity.failure {
-                                heading.push_str(&format!("\n{}", failure.user.fallback));
-                            }
-                            if activity.status == "waiting"
-                                && let Some(next) = activity
-                                    .next_event_at_ms
-                                    .and_then(chrono::DateTime::from_timestamp_millis)
-                            {
-                                heading.push_str(&format!(
-                                    "\n{} {}",
-                                    self.i18n.text("session-work-next-wake"),
-                                    next.with_timezone(&chrono::Local).format("%m-%d %H:%M:%S")
-                                ));
-                            }
-                        }
-                        format!(
-                            "{heading}\n{} · {}\n{}",
-                            self.i18n.text("session-work-log-tail"),
-                            self.i18n.text(&format!("session-work-status-{}", l.status)),
-                            l.lines
-                                .iter()
-                                .map(|l| format!(
-                                    "{}{}",
-                                    crate::sanitize_terminal_text(&l.text),
-                                    if l.chunk || l.text.ends_with('\n') {
-                                        ""
-                                    } else {
-                                        "\n"
-                                    }
-                                ))
-                                .collect::<Vec<_>>()
-                                .join("")
-                        )
-                    })
-                    .unwrap_or_else(|| self.i18n.text("plan-viewer-loading")),
-                _ => state.diff.clone(),
-            })
+        } else if let Some(job) = schedule {
+            let mut text = format!("{}\n{}", schedule_summary(job, &self.i18n), job.prompt);
+            if let Some(run) = &job.last_run
+                && let Some(failure) = &run.failure
+            {
+                text.push_str(&format!("\n{}", failure.user.fallback));
+            }
+            Some(text)
+        } else if matches!(state.detail, Some(Detail::File(_))) {
+            Some(state.diff.clone())
         } else if state.tab == Tab::Status {
             Some(retry.map(|r| r.message).unwrap_or_default())
         } else {
@@ -288,14 +212,16 @@ impl App {
             state.scroll = state.scroll.min(state.max_scroll);
             frame.render_widget(paragraph.scroll((state.scroll, 0)), body);
         } else {
-            let rows: Vec<String> = if state.tab == Tab::Tasks {
-                activities
+            let rows: Vec<String> = if state.tab == Tab::Schedules {
+                state
+                    .schedules
                     .iter()
-                    .map(|a| {
+                    .map(|job| {
+                        let prompt = crate::sanitize_terminal_text(&job.prompt);
                         format!(
                             "{} · {}",
-                            self.i18n.text(&format!("session-work-status-{}", a.status)),
-                            crate::sanitize_terminal_text(&a.title)
+                            schedule_summary(job, &self.i18n),
+                            prompt.lines().next().unwrap_or_default()
                         )
                     })
                     .collect()
@@ -303,14 +229,14 @@ impl App {
                 state
                     .files
                     .as_ref()
-                    .map(|p| {
-                        p.files
+                    .map(|page| {
+                        page.files
                             .iter()
-                            .map(|f| {
+                            .map(|file| {
                                 format!(
                                     "{}× {}",
-                                    f.operation_count,
-                                    crate::sanitize_terminal_text(&f.path)
+                                    file.operation_count,
+                                    crate::sanitize_terminal_text(&file.path)
                                 )
                             })
                             .collect()
@@ -323,11 +249,13 @@ impl App {
                 .saturating_sub(body.height.saturating_sub(1) as usize);
             if rows.is_empty() {
                 frame.render_widget(
-                    Paragraph::new(self.i18n.text(if state.file_task.is_some() {
-                        "plan-viewer-loading"
-                    } else {
-                        "session-work-empty"
-                    }))
+                    Paragraph::new(self.i18n.text(
+                        if state.file_task.is_some() || state.schedule_request != 0 {
+                            "plan-viewer-loading"
+                        } else {
+                            "session-work-empty"
+                        },
+                    ))
                     .style(theme::muted_style()),
                     body,
                 );
@@ -409,13 +337,31 @@ impl App {
     }
 }
 
-fn control_action(action: &str) -> Option<&'static str> {
-    match action {
-        "stop" => Some("work-control-stop"),
-        "pause" => Some("work-control-pause"),
-        "resume" => Some("work-control-resume"),
-        "dismiss" => Some("work-control-dismiss"),
-        "delete" => Some("work-control-delete"),
-        _ => None,
+fn schedule_summary(job: &ScheduledJobResource, i18n: &agena_tui::i18n::I18n) -> String {
+    use agena_api::resource::ScheduledJobRunStatus;
+    let status = if job.completed {
+        match job.last_run.as_ref().map(|run| run.status) {
+            Some(ScheduledJobRunStatus::Failed) => "session-work-status-failed",
+            _ => "session-work-status-succeeded",
+        }
+    } else if job.paused {
+        "session-work-status-paused"
+    } else {
+        "session-work-status-waiting"
+    };
+    let mut summary = i18n.text(status);
+    if let Some(expression) = &job.expression {
+        summary.push_str(&format!(
+            " · {} {}",
+            crate::sanitize_terminal_text(expression),
+            crate::sanitize_terminal_text(job.timezone.as_deref().unwrap_or_default())
+        ));
     }
+    if let Some(time) = job.next_fire_at.or(job.at) {
+        summary.push_str(&format!(
+            " · {}",
+            time.with_timezone(&chrono::Local).format("%m-%d %H:%M:%S")
+        ));
+    }
+    summary
 }

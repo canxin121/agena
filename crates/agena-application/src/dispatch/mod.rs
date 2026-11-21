@@ -15,17 +15,17 @@ use agena_api::{
     commands::{
         CancelRunParams, ClearSessionParams, Command, CommandResult, CompactSessionParams,
         ContinueRunParams, CreateSessionParams, CreateWorkspaceParams, DeletePermissionRuleParams,
-        DeleteSessionParams, DeleteWorkspaceParams, DismissActivityParams, ForkSessionParams,
-        ListSessionTreeParams, MarkInteractiveRequestPresentedParams, ReplacePermissionRuleParams,
-        ReplyPermissionParams, ReplyUserInputParams, ResolveWorkspaceParams,
-        RevokePermissionRuleParams, RewindSessionParams, SessionClearMode, StopActivityParams,
-        SubmitRunParams, UpdateSessionParams, UpdateSessionSelectionParams, UpdateWorkspaceParams,
+        DeleteSessionParams, DeleteWorkspaceParams, ForkSessionParams, ListSessionTreeParams,
+        MarkInteractiveRequestPresentedParams, ReplacePermissionRuleParams, ReplyPermissionParams,
+        ReplyUserInputParams, ResolveWorkspaceParams, RevokePermissionRuleParams,
+        RewindSessionParams, SessionClearMode, SubmitRunParams, UpdateSessionParams,
+        UpdateSessionSelectionParams, UpdateWorkspaceParams,
     },
     queries::{
-        ActivityLogsParams, GetActivityParams, GetPermissionRuleParams, GetSessionParams,
-        GetWorkspaceParams, ListPermissionRulesParams, ListProviderAdapterModelsParams,
-        ListProviderModelsParams, ListSavedProviderAdapterModelsParams, ListSessionsParams,
-        ListWorkspacesParams, Query, QueryResult,
+        GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams, ListPermissionRulesParams,
+        ListProviderAdapterModelsParams, ListProviderModelsParams,
+        ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams, Query,
+        QueryResult,
     },
 };
 

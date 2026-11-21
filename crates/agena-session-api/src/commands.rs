@@ -53,11 +53,6 @@ pub enum Command {
     ReplacePermissionRule(ReplacePermissionRuleParams),
     RevokePermissionRule(RevokePermissionRuleParams),
     DeletePermissionRule(DeletePermissionRuleParams),
-
-    // ── background activities ──
-    StopActivity(StopActivityParams),
-    DismissActivity(DismissActivityParams),
-    ClearFinishedActivities,
 }
 
 pub use crate::business::BusinessCommand;
@@ -344,20 +339,6 @@ pub struct DeletePermissionRuleParams {
     pub rule_id: i64,
 }
 
-// ─── background activities ────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Parameters for stopping a background activity.
-pub struct StopActivityParams {
-    pub activity_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Parameters for dismissing a background activity.
-pub struct DismissActivityParams {
-    pub activity_id: String,
-}
-
 impl Command {
     /// The session this write targets, when it is session-scoped.
     pub fn session_id(&self) -> Option<i64> {
@@ -373,10 +354,7 @@ impl Command {
             | Command::UpsertPermissionRule(_)
             | Command::ReplacePermissionRule(_)
             | Command::RevokePermissionRule(_)
-            | Command::DeletePermissionRule(_)
-            | Command::StopActivity(_)
-            | Command::DismissActivity(_)
-            | Command::ClearFinishedActivities => None,
+            | Command::DeletePermissionRule(_) => None,
             // Creating a top-level session has no existing session to scope.
             Command::CreateSession(params) => params.parent_id,
             Command::UpdateSession(params) => Some(params.session_id),
@@ -448,7 +426,7 @@ mod plugin_access_tests {
     use serde_json::json;
 
     #[test]
-    fn plugins_can_use_workspace_session_policy_and_activity_commands() {
+    fn plugins_can_use_workspace_session_policy_and_runtime_commands() {
         let requests = [
             json!({"method": "create_workspace", "params": {"path": "/work"}}),
             json!({"method": "resolve_workspace", "params": {"path": "/work", "create_if_missing": true}}),
@@ -460,9 +438,8 @@ mod plugin_access_tests {
             json!({"method": "replace_permission_rule", "params": {"rule_id": 1, "mode": "ask"}}),
             json!({"method": "revoke_permission_rule", "params": {"rule_id": 1}}),
             json!({"method": "delete_permission_rule", "params": {"rule_id": 1}}),
-            json!({"method": "stop_activity", "params": {"activity_id": "activity-1"}}),
-            json!({"method": "dismiss_activity", "params": {"activity_id": "activity-1"}}),
-            json!({"method": "clear_finished_activities"}),
+            json!({"method": "list_session_tree", "params": {"root_id": 7}}),
+            json!({"method": "management", "params": {"domain": "cancel_runtime_task", "request": {"task_id": "rtask_1"}}}),
         ];
         for request in requests {
             let command: Command = serde_json::from_value(request).unwrap();

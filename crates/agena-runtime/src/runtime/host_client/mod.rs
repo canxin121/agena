@@ -492,30 +492,24 @@ impl HostClient for RuntimeHostClient {
         Ok(())
     }
 
-    async fn register_activity_source(
+    async fn register_browser_controller(
         &self,
-        kind: agena_domain::BackgroundActivityKind,
-        adapter: Arc<dyn agena_plugin_sdk::activity::ActivitySourceAdapter>,
+        controller: Arc<dyn agena_plugin_sdk::browser::BrowserController>,
     ) -> Result<(), PluginError> {
         let runtime = self.runtime()?;
-        if kind == agena_domain::BackgroundActivityKind::Browser {
-            let session_id = current_host_callback_context()
-                .filter(|context| {
-                    context.plugin_id.as_deref() == Some(agena_bundled_plugins::tool::browser_plugin_id())
-                })
-                .and_then(|context| context.session_id)
-                .ok_or_else(|| {
-                    PluginError::from_kind(
-                        agena_plugin_sdk::PluginErrorKind::PolicyDenied,
-                        "Browser controls must be registered by the Browser plugin for its owning session",
-                    )
-                })?;
-            return runtime
-                .activities
-                .register_browser_source(session_id, &adapter);
-        }
-        runtime.activities.register_source(kind, adapter);
-        Ok(())
+        let plugin_id = agena_bundled_plugins::tool::browser_plugin_id();
+        let session_id = current_host_callback_context()
+            .filter(|context| context.plugin_id.as_deref() == Some(plugin_id))
+            .and_then(|context| context.session_id)
+            .ok_or_else(|| {
+                PluginError::from_kind(
+                    agena_plugin_sdk::PluginErrorKind::PolicyDenied,
+                    "Browser controls must be registered by the Browser plugin for its owning session",
+                )
+            })?;
+        runtime
+            .activities
+            .register_browser_controller(session_id, &controller)
     }
 
     async fn subscribe_events(

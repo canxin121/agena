@@ -4,7 +4,6 @@
 //! a session. REST, WebSocket and plugins all route into these two enums, so a
 //! new operation is added once and every `match` over them must handle it.
 
-pub mod activity;
 pub mod bridge;
 pub mod business;
 pub mod commands;

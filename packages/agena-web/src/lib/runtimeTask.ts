@@ -1,4 +1,5 @@
 import { i18n } from '@/i18n'
+import { ApiError } from './api'
 import { isDocumentVisible } from './backgroundReads'
 import { conditionalJson } from './conditionalJson'
 import { createRevalidator } from './revalidation'
@@ -13,16 +14,16 @@ export type RuntimeBackgroundTask = {
   failure?: { fallback?: string; title?: string; detail?: string; user?: { fallback?: string } } | null
 }
 
-/** Runtime maintenance tasks already publish unified activity descriptors.
- * Reuse that stream and the shared revision heartbeat instead of polling all
- * tasks. One initial read closes the gap between starting and subscribing. */
+/** The operation's revision wakes its observer. Read the native runtime result
+ * so the caller receives its exact kind and failure information. */
 export function waitForRuntimeTask<T extends RuntimeBackgroundTask>(
   initial: T,
-  options: { signal?: AbortSignal; timeoutMs?: number } = {},
+  options: { signal?: AbortSignal; timeoutMs?: number | null } = {},
 ): Promise<T> {
   options.signal?.throwIfAborted()
   if (initial.status !== 'running') return Promise.resolve(initial)
-  const resource = `activity:${initial.id}`
+  const resource = `runtime-task:${initial.id}`
+  const endpoint = `/api/v1/runtime/tasks/${encodeURIComponent(initial.id)}`
   const scope = captureResourceObservation(resource).scope
   return new Promise<T>((resolve, reject) => {
     let settled = false
@@ -43,7 +44,6 @@ export function waitForRuntimeTask<T extends RuntimeBackgroundTask>(
     function complete(task: RuntimeBackgroundTask) {
       if (settled || task.id !== initial.id || task.status === 'running') return
       cleanup()
-      // The activity's kind is "runtime"; retain the operation's exact kind.
       resolve({ ...initial, ...task, kind: initial.kind })
     }
     function fail(reason: unknown) {
@@ -66,17 +66,17 @@ export function waitForRuntimeTask<T extends RuntimeBackgroundTask>(
         activeRead = controller
         try {
           if (hasRead) await checkResourceVersions([resource], controller.signal)
-          const task = await conditionalJson<RuntimeBackgroundTask>(
-            resource,
-            `/api/v1/activities/${encodeURIComponent(initial.id)}`,
-            { signal: controller.signal },
-          )
+          const task = await conditionalJson<RuntimeBackgroundTask>(resource, endpoint, { signal: controller.signal })
           if (!settled && checkScope()) {
             hasRead = true
             complete(task)
           }
         } catch (error) {
           if (settled || (controller.signal.aborted && !isDocumentVisible())) return
+          if (error instanceof ApiError && [401, 403, 404].includes(error.status)) {
+            fail(error)
+            return
+          }
           throw error
         } finally {
           if (activeRead === controller) activeRead = undefined
@@ -94,29 +94,13 @@ export function waitForRuntimeTask<T extends RuntimeBackgroundTask>(
         activeRead?.abort()
       }
     }
-    release = subscribeResource(resource, (event) => {
-      if (settled || !checkScope()) return
-      const payload = event?.properties?.payload
-      const activity = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload.activity : null
-      if (
-        event?.type === 'runtime_signal' &&
-        event.properties?.kind === 'activity' &&
-        activity &&
-        typeof activity === 'object' &&
-        !Array.isArray(activity) &&
-        activity.id === initial.id &&
-        typeof activity.status === 'string'
-      ) {
-        complete(activity as RuntimeBackgroundTask)
-      } else queue.invalidate(0)
+    release = subscribeResource(resource, () => {
+      if (!settled && checkScope()) queue.invalidate(0)
     })
     document.addEventListener('visibilitychange', visibility)
     options.signal?.addEventListener('abort', cancel, { once: true })
-    timer = setTimeout(() => {
-      const timeout = new DOMException(
-        'The runtime task is still running. Check Runtime background tasks for progress.',
-        'TimeoutError',
-      )
+    function checkDeadline() {
+      const timeout = new DOMException('The runtime operation is still running.', 'TimeoutError')
       if (!isDocumentVisible() || !checkScope()) {
         fail(timeout)
         return
@@ -130,7 +114,7 @@ export function waitForRuntimeTask<T extends RuntimeBackgroundTask>(
       activeRead = controller
       void conditionalJson<RuntimeBackgroundTask>(
         resource,
-        `/api/v1/activities/${encodeURIComponent(initial.id)}`,
+        endpoint,
         { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(1000)]) },
         true,
       )
@@ -139,7 +123,8 @@ export function waitForRuntimeTask<T extends RuntimeBackgroundTask>(
         })
         .catch(() => {})
         .finally(() => fail(timeout))
-    }, options.timeoutMs ?? 30_000)
+    }
+    if (options.timeoutMs !== null) timer = setTimeout(checkDeadline, options.timeoutMs ?? 30_000)
     queue.invalidate(0)
   })
 }

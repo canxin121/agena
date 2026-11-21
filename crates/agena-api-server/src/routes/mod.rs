@@ -5,12 +5,12 @@
 //! request-counting middleware is applied by the caller after the merge so it
 //! still runs exactly once for every route.
 
-mod activity;
 mod bots;
 mod git;
 mod health;
 mod mcp;
 mod memories;
+mod notifications;
 mod operations;
 mod ops;
 mod permissions;
@@ -44,7 +44,7 @@ pub fn router() -> Router<AppState> {
         .merge(settings::routes())
         .merge(workspaces::routes())
         .merge(git::routes())
-        .merge(activity::routes())
+        .merge(notifications::routes())
         .merge(runtime::routes())
         .merge(bots::routes())
         .merge(tools::routes())

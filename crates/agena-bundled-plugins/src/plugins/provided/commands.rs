@@ -326,11 +326,11 @@ const BUILT_IN_COMMANDS: &[BuiltInCommand] = &[
         summary_key: "command-usage-summary",
     },
     BuiltInCommand {
-        action: "activities",
-        slash: "/activities",
+        action: "schedules",
+        slash: "/schedules",
         aliases: &[],
         usage: None,
-        summary_key: "command-activities-summary",
+        summary_key: "command-schedules-summary",
     },
     BuiltInCommand {
         action: "queue",
@@ -2749,7 +2749,7 @@ mod bot_command_tests {
     #[test]
     fn public_catalog_omits_retired_task_commands_and_keeps_runtime_controls() {
         let commands = built_in_commands();
-        for name in ["task", "tasks", "task-board"] {
+        for name in ["task", "tasks", "task-board", "activities"] {
             assert!(commands.iter().all(|command| {
                 command.slash.as_deref() != Some(format!("/{name}").as_str())
                     && !command.aliases.iter().any(|alias| alias == name)
@@ -2759,7 +2759,7 @@ mod bot_command_tests {
                         }
             }));
         }
-        for slash in ["/bot", "/activities", "/background", "/queue"] {
+        for slash in ["/bot", "/schedules", "/background", "/queue"] {
             assert!(
                 commands
                     .iter()

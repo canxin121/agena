@@ -265,12 +265,6 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
       keywords: ['advanced', 'configuration', 'json path', 'global', 'workspace', 'override'],
     },
     {
-      id: 'activities',
-      label: () => st('Activity history'),
-      description: () => st('Inspect durable operational activity records and their current states.'),
-      keywords: ['activities', 'tasks', 'operations', 'history'],
-    },
-    {
       id: 'memories',
       label: () => st('Memories'),
       description: () => st('Inspect memory records and indexing state.'),

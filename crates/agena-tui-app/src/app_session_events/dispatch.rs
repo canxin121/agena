@@ -4,30 +4,6 @@ impl App {
     pub(crate) fn handle_message(&mut self, message: AppMessage) {
         match message {
             AppMessage::AsyncOperationCompleted(completion) => completion(self),
-            AppMessage::ActivitiesLoaded { request_id, result } => {
-                self.handle_activities_loaded(request_id, result)
-            }
-            AppMessage::ActivitiesLogLoaded {
-                activity_id,
-                request_id,
-                result,
-            } => self.handle_activity_log_loaded(activity_id, request_id, result),
-            AppMessage::ActivitiesStopped {
-                activity_id,
-                request_id,
-                result,
-            } => {
-                if let Err(error) = &result {
-                    self.flash_error(error.clone());
-                }
-                self.handle_activities_stopped(activity_id, request_id, result.is_ok_and(|ok| ok));
-            }
-            AppMessage::ActivitiesCleared { request_id, result } => {
-                if let Err(error) = &result {
-                    self.flash_error(error.clone());
-                }
-                self.handle_activities_cleared(request_id, result.is_ok_and(|ok| ok));
-            }
             AppMessage::BtwUpdated {
                 session_id,
                 request_id,

@@ -29,7 +29,6 @@ impl App {
                 .get(source)
                 .is_some_and(|s| s.accepts_text()),
             Route::Usage(_)
-            | Route::Activities(_)
             | Route::PlanViewer(_)
             | Route::SessionWork(_)
             | Route::SettingsStudio(_)
@@ -107,7 +106,7 @@ impl App {
                     handled_route = true;
                 }
                 Route::Main => {}
-                Route::Usage(_) | Route::Activities(_) | Route::PlanViewer(_) | Route::Hub(_) => {
+                Route::Usage(_) | Route::PlanViewer(_) | Route::Hub(_) => {
                     handled_route = true;
                 }
                 Route::SessionWork(_) | Route::Btw(_) => {

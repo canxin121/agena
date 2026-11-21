@@ -43,6 +43,12 @@ fn native_fixture_address() -> anyhow::Result<std::net::IpAddr> {
     Ok(address)
 }
 
+fn fixture_without_memory() -> TestAgenaBuilder {
+    fixture().configure_global(|config| {
+        config["plugins"]["list"]["agena.memory"]["enabled"] = json!(false);
+    })
+}
+
 fn native_fixture_network() -> anyhow::Result<Value> {
     let network = if cfg!(target_os = "macos") {
         json!({"default":"allow"})

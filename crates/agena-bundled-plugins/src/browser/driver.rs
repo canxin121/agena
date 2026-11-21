@@ -22,7 +22,7 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use diagnostics::Diagnostics;
-pub(crate) use diagnostics::{MAX_BODY_BYTES, ResponseBody, console_text};
+pub(crate) use diagnostics::{MAX_BODY_BYTES, ResponseBody};
 
 pub(crate) enum DomFormat {
     Text,
@@ -77,14 +77,8 @@ impl PageEvents {
         let network_event = event.method.starts_with("Network.");
         match self {
             Self::Activity { sender, .. }
-                if matches!(
-                    event.method.as_str(),
-                    "Page.frameNavigated"
-                        | "Page.navigatedWithinDocument"
-                        | "Runtime.consoleAPICalled"
-                        | "Runtime.exceptionThrown"
-                        | "Log.entryAdded"
-                ) =>
+                if event.method == "Page.frameNavigated"
+                    && event.params.pointer("/frame/parentId").is_none() =>
             {
                 let _ = sender.try_send(event);
             }
@@ -172,7 +166,7 @@ struct PageEventsState {
     diagnostics: SyncMutex<Diagnostics>,
     private: std::sync::atomic::AtomicBool,
     saw_document: std::sync::atomic::AtomicBool,
-    dialog: SyncMutex<Option<agena_plugin_sdk::activity::browser::BrowserDialog>>,
+    dialog: SyncMutex<Option<agena_plugin_sdk::browser::BrowserDialog>>,
 }
 
 #[derive(Clone)]
@@ -563,7 +557,7 @@ impl BrowserDriver {
         Ok(())
     }
 
-    pub fn dialog(&self) -> SdkResult<Option<agena_plugin_sdk::activity::browser::BrowserDialog>> {
+    pub fn dialog(&self) -> SdkResult<Option<agena_plugin_sdk::browser::BrowserDialog>> {
         Ok(self
             .page()?
             .events
@@ -1290,7 +1284,7 @@ async fn run_page_events(
                         }
                     }
                     "Page.javascriptDialogOpening" if main => {
-                        let dialog = agena_plugin_sdk::activity::browser::BrowserDialog {
+                        let dialog = agena_plugin_sdk::browser::BrowserDialog {
                             kind: event.params["type"].as_str().unwrap_or_default().to_owned(),
                             message: utf8_prefix(event.params["message"].as_str().unwrap_or_default(), 1024).to_owned(),
                         };
@@ -1305,10 +1299,7 @@ async fn run_page_events(
                         ) {
                             state.document_revision.fetch_add(1, Ordering::Release);
                         }
-                        if !state.private.load(Ordering::Acquire)
-                            && (main || matches!(observer, PageEvents::Activity { .. })
-                                && !matches!(event.method.as_str(), "Page.frameNavigated" | "Page.navigatedWithinDocument"))
-                        {
+                        if main && !state.private.load(Ordering::Acquire) {
                             observer.forward(event)?;
                         }
                     }

@@ -420,9 +420,10 @@ async fn stdio_host_uses_shared_application_without_an_http_listener() {
         .command(json!({"method":"delete_permission_rule","params":{"rule_id":rule_id}}))
         .await;
     assert!(fixture.op("query", rule_query).await.is_err());
-    fixture
-        .command(json!({"method":"clear_finished_activities"}))
+    let tree = fixture
+        .command(json!({"method":"list_session_tree","params":{"root_id":id}}))
         .await;
+    assert_eq!(tree["data"][0]["id"], id);
     fixture.command(json!({"method":"delete_session","params":{"session_id":id,"expected_version":renamed["data"]["version"]}})).await;
     assert!(
         fixture

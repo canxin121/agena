@@ -8,11 +8,9 @@ import CodeBlock from '@/components/ui/CodeBlock.vue'
 import AgenaInteractionPart from '@/components/chat/AgenaInteractionPart.vue'
 import AgenaContentOutput from '@/components/chat/AgenaContentOutput.vue'
 import AgenaOperationBlock from '@/components/chat/AgenaOperationBlock.vue'
-import ActivityLogView from '@/components/chat/ActivityLogView.vue'
 import PartLoadingIndicator from '@/components/chat/PartLoadingIndicator.vue'
 import BrailleSpinner from '@/components/ui/BrailleSpinner.vue'
 import DeferredPartBody from './DeferredPartBody.vue'
-import { useChatStore } from '@/stores/chat'
 import type { TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import type { ContentRef } from '@/lib/content'
 import {
@@ -107,20 +105,7 @@ const unpresentedContentResources = computed<ContentRef[]>(() => {
     return [{ resource_id: resourceId, kind: kind as ContentRef['kind'] }]
   })
 })
-const hasContentOutput = computed(
-  () =>
-    unpresentedContentResources.value.length > 0 ||
-    operation.value.presentationBlocks.some((block) => block.type === 'content'),
-)
 const status = computed(() => partStatusPresentation(props.part.status))
-const chat = useChatStore()
-const linkedActivity = computed(() =>
-  props.sessionId
-    ? (chat
-        .sessionBackgroundActivities(props.sessionId)
-        .find((activity) => activity.source_part_id === Number(props.part.id)) ?? null)
-    : null,
-)
 
 function sectionLoaded(section: ToolDetailSection): boolean {
   return sectionHasValue(section) && sectionRevisions.get(section) === (props.part.source.revision ?? 0)
@@ -606,7 +591,6 @@ function toggleOuter() {
 
       <div
         v-if="
-          linkedActivity ||
           operation.commandMarkdown ||
           operation.summary ||
           operation.presentationBlocks.length ||
@@ -615,11 +599,6 @@ function toggleOuter() {
         class="space-y-1 py-0.5"
         data-tool-presentation
       >
-        <ActivityLogView
-          v-if="linkedActivity && sessionId && !hasContentOutput"
-          :session-id="sessionId"
-          :activity="linkedActivity"
-        />
         <AgenaContentOutput
           v-for="resource in unpresentedContentResources"
           :key="resource.resource_id"
@@ -650,6 +629,7 @@ function toggleOuter() {
           :key="String(block.id || `${block.type || 'block'}:${index}`)"
           :block="block"
           :session-id="sessionId"
+          :owner-session-id="part.source.originSessionId"
         />
       </div>
 

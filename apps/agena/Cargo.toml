@@ -84,6 +84,7 @@ cc = "1.4.3"
 agena-plugin-sdk = { workspace = true, features = ["http"] }
 agena-storage-sqlite = { workspace = true }
 agena-testkit = { workspace = true }
+imagesize = { workspace = true }
 jsonschema = { workspace = true }
 schemars = { workspace = true }
 

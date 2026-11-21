@@ -1,11 +1,8 @@
-//! Unified domain model for long-running background activities.
+//! Runtime observations used by notification delivery and change detection.
 //!
-//! Agena tools create background work of several kinds — background shell
-//! processes, delegated subagent tasks, runtime maintenance tasks, managed
-//! browser sessions, scheduled jobs — and this module is the single wire
-//! contract they all share. A [`BackgroundActivity`] is a stable descriptor
-//! plus a log cursor; transports (REST, WS, SSE) and UIs (TUI, web) can list,
-//! inspect, follow, and control every kind without knowing its source.
+//! Processes, delegated agent runs, maintenance operations, browser pages,
+//! and schedules publish lifecycle observations. Output and control come
+//! from the tool part, session, or owning service.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -17,8 +14,7 @@ use strum::{Display, EnumString};
 )]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
-/// Kind of background activity. Durable tool work keeps the same kind from
-/// its background-operation aggregate all the way through this UI contract.
+/// Identifies the source of a runtime activity observation.
 pub enum BackgroundActivityKind {
     /// A long-lived shell process started by `shell.spawn` or `shell.open`.
     Shell,
@@ -136,8 +132,7 @@ pub struct BackgroundActivity {
     /// operation. Scheduler jobs use their prefixed activity id instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation_id: Option<String>,
-    /// Tool-call part that launched this member. This is the stable bridge
-    /// from Activities back to the transcript in both TUI and Web.
+    /// Tool-call part that launched the operation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_part_id: Option<i64>,
     pub created_at_ms: i64,
@@ -178,34 +173,6 @@ impl BackgroundActivity {
     }
 }
 
-/// One line of activity output in the unified log cursor protocol.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct BackgroundActivityLogLine {
-    pub seq: u64,
-    /// `stdout` / `stderr` for shell, `message` for agent transcripts.
-    pub stream: String,
-    pub ts_ms: i64,
-    pub text: String,
-    #[serde(default)]
-    pub chunk: bool,
-}
-
-/// Unified log read result. Mirrors the shell monitor read contract so every
-/// source can offer incremental `since_seq` tails.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct BackgroundActivityLogRead {
-    pub activity_id: String,
-    pub status: BackgroundActivityStatus,
-    pub lines: Vec<BackgroundActivityLogLine>,
-    pub last_seq: u64,
-    pub has_more: bool,
-    pub dropped_lines: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub exit_code: Option<i32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub completion_reason: Option<String>,
-}
-
 /// Why a [`BackgroundActivityChangedEvent`] was published.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Display, EnumString,
@@ -229,40 +196,4 @@ pub struct BackgroundActivityChangedEvent {
     pub reason: BackgroundActivityEventReason,
     pub activity: BackgroundActivity,
     pub ts_ms: i64,
-}
-
-/// Query filter shared by list endpoints.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-#[serde(default)]
-pub struct BackgroundActivityFilter {
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub kinds: Vec<BackgroundActivityKind>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub statuses: Vec<BackgroundActivityStatus>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<i64>,
-    /// If set, only active (pending/running) activities are returned.
-    pub active_only: bool,
-}
-
-impl BackgroundActivityFilter {
-    pub fn matches(&self, activity: &BackgroundActivity) -> bool {
-        if !self.kinds.is_empty() && !self.kinds.contains(&activity.kind) {
-            return false;
-        }
-        if !self.statuses.is_empty() && !self.statuses.contains(&activity.status) {
-            return false;
-        }
-        if let Some(session_id) = self.session_id {
-            let matches = activity.session_id == Some(session_id)
-                || activity.parent_session_id == Some(session_id);
-            if !matches {
-                return false;
-            }
-        }
-        if self.active_only && !activity.is_active() {
-            return false;
-        }
-        true
-    }
 }

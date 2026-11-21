@@ -309,7 +309,10 @@ export function invalidateResources(
 
 export function invalidateResourcePrefix(prefix: string, reason: InvalidationReason = 'reconcile') {
   ensureScope()
-  invalidateResources(new Set([...listeners.keys(), ...versions.keys()].filter((key) => key.startsWith(prefix))), reason)
+  invalidateResources(
+    new Set([...listeners.keys(), ...versions.keys()].filter((key) => key.startsWith(prefix))),
+    reason,
+  )
 }
 
 export function applyResourceEvent(event: SseEvent) {
@@ -355,18 +358,10 @@ export function applyResourceEvent(event: SseEvent) {
   } else if (event.type === 'runtime_signal') {
     const payload =
       props.payload && typeof props.payload === 'object' && !Array.isArray(props.payload) ? props.payload : {}
-    if (props.kind === 'activity') {
-      const activity =
-        payload.activity && typeof payload.activity === 'object' && !Array.isArray(payload.activity)
-          ? payload.activity
-          : payload
-      if (typeof activity.id === 'string') keys.push(`activity:${activity.id}`)
-      if (typeof activity.id === 'string') keys.push(`activity:${activity.id}:logs`)
-      if (payload.reason !== 'updated' && payload.reason !== 'logs_changed') {
-        keys.push('activities')
-        if (sid) keys.push(`session:${sid}:state`)
-      }
+    if (props.kind === 'runtime_task_changed' && typeof payload.task_id === 'string') {
+      keys.push(`runtime-task:${payload.task_id}`)
     }
+    if (props.kind === 'schedule_changed' && sid) keys.push(`session:${sid}:schedules`)
     if (props.kind === 'plugin' && payload.kind === 'plan.changed' && sid) keys.push(`session:${sid}:plan`)
   }
   invalidateResources(keys)

@@ -81,17 +81,19 @@ impl Clock {
         let RuntimeLiveSignal::Activity(activity) = signal else {
             return;
         };
+        let key = match activity.activity.kind {
+            agena_domain::BackgroundActivityKind::Runtime => {
+                format!("runtime-task:{}", activity.activity_id)
+            }
+            agena_domain::BackgroundActivityKind::Cron
+                if let Some(id) = activity.activity.session_id =>
+            {
+                format!("session:{id}:schedules")
+            }
+            _ => return,
+        };
         let revision = self.tick();
-        self.set("activities".into(), revision);
-        self.set(format!("activity:{}", activity.activity_id), revision);
-        self.set(format!("activity:{}:logs", activity.activity_id), revision);
-        if let Some(id) = activity
-            .activity
-            .parent_session_id
-            .or(activity.activity.session_id)
-        {
-            self.set(format!("session:{id}:state"), revision);
-        }
+        self.set(key, revision);
     }
 }
 
@@ -384,9 +386,20 @@ impl ResourceRevisions {
             }
         }
         if let Some(signal) = signal {
-            keys.push("activities".to_owned());
+            if signal.kind == "runtime_task_changed"
+                && let Some(id) = signal
+                    .payload
+                    .get("task_id")
+                    .and_then(serde_json::Value::as_str)
+            {
+                keys.push(format!("runtime-task:{id}"));
+            }
             if let Some(id) = signal.session_id {
-                keys.push(format!("session:{id}:state"));
+                if signal.kind == "schedule_changed" {
+                    keys.push(format!("session:{id}:schedules"));
+                } else {
+                    keys.push(format!("session:{id}:state"));
+                }
                 if signal.kind == "plugin"
                     && signal
                         .payload

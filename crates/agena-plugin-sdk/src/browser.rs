@@ -1,4 +1,4 @@
-//! Operator transport for live browser activities.
+//! Operator control of a session's browser.
 
 use std::net::SocketAddr;
 
@@ -6,6 +6,16 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
+
+#[async_trait]
+pub trait BrowserController: Send + Sync + 'static {
+    async fn browser_control(
+        &self,
+        session_id: i64,
+        command: BrowserControlCommand,
+        network: Option<std::sync::Arc<dyn BrowserNetworkAuthority>>,
+    ) -> Result<BrowserControlResult>;
+}
 
 #[async_trait]
 pub trait BrowserNetworkAuthority: Send + Sync + 'static {
@@ -19,6 +29,8 @@ pub enum BrowserControlCommand {
     Frame {
         page_id: String,
         control_id: Option<String>,
+        #[serde(default)]
+        thumbnail: bool,
     },
     TakeControl {
         page_id: String,

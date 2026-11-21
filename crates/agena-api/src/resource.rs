@@ -8,7 +8,6 @@ use uuid::Uuid;
 
 // Session-facing values now live in the shared contract crate so every
 // transport (REST, WebSocket, plugins) reads one definition.
-pub use agena_session_api::activity::{BackgroundActivityLogResource, BackgroundActivityResource};
 pub use agena_session_api::resource::{
     ActiveExecutionResource, ApprovalModelSelectionResource, DecisionTraceStep,
     ExecutionAttemptResource, HealthResponse, ModelRef, NetworkPermissionConfigResource,
@@ -28,14 +27,12 @@ pub use agena_session_api::resource::{
 
 use std::collections::BTreeMap;
 
-mod activity;
 mod auth;
 mod conversation;
 mod file_changes;
 mod interaction;
 mod notification;
 mod permission;
-pub use activity::*;
 pub use auth::*;
 pub use conversation::*;
 pub use file_changes::*;

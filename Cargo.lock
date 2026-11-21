@@ -203,6 +203,7 @@ dependencies = [
  "getrandom 0.4.3",
  "http-body-util",
  "ignore",
+ "imagesize 0.15.0",
  "jsonschema",
  "jsonwebtoken",
  "libc",

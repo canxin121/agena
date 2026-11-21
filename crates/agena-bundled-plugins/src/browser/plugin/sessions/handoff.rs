@@ -5,7 +5,7 @@ mod viewport;
 use std::sync::Arc;
 
 use agena_plugin_host::sdk::{host_api::AskUserRequest, permission_wait};
-use agena_plugin_sdk::activity::browser::{
+use agena_plugin_sdk::browser::{
     BrowserControlCommand, BrowserControlResult, BrowserHelpRequest, BrowserNetworkAuthority,
     BrowserTab,
 };
@@ -24,7 +24,7 @@ pub(super) type AgentAccess = OwnedRwLockReadGuard<ControlState>;
 
 #[derive(Default)]
 pub(super) struct ControlState {
-    pub(super) activity_source: tokio::sync::OnceCell<Arc<dyn ActivitySourceAdapter>>,
+    pub(super) controller: tokio::sync::OnceCell<Arc<dyn BrowserController>>,
     human: Option<HumanControl>,
     help: Option<HelpRequest>,
 }
@@ -169,6 +169,7 @@ impl BrowserSessions {
             BrowserControlCommand::Frame {
                 page_id,
                 control_id,
+                thumbnail,
             } => {
                 let control = control.read().await;
                 if control.human.is_some() || control_id.is_some() {
@@ -177,7 +178,7 @@ impl BrowserSessions {
                 let page = self.operator_page(session_id, &page_id).await?;
                 page.verify_preview_lease().await?;
                 let _lease = self.lease()?;
-                viewport::frame(&page).await
+                viewport::frame(&page, thumbnail).await
             }
             BrowserControlCommand::TakeControl { page_id } => {
                 let network = network.ok_or_else(control_denied)?;

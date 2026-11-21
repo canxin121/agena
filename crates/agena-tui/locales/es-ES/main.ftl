@@ -2286,7 +2286,7 @@ flash-system-cleared = anulación de la instrucción del sistema eliminada
 flash-runtime-status = estado de la sesión: {$summary}
 flash-diagnostics-summary = diagnósticos: cwd={$cwd} session={$session} queue={$queue} runtime={$runtime}
 flash-session-permission-updated = permisos de sesión actualizados.
-session-work-tasks = Tareas
+session-work-schedules = Programaciones
 session-work-files = Archivos
 session-work-requests = Solicitudes
 session-work-waiting = Esperando herramientas
@@ -2735,7 +2735,7 @@ command-parent-summary = Salta a la sesión principal
 command-diagnostics-summary = Muestra un resumen de diagnóstico anonimizado para enviar comentarios
 command-status-summary = Muestra el estado actual de la sesión, la ejecución, el espacio de trabajo y la interfaz
 command-usage-summary = Abre las analíticas interactivas de tokens y costes
-command-activities-summary = Abre el panel de actividades en segundo plano
+command-schedules-summary = Gestionar las programaciones de la conversación
 command-plan-summary = Abre el visor del plan de la sesión actual
 command-btw-summary = Pregunta por separado mientras continúa la conversación principal. Solo herramientas de lectura; no modifica la conversación principal.
 

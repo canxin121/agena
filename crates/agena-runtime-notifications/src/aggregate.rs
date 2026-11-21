@@ -65,13 +65,7 @@ pub fn from_activity_payload(
     }
 }
 
-/// BackgroundActivity -> Notification。
-///
-/// 后台活动是通知的主要来源之一：每个活动状态变化（新建/运行/成功/失败/取消/停止）
-/// 生成一条 `BackgroundActivity` 通知，落 ActivitiesPanel（可镜像 Log）。
-///
-/// 活动操作（stop/dismiss）不属于通知领域——它们走 activities REST API，
-/// 因此这里不附加任何 `ActionTarget`。
+/// Record a lifecycle change in notification history. Each operation supplies its own controls.
 pub fn from_background_activity(activity: &BackgroundActivity) -> Notification {
     let severity = match activity.status {
         BackgroundActivityStatus::Failed => NotificationSeverity::Error,
@@ -96,7 +90,7 @@ pub fn from_background_activity(activity: &BackgroundActivity) -> Notification {
         },
         severity,
         scope,
-        surface: NotificationSurface::ActivitiesPanel,
+        surface: NotificationSurface::Log,
         source: NotificationSource::Background,
         summary: activity.title.clone(),
         detail,

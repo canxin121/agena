@@ -100,7 +100,7 @@ pub fn default_surface(kind: &NotificationKind) -> NotificationSurface {
         NotificationKind::RunState { .. } => NotificationSurface::PlanPanel,
         NotificationKind::CommandExecution { .. } => NotificationSurface::ComposerFooter,
         NotificationKind::ToolCall { .. } => NotificationSurface::StatusLine,
-        NotificationKind::BackgroundActivity { .. } => NotificationSurface::ActivitiesPanel,
+        NotificationKind::BackgroundActivity { .. } => NotificationSurface::Log,
         NotificationKind::PermissionRequest { .. } => NotificationSurface::PermissionDialog,
         NotificationKind::UserInputRequest { .. } => NotificationSurface::InputPrompt,
         NotificationKind::HistorySearch { .. } => NotificationSurface::HistorySearch,

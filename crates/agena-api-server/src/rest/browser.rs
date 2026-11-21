@@ -1,4 +1,4 @@
-use agena_plugin_host::sdk::activity::browser::BrowserControlCommand;
+use agena_plugin_host::sdk::browser::BrowserControlCommand;
 use axum::http::header::CACHE_CONTROL;
 use axum::response::Response;
 
@@ -30,7 +30,7 @@ async fn browser_command(
         ));
     }
     let result = state
-        .runtime_activities()?
+        .runtime_control()
         .browser_control(session_id, command)
         .await
         .map_err(|error| ServerError::from_failure(*error.failure))?;

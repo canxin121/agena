@@ -128,8 +128,7 @@ pub use attachment::{
 pub use auto_compaction::SessionAutoCompactionConfig;
 pub use background_activity::{
     BackgroundActivity, BackgroundActivityChangedEvent, BackgroundActivityEventReason,
-    BackgroundActivityFilter, BackgroundActivityKind, BackgroundActivityLogLine,
-    BackgroundActivityLogRead, BackgroundActivityStatus,
+    BackgroundActivityKind, BackgroundActivityStatus,
 };
 pub use command_events::CommandOutputStream;
 pub use config_setting_source::{

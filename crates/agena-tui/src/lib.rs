@@ -11,7 +11,7 @@
 //! - **Composer & input** — [`composer`], [`input`], [`file_attach`],
 //!   [`file_mentions`], [`command_palette`], [`prompt_history`].
 //! - **Transcript & timeline** — [`timeline`], [`plan_viewer`],
-//!   [`activities`], [`session_status`].
+//!   [`session_status`].
 //! - **Permissions & choices** — [`permission_prompt`], [`choice`],
 //!   [`selection_picker`], [`user_input`], [`model_chooser`].
 //! - **Terminal** — [`terminal`], [`terminal_capabilities`],
@@ -20,7 +20,6 @@
 //! - **Chrome** — [`status_line`], [`help`], [`keymap`], [`slash_commands`],
 //!   [`usage`], [`i18n`], [`main_focus`].
 
-pub mod activities;
 pub mod choice;
 pub mod command_palette;
 pub mod composer;

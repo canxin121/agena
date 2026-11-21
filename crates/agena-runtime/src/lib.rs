@@ -113,7 +113,6 @@ mod watch_paths;
 
 pub use runtime::bootstrap_application_services;
 
-pub use activity::{ActivityControlError, RuntimeActivityService};
 pub(crate) use agena_bundled_plugins::tool::{memory_plugin_id, new_memory_plugin};
 pub use agena_runtime_config::default_config_path;
 pub(crate) use agena_runtime_config::project_config_path;

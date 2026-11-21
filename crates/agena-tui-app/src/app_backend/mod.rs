@@ -12,7 +12,6 @@
 //! palettes, file search) stay synchronous — never `async` — so they can run
 //! directly inside synchronous TUI handlers.
 
-pub(crate) mod activities;
 pub(crate) mod aws;
 pub(crate) mod config;
 pub(crate) mod file_index;

@@ -5,7 +5,6 @@
 //! `agena-tui-components`; configurable composer actions are re-exported here
 //! so this directory is the discovery point for all Agena TUI input policy.
 
-mod activities;
 mod core;
 mod plugin;
 mod studio;
@@ -94,7 +93,6 @@ pub enum KeyContext {
     UserInputQuestion,
     UserInputReview,
     Usage,
-    Activities,
     PlanViewer,
     Hub,
     SettingsStudio,
@@ -236,12 +234,6 @@ pub enum KeyAction {
     UsageCycleModel,
     UsageToggleSubagents,
     UsageCycleSort,
-    ActivitiesToggleFinished,
-    ActivitiesCycleKind,
-    ActivitiesCycleStatus,
-    ActivitiesStop,
-    ActivitiesDismiss,
-    ActivitiesClearFinished,
     ModelCatalogSearch,
     PluginCycleTransport,
     PluginCycleConfig,
@@ -280,7 +272,6 @@ pub fn resolve(context: KeyContext, key: KeyEvent) -> Option<KeyAction> {
         | KeyContext::PlanViewer
         | KeyContext::Hub => core::resolve(context, key),
         KeyContext::Usage => usage::resolve(key),
-        KeyContext::Activities => activities::resolve(key),
         KeyContext::SettingsStudio
         | KeyContext::PermissionStudio
         | KeyContext::PermissionRuleStudio

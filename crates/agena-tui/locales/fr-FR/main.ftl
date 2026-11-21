@@ -1118,7 +1118,7 @@ command-parent-summary = Accéder à la session parente
 command-diagnostics-summary = Afficher un résumé de diagnostic expurgé pour le signalement
 command-status-summary = Afficher l’état actuel de la session, de l’exécution, de l’espace de travail et de l’interface
 command-usage-summary = Ouvrir les statistiques interactives de jetons et de coûts
-command-activities-summary = Ouvrir le panneau des activités en arrière-plan
+command-schedules-summary = Gérer les planifications de cette conversation
 command-plan-summary = Ouvrir l’afficheur de plan de la session actuelle
 command-btw-summary = Poser une question à part pendant que la conversation principale continue. Outils en lecture seule ; aucune modification de la conversation principale.
 
@@ -2597,7 +2597,7 @@ flash-system-cleared = Remplacement de l’invite système supprimé
 flash-runtime-status = État de la session : {$summary}
 flash-diagnostics-summary = Diagnostic : cwd={$cwd} session={$session} queue={$queue} runtime={$runtime}
 flash-session-permission-updated = Autorisations de session mises à jour.
-session-work-tasks = Tâches
+session-work-schedules = Planifications
 session-work-files = Fichiers
 session-work-requests = Demandes
 session-work-waiting = En attente des outils

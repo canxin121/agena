@@ -211,7 +211,6 @@ const SETTINGS_CATEGORIES: readonly SettingsCategory[] = [
     icon: 'runtime-session',
     keywords: ['history', 'usage', 'memory', 'records', '数据', '记录'],
     tasks: [
-      { id: 'activity', section: 'diagnostics', view: 'activities', label: () => st('Activity history') },
       {
         id: 'usage',
         section: 'diagnostics',

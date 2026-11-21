@@ -112,43 +112,6 @@ pub async fn dispatch_query(
             }))
         }
         Query::Runtime => Ok(QueryResult::Runtime(state.runtime_status_response().await?)),
-        Query::ListActivities(params) => {
-            let service = state.runtime_activities()?;
-            let filter = crate::service::activity_filter_from_params(&params);
-            let activities = service
-                .list_activities(&filter)
-                .await
-                .map_err(activity_control_error)?;
-            Ok(QueryResult::Activities(
-                activities
-                    .iter()
-                    .map(agena_api::resource::BackgroundActivityResource::from)
-                    .collect(),
-            ))
-        }
-        Query::GetActivity(GetActivityParams { activity_id }) => {
-            let service = state.runtime_activities()?;
-            let activity = service
-                .get_activity(&activity_id)
-                .await
-                .map_err(activity_control_error)?;
-            Ok(QueryResult::Activity(
-                agena_api::resource::BackgroundActivityResource::from(&activity),
-            ))
-        }
-        Query::ActivityLogs(ActivityLogsParams {
-            activity_id,
-            since_seq,
-            limit,
-            wait_ms,
-        }) => {
-            let service = state.runtime_activities()?;
-            let read = service
-                .activity_logs(&activity_id, since_seq, limit, wait_ms)
-                .await
-                .map_err(activity_control_error)?;
-            Ok(QueryResult::ActivityLogs(read.into()))
-        }
         Query::ListProviders => Ok(QueryResult::Providers(
             crate::provider_queries::list_providers_response(state),
         )),
@@ -242,14 +205,9 @@ pub async fn dispatch_query(
     }
 }
 use super::{
-    ActivityLogsParams, ApplicationError, CursorPaginationQuery, GetActivityParams,
-    GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams, ListPermissionRulesParams,
-    ListProviderAdapterModelsParams, ListProviderModelsParams,
-    ListSavedProviderAdapterModelsParams, ListSessionsParams, ListWorkspacesParams, Query,
-    QueryResult, SearchPaginationQuery, SessionListQuery, WorkspaceListQuery, optional_result,
-    page_result,
+    ApplicationError, CursorPaginationQuery, GetPermissionRuleParams, GetSessionParams,
+    GetWorkspaceParams, ListPermissionRulesParams, ListProviderAdapterModelsParams,
+    ListProviderModelsParams, ListSavedProviderAdapterModelsParams, ListSessionsParams,
+    ListWorkspacesParams, Query, QueryResult, SearchPaginationQuery, SessionListQuery,
+    WorkspaceListQuery, optional_result, page_result,
 };
-
-fn activity_control_error(error: agena_runtime::ActivityControlError) -> ApplicationError {
-    ApplicationError::bad_request_error(&error)
-}

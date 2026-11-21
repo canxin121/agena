@@ -1,9 +1,9 @@
-//! Session work surface: tasks, recorded file edits and provider retry
+//! Session work surface: schedules, recorded file edits and provider retry
 //! status for the current session, rendered as a full-screen route. Bounded
 //! reads and the canonical execution snapshot keep it consistent with the
 //! chat surface; the composer only carries the chip counts.
 use crate::{App, AppMessage, Route};
-use agena_api::resource::{BackgroundActivityLogResource, BackgroundActivityResource};
+use agena_api::resource::ScheduledJobResource;
 use agena_tui::main_focus::Focus;
 use agena_tui_components::{
     pointer::{self, PointerAction},
@@ -32,7 +32,7 @@ impl Drop for ReadTask {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum Tab {
-    Tasks,
+    Schedules,
     #[default]
     Files,
     Status,
@@ -40,7 +40,7 @@ pub(crate) enum Tab {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Detail {
-    Task(String),
+    Schedule(String),
     File(String),
 }
 
@@ -49,9 +49,8 @@ pub(crate) type FilePage = agena_api::resource::SessionFileChangesResource;
 #[derive(Debug)]
 pub(crate) enum WorkResult {
     Files(FilePage),
-    Logs(BackgroundActivityLogResource),
     Diff(String, bool),
-    Control(Box<BackgroundActivityResource>),
+    Schedules(Vec<ScheduledJobResource>),
 }
 
 #[derive(Debug, Default)]
@@ -61,8 +60,7 @@ pub(crate) struct SessionWorkState {
     page: usize,
     selected: usize,
     detail: Option<Detail>,
-    detail_activity: Option<BackgroundActivityResource>,
-    logs: Option<BackgroundActivityLogResource>,
+    schedules: Vec<ScheduledJobResource>,
     diff: String,
     diff_limit: usize,
     diff_truncated: bool,
@@ -70,16 +68,15 @@ pub(crate) struct SessionWorkState {
     detail_task: Option<ReadTask>,
     file_request: u64,
     detail_request: u64,
-    control_request: u64,
-    control_observation: Option<(String, String, Option<i64>)>,
+    schedule_request: u64,
+    schedules_at: Option<Instant>,
     file_at: Option<Instant>,
     detail_at: Option<Instant>,
     file_dirty: bool,
     detail_dirty: bool,
-    activity_times: std::collections::BTreeMap<String, i64>,
     file_error: Option<String>,
     detail_error: Option<String>,
-    control_error: Option<String>,
+    schedule_error: Option<String>,
     scroll: u16,
     max_scroll: u16,
     render_key: Option<(String, u16, ratatui::style::Color)>,
@@ -96,8 +93,6 @@ impl SessionWorkState {
     fn select_detail(&mut self, detail: Option<Detail>) {
         self.cancel_detail();
         self.detail = detail;
-        self.detail_activity = None;
-        self.logs = None;
         self.diff.clear();
         self.diff_limit = 256 * 1024;
         self.diff_truncated = false;
@@ -116,33 +111,23 @@ impl App {
             .is_some_and(|files| files.total_files > 0 || files.recording_incomplete)
     }
 
-    fn session_work_has_tasks(&self) -> bool {
-        self.transcript
-            .execution
-            .as_ref()
-            .is_some_and(|e| !e.background_activities.is_empty())
-    }
-
     fn heal_session_work_selection(&mut self, id: i64) {
         if self.transcript.session_id != Some(id) {
             return;
         }
         let has_files = self.session_work_has_files();
-        let has_tasks = self.session_work_has_tasks();
         let has_status = self.session_work_has_status();
         let Some(state) = self.session_work.get_mut(&id) else {
             return;
         };
         let tab_available = match state.tab {
             Tab::Files => has_files,
-            Tab::Tasks => has_tasks,
+            Tab::Schedules => true,
             Tab::Status => has_status,
         };
         if !tab_available {
             state.tab = if has_files {
                 Tab::Files
-            } else if has_tasks {
-                Tab::Tasks
             } else if has_status {
                 Tab::Status
             } else {
@@ -185,7 +170,7 @@ impl App {
             let oldest = self
                 .session_work
                 .iter()
-                .filter(|(_, s)| s.control_request == 0)
+                .filter(|(_, s)| s.schedule_request == 0)
                 .min_by_key(|(_, s)| s.file_at)
                 .map(|(id, _)| *id);
             if let Some(oldest) = oldest {
@@ -207,20 +192,27 @@ impl App {
                     }
             });
         let detail_due = panel_open
-            && state.detail.is_some()
+            && matches!(state.detail, Some(Detail::File(_)))
             && state.detail_task.is_none()
             && state.detail_at.is_none_or(|at| {
                 now.duration_since(at)
                     >= Duration::from_millis(if state.detail_error.is_some() {
                         30_000
-                    } else if state.detail_dirty
-                        || state.logs.as_ref().is_some_and(|logs| logs.has_more)
-                    {
+                    } else if state.detail_dirty {
                         750
                     } else {
                         30_000
                     })
             });
+        let schedules_due = panel_open
+            && state.tab == Tab::Schedules
+            && state.schedule_request == 0
+            && state
+                .schedules_at
+                .is_none_or(|at| now.duration_since(at) >= Duration::from_secs(15));
+        if schedules_due {
+            self.request_work_schedules(id, None);
+        }
         if files_due {
             self.request_work_files(id);
         }
@@ -237,73 +229,10 @@ impl App {
         }
     }
 
-    pub(crate) fn apply_session_activity(
-        &mut self,
-        id: i64,
-        time: i64,
-        dismissed: bool,
-        activity: BackgroundActivityResource,
-    ) {
-        let state = self.session_work.entry(id).or_default();
-        if state
-            .activity_times
-            .get(&activity.id)
-            .is_some_and(|previous| *previous >= time)
-        {
-            return;
+    pub(crate) fn mark_session_schedules_changed(&mut self, id: i64) {
+        if let Some(state) = self.session_work.get_mut(&id) {
+            state.schedules_at = None;
         }
-        if state.activity_times.len() >= 512
-            && !state.activity_times.contains_key(&activity.id)
-            && let Some(oldest) = state
-                .activity_times
-                .iter()
-                .min_by_key(|(_, time)| *time)
-                .map(|(id, _)| id.clone())
-        {
-            state.activity_times.remove(&oldest);
-        }
-        state.activity_times.insert(activity.id.clone(), time);
-        if matches!(&state.detail, Some(Detail::Task(task)) if task == &activity.id) {
-            if state.detail_activity.as_ref() != Some(&activity) {
-                state.detail_activity = Some(activity.clone());
-            }
-            state.detail_dirty = true;
-        }
-        let mut representation_changed = false;
-        let execution_absent = self.transcript.execution.is_none();
-        if let Some(execution) = self.transcript.execution.as_mut() {
-            if dismissed {
-                representation_changed = execution
-                    .background_activities
-                    .iter()
-                    .any(|row| row.id == activity.id);
-                execution
-                    .background_activities
-                    .retain(|row| row.id != activity.id);
-            } else if let Some(row) = execution
-                .background_activities
-                .iter_mut()
-                .find(|row| row.id == activity.id)
-            {
-                if row != &activity {
-                    *row = activity;
-                    representation_changed = true;
-                }
-            } else {
-                execution.background_activities.insert(0, activity);
-                representation_changed = true;
-            }
-        }
-        // A snapshot already in flight may precede this event. Leave one
-        // trailing refresh so applying that older body cannot erase the event.
-        if execution_absent
-            || (representation_changed
-                && (self.transcript.refresh_in_flight_since.is_some()
-                    || self.transcript.state_load_in_flight_since.is_some()))
-        {
-            self.pending_refresh_for(id);
-        }
-        self.heal_session_work_selection(id);
     }
 
     pub(crate) fn handle_work_row(&mut self, index: usize) {
@@ -314,29 +243,19 @@ impl App {
             return;
         };
         state.selected = index;
-        let detail = if state.tab == Tab::Tasks {
-            self.transcript
-                .execution
-                .as_ref()
-                .and_then(|e| e.background_activities.get(index))
-                .map(|a| Detail::Task(a.id.clone()))
-        } else {
-            state
+        let detail = match state.tab {
+            Tab::Schedules => state
+                .schedules
+                .get(index)
+                .map(|row| Detail::Schedule(row.id.clone())),
+            Tab::Files => state
                 .files
                 .as_ref()
-                .and_then(|p| p.files.get(index))
-                .map(|f| Detail::File(f.path.clone()))
+                .and_then(|page| page.files.get(index))
+                .map(|file| Detail::File(file.path.clone())),
+            Tab::Status => None,
         };
         state.select_detail(detail);
-        state.detail_activity = if state.tab == Tab::Tasks {
-            self.transcript
-                .execution
-                .as_ref()
-                .and_then(|e| e.background_activities.get(index))
-                .cloned()
-        } else {
-            None
-        };
         self.request_work_detail(id);
     }
 
@@ -349,7 +268,7 @@ impl App {
             return;
         }
         if let Some(tab) = match action {
-            "work-tasks" => Some(Tab::Tasks),
+            "work-schedules" => Some(Tab::Schedules),
             "work-files" => Some(Tab::Files),
             "work-status" => Some(Tab::Status),
             _ => None,
@@ -357,33 +276,13 @@ impl App {
             self.open_session_work_panel(tab);
             return;
         }
-        if action == "work-control-primary" {
-            let task = self.session_work.get(&id).and_then(|s| {
-                if let Some(Detail::Task(task)) = &s.detail {
-                    Some(task)
-                } else {
-                    None
-                }
-            });
-            let action = self
-                .transcript
-                .execution
-                .as_ref()
-                .and_then(|e| e.background_activities.iter().find(|a| Some(&a.id) == task))
-                .and_then(|a| a.controls.first())
-                .cloned();
-            if let Some(action) = action {
-                self.control_work_activity(&action);
-            }
-            return;
-        }
-        if let Some(action) = action.strip_prefix("work-control-") {
-            self.control_work_activity(action);
+        if matches!(action, "work-schedule-toggle" | "work-schedule-delete") {
+            self.control_work_schedule(id, action == "work-schedule-delete");
             return;
         }
         let tabs: Vec<_> = [
             (Tab::Files, self.session_work_has_files()),
-            (Tab::Tasks, self.session_work_has_tasks()),
+            (Tab::Schedules, true),
             (Tab::Status, self.session_work_has_status()),
         ]
         .into_iter()
@@ -414,8 +313,9 @@ impl App {
             "work-refresh" => {
                 state.file_at = None;
                 state.detail_at = None;
+                state.schedules_at = None;
             }
-            "work-prev" => {
+            "work-prev" if state.tab == Tab::Files => {
                 state.page = state.page.saturating_sub(1);
                 state.file_at = None;
                 state.selected = 0;
@@ -423,7 +323,7 @@ impl App {
                     files.files.clear();
                 }
             }
-            "work-next" => {
+            "work-next" if state.tab == Tab::Files => {
                 if state.files.as_ref().is_some_and(|f| f.has_more) {
                     state.page += 1;
                     state.file_at = None;
@@ -479,7 +379,8 @@ impl App {
             KeyCode::Char('m') => "work-more-diff",
             KeyCode::Char('n') => "work-next",
             KeyCode::Char('p') => "work-prev",
-            KeyCode::Char('x') => "work-control-primary",
+            KeyCode::Char('x') => "work-schedule-toggle",
+            KeyCode::Delete => "work-schedule-delete",
             KeyCode::Enter => {
                 let index = self.session_work.get(&id).map_or(0, |state| state.selected);
                 self.handle_work_row(index);
@@ -490,42 +391,4 @@ impl App {
         self.handle_session_work_action(action);
         false
     }
-}
-
-fn merge_log_tail(
-    previous: Option<BackgroundActivityLogResource>,
-    mut logs: BackgroundActivityLogResource,
-) -> BackgroundActivityLogResource {
-    if let Some(old) = previous.filter(|old| old.activity_id == logs.activity_id) {
-        logs.last_seq = logs.last_seq.max(old.last_seq);
-        let mut lines = old
-            .lines
-            .into_iter()
-            .map(|line| (line.seq, line))
-            .collect::<std::collections::BTreeMap<_, _>>();
-        for line in logs.lines {
-            lines.insert(line.seq, line);
-        }
-        logs.lines = lines.into_values().collect();
-    }
-    let excess = logs.lines.len().saturating_sub(200);
-    logs.lines.drain(..excess);
-    let mut budget = 128 * 1024;
-    let mut keep = 0;
-    for line in logs.lines.iter_mut().rev() {
-        if budget < 4 {
-            break;
-        }
-        if line.text.len() > budget {
-            let mut start = line.text.len() - budget + 3;
-            while !line.text.is_char_boundary(start) {
-                start += 1;
-            }
-            line.text = format!("…{}", &line.text[start..]);
-        }
-        budget = budget.saturating_sub(line.text.len());
-        keep += 1;
-    }
-    logs.lines.drain(..logs.lines.len() - keep);
-    logs
 }

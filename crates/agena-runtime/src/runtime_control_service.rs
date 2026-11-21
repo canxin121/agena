@@ -53,6 +53,43 @@ impl RuntimeControlServiceError {
 #[async_trait]
 /// Service for controlling the runtime.
 pub trait RuntimeControlService: Send + Sync {
+    async fn browser_control(
+        &self,
+        _session_id: i64,
+        _command: agena_plugin_sdk::browser::BrowserControlCommand,
+    ) -> agena_plugin_sdk::error::Result<agena_plugin_sdk::browser::BrowserControlResult> {
+        Err(agena_plugin_sdk::PluginError::from_kind(
+            agena_plugin_sdk::PluginErrorKind::HostUnavailable,
+            "Browser control is unavailable",
+        ))
+    }
+
+    fn session_processes(
+        &self,
+        _session_id: i64,
+        _websocket: bool,
+    ) -> Vec<agena_domain::ProcessSummary> {
+        Vec::new()
+    }
+
+    fn session_process(
+        &self,
+        _session_id: i64,
+        _id: &str,
+        _websocket: bool,
+    ) -> Option<agena_domain::ProcessSummary> {
+        None
+    }
+
+    async fn stop_session_process(
+        &self,
+        _session_id: i64,
+        _id: &str,
+        _websocket: bool,
+    ) -> Result<Option<agena_domain::ProcessSummary>, RuntimeControlServiceError> {
+        Ok(None)
+    }
+
     /// The active client bridge, absent when the built-in MCP plugin is disabled.
     fn mcp_connection_manager(
         &self,

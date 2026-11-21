@@ -180,7 +180,8 @@ async fn fs_edits_files_with_revision_checks() -> TestResult {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn shell_runs_commands_and_owns_background_jobs() -> TestResult {
-    fixture()
+    super::fixture_without_memory()
+        .env("AGENA_SANDBOX", "disabled")
         .expect_plugin("agena.shell")
         .seed_file("workspace/shell-input.txt", b"shell-input-marker\n".to_vec())
         .run(|case| async move {
@@ -251,12 +252,54 @@ async fn shell_runs_commands_and_owns_background_jobs() -> TestResult {
             .await?
             .assert_text_contains("background-ready-marker")?;
 
+            let http = case.http().await;
+            let endpoint = format!("/api/v1/sessions/{}/shell/processes/{process_id}", user.id());
+            let running: Value = http.get(&endpoint).await?.require_success()?.json()?;
+            assert_eq!(running["status"], "running");
+            let resource = running["output_resource"]["resource_id"].as_str().context("shell output resource")?;
+            let output = format!("/api/v1/sessions/{}/content/{resource}/text", user.id());
+            assert!(user.parts().await?.iter().any(|part| part.presentation.as_ref().is_some_and(|view| {
+                view.blocks.iter().any(|block| matches!(block, agena_domain::ViewBlock::ShellProcess {
+                    process_id: presented, ..
+                } if presented == &process_id))
+            })));
+            assert!(http.get(&output).await?.require_success()?.text()?.contains("background-ready-marker"));
+
             // Another session cannot take over a process owned by this one.
             let stranger = self::user(&case).await?;
+            let owned: Vec<Value> = http.get(&format!("/api/v1/sessions/{}/shell/processes", user.id())).await?.require_success()?.json()?;
+            assert!(owned.iter().any(|row| row["process_id"] == process_id && row["output_resource"] == running["output_resource"]));
+            for (session_id, collection) in [(stranger.id(), "shell/processes"), (user.id(), "monitor/subscriptions")] {
+                let rows: Vec<Value> = http.get(&format!("/api/v1/sessions/{session_id}/{collection}")).await?.require_success()?.json()?;
+                assert!(!rows.iter().any(|row| row["process_id"] == process_id));
+            }
+            let wrong_owner = format!("/api/v1/sessions/{}/shell/processes/{process_id}", stranger.id());
+            assert_eq!(
+                http.send_json(reqwest::Method::DELETE, &wrong_owner, &json!({})).await?.status,
+                reqwest::StatusCode::NOT_FOUND
+            );
             stranger
                 .call_tool("shell.stop", json!({"process_id":process_id}))
                 .await?
                 .assert_failed()?;
+            let completion = case.model()
+                .expect(RequestMatch::new("operator stop wakes the owning conversation", |request| {
+                    request.body["input"].as_array().is_some_and(|items| {
+                        items.iter().any(|item| {
+                            let text = item.to_string();
+                            matches!(item["role"].as_str(), Some("system" | "developer"))
+                                && text.contains("background-ready-marker")
+                                && text.contains("was stopped.")
+                        })
+                    })
+                }))
+                .reply(Reply::text("shell-stop-observed"));
+            let stopped_process: Value = http.send_json(reqwest::Method::DELETE, &endpoint, &json!({}))
+                .await?.require_success()?.json()?;
+            assert_eq!(stopped_process["status"], "stopped");
+            assert!(http.get(&output).await?.require_success()?.text()?.contains("background-ready-marker"));
+            completion.observed().await?;
+            user.wait_text_contains("shell-stop-observed").await?;
             let stopped = call(&user, "shell.stop", json!({"process_id":process_id})).await?;
             assert_eq!(stopped.data()?["process_id"], process_id);
             ensure!(stopped.data()?["status"] != "running", "managed job remained running");

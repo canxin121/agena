@@ -42,7 +42,6 @@ stdio、HTTP callback 和 cdylib 的驱动已经传输完整请求枚举。新�
 | 内容资源 | `ReadContent`、`ReadContentText` | 扩展会话操作提供订阅和文件传输 |
 | 交互回复 | 交互状态包含在会话与内容资源中 | `ReplyPermission`、`ReplyUserInput`、`MarkInteractiveRequestPresented` |
 | 权限规则 | `ListPermissionRules`、`GetPermissionRule` | `UpsertPermissionRule`、`ReplacePermissionRule`、`RevokePermissionRule`、`DeletePermissionRule` |
-| 后台活动 | `ListActivities`、`GetActivity`、`ActivityLogs` | `StopActivity`、`DismissActivity`、`ClearFinishedActivities` |
 | 领域扩展 | `Business`、`Management`、`ExtendedSession`、`Server` | 同名四个领域分支 |
 
 ### 2.2 Business：Bot、助手、集成、记忆、通知
@@ -71,7 +70,7 @@ stdio、HTTP callback 和 cdylib 的驱动已经传输完整请求枚举。新�
 | `Mcp` | 外部 MCP connection CRUD、enabled、bridge enabled、导入预览/导入、重连、测试、capabilities、resource、prompt、credential、OAuth start/complete/cancel/logout |
 | `Skills` | 指定 workspace 的 catalog/detail、create/update/delete/enabled，resource read/write/delete，validate，install preview/install |
 | `Plugins` | list/inspect/settings，architecture/surface，tool registry changes，logs，显式 tool 与 command 调用，Plugin Web settings 与 command |
-| `Marketplace` | search、installed、outdated；sync、install、uninstall、upgrade 通过共享后台任务执行 |
+| `Marketplace` | search、installed、outdated 用于查询。sync、install、uninstall、upgrade 返回操作 ID。调用方可通过 `GET /api/v1/runtime/tasks/{task_id}` 查询该操作的结果 |
 | Runtime | `RuntimeTasks`、`RuntimeMetrics`、`RuntimeDiagnostics`；`ReloadRuntime`、`CancelRuntimeTask` |
 | Usage | `Usage` 的 period、自定义日期区间、provider/model/session filters、include_subagents、timezone offset |
 | Operator | `OperatorTools`、`InvokeOperatorTool`；由 Application 分配调用 ID |
@@ -142,7 +141,8 @@ Provider/model 的一般发现使用顶层 Query；Provider Studio 和配置管�
 
 ~~~json
 {
-  "method": "clear_finished_activities"
+  "method": "delete_permission_rule",
+  "params": { "rule_id": 2 }
 }
 ~~~
 
@@ -150,9 +150,9 @@ Provider/model 的一般发现使用顶层 Query；Provider Studio 和配置管�
 
 ~~~json
 {
-  "result": "activities_cleared",
+  "result": "permission_rule_deleted",
   "data": {
-    "count": 2
+    "id": 2
   }
 }
 ~~~

@@ -1287,7 +1287,7 @@ command-parent-summary = 跳至上層工作階段
 command-diagnostics-summary = 顯示已清理的診斷摘要，以供回報
 command-status-summary = 顯示目前工作階段、執行、工作區及介面狀態
 command-usage-summary = 開啟互動式 token 與費用分析
-command-activities-summary = 開啟背景活動面板
+command-schedules-summary = 查看和管理目前工作階段的排程
 command-plan-summary = 開啟目前工作階段的計畫檢視器
 command-btw-summary = 在主要對話繼續進行時另行提問。僅使用唯讀工具；不會變更主要對話。
 
@@ -2492,7 +2492,7 @@ flash-system-cleared = 已清除系統提示詞覆寫
 flash-runtime-status = 工作階段狀態：{$summary}
 flash-diagnostics-summary = 診斷資訊：cwd={$cwd} session={$session} queue={$queue} runtime={$runtime}
 flash-session-permission-updated = 工作階段權限已更新。
-session-work-tasks = 任務
+session-work-schedules = 排程
 session-work-files = 檔案
 session-work-requests = 請求
 session-work-waiting = 等待工具

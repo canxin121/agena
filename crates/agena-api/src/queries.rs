@@ -10,8 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::pagination::PaginatedResponse;
 use crate::resource::{
-    BackgroundActivityLogResource, BackgroundActivityResource, HealthResponse,
-    PermissionRuleResource, ProviderAdapterModelsResponse, ProviderModelsResponse,
+    HealthResponse, PermissionRuleResource, ProviderAdapterModelsResponse, ProviderModelsResponse,
     ProviderSummaryResource, RuntimeStatusResponse, SessionResource, WorkspaceResource,
 };
 
@@ -40,7 +39,4 @@ pub enum QueryResult {
     SessionPlatforms(agena_assistant::PlatformInventory),
     PermissionRules(PaginatedResponse<PermissionRuleResource>),
     PermissionRule(PermissionRuleResource),
-    Activities(Vec<BackgroundActivityResource>),
-    Activity(BackgroundActivityResource),
-    ActivityLogs(BackgroundActivityLogResource),
 }

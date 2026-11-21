@@ -1199,7 +1199,7 @@ command-parent-summary = 親セッションに移動します
 command-diagnostics-summary = フィードバック用に機密情報を除去した診断概要を表示します
 command-status-summary = 現在のセッション、実行、ワークスペース、インターフェイスの状態を表示します
 command-usage-summary = トークンとコストの分析画面を開きます
-command-activities-summary = バックグラウンドアクティビティのパネルを開きます
+command-schedules-summary = この会話のスケジュールを管理する
 command-plan-summary = 現在のセッションのプランビューアーを開きます
 command-btw-summary = メインの会話を続けながら、別途質問します。読み取り専用ツールを使用し、メインの会話には変更を加えません。
 
@@ -2357,7 +2357,7 @@ session-status-plan = 計画 {$slug}
 session-status-plan-with-steps = 計画 {$slug} · {$steps} ステップ
 session-status-thinking = {$value}
 session-status-speed = {$value}
-session-work-tasks = タスク
+session-work-schedules = スケジュール
 session-work-files = ファイル
 session-work-requests = リクエスト
 session-work-waiting = ツール待ち

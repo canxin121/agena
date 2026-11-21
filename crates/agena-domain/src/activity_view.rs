@@ -107,6 +107,22 @@ pub enum ViewBlock {
         #[serde(default)]
         format: crate::ContentFormat,
     },
+    ShellProcess {
+        id: String,
+        process_id: String,
+    },
+    MonitorSubscription {
+        id: String,
+        subscription_id: String,
+    },
+    AgentSession {
+        id: String,
+        session_id: i64,
+    },
+    BrowserPage {
+        id: String,
+        page_id: String,
+    },
     Progress {
         id: String,
         phase: String,
@@ -140,7 +156,12 @@ impl ViewBlock {
             | Self::SearchResults { id, .. }
             | Self::Media { id, .. }
             | Self::Custom { id, .. } => id.as_deref(),
-            Self::Content { id, .. } | Self::Progress { id, .. } => Some(id),
+            Self::Content { id, .. }
+            | Self::ShellProcess { id, .. }
+            | Self::MonitorSubscription { id, .. }
+            | Self::AgentSession { id, .. }
+            | Self::BrowserPage { id, .. }
+            | Self::Progress { id, .. } => Some(id),
         }
     }
 

@@ -90,7 +90,7 @@ client_command_actions! {
     Diagnostics => "diagnostics", "/diagnostics";
     Status => "status", "/status";
     Usage => "usage", "/usage";
-    Activities => "activities", "/activities";
+    Schedules => "schedules", "/schedules";
     Queue => "queue", "/queue";
     Background => "background", "/background";
     Plan => "plan", "/plan";
@@ -124,7 +124,7 @@ mod tests {
 
     #[test]
     fn retired_task_commands_are_not_public_actions() {
-        for name in ["task", "tasks"] {
+        for name in ["task", "tasks", "activities"] {
             assert!(ClientCommandAction::from_action(name).is_none());
             assert!(serde_json::from_value::<ClientCommandAction>(name.into()).is_err());
             assert!(
@@ -133,7 +133,7 @@ mod tests {
                 })
             );
         }
-        for name in ["bot", "activities", "background", "queue"] {
+        for name in ["bot", "schedules", "background", "queue"] {
             assert!(ClientCommandAction::from_action(name).is_some());
         }
     }

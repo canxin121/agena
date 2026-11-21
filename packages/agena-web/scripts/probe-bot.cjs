@@ -242,7 +242,6 @@ async function main() {
     latest_event_seq: 1,
     queued_messages: [],
     queue_paused: false,
-    background_activities: [],
     execution: { agent_status: 'completed' },
   })
   const provider = {
@@ -666,6 +665,10 @@ window.__botProbe = {activeComposerSession: () => {
                     .filter((item) => item.owner_bot_id === owner && (!surface || item.owner_surface === surface))
                   return json({ items, total: items.length, page: { has_more: false } })
                 }
+                if (/^\/api\/v1\/sessions\/\d+\/(shell\/processes|monitor\/subscriptions|schedules)$/.test(p))
+                  return json([])
+                if (/^\/api\/v1\/sessions\/\d+\/browser$/.test(p))
+                  return json({ kind: 'state', tabs: [], human_control: false, help: null })
                 if (p === '/api/v1/sessions')
                   return json({
                     items: [session(7), ...(createdProject ? [session(8)] : [])],
@@ -685,7 +688,6 @@ window.__botProbe = {activeComposerSession: () => {
                 if (/\/sessions\/\d+\/(state|messages)$/.test(p)) return json(execution(Number(p.split('/')[4])))
                 if (p === '/api/v1/workspaces/7') return json({ id: 7, path: '/fixture/project' })
                 if (p === '/api/v1/workbench/fs/home') return json({ home: '/fixture' })
-                if (p === '/api/v1/activities') return json({ items: [], activities: [] })
                 if (p === '/api/v1/workspaces') return json({ items: [], page: { has_more: false } })
                 if (req.method !== 'GET') return json({ error: 'Unexpected fixture mutation' }, 400)
                 return json({ items: [], page: { has_more: false } })

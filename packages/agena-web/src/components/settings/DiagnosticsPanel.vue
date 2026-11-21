@@ -15,6 +15,7 @@ import Button from '@/components/ui/Button.vue'
 import ServerSettingField from '@/components/settings/ServerSettingField.vue'
 import { apiJson } from '@/lib/api'
 import { reloadAgenaRuntime } from '@/lib/reload'
+import type { RuntimeBackgroundTask } from '@/lib/runtimeTask'
 import { validateRuntimeSettings } from '@/lib/runtimeSettings'
 import { useToastsStore } from '@/stores/toasts'
 import type { JsonValue } from '@/types/json'
@@ -30,7 +31,7 @@ type RuntimeStatus = {
   plugin_count?: number
   session_runtime_available?: boolean
   watch_paths?: string[]
-  background_tasks?: Array<{ id?: string; kind?: string; status?: string; title?: string; message?: string | null }>
+  background_tasks?: RuntimeBackgroundTask[]
 }
 
 type ResolvedDocument = {
@@ -72,6 +73,16 @@ const tracingLevelOptions = [
 
 const appliedLayers = computed(() => resolved.value?.meta?.applied_layers || [])
 const resolvedJson = computed(() => JSON.stringify(resolved.value?.config ?? {}, null, 2))
+const latestReload = computed(() => runtime.value?.background_tasks?.find((task) => task.kind === 'runtime_reload'))
+const latestReloadText = computed(() => {
+  const task = latestReload.value
+  if (!task) return ''
+  if (task.message || task.failure?.user?.fallback) return task.message || task.failure?.user?.fallback
+  if (task.status === 'running') return t('chat.partStatus.running')
+  if (task.status === 'failed') return t('chat.partStatus.failed')
+  if (task.status === 'cancelled') return t('chat.partStatus.cancelled')
+  return t('chat.partStatus.completed')
+})
 
 async function refresh() {
   if (loading.value) return
@@ -113,6 +124,7 @@ async function reload() {
     toasts.push('success', st('Runtime reloaded'))
   } catch (reason) {
     if (reloadController.signal.aborted) return
+    await refresh()
     error.value = reason instanceof Error ? reason.message : String(reason)
   } finally {
     actionBusy.value = false
@@ -189,6 +201,10 @@ onMounted(() => void refresh())
           </div>
         </dl>
         <dl class="mt-2.5 divide-y divide-border/50 text-xs">
+          <div v-if="latestReload" class="settings-field-row py-2">
+            <dt class="text-muted-foreground">{{ $st('Latest reload') }}</dt>
+            <dd role="status" class="break-words">{{ latestReloadText }}</dd>
+          </div>
           <div class="settings-field-row py-2">
             <dt class="text-muted-foreground">{{ $st('Workspace:') }}</dt>
             <dd class="break-all font-mono">{{ runtime.workspace_root || '—' }}</dd>
@@ -279,7 +295,12 @@ onMounted(() => void refresh())
         }}</pre>
       </details>
     </SettingsCard>
-    <SettingsCard v-if="validation || reloadInfo" class="settings-columns-wide" :title="$st('Last action')" :icon="RiCheckboxCircleLine">
+    <SettingsCard
+      v-if="validation || reloadInfo"
+      class="settings-columns-wide"
+      :title="$st('Last action')"
+      :icon="RiCheckboxCircleLine"
+    >
       <details v-if="validation" class="min-w-0 rounded-lg border border-border/50">
         <summary class="cursor-pointer px-3 py-2.5 text-sm">{{ $st('Runtime settings are valid') }}</summary>
         <pre dir="ltr" class="max-h-64 overflow-auto border-t border-border/50 p-3 font-mono text-xs">{{

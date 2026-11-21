@@ -8,9 +8,7 @@ pub use agena_session_api::commands::*;
 
 use serde::{Deserialize, Serialize};
 
-use crate::resource::{
-    BackgroundActivityResource, SessionExecutionResource, SessionResource, WorkspaceResource,
-};
+use crate::resource::{SessionExecutionResource, SessionResource, WorkspaceResource};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "result", content = "data", rename_all = "snake_case")]
@@ -33,13 +31,6 @@ pub enum CommandResult {
     PermissionRule(crate::resource::PermissionRuleResource),
     PermissionRuleDeleted {
         id: i64,
-    },
-    Activity(BackgroundActivityResource),
-    ActivityDeleted {
-        id: String,
-    },
-    ActivitiesCleared {
-        count: usize,
     },
     Ack,
 }

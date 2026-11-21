@@ -202,7 +202,15 @@ fn read_runtime_file_setting_document(
     let revision = document_revision(&document);
     crate::normalize_settings_document(&mut document)
         .map_err(RuntimeConfigSettingsError::invalid_input)?;
-    let value = get_json_path(&document, input.target.path.as_deref())?;
+    let mut value = get_json_path(&document, input.target.path.as_deref())?;
+    // Project legacy assignments for the dedicated editor. Keep the raw
+    // document available through the ordinary config reader for repair.
+    if input.target.path.as_deref() == Some("access_control") && !value.is_null() {
+        let catalog: agena_domain::AccessControlConfig = serde_json::from_value(value)
+            .map_err(|error| RuntimeConfigSettingsError::invalid_input_error(&error))?;
+        value = serde_json::to_value(catalog)
+            .map_err(|error| RuntimeConfigSettingsError::invalid_input_error(&error))?;
+    }
     let override_path = if config_found {
         agena_domain::config_setting_override_path(&document, input.target.path.as_deref())
             .map_err(|error| RuntimeConfigSettingsError::invalid_input_error(&error))?
@@ -611,12 +619,6 @@ pub(crate) fn normalize_settings_document(
             normalize_permission_config(
                 &mut profile.permission,
                 &format!("access_control.profiles.{id}.permission"),
-            )?;
-        }
-        for (index, user) in access_control.users.iter_mut().enumerate() {
-            normalize_permission_config(
-                &mut user.overrides,
-                &format!("access_control.users.{index}.overrides"),
             )?;
         }
         access_control

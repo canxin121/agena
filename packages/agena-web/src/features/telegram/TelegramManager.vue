@@ -30,7 +30,6 @@ import {
   telegramChatAllowed,
   telegramChatRows,
   copyTelegramChatAccess,
-  parseTelegramAdministratorIds,
   type TelegramAiBot,
   type TelegramBot,
   type TelegramBotConfig,
@@ -94,42 +93,17 @@ const busy = ref(false),
   scopedLoading = ref(false),
   syncing = ref(false),
   verifying = ref(false)
-const accessEditing = ref(false),
-  selectedRoom = ref(''),
+const selectedRoom = ref(''),
   selectedBinding = ref('')
 const bindings = computed(() =>
   bot.value ? (snapshot.value?.bindings || []).filter((entry) => matchesTelegramBot(entry, bot.value!)) : [],
 )
 const rows = computed(() => (bot.value ? telegramChatRows(bot.value, inventory.value, bindings.value) : []))
 const draft = ref<TelegramBotConfig | null>(null)
-const administratorInput = ref('')
 const reconnectAttempts = ref(new Map<string, TelegramReconnectAttempt>())
 const draftBaseline = ref(''),
   draftRevision = ref(0)
-const dirty = computed(
-  () =>
-    !!draft.value &&
-    (JSON.stringify(draft.value) !== draftBaseline.value ||
-      administratorInput.value !== draft.value.administrator_user_ids.join('\n')),
-)
-const administratorCandidates = computed(() => {
-  const senders = new Map<string, string>()
-  for (const room of inventory.value?.rooms || []) {
-    const id = room.last_sender_id
-    if (id && !room.last_sender_is_bot && /^[1-9][0-9]*$/.test(id)) senders.set(id, room.last_sender_name || id)
-  }
-  return [...senders].slice(0, 16).map(([id, name]) => ({ id, name }))
-})
-function administratorSelected(id: string) {
-  return administratorInput.value.split(/[\s,，]+/).includes(id)
-}
-function toggleAdministrator(id: string) {
-  if (busy.value) return
-  const ids = new Set(administratorInput.value.split(/[\s,，]+/).filter(Boolean))
-  if (ids.has(id)) ids.delete(id)
-  else ids.add(id)
-  administratorInput.value = [...ids].join('\n')
-}
+const dirty = computed(() => !!draft.value && JSON.stringify(draft.value) !== draftBaseline.value)
 const query = ref(''),
   kind = ref(''),
   accessFilter = ref(''),
@@ -183,7 +157,6 @@ const scopeKey = () => botId.value + ':' + (source.value || '')
 
 function resetDraft() {
   draft.value = bot.value ? botConfig(bot.value) : null
-  administratorInput.value = draft.value?.administrator_user_ids.join('\n') || ''
   draftBaseline.value = JSON.stringify(draft.value)
   draftRevision.value = catalog.value.revision
   mutationError.value = ''
@@ -240,7 +213,7 @@ async function refreshAiBots() {
   }
 }
 async function refreshScope() {
-  if (!bot.value || disposed || scopedLoading.value || busy.value || accessEditing.value) return
+  if (!bot.value || disposed || scopedLoading.value || busy.value) return
   const current = epoch,
     key = scopeKey(),
     owner = bot.value.id,
@@ -280,7 +253,7 @@ function resetScope() {
 watch([botId, source], resetScope)
 async function loadDetail(id: string) {
   const sourceId = source.value
-  if (!sourceId || !id || !bindings.value.some((entry) => entry.id === id) || accessEditing.value) return
+  if (!sourceId || !id || !bindings.value.some((entry) => entry.id === id)) return
   const generation = ++detailGeneration,
     key = scopeKey()
   detailRead?.abort()
@@ -403,11 +376,6 @@ async function saveAccess() {
   mutationError.value = ''
   stopScopeReads()
   try {
-    try {
-      config.administrator_user_ids = parseTelegramAdministratorIds(administratorInput.value)
-    } catch {
-      throw new Error(tx('administratorIdsInvalid'))
-    }
     await telegramApi.save(draftRevision.value, config)
     if (disposed) return
     draft.value = null
@@ -594,10 +562,6 @@ async function rebuild(binding: IntegrationBinding) {
   }
   if (!disposed) await refreshScope()
 }
-function accessChanged(binding: IntegrationBinding) {
-  if (detail.value?.binding.id === binding.id) detail.value.binding = binding
-  void refreshScope()
-}
 async function loadLogs() {
   try {
     const result = await apiJson<{ logs?: typeof logs.value }>('/api/v1/plugins/agena.telegram/logs?limit=80')
@@ -623,7 +587,7 @@ onMounted(() => {
   void refreshAll()
 })
 const timer = setInterval(() => {
-  if (visible.value && !busy.value && !editor.value && !manual.value && !dirty.value && !accessEditing.value) {
+  if (visible.value && !busy.value && !editor.value && !manual.value && !dirty.value) {
     void refreshCatalog().then(refreshScope)
   }
 }, 15000)
@@ -814,51 +778,6 @@ onBeforeUnmount(() => {
               {{ aiLoading ? tx('aiBotsLoading') : aiBots.length ? tx('aiBotHint') : tx('noAiBots') }}
             </p>
             <p v-if="aiError" role="alert" class="break-words text-xs text-destructive">{{ aiError }}</p>
-          </section>
-
-          <section
-            class="space-y-3 rounded-xl border border-border/70 bg-card p-4 sm:p-5"
-            data-testid="telegram-administrators"
-          >
-            <label for="telegram-administrator-ids" class="block text-sm font-semibold">{{
-              tx('administrators')
-            }}</label>
-            <p id="telegram-administrator-hint" class="text-xs leading-relaxed text-muted-foreground">
-              {{ tx('administratorsHint') }}
-            </p>
-            <textarea
-              id="telegram-administrator-ids"
-              v-model="administratorInput"
-              :disabled="busy"
-              rows="3"
-              :placeholder="tx('administratorIdsPlaceholder')"
-              aria-describedby="telegram-administrator-hint"
-              data-testid="telegram-administrator-ids"
-              class="w-full min-w-0 resize-y rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            />
-            <div v-if="administratorCandidates.length" class="space-y-2">
-              <p class="text-xs text-muted-foreground">{{ tx('administratorCandidates') }}</p>
-              <div class="flex flex-wrap gap-2">
-                <button
-                  v-for="candidate in administratorCandidates"
-                  :key="candidate.id"
-                  type="button"
-                  :disabled="busy"
-                  :aria-pressed="administratorSelected(candidate.id)"
-                  :class="
-                    administratorSelected(candidate.id)
-                      ? 'border-sky-500/50 bg-sky-500/10 text-sky-700 dark:text-sky-300'
-                      : 'border-border text-muted-foreground'
-                  "
-                  class="rounded-lg border px-3 py-2 text-xs disabled:opacity-50"
-                  :data-telegram-administrator="candidate.id"
-                  @click="toggleAdministrator(candidate.id)"
-                >
-                  {{ candidate.name }} <span class="font-mono">{{ candidate.id }}</span>
-                  <span v-if="administratorSelected(candidate.id)"> · {{ tx('administrator') }}</span>
-                </button>
-              </div>
-            </div>
           </section>
 
           <section
@@ -1119,14 +1038,11 @@ onBeforeUnmount(() => {
                   v-if="detail && source"
                   :key="detail.binding.id"
                   :detail="detail"
-                  :source="source"
                   :busy="busy"
                   :bot-enabled="bot.enabled"
                   :rebuild-pending="rebuildPending(detail.binding)"
                   @control="control"
                   @rebuild="rebuild"
-                  @changed="accessChanged"
-                  @editing="accessEditing = $event"
                   @open-session="emit('openSession', $event)"
                 />
               </div>

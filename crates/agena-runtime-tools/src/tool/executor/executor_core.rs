@@ -98,9 +98,7 @@ impl ToolExecutor {
         &self.workspace_root
     }
 
-    /// Build a session-scoped executor and await definition hooks on the
-    /// owning runtime. This is the only session-context construction path.
-    pub async fn for_session_context_async<C: crate::ToolSessionContext + ?Sized>(
+    fn scope_session_principal<C: crate::ToolSessionContext + ?Sized>(
         &self,
         session_context: &C,
     ) -> Self {
@@ -123,6 +121,18 @@ impl ToolExecutor {
         } else if let Some(root) = session_context.effective_workspace_root() {
             scoped.workspace_root = root.to_path_buf();
         }
+        scoped.channel_authority = session_context.channel_authority().cloned();
+        scoped.channel_verifier = session_context.channel_verifier();
+        if scoped
+            .channel_authority
+            .as_ref()
+            .is_some_and(|authority| authority.permission_complete)
+        {
+            // A complete profile supplies its own exact rules. The source
+            // session's restrictions are applied below as separate ceilings.
+            scoped.principal.tool_policy =
+                crate::permission::ToolPermissionPolicy::new(agena_domain::PermissionMode::Deny);
+        }
         if !session_context.effective_permission().is_empty() {
             scoped.principal = scoped
                 .principal
@@ -141,8 +151,6 @@ impl ToolExecutor {
                 .clone()
                 .apply_permission_ceiling_or_self(ceiling);
         }
-        scoped.channel_authority = session_context.channel_authority().cloned();
-        scoped.channel_verifier = session_context.channel_verifier();
         if let Some(authority) = &scoped.channel_authority
             && !authority.source_admin
         {
@@ -150,17 +158,32 @@ impl ToolExecutor {
                 .principal
                 .clone()
                 .apply_permission_ceiling_or_self(&authority.permission_fence());
-            let permitted = authority
-                .grant
-                .allowed_tools()
-                .into_iter()
-                .collect::<std::collections::HashSet<_>>();
-            match scoped.allowed_tool_names.as_mut() {
-                Some(current) => current.retain(|name| permitted.contains(name)),
-                None => scoped.allowed_tool_names = Some(permitted),
-            }
         }
         scoped.definition_catalog = None;
+        scoped
+    }
+
+    /// Scope a concrete resource check to the live principal without loading
+    /// tool definitions. This executor has no tools available for invocation.
+    pub fn for_session_resource_context<C: crate::ToolSessionContext + ?Sized>(
+        &self,
+        session_context: &C,
+    ) -> Self {
+        let mut scoped = self.scope_session_principal(session_context);
+        scoped.allowed_tool_names = Some(Default::default());
+        scoped.definition_catalog = Some(Arc::new(Vec::new()));
+        if let Some(model_id) = session_context.selected_model() {
+            scoped.model_id = Some(model_id.to_owned());
+        }
+        scoped
+    }
+
+    /// Build a session-scoped executor and await definition hooks on the owning runtime.
+    pub async fn for_session_context_async<C: crate::ToolSessionContext + ?Sized>(
+        &self,
+        session_context: &C,
+    ) -> Self {
+        let mut scoped = self.scope_session_principal(session_context);
         let definition_catalog = scoped
             .registered_tools_with_definition_overrides_async()
             .await;
@@ -346,6 +369,10 @@ impl ToolExecutor {
         &self.plugins
     }
 
+    pub fn plugin_is_enabled(&self, plugin: &agena_plugin_host::sdk::PluginKey) -> bool {
+        self.principal.plugin_is_enabled(plugin)
+    }
+
     pub fn builtin_tool_set(&self) -> BuiltinToolSet {
         BuiltinToolSet::for_model(self.model_id.as_deref())
     }
@@ -409,22 +436,28 @@ impl ToolExecutor {
     }
 
     pub(crate) fn available_registered_tools(&self) -> Vec<RegisteredTool> {
-        let tool_set = self.builtin_tool_set();
-        self.registered_tools_with_definition_overrides()
-            .into_iter()
-            .filter(|entry| {
-                tool_set.is_tool_enabled(entry) && self.tool_is_within_capability(entry)
-            })
-            .collect()
+        self.filter_tool_catalog(self.registered_tools_with_definition_overrides())
     }
 
     pub(crate) async fn available_registered_tools_async(&self) -> Vec<RegisteredTool> {
+        self.filter_tool_catalog(
+            self.registered_tools_with_definition_overrides_async()
+                .await,
+        )
+    }
+
+    fn filter_tool_catalog(&self, tools: Vec<RegisteredTool>) -> Vec<RegisteredTool> {
         let tool_set = self.builtin_tool_set();
-        self.registered_tools_with_definition_overrides_async()
-            .await
+        let uses_profile = self
+            .channel_authority
+            .as_ref()
+            .is_some_and(|authority| authority.uses_profile_tool_permissions());
+        tools
             .into_iter()
             .filter(|entry| {
-                tool_set.is_tool_enabled(entry) && self.tool_is_within_capability(entry)
+                tool_set.is_tool_enabled(entry)
+                    && self.tool_is_within_capability(entry)
+                    && (!uses_profile || self.tool_is_discoverable_under_permission(entry))
             })
             .collect()
     }
@@ -432,22 +465,21 @@ impl ToolExecutor {
     /// Whether this tool may be offered to the executor's conversation kind.
     ///
     /// Applicability is the declaration's own statement about which
-    /// conversations it serves, so it is checked before the grant, profile and
-    /// read-only filters: a project-only tool is not "denied" in a Bot
-    /// session, it simply does not belong there.
+    /// conversations it serves. This is checked before permission rules.
     pub(crate) fn tool_applies_to_session(&self, entry: &RegisteredTool) -> bool {
         entry.definition().applies_to.contains(self.session_kind)
     }
 
     pub(crate) fn tool_is_within_capability(&self, entry: &RegisteredTool) -> bool {
-        if !self.tool_applies_to_session(entry) {
+        if !self.tool_applies_to_session(entry) || !self.plugin_is_enabled(entry.plugin_key()) {
             return false;
         }
-        if self
-            .channel_authority
-            .as_ref()
-            .is_some_and(|a| !a.active_at(chrono::Utc::now().timestamp_millis()))
-        {
+        if self.channel_authority.as_ref().is_some_and(|authority| {
+            !authority.allows_tool(
+                &entry.canonical_name(),
+                chrono::Utc::now().timestamp_millis(),
+            )
+        }) {
             return false;
         }
 

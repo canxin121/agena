@@ -65,29 +65,14 @@ test('selects configured rooms and combines topic bindings only within the same 
   ).toEqual([{ actor: '7', display_name: 'Current', first_seen_at_ms: 100, last_seen_at_ms: 250 }])
 })
 
-test('bulk edits keep individual overrides and account-wide groups outside the selected room draft', () => {
+test('binds one profile per scoped member and removes it on inheritance', () => {
   const [room, personal] = channelAssignmentRooms(inventory)
   const scoped = room!.identity
   const catalog = emptyPermissionCatalog()
-  const accountBinding = {
-    platform: scoped.platform,
-    tenant: scoped.tenant,
-    account: scoped.account,
-    actor: '7',
-    group_ids: ['account-group'],
-    overrides: {},
-  }
-  const personalBinding = { ...personal!.identity, actor: '7', group_ids: ['other-account'], overrides: {} }
+  const personalBinding = { ...personal!.identity, actor: '7', profile_id: 'other-profile' }
   catalog.users = [
-    accountBinding,
-    {
-      ...scoped,
-      actor: '7',
-      group_ids: ['readers'],
-      profile_id: 'member-profile',
-      overrides: { tools: { names: { shell: 'deny' } } },
-    },
-    { ...scoped, actor: '8', group_ids: ['readers'], overrides: {} },
+    { ...scoped, actor: '7', profile_id: 'member-profile' },
+    { ...scoped, actor: '8', profile_id: 'reader' },
     personalBinding,
   ]
   catalog.conversations = [
@@ -97,19 +82,18 @@ test('bulk edits keep individual overrides and account-wide groups outside the s
   const next = applyChannelAssignments(
     catalog,
     room!,
-    'read',
+    'reader',
     new Map([
-      ['7', ['readers', 'reviewers']],
-      ['8', []],
-      ['9', ['reviewers']],
+      ['7', 'reviewer'],
+      ['8', ''],
+      ['9', 'reviewer'],
     ]),
   )
   const bindings = roomPermissionBindings(next, room!)
-  expect(bindings.profile).toBe('read')
-  expect(bindings.members.get('7')).toEqual({ ...catalog.users[1]!, group_ids: ['readers', 'reviewers'] })
+  expect(bindings.profile).toBe('reader')
+  expect(bindings.members.get('7')).toEqual({ ...scoped, actor: '7', profile_id: 'reviewer' })
   expect(bindings.members.has('8')).toBe(false)
-  expect(bindings.members.get('9')).toEqual({ ...scoped, actor: '9', group_ids: ['reviewers'], overrides: {} })
-  expect(bindings.accountMembers.get('7')).toEqual(accountBinding)
+  expect(bindings.members.get('9')).toEqual({ ...scoped, actor: '9', profile_id: 'reviewer' })
   expect(next.users).toContain(personalBinding)
   expect(applyChannelAssignments(next, room!, '', new Map()).conversations).toEqual([catalog.conversations[1]!])
 })

@@ -1,4 +1,5 @@
 //! Explicit user-authorized media preparation into immutable kernel blobs.
+use super::super::model::SessionExecutionContext;
 use super::*;
 use crate::session::kernel::media::{MediaBinding, uri};
 use agena_domain::{
@@ -38,23 +39,6 @@ pub(super) fn tool_media_input_binder(
 }
 
 impl SessionManager {
-    pub(super) async fn prepare_user_media(
-        &self,
-        session: SessionId,
-        model: &ModelRef,
-        document: ComposerDocument,
-        request: RequestId,
-    ) -> Result<(ComposerDocument, Vec<PreparedBlob>), AppError> {
-        self.prepare_user_media_with_state(
-            session,
-            model,
-            document,
-            request,
-            self.state_for_session(session).await?,
-        )
-        .await
-    }
-
     pub(super) async fn prepare_user_media_with_state(
         &self,
         session: SessionId,
@@ -62,6 +46,7 @@ impl SessionManager {
         mut document: ComposerDocument,
         request: RequestId,
         state: Arc<ExecutionState>,
+        context: Option<SessionExecutionContext>,
     ) -> Result<(ComposerDocument, Vec<PreparedBlob>), AppError> {
         if !document.0.iter().any(|node| {
             matches!(node, ComposerNode::Activity { activity }
@@ -76,7 +61,10 @@ impl SessionManager {
             .acquire()
             .await
             .map_err(|_| AppError::Cancelled)?;
-        let context = self.execution_context_with_state(session, &state).await?;
+        let context = match context {
+            Some(context) => context,
+            None => self.execution_context_with_state(session, &state).await?,
+        };
         let executor = state.executor.for_session_context_async(&context).await;
         let root = if context.global {
             None

@@ -703,6 +703,8 @@ pub struct PermissionConfigResource {
     pub network: Option<NetworkPermissionConfigResource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<ToolPermissionConfigResource>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub plugins: BTreeMap<String, bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval_model: Option<ApprovalModelSelectionResource>,
 }
@@ -986,6 +988,7 @@ impl PermissionConfigResource {
                 .tools
                 .as_ref()
                 .is_none_or(ToolPermissionConfigResource::is_empty)
+            && self.plugins.is_empty()
             && self.approval_model.is_none()
     }
 }
@@ -1091,6 +1094,7 @@ impl From<&agena_domain::PermissionConfig> for PermissionConfigResource {
                 }),
             network: value.network.clone(),
             tools: value.tools.as_ref().map(ToolPermissionConfigResource::from),
+            plugins: value.plugins.clone(),
             approval_model: value.approval_model.as_ref().map(|model| {
                 ApprovalModelSelectionResource {
                     provider: model.provider.clone(),
@@ -1194,6 +1198,7 @@ impl From<PermissionConfigResource> for agena_domain::PermissionConfig {
                     })
                     .collect(),
             }),
+            plugins: value.plugins,
             approval_model: value.approval_model.map(|model| {
                 agena_domain::ApprovalModelSelection {
                     provider: model.provider,

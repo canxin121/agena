@@ -294,7 +294,7 @@ pub(crate) fn build_web_config_sections(plugin: &PluginWorkbenchPlugin) -> Vec<C
                     issue_label: section_issue_label(plugin, &config_path(["store"])),
                 },
                 ConfigOverviewCard {
-                    title: "Browser".to_owned(),
+                    title: "Rendering".to_owned(),
                     summary: format!(
                         "{}, wait {}, selector {}",
                         if get_value_at_path(
@@ -559,12 +559,12 @@ pub(crate) fn build_web_config_sections(plugin: &PluginWorkbenchPlugin) -> Vec<C
     sections.push(web_form_section(
         plugin,
         "browser",
-        "Browser",
+        "Rendering",
         config_path(["browser"]),
         None,
         vec![
             ConfigGroupView {
-                title: "Browser".to_owned(),
+                title: "Rendering".to_owned(),
                 layout: ConfigGroupLayout::Standard,
                 rows: vec![
                     build_bool_row(plugin, "Enabled", config_path(["browser", "enabled"]), None),

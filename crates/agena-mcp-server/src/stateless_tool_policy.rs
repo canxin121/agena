@@ -17,6 +17,7 @@ const HIDDEN_STATELESS_MCP_PLUGIN_IDS: &[&str] = &[
     // effects, subagents, or session notifications that stateless MCP cannot
     // deliver correctly.
     "agena.interaction",
+    "agena.browser",
     "agena.session",
     "agena.plan",
     "agena.agent",
@@ -38,10 +39,6 @@ const KNOWN_INTERACTIVE_TOOL_NAMES: &[&str] = &[
     "prompt.ask",
     "prompt.notify",
 ];
-
-// `agena.web` also owns useful stateless fetch/search/crawl tools, so only its
-// managed-browser lifecycle is filtered rather than hiding the entire plugin.
-const KNOWN_INTERACTIVE_TOOL_PREFIXES: &[&str] = &["web.browser_", "agena.web.browser_"];
 
 /// Transport-relevant metadata used to decide whether one runtime tool belongs
 /// on Agena's stateless MCP surface.
@@ -102,9 +99,6 @@ fn plugin_id_is_hidden(plugin_id: &str) -> bool {
 
 fn tool_has_known_interactive_name(name: &str) -> bool {
     KNOWN_INTERACTIVE_TOOL_NAMES.contains(&name)
-        || KNOWN_INTERACTIVE_TOOL_PREFIXES
-            .iter()
-            .any(|prefix| name.starts_with(prefix))
 }
 
 #[cfg(test)]
@@ -137,6 +131,7 @@ mod tests {
             "agena.chatgpt",
             "agena.session",
             "agena.interaction",
+            "agena.browser",
             "agena.settings",
             "agena.mcp",
         ] {

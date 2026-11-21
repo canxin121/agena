@@ -456,7 +456,7 @@ fn configuration(api: &BotApi, id: &str, account: &str) -> BotConfiguration {
         enabled: true,
         credential_kind: "vault".into(),
         ai_bot_id: Some(ai_id(id)),
-        administrator_user_ids: Default::default(),
+        _legacy_administrator_user_ids: Default::default(),
         chat_access: ChatAccess {
             mode: routing::ChatAccessMode::Blacklist,
             private_enabled: true,
@@ -486,7 +486,6 @@ fn register_binding(
         ai_bot_id: config.ai_bot_id,
         source_session_id: Some(ai_source(config.ai_bot_id.unwrap())),
         chat_access: config.chat_access.clone(),
-        administrator_user_ids: config.administrator_user_ids.clone(),
         access_since_ms: 0,
         chat_since_ms: BTreeMap::new(),
     };
@@ -1284,138 +1283,38 @@ async fn deleted_canonical_source_rebinds_without_reusing_retired_routes() {
 }
 
 #[tokio::test]
-async fn local_administrators_update_existing_routes_and_revoke_without_granting_members() {
+async fn legacy_administrator_selection_does_not_grant_telegram_tools() {
     use agena_assistant::{ChannelGrant, ChannelRole};
-    use std::collections::BTreeSet;
+
     let api = BotApi::start().await;
     let host = Arc::new(MemoryHost::default());
     let plugin = plugin(host.clone());
-    let mut config = configuration(&api, "work", "work_bot");
-    plugin
-        .save_managed_bot(0, config.clone(), Some("123:fixture-work".into()))
-        .await
-        .unwrap();
-    for (chat, kind) in [
-        ("77", ConversationKind::Direct),
-        ("99", ConversationKind::Direct),
-        ("-8", ConversationKind::Group),
-        ("-9", ConversationKind::Broadcast),
-    ] {
-        plugin
-            .add_manual_chat("work".into(), chat.into(), kind, None)
-            .await
-            .unwrap();
-    }
-    plugin.synchronize_managed_bot("work", false).await.unwrap();
-    let before = binding_for(&host, 101, "-8");
-    config.administrator_user_ids = BTreeSet::from(["00077".into(), "88".into()]);
-    plugin
-        .save_managed_bot(1, config.clone(), None)
-        .await
-        .unwrap();
-    let group = binding_for(&host, 101, "-8");
-    assert!(group.epoch > before.epoch);
-    let policy = group.spec.channel_policy.as_ref().unwrap();
-    assert_eq!(
-        policy.administrator_actors,
-        BTreeSet::from(["77".into(), "88".into()])
-    );
-    assert_eq!(
-        policy.member("77", 1).unwrap().0,
-        ChannelRole::Administrator
-    );
-    assert_eq!(
-        policy.member("somebody-else", 1).unwrap().0,
-        ChannelRole::Member
-    );
-    assert_eq!(policy.grant, ChannelGrant::default());
-    assert_eq!(
-        binding_for(&host, 101, "77")
-            .spec
-            .channel_policy
-            .unwrap()
-            .administrator_actors,
-        BTreeSet::from(["77".into()])
-    );
-    for chat in ["99", "-9"] {
-        assert!(
-            binding_for(&host, 101, chat)
-                .spec
-                .channel_policy
-                .unwrap()
-                .administrator_actors
-                .is_empty()
-        );
-    }
-    let stored: Registry = plugin.read_record("bots").await.unwrap();
-    assert_eq!(
-        stored.bots["work"].config.administrator_user_ids,
-        policy.administrator_actors
-    );
-
-    // A valid in-channel revocation survives background reconciliation and
-    // restart while the local administrator selection remains unchanged.
-    {
-        let mut bindings = host.bindings.lock().unwrap();
-        let current = bindings.get_mut(&group.id).unwrap();
-        let policy = current.spec.channel_policy.as_mut().unwrap();
-        policy.administrator_actors.remove("77");
-        policy
-            .members
-            .iter_mut()
-            .find(|member| member.actor == "77")
-            .unwrap()
-            .role = ChannelRole::Member;
-        current.revision += 1;
-        current.epoch += 1;
-    }
-    plugin.synchronize_managed_bot("work", false).await.unwrap();
+    let mut config = serde_json::to_value(configuration(&api, "work", "work_bot")).unwrap();
+    config["administrator_user_ids"] = json!(["77"]);
+    let config: BotConfiguration = serde_json::from_value(config).unwrap();
     assert!(
-        !binding_for(&host, 101, "-8")
-            .spec
-            .channel_policy
+        serde_json::to_value(&config)
             .unwrap()
-            .administrator_actors
-            .contains("77")
+            .get("administrator_user_ids")
+            .is_none()
     );
-    let restarted_while_revoked = self::plugin(host.clone());
-    restarted_while_revoked
-        .synchronize_managed_bot("work", false)
+    plugin
+        .save_managed_bot(0, config, Some("123:fixture-work".into()))
         .await
         .unwrap();
-    assert!(
-        !binding_for(&host, 101, "-8")
-            .spec
-            .channel_policy
-            .unwrap()
-            .administrator_actors
-            .contains("77")
-    );
-    drop(restarted_while_revoked);
-
-    // Reconciliation does not undo a manual pause, and removing an
-    // administrator immediately advances the binding's authorization epoch.
-    host.bindings
-        .lock()
-        .unwrap()
-        .get_mut(&group.id)
-        .unwrap()
-        .state = BindingState::Paused;
-    config.administrator_user_ids.clear();
-    plugin.save_managed_bot(2, config, None).await.unwrap();
-    let revoked = binding_for(&host, 101, "-8");
-    assert!(revoked.epoch > group.epoch);
-    assert_eq!(revoked.state, BindingState::Paused);
-    let policy = revoked.spec.channel_policy.as_ref().unwrap();
-    assert!(policy.administrator_actors.is_empty());
+    let mut registry: Value = plugin.read_record("bots").await.unwrap();
+    registry["bots"]["work"]["administrator_user_ids"] = json!(["77"]);
+    plugin.write_record("bots", &registry).await.unwrap();
+    drop(plugin);
+    let plugin = self::plugin(host.clone());
+    plugin
+        .add_manual_chat("work".into(), "-8".into(), ConversationKind::Group, None)
+        .await
+        .unwrap();
+    plugin.synchronize_managed_bot("work", false).await.unwrap();
+    let binding = binding_for(&host, 101, "-8");
+    let policy = binding.spec.channel_policy.unwrap();
+    assert!(!policy.is_source_administrator("77", 1));
     assert_eq!(policy.member("77", 1).unwrap().0, ChannelRole::Member);
     assert_eq!(policy.grant, ChannelGrant::default());
-    drop(plugin);
-    let restarted = self::plugin(host);
-    restarted
-        .synchronize_managed_bot("work", false)
-        .await
-        .unwrap();
-    let stored: Registry = restarted.read_record("bots").await.unwrap();
-    assert!(stored.bots["work"].config.administrator_user_ids.is_empty());
 }

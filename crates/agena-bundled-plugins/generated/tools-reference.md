@@ -1013,7 +1013,7 @@ Named Bot access to ordinary project sessions and integration grants.
       "type": "object",
       "properties": {
         "tools": {
-          "description": "Exact canonical tool IDs only; empty means no tools. Scope-preserving\nmemory/companion helpers are derived from the booleans below, not freely\nassigned management-tool names.",
+          "description": "Legacy binding and automated-report tools. Named permission profiles\nselect tools through their execution rules.",
           "type": "array",
           "uniqueItems": true,
           "items": {

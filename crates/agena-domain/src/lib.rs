@@ -106,7 +106,7 @@ pub mod session_kernel;
 pub use access::{AccessKind, AccessSelector, PathKind};
 pub use access_control::{
     AccessControlConfig, DEFAULT_PERMISSION_PROFILE_ID, PermissionConversationBinding,
-    PermissionProfile, PermissionUserBinding, PermissionUserGroup, ResolvedAccessControl,
+    PermissionProfile, PermissionUserBinding, ResolvedAccessControl,
 };
 pub use activity::{
     ActivityPayload, ActivityProvenance, ActivityState, CancellationOutcome, CancellationResult,

@@ -51,6 +51,7 @@ pub(super) async fn catalog(executor: &ToolExecutor) -> ToolApiCatalog {
         .plugin_manager()
         .plugins()
         .iter()
+        .filter(|plugin| executor.plugin_is_enabled(&plugin.key()))
         .map(|plugin| {
             let id = plugin.key().to_string();
             CatalogPlugin {

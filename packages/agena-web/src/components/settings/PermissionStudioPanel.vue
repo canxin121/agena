@@ -34,6 +34,7 @@ import PermissionRuleTable from './permissions/PermissionRuleTable.vue'
 import type { PermissionRuleKind, PermissionRuleRow } from './permissions/permissionRuleTable'
 import PermissionAccessToolbar from './permissions/PermissionAccessToolbar.vue'
 import PermissionPolicyRow from './permissions/PermissionPolicyRow.vue'
+import PluginPermissionEditor from './permissions/PluginPermissionEditor.vue'
 import PermissionHelp from './permissions/PermissionHelp.vue'
 import SettingsSourceControl from './SettingsSourceControl.vue'
 import SandboxSettingsPanel from './SandboxSettingsPanel.vue'
@@ -63,6 +64,7 @@ import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import { useToastsStore } from '@/stores/toasts'
 import type { JsonValue } from '@/types/json'
 import { settingsText as st } from '@/i18n/settingsText'
+import { parsePluginStatusList, type PluginRuntimeStatus } from '@/features/pluginWeb/hub'
 
 import {
   SHELL_COMMAND_RULE_GROUP,
@@ -335,6 +337,8 @@ const networkProtocolOptions = computed(() => [
   { value: 'any', label: st('Any protocol') },
 ])
 const toolCatalog = ref<Array<{ name: string; summary: string }>>([])
+const installedPlugins = ref<PluginRuntimeStatus[]>([])
+const pluginCatalogUnavailable = ref(false)
 const newPath = ref('')
 const newPathMode = ref<PathPermissionMode>('readonly')
 const newToolName = ref('')
@@ -1065,6 +1069,17 @@ function mutate(mutator: (next: PermissionConfig) => void): boolean {
   }
 }
 
+function setPluginPermission(id: string, enabled: boolean | undefined) {
+  if (formDisabled.value) return
+  mutate((next) => {
+    const plugins = { ...next.plugins }
+    if (enabled === undefined) delete plugins[id]
+    else plugins[id] = enabled
+    if (Object.keys(plugins).length) next.plugins = plugins
+    else delete next.plugins
+  })
+}
+
 function modeAt(scope: 'workspace' | 'external'): PathPermissionMode | '' | '__invalid__' {
   const mode = config.value.path?.[scope]
   if (mode == null) return ''
@@ -1772,12 +1787,13 @@ async function load() {
   error.value = ''
   saveError.value = ''
   try {
-    const [policy, catalog, profiles] = await Promise.allSettled([
+    const [policy, catalog, profiles, plugins] = await Promise.allSettled([
       readPolicy(source, sessionId, workspaceTarget, controller.signal),
       apiJson<ToolCatalogResponse>('/api/v1/plugins/surface', { signal: controller.signal }),
       !profileEditor.value && source !== 'effective'
         ? apiJson<SettingsResponse>('/api/v1/settings/layers/global?path=access_control', { signal: controller.signal })
         : null,
+      apiJson<unknown>('/api/v1/plugins', { signal: controller.signal }).then(parsePluginStatusList),
     ])
     if (generation !== loadGeneration || key !== contextKey.value) return
     if (catalog.status === 'fulfilled') {
@@ -1786,6 +1802,8 @@ async function load() {
         .filter((item) => item.name)
         .sort((a, b) => a.name.localeCompare(b.name))
     }
+    pluginCatalogUnavailable.value = plugins.status === 'rejected'
+    if (plugins.status === 'fulfilled') installedPlugins.value = plugins.value
     if (policy.status === 'rejected') throw policy.reason
     permissionProfiles.value =
       profiles.status === 'fulfilled' && profiles.value ? permissionProfilesForLayer(profiles.value) : null
@@ -2394,6 +2412,16 @@ onBeforeUnmount(() => {
                 </p>
               </template>
               <template v-else-if="domain.id === 'tools'">
+                <PluginPermissionEditor
+                  :plugins="installedPlugins"
+                  :local="config.plugins"
+                  :inherited="cleanResolvedPermission?.plugins ?? inheritedPermission?.plugins"
+                  :editable="canEdit"
+                  :disabled="formDisabled"
+                  :load-failed="pluginCatalogUnavailable"
+                  @change="setPluginPermission"
+                  @retry="load"
+                />
                 <PermissionPolicyRow
                   :scope="selectedSource"
                   :label="$st('Default tool mode')"

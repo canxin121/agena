@@ -11,8 +11,8 @@
 //! pasted into the wrong connection cannot silently serve a different bot's
 //! rooms. Receiving a message proves its sender was in that chat at that
 //! moment, which is all `is_member` claims; that fact is never upgraded into an
-//! Agena role. Roles, tool grants, quotas and the inbox live in the host's
-//! `channel_policy` and are rechecked there for every message.
+//! Agena role. The host checks channel admission and resolves a named
+//! permission profile for each authenticated sender and conversation.
 //!
 //! The endpoint and token never come from message content. They are operator
 //! configuration, validated before use, exactly like the reference bridge's

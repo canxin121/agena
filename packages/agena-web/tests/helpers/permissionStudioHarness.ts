@@ -5,6 +5,7 @@ import * as vue from 'vue'
 
 import * as permissionConfig from '../../src/lib/permissionConfig'
 import * as permissionProfiles from '../../src/lib/permissionProfiles'
+import * as pluginHub from '../../src/features/pluginWeb/hub'
 import { runtimeSettingBaseValue } from '../../src/lib/runtimeSettingLayer'
 import * as permissionNavigation from '../../src/components/settings/permissions/permissionNavigation'
 import { resolveSettingsSessionId } from '../../src/components/settings/settingsSessionScope'
@@ -46,6 +47,7 @@ export async function createPermissionEditor(
     profileDraft?: boolean
     profiles?: permissionProfiles.PermissionCatalog['profiles']
     factoryProfiles?: permissionProfiles.PermissionCatalog['profiles']
+    plugins?: pluginHub.PluginRuntimeStatus[]
   } = {},
 ) {
   const writes: Array<{ path: string; value: unknown; scope: string }> = []
@@ -152,6 +154,7 @@ export async function createPermissionEditor(
         }
         reads.push(url)
         if (url === '/api/v1/plugins/surface') return { permission_tools: [] }
+        if (url === '/api/v1/plugins') return { items: options.plugins ?? [] }
         if (url.includes('/sessions/')) {
           const sessionId = url.match(/\/sessions\/([^/]+)\//)?.[1] || '1'
           const selected = structuredClone(sessionPolicies.get(sessionId) ?? serverPolicies.session)
@@ -246,6 +249,7 @@ export async function createPermissionEditor(
     '@/i18n/settingsText': { settingsText: translate },
     '@/lib/permissionConfig': permissionConfig,
     '@/lib/permissionProfiles': permissionProfiles,
+    '@/features/pluginWeb/hub': pluginHub,
     '@/lib/runtimeSettingLayer': { runtimeSettingBaseValue },
     './permissions/permissionNavigation': permissionNavigation,
     './settingsSessionScope': { resolveSettingsSessionId },

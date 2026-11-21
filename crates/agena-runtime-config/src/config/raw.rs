@@ -792,12 +792,6 @@ impl RawConfig {
                 &profile.permission,
             )?;
         }
-        for (index, user) in access_control.users.iter().enumerate() {
-            validate_permission_config(
-                &format!("access_control.users.{index}.overrides"),
-                &user.overrides,
-            )?;
-        }
         // Native filesystem compilation needs the actual execution scope.
         // ConfigLoader and settings validators bind it after all layers resolve.
 

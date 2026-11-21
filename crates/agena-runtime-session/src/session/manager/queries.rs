@@ -427,10 +427,7 @@ impl SessionManager {
         let Some(baseline) = baseline else {
             return Ok(None);
         };
-        let shared = baseline.session_mode == agena_domain::ChannelSessionMode::PerConversation
-            && baseline.actor != "@service"
-            && !baseline.source_admin
-            && !delegated;
+        let shared = Self::is_shared_channel(baseline, delegated);
         if let Some(execution) = execution {
             let input = self
                 .kernel()
@@ -569,8 +566,16 @@ impl SessionManager {
             author: Some(author),
             ..
         } = &entry.payload
-            && let Some(authority) = &author.channel_authority
         {
+            return Ok(Self::author_channel_authority(author)?.cloned());
+        }
+        Ok(None)
+    }
+
+    fn author_channel_authority(
+        author: &agena_domain::MessageAuthor,
+    ) -> Result<Option<&agena_domain::ChannelAuthority>, AppError> {
+        if let Some(authority) = &author.channel_authority {
             if author.id != authority.actor
                 || author.group_ids != authority.group_ids
                 || !matches!(&author.kind, agena_domain::AuthorKind::ChannelMember { role } if *role == authority.role)
@@ -579,9 +584,16 @@ impl SessionManager {
                     "message author differs from its verified execution identity".into(),
                 ));
             }
-            return Ok(Some(authority.clone()));
+            return Ok(Some(authority));
         }
         Ok(None)
+    }
+
+    fn is_shared_channel(baseline: &agena_domain::ChannelAuthority, delegated: bool) -> bool {
+        baseline.session_mode == agena_domain::ChannelSessionMode::PerConversation
+            && baseline.actor != "@service"
+            && !baseline.source_admin
+            && !delegated
     }
 
     fn validate_channel_execution_scope(
@@ -611,6 +623,11 @@ impl SessionManager {
         let Some(authority) = context.channel_authority.as_ref() else {
             return;
         };
+        for fragment in &mut context.prompts.inline {
+            if fragment.body == super::session_prompt::LEGACY_CHANNEL_SYSTEM_PROMPT {
+                fragment.body = super::session_prompt::CHANNEL_SYSTEM_PROMPT.into();
+            }
+        }
         if named_session_permission {
             context
                 .permission_ceiling_layers
@@ -687,19 +704,56 @@ impl SessionManager {
         state: &ExecutionState,
         execution: Option<ExecutionId>,
     ) -> Result<ToolContext, AppError> {
+        self.build_execution_context(id, state, execution, None)
+            .await
+    }
+
+    pub(super) async fn execution_context_for_submission(
+        &self,
+        id: SessionId,
+        state: &ExecutionState,
+        author: Option<&agena_domain::MessageAuthor>,
+    ) -> Result<ToolContext, AppError> {
+        if let Some(authority) = author
+            .map(Self::author_channel_authority)
+            .transpose()?
+            .flatten()
+        {
+            return self
+                .build_execution_context(id, state, None, Some(authority))
+                .await;
+        }
+        self.execution_context_with_state(id, state).await
+    }
+
+    async fn build_execution_context(
+        &self,
+        id: SessionId,
+        state: &ExecutionState,
+        execution: Option<ExecutionId>,
+        submitted_authority: Option<&agena_domain::ChannelAuthority>,
+    ) -> Result<ToolContext, AppError> {
         let (metadata, configuration) = tokio::try_join!(
             self.kernel().reader.metadata(id),
             self.kernel().reader.configuration(id)
         )
         .map_err(kernel_error)?;
-        let authority = self
-            .channel_authority_for_execution(
-                id,
-                execution,
-                configuration.channel_authority.as_ref(),
-                configuration.relation_kind == agena_domain::SessionRelationKind::Subagent,
-            )
-            .await?;
+        let delegated = configuration.relation_kind.is_subagent();
+        let baseline = configuration.channel_authority.as_ref();
+        let authority = if let Some(submitted) = submitted_authority {
+            let baseline = baseline.ok_or_else(|| {
+                AppError::Config("verified channel input requires a channel session".into())
+            })?;
+            Self::validate_channel_execution_scope(
+                baseline,
+                submitted,
+                Self::is_shared_channel(baseline, delegated),
+            )?;
+            Some(submitted.clone())
+        } else {
+            self.channel_authority_for_execution(id, execution, baseline, delegated)
+                .await?
+        };
         if let Some(authority) = &authority {
             self.channel_verifier
                 .get()

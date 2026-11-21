@@ -16,6 +16,7 @@ import {
 import { integrationTemplate, parseIntegration } from '@/features/integrations/model'
 import ChannelAccessPanel from '@/features/integrations/ChannelAccessPanel.vue'
 import PlatformInventoryPanel from '@/features/integrations/PlatformInventoryPanel.vue'
+import { TELEGRAM_ID } from '@/features/telegram/model'
 
 const route = useRoute(),
   router = useRouter(),
@@ -279,7 +280,7 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <ChannelAccessPanel
-            v-if="source"
+            v-if="source && detail.binding.spec.provider !== TELEGRAM_ID"
             :source="source"
             :detail="detail"
             :readonly="loading || busy"

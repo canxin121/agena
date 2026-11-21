@@ -586,7 +586,7 @@ async fn bot_owned_telegram_chat_is_created_enabled_and_answers_without_project_
             ensure!(
                 private_root.starts_with(
                     case.data_dir()
-                        .join("channel-speakers")
+                        .join("channel-scopes")
                         .join(binding.id.to_string())
                 ),
                 "the channel must use its own private scope: {workspace}"

@@ -21,6 +21,7 @@ mod tests {
             },
             "tools":{"default":"ask","names":{"agena.shell.exec":"deny"},
                 "rules":{"agena.shell.exec":{"routine":"allow","dangerous":"deny"},"fixture.tool":"auto"}},
+            "plugins":{"agena.shell":false,"agena.fs":true},
             "approval_model":{"provider":"fixture","adapter":"adapter","model":"model","thinking_mode":"high","speed_mode":"fast","verbosity":"low"}
         });
         let resource: PermissionConfigResource = serde_json::from_value(wire.clone()).unwrap();

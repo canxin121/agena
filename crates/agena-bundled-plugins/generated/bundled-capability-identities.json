@@ -79,8 +79,8 @@
             "mutate",
             "agent"
           ],
-          "definition_identity": "112ceea21158b242f98f25b72ddb42239785223476a2e8822aec0d4d07f599ca",
-          "input_schema_sha256": "5f1b430526387de2c410132d108d8f8b697b4b73376d6320ef1be3305db3bf70",
+          "definition_identity": "e24af1c9aaeff5f55dec23fa453a941fb5cf8b61f68f9131da3c830ef557a823",
+          "input_schema_sha256": "e7685d331c6c90f624b08c02b2f7cc5c1083b0966e79c0097106b034a50e8a87",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
         },
         {

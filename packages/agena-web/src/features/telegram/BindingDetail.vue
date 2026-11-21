@@ -1,13 +1,11 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import Button from '@/components/ui/Button.vue'
-import ChannelAccessPanel from '@/features/integrations/ChannelAccessPanel.vue'
 import type { IntegrationBinding, IntegrationControlAction, IntegrationDetail } from '@/generated/agenaState'
 import { useTelegramCopy } from './copy'
 import { telegramBindingNeedsReview } from './reconnect'
 const props = defineProps<{
   detail: IntegrationDetail
-  source: number
   busy: boolean
   botEnabled: boolean
   rebuildPending?: boolean
@@ -15,14 +13,12 @@ const props = defineProps<{
 const emit = defineEmits<{
   control: [binding: IntegrationBinding, action: IntegrationControlAction]
   rebuild: [binding: IntegrationBinding]
-  changed: [binding: IntegrationBinding]
-  editing: [value: boolean]
   openSession: [id: number]
 }>()
 const { tx, stateLabel, date } = useTelegramCopy()
 const requiresReview = computed(() => telegramBindingNeedsReview(props.detail.binding))
 const requiresRebuild = computed(() => props.rebuildPending || requiresReview.value)
-const tab = ref<'events' | 'deliveries' | 'access'>('events')
+const tab = ref<'events' | 'deliveries'>('events')
 const search = ref('')
 const events = computed(() =>
   props.detail.events.filter(
@@ -137,62 +133,52 @@ const deliveries = computed(() =>
     </p>
     <nav class="flex flex-wrap gap-1 border-b border-border pb-2" :aria-label="tx('activity')">
       <Button
-        v-for="item in ['events', 'deliveries', 'access'] as const"
+        v-for="item in ['events', 'deliveries'] as const"
         :key="item"
         :variant="tab === item ? 'secondary' : 'ghost'"
         size="sm"
         :aria-pressed="tab === item"
         @click="tab = item"
-        >{{ tx(item === 'events' ? 'received' : item === 'deliveries' ? 'deliveries' : 'permissions') }}
-        <span v-if="item !== 'access'" class="ml-1 text-xs opacity-60">{{
+        >{{ tx(item === 'events' ? 'received' : 'deliveries') }}
+        <span class="ml-1 text-xs opacity-60">{{
           item === 'events' ? detail.events.length : detail.deliveries.length
         }}</span></Button
       >
     </nav>
-    <ChannelAccessPanel
-      v-if="tab === 'access'"
-      :source="source"
-      :detail="detail"
-      :readonly="busy"
-      @editing="emit('editing', $event)"
-      @changed="emit('changed', $event)"
+    <input
+      v-model="search"
+      type="search"
+      :aria-label="tx('messageFilter')"
+      :placeholder="tx('messageFilter')"
+      class="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm focus-visible:ring-2 focus-visible:ring-ring"
     />
-    <template v-else>
-      <input
-        v-model="search"
-        type="search"
-        :aria-label="tx('messageFilter')"
-        :placeholder="tx('messageFilter')"
-        class="h-9 w-full rounded-lg border border-border bg-background px-3 text-sm focus-visible:ring-2 focus-visible:ring-ring"
-      />
-      <div v-if="tab === 'events'" class="max-h-[32rem] space-y-3 overflow-y-auto" data-testid="telegram-event-list">
-        <p v-if="!events.length" class="py-6 text-center text-sm text-muted-foreground">{{ tx('none') }}</p>
-        <article v-for="entry in events" :key="entry.event.id" class="space-y-2 rounded-xl bg-muted/40 p-3">
-          <div class="flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
-            <span class="font-mono">{{ entry.event.actor }}</span
-            ><span>{{ entry.state }} · {{ date(entry.received_at_ms) }}</span>
-          </div>
-          <p class="whitespace-pre-wrap break-words text-sm">{{ entry.event.text }}</p>
-          <p v-if="entry.note" class="break-words text-xs text-muted-foreground">{{ entry.note }}</p>
-          <Button v-if="entry.session_id" variant="ghost" size="sm" @click="emit('openSession', entry.session_id)">{{
-            tx('openConversation')
-          }}</Button>
-        </article>
-      </div>
-      <div v-else class="max-h-[32rem] space-y-3 overflow-y-auto">
-        <p v-if="!deliveries.length" class="py-6 text-center text-sm text-muted-foreground">{{ tx('none') }}</p>
-        <article v-for="entry in deliveries" :key="entry.id" class="space-y-2 rounded-xl bg-muted/40 p-3">
-          <div class="flex flex-wrap justify-between gap-2 text-[11px] text-muted-foreground">
-            <span>{{ entry.state }} · {{ entry.attempts }}</span
-            ><span>{{ date(entry.created_at_ms) }}</span>
-          </div>
-          <p class="whitespace-pre-wrap break-words text-sm">{{ entry.text }}</p>
-          <p v-if="entry.error" class="break-words text-xs text-destructive">{{ entry.error }}</p>
-          <p v-if="entry.remote_id" class="break-all font-mono text-[10px] text-muted-foreground">
-            {{ entry.remote_id }}
-          </p>
-        </article>
-      </div>
-    </template>
+    <div v-if="tab === 'events'" class="max-h-[32rem] space-y-3 overflow-y-auto" data-testid="telegram-event-list">
+      <p v-if="!events.length" class="py-6 text-center text-sm text-muted-foreground">{{ tx('none') }}</p>
+      <article v-for="entry in events" :key="entry.event.id" class="space-y-2 rounded-xl bg-muted/40 p-3">
+        <div class="flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
+          <span class="font-mono">{{ entry.event.actor }}</span
+          ><span>{{ entry.state }} · {{ date(entry.received_at_ms) }}</span>
+        </div>
+        <p class="whitespace-pre-wrap break-words text-sm">{{ entry.event.text }}</p>
+        <p v-if="entry.note" class="break-words text-xs text-muted-foreground">{{ entry.note }}</p>
+        <Button v-if="entry.session_id" variant="ghost" size="sm" @click="emit('openSession', entry.session_id)">{{
+          tx('openConversation')
+        }}</Button>
+      </article>
+    </div>
+    <div v-else class="max-h-[32rem] space-y-3 overflow-y-auto">
+      <p v-if="!deliveries.length" class="py-6 text-center text-sm text-muted-foreground">{{ tx('none') }}</p>
+      <article v-for="entry in deliveries" :key="entry.id" class="space-y-2 rounded-xl bg-muted/40 p-3">
+        <div class="flex flex-wrap justify-between gap-2 text-[11px] text-muted-foreground">
+          <span>{{ entry.state }} · {{ entry.attempts }}</span
+          ><span>{{ date(entry.created_at_ms) }}</span>
+        </div>
+        <p class="whitespace-pre-wrap break-words text-sm">{{ entry.text }}</p>
+        <p v-if="entry.error" class="break-words text-xs text-destructive">{{ entry.error }}</p>
+        <p v-if="entry.remote_id" class="break-all font-mono text-[10px] text-muted-foreground">
+          {{ entry.remote_id }}
+        </p>
+      </article>
+    </div>
   </section>
 </template>

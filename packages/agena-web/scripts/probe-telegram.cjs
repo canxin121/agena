@@ -539,13 +539,9 @@ connection.commit()
     })
   }
   const chatCheck = (id) => '[data-telegram-chat-check="' + id + '"]'
-  const administratorInput = '[data-testid="telegram-administrator-ids"]'
-  const administratorIds = () =>
-    browser.evaluate(
-      'document.querySelector(' +
-        JSON.stringify(administratorInput) +
-        ').value.split(/[\\s,，]+/).filter(Boolean).sort()',
-    )
+  const assignmentsPath = '/api/v1/settings/layers/global?path=access_control'
+  const assignmentMember = '[data-assignment-member-profile="77"]'
+  const saveAssignments = () => browser.click('[data-assignment-save] button:last-child')
   const noOverflow = () =>
     browser.evaluate(
       'document.documentElement.scrollWidth <= innerWidth + 1 && [...document.querySelectorAll("[role=dialog]")].filter(n=>n.getClientRects().length).every(n=>n.getBoundingClientRect().left>=-1 && n.getBoundingClientRect().right<=innerWidth+1)',
@@ -670,57 +666,99 @@ connection.commit()
     await saveAccess(work.id, (bot) => bot.chat_access.channel_enabled)
     const channel = await waitBinding(work.source_session_id, work.id, -100456)
 
-    await browser.waitVisible(administratorInput)
-    await browser.waitVisible('[data-telegram-administrator="77"]')
-    const administratorRevision = (await command('list_bots')).revision
-    await browser.fill(administratorInput, '@alice')
-    await browser.click('[data-testid="telegram-save-access"]')
+    assert.equal(await browser.visible('[data-testid="telegram-administrators"]'), false)
+    // A verified interaction is discoverable without sending a model request.
+    seed('123:fixture-work', 4, 77, 'private', '/access revoke 77')
+    accounts.get('123:fixture-work').updates.at(-1).message.date = Math.floor(Date.now() / 1000) + 1
+    const participantPath =
+      '/api/v1/sessions/' +
+      work.source_session_id +
+      '/integrations/' +
+      direct.id +
+      '/participants?resource=77&kind=direct'
     await until(
-      () =>
-        browser.evaluate(
-          '[...document.querySelectorAll("[role=alert]")].some(node => node.textContent.includes("64"))',
-        ),
-      Boolean,
-      'invalid administrator username rejected in the manager',
+      () => api('GET', participantPath),
+      (page) => page.participants.some((member) => member.actor === '77' && member.display_name === 'Alice'),
+      'verified member available to the permission directory',
     )
-    assert.equal((await command('list_bots')).revision, administratorRevision)
-    await browser.fill(administratorInput, '00077, 88')
-    await saveAccess(work.id, (bot) => JSON.stringify(bot.administrator_user_ids) === '["77","88"]')
-    const adminGroup = await waitBinding(work.source_session_id, work.id, -100123)
-    const adminDirect = await waitBinding(work.source_session_id, work.id, 77)
-    assert.deepEqual(adminGroup.spec.channel_policy.administrator_actors, ['77', '88'])
-    assert.deepEqual(adminDirect.spec.channel_policy.administrator_actors, ['77'])
-    assert.deepEqual(
-      (await waitBinding(work.source_session_id, work.id, -100456)).spec.channel_policy.administrator_actors,
-      [],
+    const settings = await api('GET', assignmentsPath)
+    await api('PUT', '/api/v1/settings/layers/global', {
+      path: 'access_control',
+      expected_revision: settings.revision,
+      value: {
+        profiles: {
+          reader: { name: 'Reader', grant: { tools: ['agena.fs.read'] } },
+          chat: { name: 'Chat only', complete: true },
+        },
+      },
+    })
+    await browser.click('[data-telegram-room-details="77"]')
+    await browser.click('[data-testid="conversation-members"] summary')
+    await browser.click('[data-testid="conversation-members"] li a')
+    await browser.waitVisible(assignmentMember)
+    const assignmentsUrl = await browser.evaluate('location.href')
+    await browser.select('[data-assignment-room-profile]', 'reader')
+    await browser.select(assignmentMember, 'chat')
+    await saveAssignments()
+    const assigned = await until(
+      () => api('GET', assignmentsPath),
+      (catalog) => catalog.value?.users?.some((user) => user.actor === '77' && user.profile_id === 'chat'),
+      'direct member profile saved',
     )
-    assert.deepEqual(adminGroup.spec.channel_policy.grant.tools, [])
-    assert.ok(adminGroup.epoch > group.epoch)
-    assert.equal(adminGroup.spec.channel_policy.members.find((member) => member.actor === '77').role, 'administrator')
-    pass(
-      'administrator UI rejects usernames and applies exact user IDs to existing private/group routes without granting ordinary members',
-    )
-
-    await browser.click('[data-telegram-administrator="77"]')
-    await saveAccess(work.id, (bot) => JSON.stringify(bot.administrator_user_ids) === '["88"]')
-    const revokedDirect = await waitBinding(work.source_session_id, work.id, 77)
-    assert.deepEqual(revokedDirect.spec.channel_policy.administrator_actors, [])
-    assert.ok(revokedDirect.epoch > adminDirect.epoch)
-    await browser.click('[data-telegram-administrator="77"]')
-    await saveAccess(work.id, (bot) => JSON.stringify(bot.administrator_user_ids) === '["77","88"]')
-    await openBot(home.id)
-    assert.deepEqual(await administratorIds(), [])
-    await openBot(work.id)
-    assert.deepEqual(await administratorIds(), ['77', '88'])
+    assert.deepEqual(assigned.value.users, [
+      {
+        platform: 'agena.telegram',
+        tenant: 'telegram',
+        account: 'work_bot',
+        resource: '77',
+        actor: '77',
+        profile_id: 'chat',
+      },
+    ])
+    assert.equal(assigned.value.conversations[0].default_profile_id, 'reader')
+    await browser.waitVisible('[data-assignment-save]', false)
+    pass('the observed member link opens one assignment page for the exact Bot, conversation and member')
+    await browser.goto(origin + '/settings/permissions?view=profiles&scope=global')
+    await browser.click('[data-permission-profile="reader"] button[aria-expanded="false"]')
+    const pluginAccess = '[data-permission-profile="reader"] [data-permission-plugin-access]'
+    const fsPlugin = pluginAccess + ' [data-permission-plugin="agena.fs"]'
+    await browser.waitVisible(fsPlugin)
+    await browser.fill(pluginAccess + ' input:not([role="switch"])', 'agena.fs')
     assert.equal(
       await browser.evaluate(
-        'document.querySelector(' +
-          JSON.stringify('[data-telegram-administrator="77"]') +
-          ').getAttribute("aria-pressed")',
+        `document.querySelectorAll(${JSON.stringify(pluginAccess + ' [data-permission-plugin]')}).length`,
       ),
-      'true',
+      1,
     )
-    pass('known sender buttons grant and revoke administrators; reopening preserves each bot’s independent selection')
+    await browser.check(fsPlugin + ' [role="switch"]', false)
+    await browser.click('[data-permission-profile-save] button:last-child')
+    await until(
+      () => api('GET', assignmentsPath),
+      (catalog) => catalog.value?.profiles?.reader?.permission?.plugins?.['agena.fs'] === false,
+      'plugin switch saved in the permission profile',
+    )
+    await browser.waitVisible('[data-permission-profile-save]', false)
+    const fsSwitch = `document.querySelector(${JSON.stringify(fsPlugin + ' [role="switch"]')})?.checked`
+    await until(
+      () => browser.evaluate(fsSwitch),
+      (checked) => checked === false,
+      'saved plugin remains disabled',
+    )
+    await browser.click(fsPlugin + ' button')
+    await browser.click('[data-permission-profile-save] button:last-child')
+    await until(
+      () => api('GET', assignmentsPath),
+      (catalog) => catalog.value?.profiles?.reader?.permission?.plugins?.['agena.fs'] === undefined,
+      'plugin switch restored inherited access',
+    )
+    await browser.waitVisible('[data-permission-profile-save]', false)
+    await until(
+      () => browser.evaluate(fsSwitch),
+      (checked) => checked === true,
+      'inherited plugin access is enabled',
+    )
+    pass('the permission profile can find, disable and restore an installed plugin')
+    await openBot(work.id)
 
     for (const [kind, field, chatId, original] of [
       ['private', 'private_enabled', 77, direct],
@@ -748,7 +786,7 @@ connection.commit()
     assert.equal(homeInventory.rooms[0].last_text, 'home private message')
     assert.equal(
       (await command('bot_inventory', { bot_id: work.id })).rooms.find((room) => room.chat_id === '77').last_text,
-      'work private message',
+      '/access revoke 77',
     )
     pass('the same numeric private chat stays isolated between Telegram accounts and AI owners')
 
@@ -765,7 +803,7 @@ connection.commit()
     )
     await waitBinding(work.source_session_id, work.id, 77, 'paused')
     await waitBinding(work.source_session_id, work.id, -100123)
-    seed('123:fixture-work', 4, -100999, 'supergroup', 'future room first discovered after blacklist was saved')
+    seed('123:fixture-work', 5, -100999, 'supergroup', 'future room first discovered after blacklist was saved')
     await until(
       () => command('bot_inventory', { bot_id: work.id }),
       (value) => value.rooms.some((room) => room.chat_id === '-100999'),
@@ -824,10 +862,6 @@ connection.commit()
     await openBot(work.id)
     assert.ok(await noOverflow())
     await browser.screenshot(path.join(tmp, 'chats-desktop.png'))
-    await browser.evaluate(
-      'document.querySelector("[data-testid=telegram-administrators]").scrollIntoView({block:"center"})',
-    )
-    await browser.screenshot(path.join(tmp, 'administrators-desktop.png'))
     await browser.evaluate("document.documentElement.classList.add('dark')")
     await browser.screenshot(path.join(tmp, 'chats-dark.png'))
     await browser.send('Emulation.setDeviceMetricsOverride', {
@@ -838,17 +872,20 @@ connection.commit()
     })
     assert.ok(await noOverflow(), 'mobile chat policy must fit the viewport')
     await browser.screenshot(path.join(tmp, 'chats-mobile.png'))
-    await browser.fill(administratorInput, '77')
-    await saveAccess(work.id, (bot) => JSON.stringify(bot.administrator_user_ids) === '["77"]')
-    await browser.fill(administratorInput, '77\n88')
-    await saveAccess(work.id, (bot) => JSON.stringify(bot.administrator_user_ids) === '["77","88"]')
-    await browser.evaluate(
-      'document.querySelector("[data-testid=telegram-administrators]").scrollIntoView({block:"center"})',
+    await browser.goto(assignmentsUrl)
+    await browser.waitVisible(assignmentMember)
+    assert.ok(await noOverflow(), 'mobile profile assignments must fit the viewport')
+    await browser.select(assignmentMember, '')
+    await saveAssignments()
+    await until(
+      () => api('GET', assignmentsPath),
+      (catalog) => catalog.value?.users?.length === 0,
+      'member override removed to inherit the conversation',
     )
-    assert.ok(await noOverflow(), 'mobile administrator controls must fit the viewport')
-    assert.deepEqual(await administratorIds(), ['77', '88'])
-    await browser.screenshot(path.join(tmp, 'administrators-mobile.png'))
-    pass('administrator controls fit desktop and 390px mobile layouts and support saving on mobile')
+    await browser.waitVisible('[data-assignment-save]', false)
+    await browser.screenshot(path.join(tmp, 'assignments-mobile.png'))
+    pass('member selection restores the conversation default and fits the mobile viewport')
+    await openBot(work.id)
     await browser.click('[data-testid="telegram-edit-bot"]')
     await browser.waitVisible('[data-testid="telegram-bot-editor"]')
     assert.ok(await noOverflow(), 'mobile bot editor must fit the viewport')
@@ -873,8 +910,8 @@ connection.commit()
     const previousIds = (await integrations(work.source_session_id, work.id)).map((binding) => binding.id).sort()
     const inspection = await request('GET', '/api/v1/plugins/agena.telegram')
     assert.ok(inspection.ok, 'the local provider inspection is available')
-    // Legacy Rust hashing preserves schema floats such as 0.0. Pass the raw
-    // response to Python: parsing it in JavaScript first would turn 0.0 into 0.
+    // Use the trusted legacy manifest and preserve its key order and schema
+    // floats. Parsing the response in JavaScript would turn 0.0 into 0.
     const hasher = spawn(
       'python3',
       [
@@ -882,10 +919,12 @@ connection.commit()
         `
 import hashlib, json, sys
 plugin = json.load(sys.stdin)['plugin']
-assert plugin['manifest'] and plugin['configured_plugin']
-payload = {'manifest': plugin['manifest'], 'configuration': plugin['configured_plugin']}
-print(hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest())
+with open(sys.argv[1]) as source:
+    manifest = json.load(source)
+payload = {'manifest': manifest, 'configuration': plugin['configured_plugin']}
+print(hashlib.sha256(json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest())
 `,
+        path.join(repo, 'crates/agena-runtime/src/runtime/assistant/integrations/legacy/telegram-885d63f24.json'),
       ],
       { stdio: ['pipe', 'pipe', 'pipe'] },
     )
@@ -998,7 +1037,21 @@ print(hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, sep
     )
 
     const savedCatalog = await command('list_bots')
+    const beforeUpgrade = await waitBinding(work.source_session_id, work.id, 77)
     await stop(server)
+    await patchIsolatedBinding(direct.id, {
+      spec: {
+        ...beforeUpgrade.spec,
+        channel_policy: {
+          ...beforeUpgrade.spec.channel_policy,
+          administrator_actors: ['77'],
+          members: beforeUpgrade.spec.channel_policy.members.map((member) =>
+            member.actor === '77' ? { ...member, role: 'administrator' } : member,
+          ),
+          grant: { ...beforeUpgrade.spec.channel_policy.grant, tools: ['agena.fs.write'] },
+        },
+      },
+    })
     await start()
     const restored = await command('list_bots')
     assert.equal(restored.bots.length, 2)
@@ -1014,15 +1067,12 @@ print(hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, sep
     assert.equal((await waitBinding(work.source_session_id, work.id, 77)).id, direct.id)
     await openBot(work.id)
     assert.equal(await browser.evaluate('document.querySelector("[data-testid=telegram-ai-bot]").value'), atlas.id)
-    assert.deepEqual(await administratorIds(), ['77', '88'])
-    assert.deepEqual((await catalogBot(work.id)).administrator_user_ids, ['77', '88'])
-    assert.deepEqual(
-      (await waitBinding(work.source_session_id, work.id, 77)).spec.channel_policy.administrator_actors,
-      ['77'],
-    )
-    pass(
-      'server restart preserves tokens, AI assignment, policy, administrators, discovered rooms and stable routing bindings',
-    )
+    const restoredDirect = await waitBinding(work.source_session_id, work.id, 77)
+    assert.equal(restoredDirect.epoch, beforeUpgrade.epoch + 1)
+    assert.deepEqual(restoredDirect.spec.channel_policy.administrator_actors, [])
+    assert.deepEqual(restoredDirect.spec.channel_policy.grant.tools, [])
+    assert.equal((await api('GET', assignmentsPath)).value.conversations[0].default_profile_id, 'reader')
+    pass('restart revokes legacy Telegram grants and preserves named profiles, chat enablement and bindings')
 
     await browser.click('[data-testid="telegram-toggle-bot"]')
     await until(
@@ -1097,7 +1147,7 @@ print(hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, sep
         JSON.stringify(
           await browser
             .evaluate(
-              '({url:location.href,text:document.body.innerText,administratorInput:document.querySelector(\"[data-testid=telegram-administrator-ids]\")?.value,saveBar:document.querySelector(\"[data-testid=telegram-access-savebar]\")?.outerHTML})',
+              '({url:location.href,text:document.body.innerText,saveBar:document.querySelector(\"[data-testid=telegram-access-savebar]\")?.outerHTML})',
             )
             .catch(() => ({})),
           null,

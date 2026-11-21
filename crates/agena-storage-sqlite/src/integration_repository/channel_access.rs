@@ -8,6 +8,28 @@ pub(crate) const DECLARATIONS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS agena_channel_user_budget (binding_id TEXT NOT NULL REFERENCES agena_integration_bindings(id), actor TEXT NOT NULL, utc_day TEXT NOT NULL, used INTEGER NOT NULL CHECK(used>=0), PRIMARY KEY(binding_id,actor,utc_day)) WITHOUT ROWID",
 ];
 
+pub(crate) async fn retire_telegram_grants(database: &DatabaseConnection) -> Result<()> {
+    let tx = database.begin().await.map_err(error)?;
+    let rows = tx
+        .query_all(statement(
+            "SELECT binding_json FROM agena_integration_bindings WHERE json_extract(binding_json,'$.spec.provider')='agena.telegram'",
+            vec![],
+        ))
+        .await
+        .map_err(error)?;
+    for row in rows {
+        let mut binding: IntegrationBinding = decode(row, "binding_json")?;
+        if binding.spec.retire_telegram_grants() {
+            // Fence old executions and deliveries while retaining the revision
+            // used by the Telegram router to recognize policy-paused bindings.
+            binding.epoch += 1;
+            binding.channel_session_id = None;
+            put_binding(&tx, &binding, binding.revision).await?;
+        }
+    }
+    tx.commit().await.map_err(error)
+}
+
 impl SqliteIntegrationRepository {
     pub(super) async fn channel_policy_write(
         &self,
@@ -23,6 +45,12 @@ impl SqliteIntegrationRepository {
             .await
             .map_err(error)?;
         let tx = self.database.begin().await.map_err(error)?;
+        let mut b = read_binding(&tx, id).await?;
+        if b.spec.is_telegram_channel() {
+            return Err(Error::Invalid(
+                "Telegram chat permissions are managed in Permission assignments",
+            ));
+        }
         let input = json(&serde_json::json!({"request":r,"actor":actor}))?;
         if let Some(row)=tx.query_one(statement("SELECT input_json,result_json FROM agena_channel_access_audit WHERE binding_id=? AND request_key=?",vec![id.to_string().into(),r.request_key.clone().into()])).await.map_err(error)? {
             if row.try_get::<String>("","input_json").map_err(error)?!=input{return Err(Error::Conflict("access request identity was reused with different input"));}
@@ -31,7 +59,6 @@ impl SqliteIntegrationRepository {
         // Replaying a committed receipt never restores access; it stays valid
         // even if that recorded owner's assignment has since expired.
         r.policy.validate(now).map_err(Error::Policy)?;
-        let mut b = read_binding(&tx, id).await?;
         if b.spec.mode != IntegrationMode::Channel {
             return Err(Error::Invalid(
                 "only channel bindings have member access policy",

@@ -11,6 +11,7 @@ use uuid::Uuid;
 mod channel_access;
 mod channel_participants;
 pub(crate) use channel_access::DECLARATIONS as CHANNEL_DECLARATIONS;
+pub(crate) use channel_access::retire_telegram_grants;
 pub(crate) use channel_participants::{PARTICIPANTS_TABLE, backfill_channel_participants};
 
 pub(crate) const DECLARATIONS: &[&str] = &[

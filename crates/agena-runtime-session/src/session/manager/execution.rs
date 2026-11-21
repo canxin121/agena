@@ -202,19 +202,29 @@ impl SessionManager {
                 let _submission = dispatch.submission.lock().await;
                 manager.require_writable_bot_history(session.get()).await?;
                 manager.restore_queued_executions(session).await?;
+                let state = manager.state_for_session(session).await?;
+                let context = manager
+                    .execution_context_for_submission(session, &state, author.as_ref())
+                    .await?;
                 let mut options = request.run.options;
-                manager.prepare_options(session, &mut options).await?;
+                manager.prepare_options_for_selection(&context.selection, &mut options, &state)?;
                 let send_id = request
                     .idempotency_key
                     .as_deref()
                     .map(|key| request_key(&format!("send:{}", session.get()), key))
                     .unwrap_or_default();
-                let state = manager.state_for_session(session).await?;
                 let document = manager
                     .submit_hook(session, request.document, &state)
                     .await?;
                 let (document, blobs) = manager
-                    .prepare_user_media(session, &options.model, document, send_id)
+                    .prepare_user_media_with_state(
+                        session,
+                        &options.model,
+                        document,
+                        send_id,
+                        state,
+                        Some(context),
+                    )
                     .await?;
                 manager
                     .persist_submission_selection(session.get(), options.clone())
@@ -1321,10 +1331,19 @@ impl SessionManager {
         state: &ExecutionState,
     ) -> Result<(), AppError> {
         let context = self.execution_context_with_state(session, state).await?;
+        self.prepare_options_for_selection(&context.selection, options, state)
+    }
+
+    fn prepare_options_for_selection(
+        &self,
+        selection: &ExecutionSelection,
+        options: &mut SessionRunOptions,
+        state: &ExecutionState,
+    ) -> Result<(), AppError> {
         let selection = state
             .config
             .default_selection
-            .overlay_with_cascade(&context.selection);
+            .overlay_with_cascade(selection);
         if selection.model_ref().ok().flatten().as_ref() == Some(&options.model) {
             if options.thinking_mode.is_none() {
                 options.thinking_mode = selection.thinking_mode;

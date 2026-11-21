@@ -44,10 +44,10 @@ pub(super) struct BotConfiguration {
     pub ai_bot_id: Option<uuid::Uuid>,
     #[serde(default)]
     pub chat_access: ChatAccess,
-    /// Locally selected Telegram users who may use the connected AI Bot's
-    /// tools and permissions. Stable numeric user IDs, never usernames.
-    #[serde(default)]
-    pub administrator_user_ids: std::collections::BTreeSet<String>,
+    // Accept saved registries from before permissions moved to assignments.
+    #[serde(default, rename = "administrator_user_ids", skip_serializing)]
+    #[schemars(skip)]
+    _legacy_administrator_user_ids: serde::de::IgnoredAny,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,7 +77,6 @@ impl StoredBot {
             ai_bot_id: self.config.ai_bot_id,
             source_session_id: self.source_session_id,
             chat_access: self.config.chat_access.clone(),
-            administrator_user_ids: self.config.administrator_user_ids.clone(),
             access_since_ms: self.access_since_ms,
             chat_since_ms: self.chat_since_ms.clone(),
         }
@@ -101,7 +100,6 @@ pub(super) struct ResolvedBot {
     pub ai_bot_id: Option<uuid::Uuid>,
     pub source_session_id: Option<i64>,
     pub chat_access: ChatAccess,
-    pub administrator_user_ids: std::collections::BTreeSet<String>,
     pub access_since_ms: i64,
     pub chat_since_ms: BTreeMap<String, i64>,
 }
@@ -329,8 +327,7 @@ impl Stream {
                 .chars()
                 .take(500)
                 .collect();
-            // Anonymous/group and channel posts are authored by a chat. A
-            // compatibility `from` user must not become an admin candidate.
+            // Anonymous group and channel posts use the authoring chat identity.
             let sender_chat = message
                 .get("sender_chat")
                 .or_else(|| update.get("channel_post").map(|_| chat));
@@ -452,7 +449,6 @@ impl TelegramPlugin {
             ai_bot_id: None,
             source_session_id: None,
             chat_access: ChatAccess::default(),
-            administrator_user_ids: Default::default(),
             access_since_ms: 0,
             chat_since_ms: BTreeMap::new(),
             connection: self
@@ -532,7 +528,6 @@ impl TelegramPlugin {
                 "managed": true, "updated_at_ms": bot.updated_at_ms,
                 "ai_bot_id": bot.config.ai_bot_id, "source_session_id": bot.source_session_id,
                 "ai_bot": bot.ai_bot, "chat_access": bot.config.chat_access,
-                "administrator_user_ids": bot.config.administrator_user_ids,
                 "routing_error": self.routing_error(&bot.config.id).await?,
                 "verification": stream.verification, "last_poll_ms": stream.last_poll_ms,
                 "last_error": stream.last_error, "room_count": stream.rooms.len(), "buffered_updates": stream.updates.len() }));
@@ -547,7 +542,7 @@ impl TelegramPlugin {
                 "connection":legacy.connection, "credential_kind":"environment", "has_token":legacy.connection.token().is_ok(),
                 "managed":false, "updated_at_ms":0, "verification":stream.verification,
                 "ai_bot_id":null,"source_session_id":null,"ai_bot":null,
-                "chat_access":ChatAccess::default(),"administrator_user_ids":[],"routing_error":null,
+                "chat_access":ChatAccess::default(),"routing_error":null,
                 "last_poll_ms":stream.last_poll_ms, "last_error":stream.last_error,
                 "room_count":stream.rooms.len(), "buffered_updates":stream.updates.len() }));
         }
@@ -584,8 +579,6 @@ impl TelegramPlugin {
         bot.connection.bot_token_env = bot.connection.bot_token_env.trim().into();
         bot.connection.validate_transport()?;
         bot.chat_access.normalize()?;
-        bot.administrator_user_ids =
-            routing::normalize_administrator_user_ids(&bot.administrator_user_ids)?;
         let ai_bot_id = bot
             .ai_bot_id
             .ok_or_else(|| invalid("Select a local AI Bot for this Telegram bot"))?;
@@ -623,9 +616,6 @@ impl TelegramPlugin {
             ));
         }
         let old = registry.bots.get(&bot.id);
-        let administrators_changed = old
-            .is_some_and(|old| old.config.administrator_user_ids != bot.administrator_user_ids)
-            || (old.is_none() && !bot.administrator_user_ids.is_empty());
         let old_secret = old.and_then(|old| old.secret_name.clone());
         let supplied = token
             .map(|value| value.trim().to_owned())
@@ -812,14 +802,6 @@ impl TelegramPlugin {
             stream.verification = None;
             stream.last_error = None;
             self.write_record(&stream_key(&resolved), &stream).await?;
-        }
-        // A successful administrator save also updates existing binding epochs.
-        // The background reconciler retries interrupted synchronization.
-        if administrators_changed {
-            drop(_transaction);
-            drop(_account);
-            drop(_routing);
-            self.synchronize_managed_bot(&bot.id, false).await?;
         }
         Ok(result(
             "Telegram bot saved",
@@ -1223,7 +1205,7 @@ mod tests {
         assert_eq!(state.floor, 1);
     }
     #[test]
-    fn directory_keeps_anonymous_chat_senders_out_of_user_administrator_candidates() {
+    fn directory_uses_the_authoring_chat_for_anonymous_messages() {
         let mut state = Stream::default();
         state.observe(
             &json!({"message":{"message_id":1,"chat":{"id":-8,"type":"supergroup"},

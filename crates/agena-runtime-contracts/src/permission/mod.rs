@@ -19,9 +19,9 @@ use agena_domain::{
     AccessKind, AccessSelector, NetworkTarget, PermissionAction, PermissionDecision,
     PermissionMode, decide_from_mode,
 };
-use agena_plugin_sdk::ToolTag;
+use agena_plugin_sdk::{PluginKey, ToolTag};
 use path_clean::PathClean;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -57,6 +57,7 @@ pub(crate) fn command_class_label(class: CommandClass) -> &'static str {
 #[derive(Debug, Clone)]
 /// Permission policy for tool execution.
 pub struct ToolPermissionPolicy {
+    pub(crate) disabled_plugins: HashSet<PluginKey>,
     pub(crate) default_mode: PermissionMode,
     pub(crate) tool_modes: HashMap<String, PermissionMode>,
     pub(crate) bash_pattern_rules: Vec<BashPatternRule>,
@@ -281,6 +282,7 @@ pub fn tool_action(
 impl ToolPermissionPolicy {
     pub fn new(default_mode: PermissionMode) -> Self {
         Self {
+            disabled_plugins: HashSet::new(),
             default_mode,
             tool_modes: HashMap::new(),
             bash_pattern_rules: Vec::new(),
@@ -408,14 +410,63 @@ impl ToolPermissionPolicy {
         self.decision_for_mode(name, self.default_mode)
     }
 
-    /// The configured mode for one of `names`, if the user named the tool or a
-    /// default did. This is the map `tools.names` writes into.
+    /// Permission aliases describe the same tool. A restriction follows the
+    /// tool even if an invocation or another setting uses a different alias.
     fn tool_name_mode<'a>(&self, names: &[&'a str]) -> Option<(&'a str, PermissionMode)> {
-        names.iter().find_map(|name| {
-            self.tool_modes
-                .get(*name)
-                .copied()
-                .map(|mode| (*name, mode))
+        names
+            .iter()
+            .filter_map(|name| self.tool_modes.get(*name).map(|mode| (*name, *mode)))
+            .max_by_key(|(_, mode)| match mode {
+                PermissionMode::Allow => 0,
+                PermissionMode::Auto => 1,
+                PermissionMode::Ask => 2,
+                PermissionMode::Deny => 3,
+            })
+    }
+
+    pub(crate) fn tool_is_discoverable(&self, names: &[&str], tags: &[ToolTag]) -> bool {
+        if !matches!(
+            self.check_tool_with_names(names, None, tags),
+            PermissionDecision::Deny { .. }
+        ) {
+            return true;
+        }
+        // A shell command can be authorized by its own rule when only the
+        // default tool mode denies. The real command is checked on invocation.
+        if !ToolTag::is_shell(tags)
+            || is_terminal_write(names)
+            || self.tool_name_mode(names).is_some()
+        {
+            return false;
+        }
+        if self.bash_deny_rules.iter().any(|rule| rule.pattern == "*") {
+            return false;
+        }
+        for rule in self
+            .bash_overlay_rules
+            .iter()
+            .rev()
+            .filter(|rule| matches!(rule.matcher, CommandPatternMatcher::Wildcard(_)))
+            .chain(&self.bash_pattern_rules)
+        {
+            if rule.mode != PermissionMode::Deny {
+                return true;
+            }
+            if rule.pattern == "*" {
+                return false;
+            }
+        }
+        [
+            CommandClass::NoOp,
+            CommandClass::Routine,
+            CommandClass::Dangerous,
+        ]
+        .into_iter()
+        .any(|class| {
+            matches!(
+                self.command_class_mode(class),
+                PermissionMode::Allow | PermissionMode::Ask
+            )
         })
     }
 
@@ -496,13 +547,7 @@ impl ToolPermissionPolicy {
             return None;
         }
         let class = crate::command_class::command_classes(normalized)?;
-        let configured = self
-            .bash_overlay_rules
-            .iter()
-            .rev()
-            .find(|rule| matches!(rule.matcher, CommandPatternMatcher::Class(rule_class) if rule_class == class))
-            .map(|rule| rule.mode);
-        let mode = configured.unwrap_or_else(|| built_in_command_class_mode(class));
+        let mode = self.command_class_mode(class);
         if mode == PermissionMode::Auto {
             return None;
         }
@@ -519,6 +564,14 @@ impl ToolPermissionPolicy {
             },
             PermissionMode::Auto => unreachable!("handled above"),
         })
+    }
+
+    fn command_class_mode(&self, class: CommandClass) -> PermissionMode {
+        self.bash_overlay_rules
+            .iter()
+            .rev()
+            .find(|rule| matches!(rule.matcher, CommandPatternMatcher::Class(rule_class) if rule_class == class))
+            .map_or_else(|| built_in_command_class_mode(class), |rule| rule.mode)
     }
 
     fn evaluate_bash_pattern(&self, command: &str) -> Option<PermissionDecision> {
@@ -630,6 +683,8 @@ pub enum PermissionConfigError {
     UnresolvedPathAlias { pattern: String, alias: String },
     #[error("invalid permission network rule `{pattern}`: {reason}")]
     InvalidNetworkRule { pattern: String, reason: String },
+    #[error("invalid permission.plugins key {plugin:?}: use an exact namespace.plugin ID")]
+    InvalidPluginId { plugin: String },
     #[error("invalid permission.tools.rules[{tool:?}][{pattern:?}]: {reason}")]
     InvalidToolRule {
         tool: String,

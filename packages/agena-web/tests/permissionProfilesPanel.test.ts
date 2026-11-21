@@ -34,7 +34,7 @@ async function editor(
   let revision = 1
   let failure = ''
   let raceNextWrite = false
-  const route = vue.reactive({ query: { assignment } })
+  const route = vue.reactive({ query: { assignment, channelSource: '7' } })
   const writes: Array<{ path: string; value: permissionProfiles.PermissionCatalog; expected_revision?: string }> = []
   const requests: Array<{ url: string; method: string; body?: Record<string, unknown> }> = []
   const api = {
@@ -127,9 +127,10 @@ async function editor(
 describe('permission configuration management', () => {
   test('opens the chat directory by default and saves through the same revision guard', async () => {
     const catalog = permissionProfiles.emptyPermissionCatalog()
+    const room = { platform: 'agena.telegram', tenant: 'telegram', account: 'bot', resource: '-1007' }
+    catalog.profiles.reader = { name: 'Reader', description: '', revision: 1, permission: {} }
     const { panel, writes, race, current } = await editor(catalog, undefined, '')
-    expect(panel.section.value).toBe('channels')
-    const next = { ...catalog, groups: { staff: { name: 'Staff', priority: 0 } } }
+    const next = { ...catalog, conversations: [{ ...room, default_profile_id: 'reader' }] }
     race()
     await expect(panel.saveChannelAssignments(next)).rejects.toThrow('revision conflict')
     expect(current()).toEqual(catalog)
@@ -140,35 +141,20 @@ describe('permission configuration management', () => {
     expect(current()).toEqual(next)
   })
 
-  test('opens assignments from observed member and room links with their exact identities', async () => {
-    const catalog = permissionProfiles.emptyPermissionCatalog()
+  test('passes observed room and member links to the conversation directory', async () => {
     const room = { platform: 'custom.chat', tenant: 'team', account: 'bot', resource: 'channel/研发?&=2' }
     const actor = 'person-1'
-    const other = { ...room, resource: 'other-room', actor, group_ids: [], overrides: {} }
-    catalog.users.push(other)
-    catalog.profiles.reader = { name: 'Reader', description: '', revision: 1, permission: {} }
-    catalog.groups.readers = { name: 'Readers', priority: 0, profile_id: 'reader' }
-    const member = permissionProfiles.channelPermissionSettings({ ...room, actor }).query.assignment
-    const { panel, route, current, writes } = await editor(catalog, undefined, member)
-    expect(panel.section.value).toBe('users')
-    expect(clone(panel.draft.value)).toMatchObject({ ...room, actor, group_ids: [] })
+    const member = permissionProfiles.channelPermissionSettings({ ...room, actor }, 7).query.assignment
+    const { panel, route, writes } = await editor(permissionProfiles.emptyPermissionCatalog(), undefined, member)
+    expect(panel.channelTarget.value).toEqual({ ...room, actor })
+    expect(panel.channelSource.value).toBe(7)
+    expect(panel.draft.value).toBeNull()
+
+    route.query.assignment = permissionProfiles.channelPermissionSettings(room, 7).query.assignment
+    await vue.nextTick()
+    expect(panel.channelTarget.value).toEqual(room)
+    expect(panel.draft.value).toBeNull()
     expect(writes).toHaveLength(0)
-    panel.draft.value.group_ids = ['readers']
-    await panel.save()
-    expect(current().users).toEqual([other, { ...room, actor, group_ids: ['readers'], overrides: {} }])
-
-    route.query.assignment = permissionProfiles.channelPermissionSettings(room).query.assignment
-    await vue.nextTick()
-    expect(panel.section.value).toBe('conversations')
-    expect(clone(panel.draft.value)).toMatchObject(room)
-    panel.draft.value.profile_id = 'reader'
-    await panel.save()
-    expect(current().conversations).toEqual([{ ...room, default_profile_id: 'reader' }])
-
-    route.query.assignment = member
-    await vue.nextTick()
-    expect(clone(panel.draft.value)).toMatchObject({ ...room, actor, group_ids: ['readers'] })
-    expect(writes.map((write) => write.expected_revision)).toEqual(['r1', 'r2'])
   })
 
   test('the default profile is present and editable before it has an authored record', async () => {
@@ -202,14 +188,13 @@ describe('permission configuration management', () => {
     expect(buildSettingsScopes('permissions', 'profiles').map((scope) => scope.id)).toEqual(['global'])
   })
 
-  test('creates and copies profiles, then persists group, user and conversation bindings with revision guards', async () => {
+  test('creates and copies profiles with revision guards', async () => {
     const { panel, writes, requests, current } = await editor()
     await panel.addEntry()
     Object.assign(panel.draft.value, {
       id: 'readers',
       name: 'Readers',
       grantEnabled: true,
-      toolsText: 'fs.read\nfs.read\nfs.list',
       mcp: [{ server: 'docs', tools: 'search' }],
       permission: {
         path: { workspace: 'readonly', external: 'deny' },
@@ -218,7 +203,13 @@ describe('permission configuration management', () => {
     })
     await panel.save()
     expect(panel.error.value).toBe('')
-    expect(current().profiles.readers?.grant?.tools).toEqual(['fs.read', 'fs.list'])
+    expect(current().profiles.readers?.grant).toEqual({
+      mcp_tools: { docs: ['search'] },
+      network_hosts: [],
+      private_memory: false,
+      source_workspace: false,
+    })
+    expect(current().profiles.readers?.permission.tools?.names).toEqual({ 'fs.read': 'allow' })
     expect(current().profiles.readers?.revision).toBe(1)
     expect(current().profiles.readers).toMatchObject({ complete: true, permission: { network: { default: 'deny' } } })
     await panel.addEntry(true)
@@ -227,79 +218,23 @@ describe('permission configuration management', () => {
     await panel.save()
     expect(current().profiles.researchers?.permission).toEqual(current().profiles.readers?.permission)
 
-    await panel.selectSection('groups')
-    await panel.addEntry()
-    Object.assign(panel.draft.value, { id: 'staff', name: 'Staff', priority: 10, profile_id: 'readers' })
-    await panel.save()
-    await panel.selectSection('users')
-    await panel.addEntry()
-    Object.assign(panel.draft.value, {
-      platform: 'telegram',
-      tenant: 'telegram',
-      account: 'bot-1',
-      actor: '123',
-      group_ids: ['staff'],
-      profile_id: 'researchers',
-      resource: '-100123',
-      permission: { tools: { names: { shell: 'deny' } } },
-    })
-    await panel.save()
-    await panel.selectSection('conversations')
-    await panel.addEntry()
-    Object.assign(panel.draft.value, {
-      platform: 'telegram',
-      tenant: 'telegram',
-      account: 'bot-1',
-      resource: '-100123',
-      profile_id: 'readers',
-    })
-    await panel.save()
-    expect(panel.error.value).toBe('')
-    expect(current().users[0]).toMatchObject({
-      actor: '123',
-      resource: '-100123',
-      group_ids: ['staff'],
-      profile_id: 'researchers',
-      overrides: { tools: { names: { shell: 'deny' } } },
-    })
-    expect(current().conversations[0]?.default_profile_id).toBe('readers')
-    expect(writes.map((write) => write.expected_revision)).toEqual(['r1', 'r2', 'r3', 'r4', 'r5'])
+    expect(writes.map((write) => write.expected_revision)).toEqual(['r1', 'r2'])
     expect(requests.every((request) => request.url.startsWith('/api/v1/settings/layers/global'))).toBe(true)
     expect(panel.dirty.value).toBe(false)
   })
 
-  test('requires removing profile and group bindings before deletion and supports reassignment', async () => {
+  test('requires removing member and conversation bindings before deleting a profile', async () => {
     const catalog = permissionProfiles.emptyPermissionCatalog()
     catalog.profiles.reader = { name: 'Reader', description: '', revision: 1, permission: {} }
-    catalog.groups.staff = { name: 'Staff', priority: 0, profile_id: 'reader' }
-    catalog.users.push({
-      platform: 'telegram',
-      tenant: 'telegram',
-      account: 'bot',
-      actor: 'one',
-      group_ids: ['staff'],
-      overrides: {},
-    })
+    const room = { platform: 'agena.telegram', tenant: 'telegram', account: 'bot', resource: '-1007' }
+    catalog.users.push({ ...room, actor: 'one', profile_id: 'reader' })
+    catalog.conversations.push({ ...room, default_profile_id: 'reader' })
     const { panel, writes, current } = await editor(catalog)
     await panel.selectEntry('reader')
     await panel.removeEntry()
     expect(panel.error.value).toContain('in use')
     expect(writes).toHaveLength(0)
-    await panel.selectSection('groups')
-    await panel.selectEntry('staff')
-    await panel.removeEntry()
-    expect(panel.error.value).toContain('in use')
-    await panel.selectSection('users')
-    await panel.selectEntry(permissionProfiles.permissionUserKey(catalog.users[0]!))
-    panel.draft.value.actor = 'two'
-    await panel.save()
-    expect(current().users.map((user) => user.actor)).toEqual(['two'])
-    await panel.removeEntry()
-    await panel.selectSection('groups')
-    await panel.selectEntry('staff')
-    await panel.removeEntry()
-    await panel.selectSection('profiles')
-    await panel.selectEntry('reader')
+    await panel.saveChannelAssignments({ ...catalog, users: [], conversations: [] })
     await panel.removeEntry()
     expect(current()).toEqual(permissionProfiles.emptyPermissionCatalog())
   })
@@ -310,9 +245,9 @@ describe('permission configuration management', () => {
     const harness = await editor(catalog)
     await harness.panel.selectEntry('reader')
     harness.panel.draft.value.name = 'Changed'
-    harness.fail('Conflicting groups at priority 10')
+    harness.fail('Invalid permission profile')
     await harness.panel.save()
-    expect(harness.panel.error.value).toContain('Conflicting groups')
+    expect(harness.panel.error.value).toContain('Invalid permission profile')
     expect(harness.panel.draft.value.name).toBe('Changed')
     expect(harness.panel.dirty.value).toBe(true)
     harness.fail('')
@@ -324,25 +259,13 @@ describe('permission configuration management', () => {
     expect(harness.writes).toHaveLength(0)
   })
 
-  test('reads omitted optional fields with the same defaults as the persisted schema', async () => {
-    const catalog = permissionProfiles.readPermissionCatalog({
-      profiles: { reader: { name: 'Reader' } },
-      groups: { staff: { name: 'Staff', profile_id: 'reader' } },
-      users: [{ platform: 'telegram', tenant: 'telegram', account: 'bot', actor: 'one' }],
-    })
-    const { panel, current } = await editor(catalog)
+  test('reads optional profile fields with the persisted defaults', async () => {
+    const catalog = permissionProfiles.readPermissionCatalog({ profiles: { reader: { name: 'Reader' } } })
+    const { panel } = await editor(catalog)
     await panel.selectEntry('reader')
     expect(panel.draft.value.permission).toEqual({})
-    await panel.selectSection('groups')
-    await panel.selectEntry('staff')
-    expect(panel.draft.value.priority).toBe(0)
-    await panel.selectSection('users')
-    await panel.selectEntry(permissionProfiles.permissionUserKey(catalog.users[0]!))
-    expect(panel.draft.value.group_ids).toEqual([])
-    panel.draft.value.group_ids = ['staff']
-    await panel.save()
-    expect(panel.error.value).toBe('')
-    expect(current().users[0]?.group_ids).toEqual(['staff'])
+    expect(panel.draft.value.description).toBe('')
+    expect(catalog.profiles.reader?.revision).toBe(1)
   })
 
   test('settings helper forwards revision guards for PATCH and DELETE too', async () => {

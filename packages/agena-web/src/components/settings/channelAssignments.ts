@@ -81,15 +81,11 @@ export function mergeChannelParticipants(
 
 export function roomPermissionBindings(catalog: PermissionCatalog, room: ChannelRoom) {
   const members = new Map<string, PermissionUser>()
-  const accountMembers = new Map<string, PermissionUser>()
   for (const user of catalog.users) {
-    if (permissionIdentityKey(user, room.identity.resource) !== room.key) continue
-    if (user.resource === room.identity.resource) members.set(user.actor, user)
-    if (!user.resource) accountMembers.set(user.actor, user)
+    if (permissionIdentityKey(user, user.resource) === room.key) members.set(user.actor, user)
   }
   return {
     members,
-    accountMembers,
     profile:
       catalog.conversations.find(
         (conversation) => permissionIdentityKey(conversation, conversation.resource) === room.key,
@@ -97,26 +93,23 @@ export function roomPermissionBindings(catalog: PermissionCatalog, room: Channel
   }
 }
 
-/** Only patch the selected room's defaults and room-scoped group memberships. */
+/** An empty selection removes the assignment and restores inheritance. */
 export function applyChannelAssignments(
   catalog: PermissionCatalog,
   room: ChannelRoom,
   profile: string | undefined,
-  groupEdits: ReadonlyMap<string, string[]>,
+  memberEdits: ReadonlyMap<string, string>,
 ): PermissionCatalog {
-  const pending = new Map(groupEdits)
+  const pending = new Map(memberEdits)
   const users = catalog.users.flatMap((user) => {
-    if (user.resource !== room.identity.resource || permissionIdentityKey(user, user.resource) !== room.key)
-      return [user]
-    const groupIds = pending.get(user.actor)
-    if (!groupIds) return [user]
+    if (permissionIdentityKey(user, user.resource) !== room.key) return [user]
+    const profileId = pending.get(user.actor)
+    if (profileId === undefined) return [user]
     pending.delete(user.actor)
-    return groupIds.length || user.profile_id || Object.keys(user.overrides).length
-      ? [{ ...user, group_ids: groupIds }]
-      : []
+    return profileId ? [{ ...user, profile_id: profileId }] : []
   })
-  for (const [actor, groupIds] of pending) {
-    if (groupIds.length) users.push({ ...room.identity, actor, group_ids: groupIds, overrides: {} })
+  for (const [actor, profileId] of pending) {
+    if (profileId) users.push({ ...room.identity, actor, profile_id: profileId })
   }
   if (profile === undefined) return { ...catalog, users }
 

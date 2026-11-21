@@ -128,9 +128,8 @@ pub enum ChannelTrigger {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct ChannelGrant {
-    /// Exact canonical tool IDs only; empty means no tools. Scope-preserving
-    /// memory/companion helpers are derived from the booleans below, not freely
-    /// assigned management-tool names.
+    /// Legacy binding and automated-report tools. Named permission profiles
+    /// select tools through their execution rules.
     pub tools: BTreeSet<String>,
     /// Fine-grained MCP server -> exact remote tool names. The generic MCP
     /// gateway and connection-management tools are never directly grantable.
@@ -141,6 +140,50 @@ pub struct ChannelGrant {
     /// Literal IP or IP:port grants intersect the source session's permission cap.
     pub network_hosts: BTreeSet<String>,
 }
+
+const CHANNEL_MCP_TOOLS: &[&str] = &["agena.mcp.tools.call", "agena.mcp.tools.search"];
+const CHANNEL_MEMORY_TOOLS: &[&str] = &[
+    "agena.memory.list",
+    "agena.memory.get",
+    "agena.memory.search",
+    "agena.memory.write",
+    "agena.memory.delete",
+    "agena.companion.manage",
+];
+
+// These plugins manage resources beyond the conversation's execution scope.
+// Only the scoped entry points above and the legacy explicit Bot grant can
+// be exposed to ordinary channel members.
+fn is_channel_management_tool(canonical: &str) -> bool {
+    let mut parts = canonical.splitn(3, '.');
+    parts.next() == Some("agena")
+        && matches!(
+            parts.next(),
+            Some(
+                "auth"
+                    | "bot"
+                    | "companion"
+                    | "config"
+                    | "cron"
+                    | "marketplace"
+                    | "mcp"
+                    | "memory"
+                    | "monitor"
+                    | "oauth"
+                    | "permission"
+                    | "permissions"
+                    | "plugin"
+                    | "plugins"
+                    | "provider"
+                    | "runtime"
+                    | "secret"
+                    | "secrets"
+                    | "session"
+                    | "settings"
+            )
+        )
+}
+
 impl ChannelGrant {
     pub fn allows_mcp_tool(&self, server: &str, tool: &str) -> bool {
         self.mcp_tools
@@ -168,44 +211,7 @@ impl ChannelGrant {
             {
                 return Err("channel tools require exact canonical IDs; wildcards and aliases are not accepted".into());
             }
-            let plugin = tool.split('.').take(2).collect::<Vec<_>>().join(".");
-            if [
-                "agena.mcp.connections.",
-                "agena.provider.",
-                "agena.marketplace.",
-                "agena.runtime.",
-                "agena.auth.",
-                "agena.oauth.",
-            ]
-            .iter()
-            .any(|prefix| tool.starts_with(prefix))
-            {
-                return Err(format!(
-                    "{tool} changes instance-level configuration and cannot be delegated through a channel role"
-                ));
-            }
-            // Cross-project session management can be explicitly delegated
-            // to a Bot-owned channel. Other Bot administration stays local.
-            if tool != "agena.bot.sessions"
-                && matches!(
-                    plugin.as_str(),
-                    "agena.config"
-                        | "agena.settings"
-                        | "agena.permission"
-                        | "agena.permissions"
-                        | "agena.plugin"
-                        | "agena.plugins"
-                        | "agena.secret"
-                        | "agena.secrets"
-                        | "agena.session"
-                        | "agena.bot"
-                        | "agena.companion"
-                        | "agena.memory"
-                        | "agena.cron"
-                        | "agena.monitor"
-                        | "agena.mcp"
-                )
-            {
+            if tool != "agena.bot.sessions" && is_channel_management_tool(tool) {
                 return Err(format!(
                     "{tool} cannot be granted directly to a channel; use the scoped capability controls"
                 ));
@@ -228,19 +234,21 @@ impl ChannelGrant {
         }
         Ok(())
     }
+    fn scoped_tools(&self) -> impl Iterator<Item = &'static str> {
+        (!self.mcp_tools.is_empty())
+            .then_some(CHANNEL_MCP_TOOLS)
+            .into_iter()
+            .chain(self.private_memory.then_some(CHANNEL_MEMORY_TOOLS))
+            .flatten()
+            .copied()
+    }
+
     pub fn allowed_tools(&self) -> BTreeSet<String> {
-        let mut tools = self.tools.clone();
-        if !self.mcp_tools.is_empty() {
-            tools.insert("agena.mcp.tools.call".into());
-            tools.insert("agena.mcp.tools.search".into());
-        }
-        if self.private_memory {
-            for name in ["list", "get", "search", "write", "delete"] {
-                tools.insert(format!("agena.memory.{name}"));
-            }
-            tools.insert("agena.companion.manage".into());
-        }
-        tools
+        self.tools
+            .iter()
+            .cloned()
+            .chain(self.scoped_tools().map(str::to_owned))
+            .collect()
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -575,10 +583,23 @@ impl ChannelAuthority {
     pub fn active_at(&self, now: i64) -> bool {
         !self.revoked && (self.expires_at_ms == 0 || now < self.expires_at_ms)
     }
+
+    pub fn uses_profile_tool_permissions(&self) -> bool {
+        !self.profile_ids.is_empty() && valid_channel_id(&self.actor)
+    }
+
+    /// Check the conversation's execution scope. The executor still applies
+    /// the effective tool rules and permission ceilings to every invocation.
     pub fn allows_tool(&self, canonical: &str, now: i64) -> bool {
         self.actor != "@shared"
             && self.active_at(now)
-            && (self.source_admin || self.grant.allowed_tools().contains(canonical))
+            && (self.source_admin
+                || self.grant.scoped_tools().any(|tool| tool == canonical)
+                || if self.uses_profile_tool_permissions() {
+                    !is_channel_management_tool(canonical)
+                } else {
+                    self.grant.tools.contains(canonical)
+                })
     }
     pub fn allows_mcp_tool(&self, server: &str, tool: &str, now: i64) -> bool {
         self.actor != "@shared"

@@ -211,7 +211,7 @@ async fn reply(messages: &Replies, marker: &str) -> Result<Value> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn bot_lists_verified_participants_and_applies_their_room_permission_groups() -> TestResult {
+async fn bot_lists_verified_participants_and_applies_their_room_member_profiles() -> TestResult {
     let replies: Replies = Default::default();
     native_mcp_fixture::fixture(replies.clone())
         .run(move |case| async move {
@@ -246,11 +246,10 @@ async fn bot_lists_verified_participants_and_applies_their_room_permission_group
             ensure!(http.anonymous().get(&path(source.id())).await?.status.as_u16() == 401);
 
             case.settings().set(SettingsLayer::Global, "access_control", json!({
-                "profiles":{"reader":{"name":"Room reader","permission":{"network":{"default":"deny"}}}},
-                "groups":{"room-readers":{"name":"Room readers","profile_id":"reader"}},
+                "profiles":{"reader":{"name":"Room reader","permission":{"tools":{"names":{"agena.fs.read":"allow"}}}}},
                 "users":[{"platform":binding.spec.provider,"tenant":group.identity.tenant,
                     "account":group.identity.account,"resource":query.resource,"actor":newcomer.actor,
-                    "group_ids":["room-readers"]}]
+                    "profile_id":"reader"}]
             }), EditOptions::default()).await?.require_success()?;
 
             group.members.push(ChannelMember { actor: newcomer.actor.clone(), role: ChannelRole::Member, expires_at_ms: None });
@@ -258,11 +257,11 @@ async fn bot_lists_verified_participants_and_applies_their_room_permission_group
             client.update_channel_access(source.id(), binding.id, &ChannelPolicyUpdate {
                 expected_revision: current.revision, request_key: "admit-newcomer".into(), policy: group.clone(),
             }).await?;
-            case.model().expect(RequestMatch::user_text("ROOM-PERMISSION-REQUEST"))
-                .check(|request| {
-                    ensure!(request.body.to_string().contains("room-readers"));
-                    Ok(())
-                })
+            let help = case.model().expect(RequestMatch::user_text("ROOM-PERMISSION-REQUEST").declares_function("tools_help"))
+                .reply(Reply::function_call("room-member-tool", "tools_help", json!({"tool":"fs.read"})));
+            case.model().expect(RequestMatch::tool_output("room-member-tool"))
+                .after(&help)
+                .check_tool_output_contains("room-member-tool", "file_path")
                 .reply(Reply::text("room-permission-ack"));
             message(&case, &group, "next-contact", &newcomer.actor, Some("second-thread"), "ROOM-PERMISSION-REQUEST").await?;
             reply(&replies, "room-permission-ack").await?;

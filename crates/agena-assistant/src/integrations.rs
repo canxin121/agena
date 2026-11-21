@@ -358,6 +358,33 @@ pub struct IntegrationSpec {
     pub channel_policy: Option<ChannelAccessPolicy>,
 }
 impl IntegrationSpec {
+    pub fn is_telegram_channel(&self) -> bool {
+        self.mode == IntegrationMode::Channel && self.provider == "agena.telegram"
+    }
+
+    /// Telegram capability grants come exclusively from named assignments.
+    /// Preserve the connection's identity, admission and routing settings.
+    pub fn retire_telegram_grants(&mut self) -> bool {
+        if !self.is_telegram_channel() {
+            return false;
+        }
+        let Some(policy) = &mut self.channel_policy else {
+            return false;
+        };
+        if !policy.grant.has_effects()
+            && policy.administrator_actors.is_empty()
+            && !policy.allow_automated_reports
+            && !policy.service_grant.has_effects()
+        {
+            return false;
+        }
+        policy.grant = ChannelGrant::default();
+        policy.administrator_actors.clear();
+        policy.allow_automated_reports = false;
+        policy.service_grant = ChannelGrant::default();
+        true
+    }
+
     /// Zero removes a lifetime or budget limit only for durable chat channels.
     pub fn expired_at(&self, now: i64) -> bool {
         !(self.mode == IntegrationMode::Channel && self.expires_at_ms == 0)
@@ -549,10 +576,11 @@ impl IntegrationBinding {
         owner_bot_id: Option<Uuid>,
         source: i64,
         key: String,
-        spec: IntegrationSpec,
+        mut spec: IntegrationSpec,
         fingerprint: String,
         now: i64,
     ) -> Result<Self> {
+        spec.retire_telegram_grants();
         spec.validate(now)?;
         validate_key(&key)?;
         if workspace.is_some() == owner_bot_id.is_some() || source <= 0 {

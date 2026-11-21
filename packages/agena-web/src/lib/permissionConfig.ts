@@ -31,6 +31,7 @@ export type PermissionConfig = {
     names?: Record<string, PermissionMode>
     rules?: Record<string, PermissionMode | Record<string, PermissionMode>>
   }
+  plugins?: Record<string, boolean>
   approval_model?: JsonValue
 }
 
@@ -454,7 +455,7 @@ export function mergeNetworkPermissionConfig(
 /** Normalize deterministic legacy values, then validate before replacing a draft or submitting it. */
 export function parsePermissionConfig(value: unknown): PermissionConfig {
   const raw = objectAt(value, 'permission')
-  knownFields(raw, ['path', 'network', 'tools', 'approval_model'], 'permission')
+  knownFields(raw, ['path', 'network', 'tools', 'plugins', 'approval_model'], 'permission')
   const result: PermissionConfig = {}
   if (raw.path != null) {
     const path = objectAt(raw.path, 'permission.path')
@@ -501,6 +502,20 @@ export function parsePermissionConfig(value: unknown): PermissionConfig {
     }
   }
   if (raw.network !== undefined) result.network = parseNetworkPermissionConfig(raw.network)
+  if (raw.plugins !== undefined) {
+    const entries = Object.entries(objectAt(raw.plugins, 'permission.plugins'))
+    for (const [id, enabled] of entries) {
+      const parts = id.split('.')
+      if (parts.length !== 2 || parts.some((part) => !part || part.trim() !== part))
+        throw new PermissionConfigError('Invalid plugin ID {id}. Use the full plugin ID.', { id })
+      if (typeof enabled !== 'boolean')
+        throw new PermissionConfigError('Invalid permission value at {field}: expected {expected}.', {
+          field: `permission.plugins[${JSON.stringify(id)}]`,
+          expected: 'true | false',
+        })
+    }
+    if (entries.length) result.plugins = Object.fromEntries(entries) as Record<string, boolean>
+  }
   if (raw.tools != null) {
     const tools = objectAt(raw.tools, 'permission.tools')
     knownFields(tools, ['default', 'names', 'rules'], 'permission.tools')

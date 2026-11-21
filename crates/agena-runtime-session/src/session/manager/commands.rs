@@ -1394,6 +1394,7 @@ impl SessionExecutionCommandService for SessionManager {
                 request.document,
                 request.request_id,
                 state,
+                None,
             )
             .await
             .map_err(command_error)?;

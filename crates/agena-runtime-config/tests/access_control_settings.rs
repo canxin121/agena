@@ -28,10 +28,9 @@ fn catalog() -> Value {
                 "grant": {"tools": ["agena.fs.read"]}
             }
         },
-        "groups": {"readers": {"name": "Readers", "priority": 10, "profile_id": "reader"}},
         "users": [{
             "platform": "agena.telegram", "tenant": "telegram", "account": "bot",
-            "actor": "alice", "group_ids": ["readers"]
+            "actor": "alice", "resource": "room", "profile_id": "reader"
         }],
         "conversations": [{
             "platform": "agena.telegram", "tenant": "telegram", "account": "bot",
@@ -147,18 +146,21 @@ fn settings_reject_invalid_catalog_and_nested_permissions_before_writing() {
     let mut invalid_permission = catalog();
     invalid_permission["profiles"]["reader"]["permission"] =
         json!({"path":{"workspace":{"read":"deny","write":"allow"}}});
+    let mut invalid_plugin = catalog();
+    invalid_plugin["profiles"]["reader"]["permission"]["plugins"] = json!({"shell": false});
     let mut duplicate_user = catalog();
     duplicate_user["users"] = json!([
         duplicate_user["users"][0].clone(),
         duplicate_user["users"][0].clone()
     ]);
-    let mut missing_group = catalog();
-    missing_group["groups"] = json!({});
+    let mut invalid_member_profile = catalog();
+    invalid_member_profile["users"][0]["profile_id"] = json!("missing");
     for invalid in [
         missing_profile,
         invalid_permission,
+        invalid_plugin,
         duplicate_user,
-        missing_group,
+        invalid_member_profile,
     ] {
         assert!(set_runtime_file_setting(&file, input(invalid), None).is_err());
         assert_eq!(fs::read(&file).unwrap(), before);

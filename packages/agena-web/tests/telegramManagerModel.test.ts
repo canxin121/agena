@@ -5,7 +5,6 @@ import {
   copyTelegramChatAccess,
   defaultTelegramChatAccess,
   telegramChatAllowed,
-  parseTelegramAdministratorIds,
 } from '../src/features/telegram/model'
 const connection = connectionFromSettings({ account: 'My_Agent_Bot' })
 describe('Telegram connection and binding ownership', () => {
@@ -39,7 +38,6 @@ function botView(id: string, account: string): TelegramBot {
     ai_bot: { id: 'ai-' + id, name: 'AI ' + id },
     source_session_id: id === 'work' ? 1 : 2,
     chat_access: defaultTelegramChatAccess(),
-    administrator_user_ids: [],
     routing_error: null,
     has_token: true,
     managed: true,
@@ -120,26 +118,6 @@ describe('multiple Telegram bots and rich chat management', () => {
     expect(telegramChatAllowed(access, '999999999999999', 'private')).toBe(true)
     expect(telegramChatAllowed(access, '-10043', 'channel')).toBe(false)
     expect(telegramChatAllowed(access, '99', 'unknown')).toBe(false)
-  })
-  test('administrator IDs preserve exact identity and reject usernames or channel actors', () => {
-    expect(parseTelegramAdministratorIds(' 00123, 456\n123，9007199254740993 ')).toEqual([
-      '123',
-      '456',
-      '9007199254740993',
-    ])
-    expect(parseTelegramAdministratorIds('')).toEqual([])
-    for (const value of ['0', '-10042', '@admin', 'channel:77', '1e3', '1.5', '+77', '9223372036854775808'])
-      expect(() => parseTelegramAdministratorIds(value)).toThrow()
-    expect(() => parseTelegramAdministratorIds(Array.from({ length: 65 }, (_, i) => String(i + 1)).join(','))).toThrow()
-  })
-  test('administrator edits do not mutate saved bot configuration or other bots', () => {
-    const work = botView('work', 'work_bot'),
-      home = botView('home', 'home_bot')
-    work.administrator_user_ids = ['77']
-    const draft = botConfig(work)
-    draft.administrator_user_ids.push('88')
-    expect(work.administrator_user_ids).toEqual(['77'])
-    expect(home.administrator_user_ids).toEqual([])
   })
   test('editing one bot keeps AI ownership, room selection and saved configuration isolated', () => {
     const work = botView('work', 'work_bot'),

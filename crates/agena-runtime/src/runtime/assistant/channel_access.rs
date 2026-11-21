@@ -39,7 +39,7 @@ impl agena_runtime_contracts::ChannelAccessVerifier for ChannelVerifier {
             .binding(id)
             .await
             .map_err(|_| "channel authorization state unavailable; access denied".to_owned())?;
-        service
+        let source = service
             .verify_integration_boundary(&binding)
             .await
             .map_err(|error| error.to_string())?;
@@ -57,7 +57,7 @@ impl agena_runtime_contracts::ChannelAccessVerifier for ChannelVerifier {
             } else {
                 &policy.grant
             };
-            let resolved = service
+            let mut resolved = service
                 .manager()
                 .map_err(|error| error.to_string())?
                 .access_control_config()
@@ -69,9 +69,10 @@ impl agena_runtime_contracts::ChannelAccessVerifier for ChannelVerifier {
                     &agena_domain::PermissionConfig::default(),
                     base_grant,
                 )?;
+            apply_plugin_denials(&mut resolved.permission, &source.disabled_plugins);
             if resolved.fingerprint != authority.profile_fingerprint
                 || resolved.grant != authority.grant
-                || resolved.group_ids != authority.group_ids
+                || !authority.group_ids.is_empty()
                 || resolved.profile_ids != authority.profile_ids
                 || resolved.permission != authority.permission_overlay
                 || resolved.complete != authority.permission_complete
@@ -109,11 +110,21 @@ fn channel_scope_keys(
     Ok((privacy_key, scope_key))
 }
 
+fn apply_plugin_denials(
+    permission: &mut agena_domain::PermissionConfig,
+    disabled: &BTreeSet<String>,
+) {
+    permission
+        .plugins
+        .extend(disabled.iter().cloned().map(|id| (id, false)));
+}
+
 fn compatible_channel_recovery(
     binding: &IntegrationBinding,
     previous: &ChannelSessionRecord,
     now: i64,
     access_control: &agena_domain::AccessControlConfig,
+    disabled_plugins: &BTreeSet<String>,
 ) -> Result<ChannelSessionRecord> {
     let policy = binding
         .spec
@@ -142,24 +153,24 @@ fn compatible_channel_recovery(
     let resolved = if old.actor == "@shared" {
         None
     } else {
-        Some(
-            access_control
-                .resolve(
-                    &binding.spec.provider,
-                    &policy.identity,
-                    &old.resource,
-                    &old.actor,
-                    &agena_domain::PermissionConfig::default(),
-                    grant,
-                )
-                .map_err(runtime_error)?,
-        )
+        let mut resolved = access_control
+            .resolve(
+                &binding.spec.provider,
+                &policy.identity,
+                &old.resource,
+                &old.actor,
+                &agena_domain::PermissionConfig::default(),
+                grant,
+            )
+            .map_err(runtime_error)?;
+        apply_plugin_denials(&mut resolved.permission, disabled_plugins);
+        Some(resolved)
     };
     let expected_grant = resolved.as_ref().map(|r| &r.grant).unwrap_or(grant);
     if old.grant != *expected_grant
         || resolved.as_ref().is_some_and(|r| {
             r.fingerprint != old.profile_fingerprint
-                || r.group_ids != old.group_ids
+                || !old.group_ids.is_empty()
                 || r.permission != old.permission_overlay
                 || r.complete != old.permission_complete
         })
@@ -253,7 +264,7 @@ impl AssistantRuntime {
             source_admin,
         )?;
         let manager = self.manager()?;
-        let resolved = manager
+        let mut resolved = manager
             .access_control_config()
             .resolve(
                 &b.spec.provider,
@@ -264,6 +275,10 @@ impl AssistantRuntime {
                 &base_grant,
             )
             .map_err(runtime_error)?;
+        let source = self
+            .source_permission_policy(b.source_session_id, b.spec.mode)
+            .await?;
+        apply_plugin_denials(&mut resolved.permission, &source.disabled_plugins);
         let private_root = agena_storage_layout::StorageLayout::current()
             .root()
             .join("channel-scopes")
@@ -295,7 +310,7 @@ impl AssistantRuntime {
         let authority = ChannelAuthority {
             binding_id: b.id.to_string(),
             platform: b.spec.provider.clone(),
-            group_ids: resolved.group_ids,
+            group_ids: Vec::new(),
             profile_ids: resolved.profile_ids,
             profile_fingerprint: resolved.fingerprint,
             permission_overlay: resolved.permission,
@@ -422,10 +437,10 @@ impl AssistantRuntime {
                 "the provider transport or connection identity changed; the existing conversation cannot be resumed under a different boundary",
             ));
         }
-        let permission = self
-            .source_permission_identity(binding.source_session_id)
+        let source_policy = self
+            .source_permission_policy(binding.source_session_id, binding.spec.mode)
             .await?;
-        if permission != binding.permission_fingerprint {
+        if source_policy.fingerprint != binding.permission_fingerprint {
             return Err(Error::Conflict(
                 "the source permission boundary changed; review cannot reuse this conversation under different capabilities",
             ));
@@ -484,6 +499,7 @@ impl AssistantRuntime {
                 &record,
                 now,
                 &manager.access_control_config(),
+                &source_policy.disabled_plugins,
             )?;
             if !scope_keys.insert(current.scope_key.clone()) {
                 return Err(Error::Conflict(
@@ -600,6 +616,9 @@ impl AssistantRuntime {
         let text = event.event.text.trim();
         if text != "/access" && !text.starts_with("/access ") {
             return Ok(false);
+        }
+        if b.spec.is_telegram_channel() {
+            return Ok(true);
         }
         let now = Utc::now().timestamp_millis();
         let policy = b
@@ -770,8 +789,14 @@ mod tests {
     #[test]
     fn compatible_recovery_preserves_original_scope_and_session_when_only_role_and_epoch_change() {
         let (binding, previous) = recovery_fixture();
-        let current =
-            compatible_channel_recovery(&binding, &previous, 2000, &Default::default()).unwrap();
+        let current = compatible_channel_recovery(
+            &binding,
+            &previous,
+            2000,
+            &Default::default(),
+            &Default::default(),
+        )
+        .unwrap();
         assert_eq!(current.session_id, 11);
         assert_eq!(current.created_at_ms, previous.created_at_ms);
         assert_eq!(current.authority.epoch, 4);
@@ -837,8 +862,14 @@ mod tests {
             let (mut binding, previous) = recovery_fixture();
             change(&mut binding);
             assert!(
-                compatible_channel_recovery(&binding, &previous, 2000, &Default::default())
-                    .is_err()
+                compatible_channel_recovery(
+                    &binding,
+                    &previous,
+                    2000,
+                    &Default::default(),
+                    &Default::default()
+                )
+                .is_err()
             );
         }
     }

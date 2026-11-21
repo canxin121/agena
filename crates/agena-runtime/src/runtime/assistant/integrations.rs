@@ -6,11 +6,16 @@ use chrono::Utc;
 use futures_util::{StreamExt, stream};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeSet, sync::Arc, time::Duration};
 use uuid::Uuid;
 
 mod provider_fingerprint;
 pub(super) use provider_fingerprint::{ProviderFingerprintMatch, ProviderIdentityCheck};
+
+pub(super) struct IntegrationSourcePolicy {
+    pub(super) fingerprint: String,
+    pub(super) disabled_plugins: BTreeSet<String>,
+}
 
 fn digest(value: &impl serde::Serialize) -> Result<String> {
     let bytes = serde_json::to_vec(value).map_err(|e| Error::Storage(e.to_string()))?;
@@ -231,7 +236,11 @@ impl AssistantRuntime {
             .ok_or(Error::Unavailable("integration provider is not active"))?;
         provider_fingerprint::check(plugin, stored)
     }
-    pub(super) async fn source_permission_identity(&self, source: i64) -> Result<String> {
+    pub(super) async fn source_permission_policy(
+        &self,
+        source: i64,
+        mode: IntegrationMode,
+    ) -> Result<IntegrationSourcePolicy> {
         let manager = self.manager()?;
         let session = manager.get_session(source).await.map_err(runtime_error)?;
         // Local Bot conversations have no project. Hash that absence as null;
@@ -241,12 +250,36 @@ impl AssistantRuntime {
             .session_workspace_root_optional(source)
             .await
             .map_err(runtime_error)?;
-        digest(&json!({
-            "permissions": session.execution.effective_permission,
-            "ceiling": session.execution.permission_ceiling,
+        let mut permission = session.execution.effective_permission;
+        let mut ceiling = session.execution.permission_ceiling;
+        let disabled_plugins = if mode == IntegrationMode::Channel {
+            // Plugin access is checked against live sender and source policy on
+            // every channel turn. Switches do not change transcript ownership.
+            std::mem::take(&mut permission.plugins)
+                .into_iter()
+                .chain(std::mem::take(&mut ceiling.plugins))
+                .chain(
+                    session
+                        .execution
+                        .permission_ceiling_layers
+                        .into_iter()
+                        .flat_map(|layer| layer.plugins),
+                )
+                .filter_map(|(id, enabled)| (!enabled).then_some(id))
+                .collect()
+        } else {
+            BTreeSet::new()
+        };
+        let fingerprint = digest(&json!({
+            "permissions": permission,
+            "ceiling": ceiling,
             "capability_denials": session.execution.capability_denied_tool_names,
             "workspace": workspace,
-        }))
+        }))?;
+        Ok(IntegrationSourcePolicy {
+            fingerprint,
+            disabled_plugins,
+        })
     }
 
     /// Validate the provider and source independently so a missing session or
@@ -254,7 +287,7 @@ impl AssistantRuntime {
     pub(super) async fn verify_integration_boundary(
         &self,
         binding: &IntegrationBinding,
-    ) -> Result<()> {
+    ) -> Result<IntegrationSourcePolicy> {
         let provider = self
             .provider_identity_check(&binding.spec.provider, &binding.provider_fingerprint)
             .map_err(|error| {
@@ -266,19 +299,19 @@ impl AssistantRuntime {
             ));
         }
         let permissions = self
-            .source_permission_identity(binding.source_session_id)
+            .source_permission_policy(binding.source_session_id, binding.spec.mode)
             .await
             .map_err(|error| {
                 Error::Policy(format!(
                     "channel source permission identity unavailable: {error}"
                 ))
             })?;
-        if permissions != binding.permission_fingerprint {
+        if permissions.fingerprint != binding.permission_fingerprint {
             return Err(Error::Conflict(
                 "channel source permissions changed; explicit review is required",
             ));
         }
-        Ok(())
+        Ok(permissions)
     }
 
     async fn adapter(&self, provider: &str) -> Result<IntegrationProvider> {
@@ -582,8 +615,10 @@ impl AssistantRuntime {
                         ));
                     }
                 }
-                let permission_fingerprint =
-                    self.source_permission_identity(b.source_session_id).await?;
+                let permission_fingerprint = self
+                    .source_permission_policy(b.source_session_id, b.spec.mode)
+                    .await?
+                    .fingerprint;
                 if b.spec.mode == IntegrationMode::Channel
                     && b.activated_at_ms.is_some()
                     && (!self

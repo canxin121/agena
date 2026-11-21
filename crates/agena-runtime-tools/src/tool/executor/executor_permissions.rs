@@ -37,6 +37,24 @@ impl ToolExecutor {
         )
     }
 
+    pub(super) fn require_plugin_enabled(&self, tool: &RegisteredTool) -> Result<(), ToolError> {
+        let plugin = tool.plugin_key();
+        if self.plugin_is_enabled(plugin) {
+            return Ok(());
+        }
+        Err(ToolError::CapabilityUnavailable(Box::new(
+            agena_domain::CapabilityUnavailableResult {
+                capability: "plugin_access".into(),
+                tool_name: Some(tool.canonical_name()),
+                reason: format!(
+                    "plugin '{plugin}' is disabled by the current permission configuration"
+                ),
+                source: agena_domain::CapabilitySourceKind::RuntimeConfiguration,
+                retryable: false,
+            },
+        )))
+    }
+
     pub(crate) fn authorize_invocation(
         &self,
         invocation: &ToolInvocation,
@@ -45,6 +63,7 @@ impl ToolExecutor {
         let definition = self
             .invocation_definition(invocation)
             .ok_or_else(|| self.unknown_tool_error(tool_name.as_str()))?;
+        self.require_plugin_enabled(&definition)?;
         if !self.tool_applies_to_session(&definition) {
             return Err(ToolError::CapabilityUnavailable(Box::new(
                 agena_domain::CapabilityUnavailableResult {
@@ -108,30 +127,50 @@ impl ToolExecutor {
             )));
         }
         let command = shell_command_from_invocation(invocation);
-        let canonical_name = definition.canonical_name();
-        let mut tool_name_aliases = vec![tool_name.as_str(), canonical_name.as_str()];
-        if definition.tool_name() != tool_name
-            && self.plugin_tool_name_is_unambiguous(definition.tool_name())
-        {
-            tool_name_aliases.push(definition.tool_name());
-        }
+        let names = self.tool_permission_names(&definition);
         Ok((
-            tool_name.clone(),
+            tool_name,
             self.principal.authorize_tool_names(
-                &tool_name_aliases,
+                &names.iter().map(String::as_str).collect::<Vec<_>>(),
                 command.as_deref(),
                 &definition.effective_tags(),
             ),
         ))
     }
 
-    pub(crate) fn plugin_tool_name_is_unambiguous(&self, plugin_tool_name: &str) -> bool {
-        self.registered_tools_with_definition_overrides()
-            .into_iter()
-            .filter(|tool| tool.tool_name() == plugin_tool_name)
-            .take(2)
-            .count()
-            == 1
+    pub(super) fn tool_is_discoverable_under_permission(&self, entry: &RegisteredTool) -> bool {
+        let names = self.tool_permission_names(entry);
+        self.principal.tool_is_discoverable(
+            &names.iter().map(String::as_str).collect::<Vec<_>>(),
+            &entry.effective_tags(),
+        )
+    }
+
+    fn tool_permission_names(&self, entry: &RegisteredTool) -> Vec<String> {
+        let canonical = entry.canonical_name();
+        let compact = crate::tool::compact_tool_call_name(&canonical);
+        let mut names = vec![canonical];
+        if compact != names[0] {
+            names.push(compact);
+        }
+        let short = entry.tool_name();
+        let unambiguous = |tools: &[RegisteredTool]| {
+            tools
+                .iter()
+                .filter(|tool| tool.tool_name() == short)
+                .take(2)
+                .count()
+                == 1
+        };
+        if !names.iter().any(|name| name == short)
+            && self.definition_catalog.as_deref().map_or_else(
+                || unambiguous(&self.registered_tools_with_definition_overrides()),
+                |catalog| unambiguous(catalog),
+            )
+        {
+            names.push(short.to_owned());
+        }
+        names
     }
 
     /// Record the path and network effects of the host's *own* builtin tools.
@@ -896,8 +935,8 @@ mod session_role_tests {
                 vec![ToolTag::Shell, ToolTag::Interactive, ToolTag::Mutate],
             ),
             tool(
-                "agena.web",
-                "browser_open",
+                "agena.browser",
+                "open",
                 vec![ToolTag::Network, ToolTag::Interactive],
             ),
             tool("agena.fs", "read", vec![ToolTag::ReadOnly]),
@@ -914,6 +953,203 @@ mod session_role_tests {
     }
 
     #[test]
+    fn resource_context_applies_session_ceiling_and_exposes_no_tools() {
+        use agena_domain::NetworkPermissionConfig;
+
+        let base = executor(catalog()).with_permission_config(&PermissionConfig {
+            network: Some(NetworkPermissionConfig::allow_all()),
+            ..Default::default()
+        });
+        let context = SessionContext {
+            ceiling: PermissionConfig {
+                network: Some(NetworkPermissionConfig::offline()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let resource = base.for_session_resource_context(&context);
+        assert!(!available_names(&base).is_empty());
+        assert!(available_names(&resource).is_empty());
+        let target = "https://192.0.2.20/";
+        assert!(matches!(
+            base.network_permission_check(target).unwrap().decision,
+            PermissionDecision::Allow
+        ));
+        assert!(matches!(
+            resource.network_permission_check(target).unwrap().decision,
+            PermissionDecision::Deny { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn plugin_access_applies_before_tool_policy_and_cannot_override_a_ceiling() {
+        let mut base = executor(catalog()).with_permission_config(&serde_json::from_value(
+            serde_json::json!({"plugins":{"agena.fs":false},"tools":{"names":{"fs.read":"allow"}}}),
+        ).unwrap());
+        let invocation = ToolInvocation::new("agena.fs.read", Default::default());
+        assert!(!available_names(&base).contains("agena.fs.read"));
+        assert!(available_names(&base).contains("agena.plan.get"));
+        assert!(matches!(base.authorize_invocation(&invocation),
+            Err(ToolError::CapabilityUnavailable(error)) if error.capability == "plugin_access"
+        ));
+        assert!(matches!(base.prepare_invocation(&invocation, 1, 1).await,
+            Err(ToolError::CapabilityUnavailable(error)) if error.capability == "plugin_access"
+        ));
+
+        let allowed =
+            serde_json::from_value(serde_json::json!({"plugins":{"agena.fs":true}})).unwrap();
+        base = base.with_permission_config(&allowed);
+        assert!(available_names(&base).contains("agena.fs.read"));
+        assert!(matches!(
+            base.authorize_invocation(&invocation).unwrap().1,
+            PermissionDecision::Allow
+        ));
+
+        let ceiling =
+            serde_json::from_value(serde_json::json!({"plugins":{"agena.fs":false}})).unwrap();
+        let mut delegated = base
+            .for_session_context_async(&SessionContext {
+                permission: allowed,
+                ceiling,
+                ..Default::default()
+            })
+            .await;
+        delegated.definition_catalog = base.definition_catalog;
+        assert!(!available_names(&delegated).contains("agena.fs.read"));
+        assert!(
+            matches!(delegated.authorize_invocation(&ToolInvocation::new("fs.read", Default::default())),
+                 Err(ToolError::CapabilityUnavailable(error)) if error.capability == "plugin_access"
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn channel_profile_tool_rules_control_the_catalog_and_invocation() {
+        use agena_domain::{
+            ChannelAccount, ChannelAuthority, ChannelGrant, ChannelRole, ChannelSessionMode,
+            ConversationKind, SessionChannelScope,
+        };
+
+        let mut executor = executor(vec![
+            tool("agena.fs", "read", vec![ToolTag::ReadOnly]),
+            tool("agena.fs", "glob", vec![ToolTag::ReadOnly]),
+            tool("agena.fs", "write", vec![ToolTag::Mutate]),
+            tool("agena.plan", "set", vec![ToolTag::Mutate]),
+            tool("agena.plan", "phase", vec![ToolTag::Mutate]),
+            tool("agena.plan", "clear", vec![ToolTag::Mutate]),
+            tool("agena.shell", "exec", vec![ToolTag::Shell, ToolTag::Mutate]),
+            tool("agena.settings", "get", vec![ToolTag::ReadOnly]),
+        ]);
+        let scope = SessionChannelScope {
+            binding_id: "test-binding".into(),
+            identity: ChannelAccount {
+                tenant: "telegram".into(),
+                account: "bot".into(),
+            },
+            resource: "chat".into(),
+            thread: None,
+            kind: ConversationKind::Direct,
+            memory_workspace_root: executor.workspace_root().to_owned(),
+            private_paths: Default::default(),
+        };
+        let mut authority = ChannelAuthority::for_speaker(
+            &scope,
+            1,
+            "alice",
+            ChannelRole::Member,
+            ChannelGrant::default(),
+            ChannelSessionMode::PerActor,
+            0,
+        );
+        executor.channel_authority = Some(authority.clone());
+        assert!(available_names(&executor).is_empty());
+
+        authority.profile_ids.push("test-profile".into());
+        authority.permission_complete = true;
+        let permission = serde_json::from_value(serde_json::json!({"tools": {
+            "default": "deny",
+            "names": {
+                "fs.read": "allow", "fs.write": "deny", "agena.fs.write": "allow",
+                "plan.set": "ask", "plan.phase": "auto", "settings.get": "allow"
+            },
+            "rules": {
+                "*": {"read-only":"deny"},
+                "shell.*": {"no-op":"deny", "routine":"deny", "dangerous":"deny", "printf *":"allow"}
+            }
+        }})).unwrap();
+        let source_permission = serde_json::from_value(serde_json::json!({
+            "tools":{"names":{"agena.plan.clear":"allow"}}
+        }))
+        .unwrap();
+        executor.principal = executor
+            .principal
+            .try_apply_permission_config(&source_permission)
+            .unwrap();
+        let mut scoped = executor
+            .for_session_context_async(&SessionContext {
+                permission,
+                ceiling: source_permission,
+                channel_authority: Some(authority),
+                ..Default::default()
+            })
+            .await;
+        scoped.definition_catalog = executor.definition_catalog;
+        let executor = scoped;
+        assert_eq!(
+            available_names(&executor),
+            BTreeSet::from([
+                "agena.fs.read".into(),
+                "agena.plan.set".into(),
+                "agena.plan.phase".into(),
+                "agena.shell.exec".into(),
+            ])
+        );
+
+        let decision = |name, input| {
+            executor
+                .authorize_invocation(&ToolInvocation::new(name, input))
+                .unwrap()
+                .1
+        };
+        for name in ["fs.write", "agena.fs.write", "fs.glob", "plan.clear"] {
+            assert!(matches!(
+                decision(name, Default::default()),
+                PermissionDecision::Deny { .. }
+            ));
+        }
+        assert!(matches!(
+            decision("plan.set", Default::default()),
+            PermissionDecision::Ask { .. }
+        ));
+        assert!(matches!(
+            decision("plan.phase", Default::default()),
+            PermissionDecision::Auto { .. }
+        ));
+        assert!(matches!(
+            decision(
+                "shell.exec",
+                serde_json::json!({"command":"printf ok"})
+                    .try_into()
+                    .unwrap()
+            ),
+            PermissionDecision::Allow
+        ));
+        assert!(matches!(
+            decision(
+                "shell.exec",
+                serde_json::json!({"command":"hostname"})
+                    .try_into()
+                    .unwrap()
+            ),
+            PermissionDecision::Deny { .. }
+        ));
+        assert!(matches!(
+            executor.authorize_invocation(&ToolInvocation::new("settings.get", Default::default())),
+            Err(ToolError::CapabilityUnavailable(_))
+        ));
+    }
+
+    #[test]
     fn subagent_catalog_and_invocation_share_role_restrictions() {
         let mut executor = executor(catalog());
         executor.session_relation_kind = SessionRelationKind::Subagent;
@@ -925,7 +1161,7 @@ mod session_role_tests {
                 "agena.agent.message",
                 "agena.agent.wait",
                 "agena.shell.open",
-                "agena.web.browser_open",
+                "agena.browser.open",
                 "agena.fs.read",
             ]
             .map(str::to_owned)
@@ -1042,7 +1278,9 @@ mod session_role_tests {
         relation: SessionRelationKind,
         global: bool,
         permission: PermissionConfig,
+        ceiling: PermissionConfig,
         denied: BTreeSet<String>,
+        channel_authority: Option<agena_domain::ChannelAuthority>,
     }
 
     impl crate::ToolSessionContext for SessionContext {
@@ -1063,11 +1301,15 @@ mod session_role_tests {
         }
 
         fn permission_ceiling(&self) -> &PermissionConfig {
-            &self.permission
+            &self.ceiling
         }
 
         fn capability_denied_tool_names(&self) -> &BTreeSet<String> {
             &self.denied
+        }
+
+        fn channel_authority(&self) -> Option<&agena_domain::ChannelAuthority> {
+            self.channel_authority.as_ref()
         }
 
         fn selected_model(&self) -> Option<&str> {

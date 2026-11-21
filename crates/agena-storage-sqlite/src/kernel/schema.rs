@@ -403,6 +403,9 @@ pub(crate) async fn initialize(database: &DatabaseConnection) -> Result<(), DbEr
             transaction.commit().await?;
             validate_objects(database, schema_objects(database).await?).await?;
         }
+        crate::integration_repository::retire_telegram_grants(database)
+            .await
+            .map_err(|error| DbErr::Custom(error.to_string()))?;
         return Ok(());
     }
     // The full schema and baseline identity reach the main database together,

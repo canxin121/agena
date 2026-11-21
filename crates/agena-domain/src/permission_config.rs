@@ -30,6 +30,9 @@ pub struct PermissionConfig {
         deserialize_with = "deserialize_tools"
     )]
     pub tools: Option<ToolPermissionConfig>,
+    /// Exact plugin IDs. Omitted entries follow the enclosing permission policy.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub plugins: BTreeMap<String, bool>,
     /// Model used to make an automatic permission decision. The runtime must
     /// fail closed to an interactive `ask` when this reference is absent or
     /// cannot be resolved.
@@ -191,7 +194,7 @@ impl PermissionConfig {
                 ]),
                 ..Default::default()
             }),
-            approval_model: None,
+            ..Self::default()
         }
     }
 
@@ -207,6 +210,7 @@ impl PermissionConfig {
                 .tools
                 .as_ref()
                 .is_none_or(ToolPermissionConfig::is_empty)
+            && self.plugins.is_empty()
             && self.approval_model.is_none()
     }
 
@@ -214,6 +218,7 @@ impl PermissionConfig {
         merge_path_section(&mut self.path, overlay.path);
         merge_network_section(&mut self.network, overlay.network);
         merge_tool_section(&mut self.tools, overlay.tools);
+        self.plugins.extend(overlay.plugins);
         if overlay.approval_model.is_some() {
             self.approval_model = overlay.approval_model;
         }

@@ -237,10 +237,17 @@ async fn bot_owned_channels_dispatch_and_manage_project_sessions_from_member_inp
         let context = manager.execution_context_value(source).await.unwrap();
         assert_eq!(context.session_kind(), agena_domain::SessionKind::Bot);
         assert!(context.effective_workspace_root().is_some());
+        let idle = manager
+            .tool_executor()
+            .for_session_context_async(&context)
+            .await;
+        assert!(idle.detailed_tools_async().await.is_empty());
         assert_eq!(
             manager.bot_context(source.get()).await.unwrap()["enabled"],
             true
         );
+        let (attempt, round, tool, message) = live_channel_tool(&manager, source, quote).await;
+        let context = manager.execution_context_value(source).await.unwrap();
         let mut ungranted = context.clone();
         ungranted
             .channel_authority
@@ -312,7 +319,6 @@ async fn bot_owned_channels_dispatch_and_manage_project_sessions_from_member_inp
             .await
             .unwrap();
 
-        let (attempt, round, tool, message) = live_channel_tool(&manager, source, quote).await;
         let call = tool.id().get();
         let operation = |value| serde_json::from_value::<BotRequest>(value).unwrap();
         let create = operation(json!({

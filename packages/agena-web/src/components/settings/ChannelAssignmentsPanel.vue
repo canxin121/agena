@@ -26,7 +26,6 @@ import {
 } from './channelAssignments'
 
 const props = defineProps<{
-  active: boolean
   catalog: PermissionCatalog
   profiles: PermissionCatalog['profiles']
   target: ChannelPermissionTarget | null
@@ -36,12 +35,15 @@ const props = defineProps<{
   save: (value: PermissionCatalog) => Promise<void>
   canDiscard: () => Promise<boolean>
 }>()
-const emit = defineEmits<{ refresh: []; groups: []; edit: [target: ChannelPermissionTarget] }>()
+const emit = defineEmits<{ refresh: [] }>()
 const { t } = useI18n()
 
 const bots = shallowRef<BotProfile[]>([])
 const botId = ref('')
-const source = computed(() => bots.value.find((bot) => bot.id === botId.value)?.local_session_id ?? null)
+const linkedSource = ref<number | null>(null)
+const source = computed(
+  () => linkedSource.value ?? bots.value.find((bot) => bot.id === botId.value)?.local_session_id ?? null,
+)
 const rooms = shallowRef<ChannelRoom[]>([])
 const roomId = ref('')
 const roomQuery = ref('')
@@ -60,6 +62,7 @@ const visibleRooms = computed(() => {
 })
 const directoryLoading = ref(false)
 const directoryError = ref('')
+const missingRoom = ref(false)
 const members = shallowRef<ChannelParticipant[]>([])
 const memberQuery = ref('')
 const membersLoading = ref(false)
@@ -75,43 +78,44 @@ let followedTarget = ''
 
 const bindings = computed(() => (room.value ? roomPermissionBindings(props.catalog, room.value) : null))
 const profileDraft = ref<string>()
-const groupEdits = shallowRef(new Map<string, string[]>())
-const dirty = computed(() => profileDraft.value !== undefined || groupEdits.value.size > 0)
+const memberEdits = shallowRef(new Map<string, string>())
+const dirty = computed(() => profileDraft.value !== undefined || memberEdits.value.size > 0)
 const saved = ref(false)
 const saveError = ref('')
-const groupOptions = computed(() =>
-  Object.entries(props.catalog.groups).sort(([, a], [, b]) => a.priority - b.priority || a.name.localeCompare(b.name)),
-)
+const profileOptions = computed(() => Object.entries(props.profiles))
+const roomProfile = computed(() => profileDraft.value ?? bindings.value?.profile ?? '')
+const inheritRoomProfile = computed(() => {
+  const profile = props.profiles[roomProfile.value]
+  return profile
+    ? t('channelAssignments.inheritProfile', { profile: permissionProfileDisplayName(roomProfile.value, profile) })
+    : t('channelAssignments.inheritRoom')
+})
+const visibleMembers = computed(() => {
+  const result = new Map<string, Pick<ChannelParticipant, 'actor' | 'display_name'>>(
+    members.value.map((member) => [member.actor, member]),
+  )
+  const query = memberQuery.value.trim().toLowerCase()
+  // A saved assignment remains editable even if the sender has no recent interaction.
+  for (const actor of bindings.value?.members.keys() ?? []) {
+    if (!result.has(actor) && actor.toLowerCase().includes(query)) result.set(actor, { actor })
+  }
+  return [...result.values()]
+})
 const visibleChecked = computed(
-  () => members.value.length > 0 && members.value.every((member) => selected.value.has(member.actor)),
+  () => visibleMembers.value.length > 0 && visibleMembers.value.every((member) => selected.value.has(member.actor)),
 )
-const selectedActor = computed(() => (selected.value.size === 1 ? selected.value.values().next().value : undefined))
-const selectedMember = computed(() => members.value.find((member) => member.actor === selectedActor.value))
+const bulkProfile = computed(() => {
+  const profiles = new Set([...selected.value].map(memberProfile))
+  return profiles.size === 1 ? [...profiles][0] : ' '
+})
 
-function groupIds(actor: string) {
-  return groupEdits.value.get(actor) ?? bindings.value?.members.get(actor)?.group_ids ?? []
+function memberProfile(actor: string) {
+  return memberEdits.value.get(actor) ?? bindings.value?.members.get(actor)?.profile_id ?? ''
 }
-function groupName(id: string) {
-  return props.catalog.groups[id]?.name || id
-}
-function inheritedGroups(actor: string) {
-  return bindings.value?.accountMembers.get(actor)?.group_ids ?? []
-}
-const editableGroups = computed(() =>
-  groupOptions.value.map(([id, group]) => {
-    const count = [...selected.value].filter((actor) => groupIds(actor).includes(id)).length
-    return {
-      id,
-      group,
-      checked: count > 0 && count === selected.value.size,
-      mixed: count > 0 && count < selected.value.size,
-    }
-  }),
-)
 
 function discard() {
   profileDraft.value = undefined
-  groupEdits.value = new Map()
+  memberEdits.value = new Map()
   saved.value = false
   saveError.value = ''
 }
@@ -150,7 +154,8 @@ async function fetchMembers(append = false, targetActor?: string) {
       append ? members.value : [],
       pages.flatMap((page) => page?.participants ?? []),
     )
-    if (targetActor && members.value.some(({ actor }) => actor === targetActor)) selected.value = new Set([targetActor])
+    if (targetActor && visibleMembers.value.some(({ actor }) => actor === targetActor))
+      selected.value = new Set([targetActor])
     cursors = pages.map((page) => page?.next_after ?? undefined)
     hasMore.value = cursors.some(Boolean)
   } catch (reason) {
@@ -180,6 +185,7 @@ function showRoom(key: string, actor?: string) {
   stopMembers()
   discard()
   roomId.value = key
+  missingRoom.value = false
   members.value = []
   selected.value = new Set()
   memberQuery.value = actor ?? ''
@@ -204,12 +210,8 @@ async function loadRooms(controller: AbortController, target: ChannelPermissionT
   rooms.value = channelAssignmentRooms(inventory)
   const key = target ? permissionIdentityKey(target, target.resource) : preferred
   const match = rooms.value.find((entry) => entry.key === key)
-  if (target && !match) {
-    showRoom(rooms.value[0]?.key ?? '')
-    emit('edit', target)
-    return
-  }
-  showRoom(match?.key ?? rooms.value[0]?.key ?? '', target?.actor)
+  showRoom(match?.key ?? rooms.value[0]?.key ?? '', match ? target?.actor : undefined)
+  missingRoom.value = Boolean(target && !match)
 }
 
 async function readDirectory(work: (controller: AbortController) => Promise<void>) {
@@ -236,19 +238,18 @@ async function refresh(target: ChannelPermissionTarget | null = null, targetSour
     if (directoryRequest !== controller) return
     bots.value = result.items.filter((entry) => !entry.archived).sort((a, b) => a.name.localeCompare(b.name))
     const matchingBot = targetSource ? bots.value.find((entry) => entry.local_session_id === targetSource) : undefined
-    if (target && !matchingBot) {
-      emit('edit', target)
-      return
-    }
+    if (target && targetSource) linkedSource.value = matchingBot ? null : targetSource
     initialized = true
     if (target) roomQuery.value = ''
-    const next =
-      matchingBot ??
-      bots.value.find((entry) => entry.id === botId.value) ??
-      bots.value.find((entry) => entry.local_session_id) ??
-      bots.value[0]
-    const preferred = botId.value === next?.id ? roomId.value : ''
-    botId.value = next?.id ?? ''
+    const next = linkedSource.value
+      ? undefined
+      : (matchingBot ??
+        bots.value.find((entry) => entry.id === botId.value) ??
+        bots.value.find((entry) => entry.local_session_id) ??
+        bots.value[0])
+    const nextId = next?.id ?? ''
+    const preferred = botId.value === nextId ? roomId.value : ''
+    botId.value = nextId
     await loadRooms(controller, target, preferred)
   })
 }
@@ -258,6 +259,7 @@ async function chooseBot(event: Event) {
   const id = input.value
   input.value = botId.value
   if (id === botId.value || !(await props.canDiscard())) return
+  linkedSource.value = null
   botId.value = id
   roomQuery.value = ''
   await readDirectory((controller) => loadRooms(controller, null))
@@ -272,17 +274,14 @@ function selectMembers(actors: string[], checked: boolean) {
   selected.value = next
 }
 
-function setGroup(id: string, checked: boolean) {
-  const edits = new Map(groupEdits.value)
-  for (const actor of selected.value) {
-    const previous = bindings.value?.members.get(actor)?.group_ids || []
-    const next = new Set(groupIds(actor))
-    if (checked) next.add(id)
-    else next.delete(id)
-    if (next.size === previous.length && previous.every((group) => next.has(group))) edits.delete(actor)
-    else edits.set(actor, [...next])
+function setMemberProfiles(actors: Iterable<string>, profileId: string) {
+  const edits = new Map(memberEdits.value)
+  for (const actor of actors) {
+    const previous = bindings.value?.members.get(actor)?.profile_id ?? ''
+    if (profileId === previous) edits.delete(actor)
+    else edits.set(actor, profileId)
   }
-  groupEdits.value = edits
+  memberEdits.value = edits
   saved.value = false
 }
 
@@ -296,7 +295,7 @@ async function save() {
   if (!room.value || !dirty.value || props.saving || props.disabled) return
   saveError.value = ''
   try {
-    await props.save(applyChannelAssignments(props.catalog, room.value, profileDraft.value, groupEdits.value))
+    await props.save(applyChannelAssignments(props.catalog, room.value, profileDraft.value, memberEdits.value))
     discard()
     saved.value = true
   } catch (reason) {
@@ -305,10 +304,9 @@ async function save() {
 }
 
 watch(
-  [() => props.active, () => props.target, () => props.targetSource],
-  ([active, target, targetSource]) => {
-    if (!active) return
-    if (target && targetSource) {
+  [() => props.target, () => props.targetSource],
+  ([target, targetSource]) => {
+    if (target) {
       const key = JSON.stringify([targetSource, target])
       if (key !== followedTarget) {
         followedTarget = key
@@ -333,6 +331,7 @@ defineExpose({ refresh, dirty, discard })
 
 <template>
   <section class="@container grid min-w-0 gap-3" data-channel-assignments :aria-busy="directoryLoading || saving">
+    <h2 class="text-sm font-semibold">{{ t('channelAssignments.title') }}</h2>
     <div class="settings-toolbar rounded-lg border border-border/70 bg-card/30 p-2.5">
       <label class="flex min-w-0 items-center gap-2 text-sm font-medium">
         {{ t('channelAssignments.bot') }}
@@ -343,6 +342,7 @@ defineExpose({ refresh, dirty, discard })
           class="min-w-0 rounded-md border border-input bg-background px-2.5 py-1.5 text-sm"
           @change="chooseBot"
         >
+          <option v-if="linkedSource" value="">{{ t('channelAssignments.linkedSource') }}</option>
           <option v-for="bot in bots" :key="bot.id" :value="bot.id">{{ bot.name }}</option>
         </select>
       </label>
@@ -365,14 +365,17 @@ defineExpose({ refresh, dirty, discard })
     >
       {{ directoryError }}
     </p>
-    <p v-else-if="directoryLoading" role="status" class="text-sm text-muted-foreground">{{ $st('Loading…') }}</p>
+    <p v-if="missingRoom" role="status" class="text-sm text-muted-foreground">
+      {{ t('channelAssignments.missingRoom') }}
+    </p>
+    <p v-if="directoryLoading" role="status" class="text-sm text-muted-foreground">{{ $st('Loading…') }}</p>
     <p
-      v-else-if="!bots.length || !rooms.length"
+      v-else-if="!rooms.length && !directoryError"
       class="rounded-md border border-dashed border-border/60 p-3 text-sm text-muted-foreground"
     >
-      {{ t(bots.length ? 'channelAssignments.noRooms' : 'channelAssignments.noBots') }}
+      {{ t(source || bots.length ? 'channelAssignments.noRooms' : 'channelAssignments.noBots') }}
     </p>
-    <div v-else class="assignment-layout grid min-w-0 items-start gap-3">
+    <div v-else-if="rooms.length" class="assignment-layout grid min-w-0 items-start gap-3">
       <section class="grid min-w-0 gap-2 rounded-lg border border-border/70 bg-card/30 p-2.5">
         <h2 class="text-sm font-medium">{{ t('channelAssignments.rooms') }}</h2>
         <SearchInput
@@ -421,13 +424,13 @@ defineExpose({ refresh, dirty, discard })
           {{ $st('Default permission profile') }}
           <select
             data-assignment-room-profile
-            :value="profileDraft ?? bindings?.profile ?? ''"
+            :value="roomProfile"
             :disabled="disabled || saving"
             class="min-w-0 rounded-md border border-input bg-background px-2.5 py-1.5 text-sm text-foreground"
             @change="setProfile"
           >
             <option value="">{{ $st('Inherit') }}</option>
-            <option v-for="(profile, id) in profiles" :key="id" :value="id">
+            <option v-for="[id, profile] in profileOptions" :key="id" :value="id">
               {{ permissionProfileDisplayName(id, profile) }}
             </option>
           </select>
@@ -435,7 +438,7 @@ defineExpose({ refresh, dirty, discard })
 
         <section class="grid min-w-0 gap-2 border-t border-border/70 pt-3" :aria-busy="membersLoading">
           <div class="flex flex-wrap items-center justify-between gap-2">
-            <h3 class="text-sm font-medium">{{ t('platforms.participants') }}</h3>
+            <h3 class="text-sm font-medium">{{ t('channelAssignments.members') }}</h3>
             <Button
               v-if="selected.size"
               size="sm"
@@ -453,113 +456,78 @@ defineExpose({ refresh, dirty, discard })
             :input-aria-label="t('channelAssignments.memberSearch')"
             @update:model-value="changeMemberQuery"
           />
-          <div
-            v-if="selected.size"
-            class="grid gap-2 rounded-md border border-border/70 bg-background/60 p-2.5"
-            data-selected-member-groups
-          >
-            <div class="flex flex-wrap items-center justify-between gap-1.5">
-              <div>
-                <h4 class="text-sm font-medium">{{ t('channelAssignments.roomGroups') }}</h4>
-                <p class="text-xs text-muted-foreground">
-                  {{
-                    selectedActor
-                      ? selectedMember?.display_name || selectedActor
-                      : t('channelAssignments.selected', { count: selected.size })
-                  }}
-                </p>
-              </div>
-              <Button
-                v-if="selectedActor"
-                size="sm"
-                variant="ghost"
-                type="button"
-                :disabled="disabled || saving"
-                @click="emit('edit', { ...room.identity, actor: selectedActor })"
-                >{{ t('channelAssignments.editIndividual') }}</Button
-              >
-            </div>
-            <div v-if="editableGroups.length" class="grid gap-1.5 sm:grid-cols-2">
-              <label
-                v-for="{ id, group, checked, mixed } in editableGroups"
-                :key="id"
-                class="flex min-w-0 items-start gap-2 rounded-md px-1.5 py-1 text-sm hover:bg-muted/50"
-              >
-                <input
-                  type="checkbox"
-                  :data-assignment-group="id"
-                  :checked="checked"
-                  :indeterminate="mixed"
-                  :disabled="disabled || saving"
-                  class="mt-0.5 shrink-0 accent-primary"
-                  @change="setGroup(id, ($event.target as HTMLInputElement).checked)"
-                />
-                <span class="break-words">{{ group.name || id }}</span>
-              </label>
-            </div>
-            <Button
-              v-else
-              size="sm"
-              variant="outline"
-              type="button"
-              class="justify-self-start"
-              :disabled="saving"
-              @click="emit('groups')"
-              >{{ t('channelAssignments.manageGroups') }}</Button
+          <label v-if="selected.size > 1" class="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            {{ t('channelAssignments.selected', { count: selected.size }) }}
+            <select
+              data-assignment-bulk-profile
+              :value="bulkProfile"
+              :aria-label="t('channelAssignments.bulkProfile')"
+              :disabled="disabled || saving"
+              class="min-w-0 max-w-full rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+              @change="setMemberProfiles(selected, ($event.target as HTMLSelectElement).value)"
             >
-          </div>
-
+              <option value=" " disabled>{{ t('channelAssignments.bulkProfile') }}</option>
+              <option value="">{{ inheritRoomProfile }}</option>
+              <option v-for="[id, profile] in profileOptions" :key="id" :value="id">
+                {{ permissionProfileDisplayName(id, profile) }}
+              </option>
+            </select>
+          </label>
           <p v-if="membersError" role="alert" class="break-words text-xs text-destructive">{{ membersError }}</p>
           <label
-            v-if="members.length"
+            v-if="visibleMembers.length"
             class="flex items-center gap-2 border-b border-border/60 px-1.5 pb-1.5 text-xs text-muted-foreground"
           >
             <input
               type="checkbox"
               :checked="visibleChecked"
-              :indeterminate="!visibleChecked && members.some((member) => selected.has(member.actor))"
+              :indeterminate="!visibleChecked && visibleMembers.some((member) => selected.has(member.actor))"
               :disabled="saving"
               class="accent-primary"
               @change="
                 selectMembers(
-                  members.map((member) => member.actor),
+                  visibleMembers.map((member) => member.actor),
                   ($event.target as HTMLInputElement).checked,
                 )
               "
             />
             {{ t('channelAssignments.selectVisible') }}
           </label>
-          <ul v-if="members.length" class="max-h-72 divide-y divide-border/60 overflow-y-auto">
-            <li v-for="member in members" :key="member.actor">
-              <label class="flex min-w-0 cursor-pointer items-start gap-2 rounded-sm px-1.5 py-2 hover:bg-muted/40">
+          <ul v-if="visibleMembers.length" class="max-h-72 divide-y divide-border/60 overflow-y-auto">
+            <li
+              v-for="member in visibleMembers"
+              :key="member.actor"
+              class="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-1.5 py-2"
+            >
+              <label class="flex min-w-0 flex-1 cursor-pointer items-start gap-2 rounded-sm text-start">
                 <input
                   type="checkbox"
                   :data-assignment-member="member.actor"
                   :checked="selected.has(member.actor)"
-                  :disabled="saving"
+                  :disabled="disabled || saving"
                   class="mt-0.5 shrink-0 accent-primary"
                   @change="selectMembers([member.actor], ($event.target as HTMLInputElement).checked)"
                 />
-                <span class="grid min-w-0 gap-0.5">
-                  <span class="break-words text-sm font-medium">{{ member.display_name || member.actor }}</span>
-                  <span v-if="member.display_name" class="break-all text-xs text-muted-foreground">{{
+                <span class="min-w-0">
+                  <span class="block break-words text-sm font-medium">{{ member.display_name || member.actor }}</span>
+                  <span v-if="member.display_name" class="block break-all text-xs text-muted-foreground">{{
                     member.actor
-                  }}</span>
-                  <span v-if="groupIds(member.actor).length" class="flex flex-wrap gap-1">
-                    <span
-                      v-for="id in groupIds(member.actor)"
-                      :key="id"
-                      class="break-words rounded bg-muted px-1.5 py-0.5 text-xs"
-                      >{{ groupName(id) }}</span
-                    >
-                  </span>
-                  <span v-if="inheritedGroups(member.actor).length" class="break-words text-xs text-muted-foreground">{{
-                    t('channelAssignments.accountGroups', {
-                      groups: inheritedGroups(member.actor).map(groupName).join(', '),
-                    })
                   }}</span>
                 </span>
               </label>
+              <select
+                :data-assignment-member-profile="member.actor"
+                :value="memberProfile(member.actor)"
+                :aria-label="t('channelAssignments.memberProfile', { name: member.display_name || member.actor })"
+                :disabled="disabled || saving"
+                class="min-w-0 max-w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                @change="setMemberProfiles([member.actor], ($event.target as HTMLSelectElement).value)"
+              >
+                <option value="">{{ inheritRoomProfile }}</option>
+                <option v-for="[id, profile] in profileOptions" :key="id" :value="id">
+                  {{ permissionProfileDisplayName(id, profile) }}
+                </option>
+              </select>
             </li>
           </ul>
           <p v-else-if="membersLoading" class="text-xs text-muted-foreground" role="status">{{ $st('Loading…') }}</p>
@@ -579,6 +547,7 @@ defineExpose({ refresh, dirty, discard })
         </section>
         <SettingsSaveBar
           v-if="dirty || saving"
+          data-assignment-save
           :dirty="dirty"
           :saving="saving"
           :disabled="disabled"

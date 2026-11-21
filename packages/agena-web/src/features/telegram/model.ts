@@ -82,22 +82,6 @@ export function telegramChatAllowed(access: TelegramChatAccess, id: string, kind
           : false
   return enabled && (access.mode === 'whitelist' ? access.chat_ids.includes(id) : !access.chat_ids.includes(id))
 }
-export function parseTelegramAdministratorIds(text: string): string[] {
-  const ids = text.split(/[\s,，]+/).filter(Boolean)
-  if (ids.length > 64) throw new Error('Select at most 64 Telegram administrator user IDs.')
-  return [
-    ...new Set(
-      ids.map((id) => {
-        if (!/^[0-9]+$/.test(id)) throw new Error('Use positive numeric Telegram user IDs, not usernames or chat IDs.')
-        const value = BigInt(id)
-        if (value <= 0n || value > 9223372036854775807n)
-          throw new Error('Use positive numeric Telegram user IDs within the supported range.')
-        return value.toString()
-      }),
-    ),
-  ]
-}
-
 export type TelegramBotConfig = {
   id: string
   name: string
@@ -106,7 +90,6 @@ export type TelegramBotConfig = {
   credential_kind: 'environment' | 'vault'
   ai_bot_id: string | null
   chat_access: TelegramChatAccess
-  administrator_user_ids: string[]
 }
 export type TelegramVerification = {
   bot_id: string
@@ -194,7 +177,6 @@ export function botConfig(bot: TelegramBot): TelegramBotConfig {
     credential_kind: bot.credential_kind,
     ai_bot_id: bot.ai_bot_id || null,
     chat_access: copyTelegramChatAccess(bot.chat_access),
-    administrator_user_ids: [...(bot.administrator_user_ids || [])],
   }
 }
 export function newBotConfig(): TelegramBotConfig {
@@ -206,7 +188,6 @@ export function newBotConfig(): TelegramBotConfig {
     connection: connectionFromSettings({}),
     ai_bot_id: null,
     chat_access: defaultTelegramChatAccess(),
-    administrator_user_ids: [],
   }
 }
 export function matchesTelegramBot(

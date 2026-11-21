@@ -12,6 +12,7 @@ impl ToolExecutor {
         let Some(resolution) = self.invocation_definition(invocation) else {
             return Ok((invocation.clone(), None));
         };
+        self.require_plugin_enabled(&resolution)?;
         let Some(payload) =
             ToolPayloadInput::from_executor_backed_invocation(&resolution, invocation)
         else {
@@ -97,6 +98,7 @@ impl ToolExecutor {
                 metadata: Default::default(),
             });
         };
+        self.require_plugin_enabled(&definition)?;
         if self.is_global() {
             self.collect_builtin_effect_checks(&mut Vec::new(), &definition, invocation)?;
         }
@@ -328,6 +330,7 @@ impl ToolExecutor {
         let resolution = self
             .invocation_definition(invocation)
             .ok_or_else(|| self.unknown_tool_error(plugin_invocation.tool_name.as_str()))?;
+        self.require_plugin_enabled(&resolution)?;
 
         if self.is_global() {
             self.collect_builtin_effect_checks(&mut Vec::new(), &resolution, invocation)?;

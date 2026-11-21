@@ -18,7 +18,7 @@ pub use agena_domain::{
     NetworkPermissionConfig, PathAccessModes, PathPermissionConfig, PermissionConfig,
     ToolPermissionConfig, ToolPermissionRules,
 };
-use agena_plugin_sdk::ToolTag;
+use agena_plugin_sdk::{PluginKey, ToolTag};
 use indexmap::IndexMap;
 
 use crate::command_class::CommandClass;
@@ -44,8 +44,20 @@ pub fn apply_to_permission_policy(
 
 pub fn apply_to_tool_permission_policy(
     config: &PermissionConfig,
-    base: ToolPermissionPolicy,
+    mut base: ToolPermissionPolicy,
 ) -> Result<ToolPermissionPolicy, PermissionConfigError> {
+    for (id, enabled) in &config.plugins {
+        let plugin = id
+            .parse::<PluginKey>()
+            .ok()
+            .filter(|key| key.to_string() == *id)
+            .ok_or_else(|| PermissionConfigError::InvalidPluginId { plugin: id.clone() })?;
+        if *enabled {
+            base.disabled_plugins.remove(&plugin);
+        } else {
+            base.disabled_plugins.insert(plugin);
+        }
+    }
     match config.tools.as_ref() {
         Some(tools) => apply_tool_permission_config(tools, base),
         None => Ok(base),
@@ -423,6 +435,19 @@ impl ExecutionPrincipal {
 
     pub fn authorize_tool_name(&self, tool_name: &str) -> PermissionDecision {
         self.authorize_tool(tool_name, None, &[])
+    }
+
+    pub fn plugin_is_enabled(&self, plugin: &PluginKey) -> bool {
+        std::iter::once(&self.tool_policy)
+            .chain(&self.tool_ceiling_policy)
+            .all(|policy| !policy.disabled_plugins.contains(plugin))
+    }
+
+    pub fn tool_is_discoverable(&self, names: &[&str], tags: &[ToolTag]) -> bool {
+        !self.blocked
+            && std::iter::once(&self.tool_policy)
+                .chain(&self.tool_ceiling_policy)
+                .all(|policy| policy.tool_is_discoverable(names, tags))
     }
 
     pub fn authorize_network_connect(&self, target: &NetworkTarget) -> PermissionDecision {

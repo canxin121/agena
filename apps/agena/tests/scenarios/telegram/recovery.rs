@@ -59,9 +59,11 @@ async fn review_restores_existing_private_history_and_local_replies_without_repl
                 action: IntegrationControlAction::Enable,
             }).await?;
             let model = case.model();
-            let first = model.expect(RequestMatch::new("original private message", |request| {
-                request.body.to_string().contains("private-history-before-upgrade")
-            })).reply(Reply::text("private-history-preserved-response"));
+            let first = model.expect(RequestMatch::user_text("private-history-before-upgrade"))
+                .reply(Reply::function_call("unassigned-tools", "tools_list", json!({"plugin":"agena.fs"})));
+            model.expect(RequestMatch::tool_output("unassigned-tools")).after(&first)
+                .check_tool_output_contains("unassigned-tools", "returned 0 of 0")
+                .reply(Reply::text("private-history-preserved-response"));
             observed.updates.lock().unwrap().push(update(1, private_message(101, "private-history-before-upgrade")));
             client.control_integration(source.session_id, active.id, &IntegrationControl {
                 not_before_ms: None, expected_revision: active.revision,
@@ -117,11 +119,13 @@ with c:
             ensure!(injected.status.success(), "fixture fault injection: {}", String::from_utf8_lossy(&injected.stderr));
             let mut policy = paused.spec.channel_policy.clone().context("private policy")?;
             policy.members.iter_mut().find(|member| member.actor == MEMBER_ID.to_string()).unwrap().role = ChannelRole::Owner;
-            let changed = client.update_channel_access(source.session_id, active.id, &ChannelPolicyUpdate {
+            let denied = client.update_channel_access(source.session_id, active.id, &ChannelPolicyUpdate {
                 expected_revision: paused.revision,
-                request_key: "promote-without-capability-change".into(), policy,
-            }).await?;
-            ensure!(changed.state == BindingState::Faulted && changed.epoch == 3);
+                request_key: "retired-channel-policy-write".into(), policy,
+            }).await;
+            ensure!(denied.is_err(), "Telegram permission writes require named assignments");
+            let changed = client.integration_detail(source.session_id, active.id).await?.binding;
+            ensure!(changed.state == BindingState::Faulted && changed.epoch == paused.epoch);
             let preview_path = format!("/api/v1/sessions/{session_id}/prompts/preview");
             ensure!(!http.get(&preview_path).await?.status.is_success(), "old authority must remain blocked until review");
             let recovered = client.control_integration(source.session_id, active.id, &IntegrationControl {
@@ -135,7 +139,7 @@ with c:
             ensure!(restored.channel_sessions.len() == 1);
             let restored_scope = &restored.channel_sessions[0];
             ensure!(restored_scope.session_id == session_id);
-            ensure!(restored_scope.authority.role == ChannelRole::Owner);
+            ensure!(restored_scope.authority.role == ChannelRole::Member);
             ensure!(restored_scope.authority.epoch == recovered.epoch);
             ensure!(restored_scope.authority.grant == original_scope.authority.grant);
             ensure!(restored_scope.authority.memory_workspace_root == original_scope.authority.memory_workspace_root);
@@ -151,9 +155,34 @@ with c:
             wait_for(|| async {
                 Ok(observed.sent.lock().unwrap().iter().any(|message| message["text"].as_str().is_some_and(|text| text.contains("local-private-reply-after-review"))).then_some(()))
             }, "local reply delivered through restored private chat").await?;
-            let remote = model.expect(RequestMatch::new("new private message after review", |request| {
-                request.body.to_string().contains("telegram-message-after-review")
-            })).reply(Reply::text("telegram-private-reply-after-review"));
+            let mut assignments = json!({
+                "users": [{"platform":"agena.telegram", "tenant":"telegram", "account":BOT_USERNAME,
+                    "resource":MEMBER_ID.to_string(), "actor":MEMBER_ID.to_string(), "profile_id":"@default"}]
+            });
+            case.settings().set(SettingsLayer::Global, "access_control", assignments.clone(), agena_testkit::EditOptions::default()).await?.require_success()?;
+            let remote = model.expect(RequestMatch::user_text("telegram-message-after-review"))
+                .reply(Reply::function_call("profile-plugins", "plugins_list", json!({"plugin":"agena.fs"})));
+            let list = model.expect(RequestMatch::tool_output("profile-plugins")).after(&remote)
+                .check(|request| {
+                    let output = request.tool_output_text("profile-plugins").context("plugin catalog response")?;
+                    ensure!(output.contains("- agena.fs [") && !output.contains(" · 0 tool(s)"), "default profile should offer filesystem tools: {output}");
+                    Ok(())
+                }).reply(Reply::function_call("profile-tools", "tools_list", json!({"plugin":"agena.fs"})));
+            let help = model.expect(RequestMatch::tool_output("profile-tools")).after(&list)
+                .check_tool_output_contains("profile-tools", "- fs.read [")
+                .reply(Reply::function_call("profile-help", "tools_help", json!({"tool":["fs.read", "plan.get"]})));
+            let read = model.expect(RequestMatch::tool_output("profile-help")).after(&help)
+                .check_tool_output_contains("profile-help", "file_path")
+                .reply(Reply::tool_call("profile-plan", "plan.get", json!({})));
+            model.expect(RequestMatch::tool_output("profile-plan")).after(&read)
+                .check(|request| {
+                    let output: Value = serde_json::from_str(&request.tool_output_text("profile-plan").context("plan response")?)?;
+                    ensure!(output["phase"] == "succeeded", "plan.get did not execute: {output}");
+                    let result: Value = serde_json::from_str(output["result"]["model"].as_str().context("plan payload")?)?;
+                    ensure!(result.get("plan") == Some(&Value::Null), "unexpected plan: {result}");
+                    Ok(())
+                })
+                .reply(Reply::text("telegram-private-reply-after-review"));
             observed.updates.lock().unwrap().push(update(2, private_message(102, "telegram-message-after-review")));
             let latest = client.integration_detail(source.session_id, active.id).await?;
             client.control_integration(source.session_id, active.id, &IntegrationControl {
@@ -164,10 +193,56 @@ with c:
             wait_for(|| async {
                 Ok(observed.sent.lock().unwrap().iter().any(|message| message["text"].as_str().is_some_and(|text| text.contains("telegram-private-reply-after-review"))).then_some(()))
             }, "incoming Telegram message uses restored private chat").await?;
+            // The same @default profile is also the source Bot's active policy.
+            // Editing a switch must take effect on the same Telegram connection.
+            let mut permission = serde_json::to_value(agena_domain::PermissionConfig::global_default())?;
+            for (update_id, enabled) in [(3, false), (4, true)] {
+                permission["plugins"] = json!({"agena.plan":enabled});
+                assignments["profiles"] = json!({"@default": {
+                    "name":"Default permissions", "complete":true, "revision":update_id, "permission":permission,
+                }});
+                case.settings().set(SettingsLayer::Global, "access_control", assignments.clone(), agena_testkit::EditOptions::default())
+                    .await?.require_success()?;
+                let user_text = format!("telegram-plugin-switch-{enabled}");
+                let done_text = format!("telegram-plugin-checked-{enabled}");
+                let plugins_id = format!("plugins-{enabled}");
+                let tools_id = format!("tools-{enabled}");
+                let call_id = format!("plan-{enabled}");
+                let plugins = model.expect(RequestMatch::user_text(user_text.clone()))
+                    .reply(Reply::function_call(plugins_id.clone(), "plugins_list", json!({"plugin":"agena.plan"})));
+                let tools = model.expect(RequestMatch::tool_output(plugins_id.clone())).after(&plugins)
+                    .check(move |request| {
+                        let output = request.tool_output_text(&plugins_id).context("plugin catalog")?;
+                        ensure!(output.contains("- agena.plan [") == enabled, "unexpected plugin catalog: {output}");
+                        Ok(())
+                    }).reply(Reply::function_call(tools_id.clone(), "tools_list", json!({"plugin":"agena.plan"})));
+                let call = model.expect(RequestMatch::tool_output(tools_id.clone())).after(&tools)
+                    .check(move |request| {
+                        let output = request.tool_output_text(&tools_id).context("tool catalog")?;
+                        ensure!(output.contains("- plan.get [") == enabled, "unexpected tool catalog: {output}");
+                        Ok(())
+                    }).reply(Reply::tool_call(call_id.clone(), "plan.get", json!({})));
+                model.expect(RequestMatch::tool_output(call_id.clone())).after(&call)
+                    .check(move |request| {
+                        let output: Value = serde_json::from_str(&request.tool_output_text(&call_id).context("plan response")?)?;
+                        ensure!(output["phase"] == if enabled { "succeeded" } else { "failed" }, "unexpected tool result: {output}");
+                        Ok(())
+                    }).reply(Reply::text(done_text.clone()));
+                observed.updates.lock().unwrap().push(update(update_id, private_message(100 + update_id, &user_text)));
+                let latest = client.integration_detail(source.session_id, active.id).await?;
+                client.control_integration(source.session_id, active.id, &IntegrationControl {
+                    not_before_ms: None, expected_revision: latest.binding.revision,
+                    action: IntegrationControlAction::PollNow,
+                }).await?;
+                wait_for(|| async {
+                    Ok(observed.sent.lock().unwrap().iter().any(|message| message["text"].as_str().is_some_and(|text| text.contains(&done_text))).then_some(()))
+                }, "Telegram reply after plugin permission change").await?;
+            }
             let final_detail = client.integration_detail(source.session_id, active.id).await?;
             ensure!(final_detail.channel_sessions.len() == 1 && final_detail.channel_sessions[0].session_id == session_id);
+            ensure!(final_detail.binding.state == BindingState::Enabled && final_detail.binding.epoch == recovered.epoch);
             let sent = observed.sent.lock().unwrap();
-            ensure!(sent.len() == 3, "recovery replayed an old response: {sent:?}");
+            ensure!(sent.len() == 5, "unexpected deliveries: {sent:?}");
             ensure!(sent.iter().filter(|message| message["text"].as_str().is_some_and(|text| text.contains("private-history-preserved-response"))).count() == 1);
             Ok(())
         }).await

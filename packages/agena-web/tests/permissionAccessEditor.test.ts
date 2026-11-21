@@ -66,13 +66,20 @@ describe('unified access permission editor', () => {
   )
 
   test('profile mode stages visual edits in the parent draft and performs no policy writes', async () => {
-    const { panel, props, reads, writes } = await createPermissionEditor({}, undefined, { profileDraft: true })
-    expect(reads).toEqual(['/api/v1/plugins/surface'])
+    const { panel, props, reads, writes } = await createPermissionEditor({}, undefined, {
+      profileDraft: true,
+      plugins: [{ plugin_id: 'agena.shell', kind: 'static', state: 'running', display_name: 'Terminal' }],
+    })
+    expect(reads).toEqual(['/api/v1/plugins/surface', '/api/v1/plugins'])
+    expect(panel.installedPlugins.value.map((plugin: { plugin_id: string }) => plugin.plugin_id)).toEqual([
+      'agena.shell',
+    ])
     expect(panel.displayedPathMode('workspace')).toBe('readwrite')
     panel.setPathSource('workspace', 'local')
     panel.setPathDefault('workspace', 'readonly')
     panel.setToolDefaultSource('local')
     panel.setToolDefault('deny')
+    panel.setPluginPermission('agena.shell', false)
     panel.setNetworkSource('allow', 'local')
     panel.beginRule('network')
     panel.networkRuleDraft.value.to = '192.0.2.10'
@@ -84,6 +91,7 @@ describe('unified access permission editor', () => {
       path: { workspace: 'readonly' },
       tools: { default: 'deny' },
       network: { version: 2, allow: [{ to: '192.0.2.10', protocol: 'tcp' }] },
+      plugins: { 'agena.shell': false },
     })
   })
 
@@ -104,6 +112,9 @@ describe('unified access permission editor', () => {
       panel.newToolName.value = 'agena.shell.exec'
       panel.newToolNameMode.value = 'deny'
       panel.addToolName()
+      panel.setPluginPermission('agena.shell', false)
+      panel.setPluginPermission('agena.fs', false)
+      panel.setPluginPermission('agena.fs', undefined)
       await panel.save()
       expect(writes).toHaveLength(1)
       expect(writes[0]).toEqual({
@@ -113,6 +124,7 @@ describe('unified access permission editor', () => {
           path: { workspace: 'readonly' },
           network: { version: 2, default: 'deny' },
           tools: { default: 'ask', names: { 'agena.fs.read': 'allow', 'agena.shell.exec': 'deny' } },
+          plugins: { 'agena.shell': false },
         },
       })
       expect(panel.dirty.value).toBe(false)

@@ -466,7 +466,12 @@ impl App {
                     if let Some(detail) = &state.detail
                         && detail.binding.spec.mode == IntegrationMode::Channel
                     {
-                        if let Some(policy) = &detail.binding.spec.channel_policy {
+                        if detail.binding.spec.is_telegram_channel() {
+                            state.error = Some(
+                                "Configure Telegram chat permissions in Permission assignments"
+                                    .into(),
+                            );
+                        } else if let Some(policy) = &detail.binding.spec.channel_policy {
                             match serde_json::to_string_pretty(policy) {
                                 Ok(text) => {
                                     let mut editor = Editor::default();

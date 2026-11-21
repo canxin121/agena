@@ -512,6 +512,25 @@ pub enum EventInput {
 
 #[async_trait]
 pub trait KernelBackend: Send + Sync {
+    async fn storage_list(&self, query: SessionStorageQuery) -> Result<SessionStorageList>;
+    async fn storage_detail(
+        &self,
+        session: SessionId,
+        query: SessionStorageDetailQuery,
+    ) -> Result<SessionStorageDetail>;
+    async fn storage_operation(&self, session: SessionId) -> Result<Option<StorageOperation>>;
+    async fn storage_preview(
+        &self,
+        session: SessionId,
+        selection: StorageSelection,
+    ) -> Result<StorageCleanupPreview>;
+    async fn storage_confirm(
+        &self,
+        session: SessionId,
+        confirmation: ConfirmStorageCleanup,
+    ) -> Result<StorageOperation>;
+    async fn storage_reclaim_database(&self) -> Result<DatabaseReclaimResult>;
+
     async fn prompt_window_status(
         &self,
         session: SessionId,
@@ -846,6 +865,10 @@ pub struct KernelPorts {
 }
 
 impl KernelPorts {
+    pub fn storage(&self) -> SessionStorage {
+        SessionStorage(self.reader.0.backend.clone())
+    }
+
     /// Infrastructure lifecycle boundary: drain accepted commands and close
     /// connections. Business handles expose no storage flush/shutdown API.
     pub async fn shutdown(self) -> Result<()> {

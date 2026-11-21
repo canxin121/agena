@@ -44,6 +44,7 @@ describe('task-based settings navigation', () => {
     }).flatMap((group) => group.items)
     expect(rows.filter((row) => row.key.startsWith('ai-session/')).map((row) => row.view)).toEqual([
       'session-behavior',
+      'storage',
       'provider-studio',
       'agent-profiles',
       'model-catalog',
@@ -56,6 +57,7 @@ describe('task-based settings navigation', () => {
     ['runtime-session', 'agent-profiles', 'ai-session', 'agent-profiles'],
     ['runtime-session', 'client-versions', 'operations', 'clients'],
     ['runtime-session', 'session-behavior', 'ai-session', 'session-behavior'],
+    ['runtime-session', 'storage', 'ai-session', 'storage'],
     ['plugins-tools', 'marketplace', 'extensions', 'plugins'],
     ['skills', 'install', 'extensions', 'skills'],
     ['mcp-server', 'connection', 'extensions', 'mcp-host'],

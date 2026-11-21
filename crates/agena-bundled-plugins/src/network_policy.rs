@@ -186,9 +186,8 @@ pub(crate) fn permitted_addresses(
     Ok(permitted)
 }
 
-/// Transports without a pinned resolver may not select a denied member of a
-/// mixed DNS answer. This is an extra check; the browser sandbox gate remains
-/// closed until the real connection can enforce the same pinned destinations.
+/// Check every candidate address before allowing a Chrome request. Chrome
+/// resolves destinations again when it connects.
 pub(crate) async fn require_browser_target(
     url: &url::Url,
     fake_ip_ranges: &[String],

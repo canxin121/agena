@@ -1,5 +1,5 @@
 use super::*;
-use agena_testkit::UserSession;
+use agena_testkit::{EditOptions, UserSession};
 use axum::{http::Method, response::Html};
 use std::{
     net::{IpAddr, Ipv4Addr},
@@ -19,7 +19,11 @@ async fn allow_fixture_browser(user: &UserSession) -> TestResult {
     allow_permissions(user).await?;
     let mut permission =
         serde_json::to_value(user.snapshot().await?.execution.selected_permission)?;
-    permission["network"] = json!({"default":"deny", "allow":[{"to":"8.8.8.8"}]});
+    permission["network"] = if cfg!(target_os = "macos") {
+        json!({"default":"allow"})
+    } else {
+        json!({"default":"deny", "allow":[{"to":"8.8.8.8"}]})
+    };
     user.client()
         .set_session_permission(user.id(), serde_json::from_value(permission)?)
         .await?;
@@ -27,15 +31,17 @@ async fn allow_fixture_browser(user: &UserSession) -> TestResult {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "starts Chrome with a test-owned HTTP proxy"]
+#[ignore = "requires Chrome with native sandbox support and starts a test-owned HTTP proxy"]
 async fn browser_takeover_blocks_the_agent_and_returns_the_signed_in_page() -> TestResult {
     let signed_in = Arc::new(tokio::sync::Notify::new());
     let server_signal = signed_in.clone();
     fixture()
         .password("browser-takeover-fixture")
         .expect_plugin("agena.browser")
+        .env("AGENA_SANDBOX", "enabled")
+        .env("CI", "1")
         .configure_global(|config| {
-            config["sandbox"] = json!(false);
+            config["sandbox"] = json!(true);
             config["plugins"]["list"]["agena.memory"]["enabled"] = json!(false);
         })
         .before_start(move |case| async move {
@@ -65,7 +71,15 @@ async fn browser_takeover_blocks_the_agent_and_returns_the_signed_in_page() -> T
             ).await?;
             let wrapper = case.workspace().join("chrome-takeover-fixture");
             tokio::fs::write(&wrapper, format!(
-                "#!/bin/sh\nexec google-chrome --proxy-server={} \"$@\"\n",
+                r#"#!/bin/sh
+for flag do
+  if [ "$flag" = --no-sandbox ]; then
+    echo 'Chrome sandbox must stay enabled' >&2
+    exit 1
+  fi
+done
+exec google-chrome --proxy-server={} "$@"
+"#,
                 proxy.base_url().trim_end_matches('/'),
             )).await?;
             tokio::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700)).await?;
@@ -125,9 +139,15 @@ async fn browser_takeover_blocks_the_agent_and_returns_the_signed_in_page() -> T
             assert_eq!(waiting_state["help"]["page_id"], page);
             let manual: Value = command(take).await?.require_success()?.json()?;
             let token = manual["control_id"].as_str().context("login control ID")?;
-            // Reload model/configuration state during a real handoff. The
-            // next turn must still use the same live browser and login state.
-            case.settings().reload_and_wait().await?;
+            // The live page and manual control must survive a change to MXC.
+            let settings = case.settings();
+            settings.set(
+                SettingsLayer::Global,
+                "sandbox",
+                json!(false),
+                EditOptions { reload: false, ..Default::default() },
+            ).await?.require_success()?;
+            settings.reload_and_wait().await?;
             assert_eq!(command(json!({"kind":"frame","page_id":page})).await?.status, StatusCode::FORBIDDEN);
             command(json!({"kind":"frame","page_id":page,"control_id":token})).await?.require_success()?;
             command(json!({

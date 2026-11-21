@@ -10,7 +10,7 @@ use serde_json::Value;
 use crate::native::{actions::DaemonState, browser::BrowserManager};
 use crate::session_settings::{MemStore, Running};
 
-pub use crate::native::cdp::chrome::ChromeProcess;
+pub use crate::native::cdp::chrome::{ChromeProcess, ChromeSandbox};
 pub use crate::native::cdp::client::{is_session_detached_error, CdpClient};
 pub use crate::native::cdp::types::CdpEvent;
 
@@ -18,8 +18,12 @@ pub async fn connect_cdp(endpoint: &str) -> Result<CdpClient, String> {
     CdpClient::connect_bounded(endpoint).await
 }
 
-pub fn launch_chrome(executable: &Path, timeout: Duration) -> Result<ChromeProcess, String> {
-    crate::native::cdp::chrome::launch_agena_chrome(executable, timeout)
+pub fn launch_chrome(
+    executable: &Path,
+    timeout: Duration,
+    sandbox: ChromeSandbox,
+) -> Result<ChromeProcess, String> {
+    crate::native::cdp::chrome::launch_agena_chrome(executable, timeout, sandbox)
 }
 
 pub struct PageEngine {

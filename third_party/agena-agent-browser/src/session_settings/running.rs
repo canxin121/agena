@@ -193,6 +193,7 @@ impl Running {
             profile: self.str(Key::Profile),
             allow_file_access: self.bool(Key::AllowFileAccess).unwrap_or(false),
             args: self.list(Key::Args).unwrap_or_default(),
+            sandbox: Default::default(),
             extensions: self.list(Key::Extensions),
             storage_state: self.str(Key::StorageState),
             user_agent: self.str(Key::UserAgent),

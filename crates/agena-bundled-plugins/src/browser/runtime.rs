@@ -1,3 +1,4 @@
+pub(crate) use agena_agent_browser::agena::ChromeSandbox;
 use agena_agent_browser::agena::{ChromeProcess, launch_chrome};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -12,6 +13,7 @@ use agena_plugin_host::{
 #[derive(Debug, Clone)]
 /// Options for launching a managed Chrome process.
 pub(crate) struct ChromeOptions {
+    sandbox: ChromeSandbox,
     pub executable_path: Option<PathBuf>,
     pub startup_timeout: Duration,
     /// How long the managed browser may stay idle before it is shut down
@@ -20,8 +22,14 @@ pub(crate) struct ChromeOptions {
 }
 
 impl ChromeOptions {
-    pub(crate) fn new(executable_path: Option<&str>, startup_secs: u64, idle_secs: u64) -> Self {
+    pub(crate) fn new(
+        executable_path: Option<&str>,
+        startup_secs: u64,
+        idle_secs: u64,
+        sandbox: ChromeSandbox,
+    ) -> Self {
         Self {
+            sandbox,
             executable_path: executable_path.map(|path| PathBuf::from(path.trim())),
             startup_timeout: Duration::from_secs(startup_secs),
             idle_timeout: (idle_secs > 0).then(|| Duration::from_secs(idle_secs)),
@@ -49,7 +57,7 @@ impl ChromeOptions {
 
 fn start_browser(options: &ChromeOptions) -> SdkResult<ChromeProcess> {
     let executable = find_browser_executable(options.executable_path.as_deref())?;
-    launch_chrome(&executable, options.startup_timeout)
+    launch_chrome(&executable, options.startup_timeout, options.sandbox)
         .map_err(|error| PluginError::from_kind(PluginErrorKind::HostUnavailable, error))
 }
 
@@ -85,7 +93,6 @@ fn lock<T>(state: &Mutex<T>) -> SdkResult<MutexGuard<'_, T>> {
 impl ChromeRuntime {
     /// Start Chrome lazily and return its DevTools endpoint.
     pub(crate) async fn endpoint(&self, options: ChromeOptions) -> SdkResult<String> {
-        require_browser_runtime()?;
         let permit = crate::BLOCKING_PLUGIN_WORKERS
             .acquire()
             .await
@@ -278,46 +285,5 @@ fn browser_candidates() -> &'static [&'static str] {
             "microsoft-edge",
             "brave-browser",
         ]
-    }
-}
-
-/// Chromium currently lacks a per-call MXC policy and an identity-bound
-/// transport that pins every connection. Keep rendering closed until that
-/// boundary exists; request interception alone cannot prevent DNS rebinding.
-pub(crate) fn require_browser_runtime() -> SdkResult<()> {
-    if !agena_process::sandbox::enabled()
-        || agena_plugin_host::sdk::host_api::current_host_callback_context()
-            .is_some_and(|context| context.sandbox_enabled == Some(false))
-    {
-        return Ok(());
-    }
-    Err(PluginError::from_kind(
-        agena_plugin_host::sdk::PluginErrorKind::HostUnavailable,
-        "Chrome is unavailable for this invocation because MXC browser isolation is not implemented.",
-    ))
-}
-
-#[cfg(test)]
-mod browser_sandbox_mode_tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn direct_browser_calls_skip_mxc_requirement_and_restore_enclosing_scope() {
-        use agena_plugin_host::sdk::host_api::{
-            HostCallbackContext, run_in_isolated_host_callback_context,
-        };
-        let previous = require_browser_runtime().is_err();
-        run_in_isolated_host_callback_context(
-            HostCallbackContext {
-                sandbox_enabled: Some(false),
-                ..Default::default()
-            },
-            async {
-                require_browser_runtime().unwrap();
-            },
-        )
-        .await;
-        assert_eq!(require_browser_runtime().is_err(), previous);
-        assert_eq!(previous, agena_process::sandbox::enabled());
     }
 }

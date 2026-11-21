@@ -6,6 +6,24 @@ use crate::browser::driver::{BrowserDriver, BrowserRequestPolicy, DomFormat, Pag
 
 static RENDERS: Semaphore = Semaphore::const_new(2);
 
+// Chrome resolves destinations itself and cannot apply the invocation's
+// MXC policy to the actual connection.
+pub(super) fn runtime_available() -> bool {
+    !agena_process::sandbox::enabled()
+        || agena_plugin_host::sdk::host_api::current_host_callback_context()
+            .is_some_and(|context| context.sandbox_enabled == Some(false))
+}
+
+pub(super) fn require_runtime() -> SdkResult<()> {
+    if runtime_available() {
+        return Ok(());
+    }
+    Err(PluginError::from_kind(
+        agena_plugin_host::sdk::PluginErrorKind::HostUnavailable,
+        "JavaScript rendering in agena.web requires direct execution mode. Use render_js: false for HTTP fetch or browser.open for an interactive page.",
+    ))
+}
+
 pub(super) async fn fetch(
     plugin: &WebPlugin,
     url: &url::Url,
@@ -26,7 +44,7 @@ pub(super) async fn search_source(
     url: &url::Url,
     remaining: Duration,
 ) -> SdkResult<agena_web::WebSearchPage> {
-    require_browser_runtime()?;
+    require_runtime()?;
     let mut options = plugin.web_fetch_options()?;
     options.timeout = remaining;
     options.max_body_bytes = 4 * 1024 * 1024;
@@ -58,7 +76,7 @@ async fn fetch_source(
     options: &WebFetchOptions,
     search_origin: Option<url::Origin>,
 ) -> SdkResult<fetch_transport::Source> {
-    require_browser_runtime()?;
+    require_runtime()?;
     let operation = async {
         let _slot = RENDERS
             .acquire()

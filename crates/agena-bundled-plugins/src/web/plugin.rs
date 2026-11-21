@@ -24,7 +24,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, Semaphore, mpsc};
 
-use crate::browser::runtime::{ChromeOptions, ChromeRuntime, require_browser_runtime};
+use crate::browser::runtime::{ChromeOptions, ChromeRuntime, ChromeSandbox};
 use crate::network_policy::{self, authorized_network_addresses, resolve_public_network_target};
 
 use agena_plugin_host::PluginError;
@@ -296,6 +296,7 @@ impl WebRenderConfig {
             self.executable_path.as_deref(),
             self.wait.timeout_secs,
             self.idle_timeout_secs,
+            ChromeSandbox::Automatic,
         )
     }
 }
@@ -1043,7 +1044,7 @@ impl WebPlugin {
         extractor: agena_web::ExtractionBackend,
     ) -> SdkResult<FetchedPage> {
         if render_js {
-            require_browser_runtime()?;
+            rendered_fetch::require_runtime()?;
         }
         let state = self.state()?;
         if !state.config.fetch.enabled {
@@ -1612,7 +1613,7 @@ impl WebPlugin {
             .search_with_renderer(
                 query,
                 &options,
-                config.browser.enabled && require_browser_runtime().is_ok(),
+                config.browser.enabled && rendered_fetch::runtime_available(),
                 |url, remaining| {
                     Box::pin(async move {
                         rendered_fetch::search_source(self, &url, remaining)

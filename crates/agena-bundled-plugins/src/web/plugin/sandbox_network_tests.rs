@@ -170,6 +170,27 @@ async fn remote_dns_proxy_is_rejected_before_host_authorization_or_connection() 
 }
 
 #[tokio::test]
+async fn direct_rendered_fetch_uses_the_invocation_sandbox_mode() {
+    use agena_plugin_host::sdk::host_api::{
+        HostCallbackContext, run_in_isolated_host_callback_context,
+    };
+
+    let previous = rendered_fetch::runtime_available();
+    run_in_isolated_host_callback_context(
+        HostCallbackContext {
+            sandbox_enabled: Some(false),
+            ..Default::default()
+        },
+        async {
+            rendered_fetch::require_runtime().unwrap();
+        },
+    )
+    .await;
+    assert_eq!(rendered_fetch::runtime_available(), previous);
+    assert_eq!(previous, !agena_process::sandbox::enabled());
+}
+
+#[tokio::test]
 async fn render_gate_prevents_launching_chrome_for_sandboxed_fetch() {
     let plugin = WebPlugin::default();
     let url = url::Url::parse("https://example.org").unwrap();

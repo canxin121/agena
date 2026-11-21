@@ -200,6 +200,11 @@ Web fetch, crawl, and search can still render JavaScript when configured in
 `agena.web`. Rendering uses disposable pages and its own Chrome process.
 Interactive pages and their cookies belong to the Browser plugin.
 
+The Browser plugin starts Chrome on the host with its built-in sandbox and
+controls it over local CDP in either MXC mode. Navigation and intercepted
+requests use the owning conversation's policy. Web's JavaScript rendering
+requires direct execution mode.
+
 `browser.list` includes `previews` belonging to the current canonical workspace
 and Agena session even before Chrome starts. Pass the ID in `preview_id`.
 
@@ -308,8 +313,8 @@ continues to enforce the conversation's network policy.
 
 Returning control checks for text left in recognized sign-in fields. Finish
 the sign-in flow or clear those fields before returning the browser. Runtime
-reloads with the same Browser and sandbox settings keep the same tabs, Chrome
-context, and control grant.
+reloads with the same Browser settings keep the tabs, Chrome context, and
+control grant, including across changes to the MXC setting.
 
 Closing the panel leaves the browser in human control. The original Web tab
 can reopen the panel and return control. **Close these pages** discards the

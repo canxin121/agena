@@ -41,7 +41,6 @@ pub(super) type RuntimeServices = agena_runtime::RuntimeServiceBundle<
 type SnapshotState = agena_runtime::RuntimeSnapshotState<Arc<ResolvedConfig>, RuntimeServices>;
 
 struct BrowserConfiguration {
-    sandbox: bool,
     plugin: Option<agena_plugin_host::ConfiguredPlugin>,
     sessions: BrowserSessionPool,
 }
@@ -52,19 +51,14 @@ impl BrowserConfiguration {
         host: Arc<super::host_client::RuntimeHostClient>,
         previous: Option<&Self>,
     ) -> Self {
-        let sandbox = config.sandbox;
         let plugin = config.plugins.list.get(browser_plugin_id()).cloned();
         let sessions = previous
-            .filter(|previous| previous.sandbox == sandbox && previous.plugin == plugin)
+            .filter(|previous| previous.plugin == plugin)
             .map_or_else(
                 || BrowserSessionPool::new(host),
                 |previous| previous.sessions.clone(),
             );
-        Self {
-            sandbox,
-            plugin,
-            sessions,
-        }
+        Self { plugin, sessions }
     }
 }
 

@@ -457,7 +457,6 @@ impl BrowserPlugin {
         context: &ToolInvokeContext<'_>,
         target: &str,
     ) -> SdkResult<BrowserAccess> {
-        require_browser_runtime()?;
         let control = handoff::agent_access(self.browser_state.control(context.session_id)).await?;
         let page = self
             .browser_state
@@ -532,7 +531,6 @@ impl BrowserPlugin {
         context: &ToolInvokeContext<'_>,
         input: &BrowserOpenInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        require_browser_runtime()?;
         let control = self.browser_state.control(context.session_id);
         let agent_access = handoff::agent_access(control.clone()).await?;
         let owner = browser_owner(context)?;

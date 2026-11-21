@@ -327,6 +327,13 @@ fn maybe_start_xvfb(options: &LaunchOptions) -> Option<XvfbServer> {
     None
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ChromeSandbox {
+    #[default]
+    Automatic,
+    Required,
+}
+
 #[derive(Clone)]
 pub struct LaunchOptions {
     pub headless: bool,
@@ -338,6 +345,7 @@ pub struct LaunchOptions {
     pub proxy_password: Option<String>,
     pub profile: Option<String>,
     pub args: Vec<String>,
+    pub(crate) sandbox: ChromeSandbox,
     pub allow_file_access: bool,
     pub extensions: Option<Vec<String>>,
     pub storage_state: Option<String>,
@@ -402,6 +410,7 @@ impl Default for LaunchOptions {
             proxy_password: None,
             profile: None,
             args: Vec::new(),
+            sandbox: ChromeSandbox::Automatic,
             allow_file_access: false,
             extensions: None,
             storage_state: None,
@@ -594,7 +603,9 @@ fn build_chrome_args(options: &LaunchOptions) -> Result<ChromeArgs, String> {
         args.push("--force-webrtc-ip-handling-policy=disable_non_proxied_udp".to_string());
     }
 
-    if should_disable_sandbox(&args) {
+    if options.sandbox == ChromeSandbox::Required {
+        args.retain(|arg| arg != "--no-sandbox");
+    } else if should_disable_sandbox(&args) {
         args.push("--no-sandbox".to_string());
     }
 
@@ -813,9 +824,11 @@ fn try_launch_chrome(chrome_path: &Path, options: &LaunchOptions) -> Result<Chro
 pub(crate) fn launch_agena_chrome(
     chrome_path: &Path,
     timeout: Duration,
+    sandbox: ChromeSandbox,
 ) -> Result<ChromeProcess, String> {
     let options = LaunchOptions {
         webmcp: false,
+        sandbox,
         args: vec![
             "--remote-debugging-address=127.0.0.1".to_string(),
             "--disable-dev-shm-usage".to_string(),
@@ -932,7 +945,7 @@ fn launch_chrome_with_deadline(
                 "Failed to capture Chrome stderr".to_string()
             })?;
             let reader = BufReader::new(stderr);
-            match wait_for_ws_url_until(reader, deadline) {
+            match wait_for_ws_url_until(reader, deadline, options.sandbox) {
                 Ok(url) => url,
                 Err(fallback_err) => {
                     terminate_launched_chrome(&mut child);
@@ -1012,6 +1025,7 @@ fn wait_for_devtools_active_port(
 fn wait_for_ws_url_until(
     reader: impl BufRead,
     deadline: std::time::Instant,
+    sandbox: ChromeSandbox,
 ) -> Result<String, String> {
     let prefix = "DevTools listening on ";
     let mut stderr_lines: Vec<String> = Vec::new();
@@ -1021,6 +1035,7 @@ fn wait_for_ws_url_until(
             return Err(chrome_launch_error(
                 "Timeout waiting for Chrome DevTools URL",
                 &stderr_lines,
+                sandbox,
             ));
         }
         let line = line.map_err(|e| format!("Failed to read Chrome stderr: {}", e))?;
@@ -1033,10 +1048,11 @@ fn wait_for_ws_url_until(
     Err(chrome_launch_error(
         "Chrome exited before providing DevTools URL",
         &stderr_lines,
+        sandbox,
     ))
 }
 
-fn chrome_launch_error(message: &str, stderr_lines: &[String]) -> String {
+fn chrome_launch_error(message: &str, stderr_lines: &[String], sandbox: ChromeSandbox) -> String {
     let relevant: Vec<&String> = stderr_lines
         .iter()
         .filter(|l| {
@@ -1054,10 +1070,12 @@ fn chrome_launch_error(message: &str, stderr_lines: &[String]) -> String {
 
     if relevant.is_empty() {
         if stderr_lines.is_empty() {
-            return format!(
-                "{} (no stderr output from Chrome)\nHint: try passing --args \"--no-sandbox\" if Chrome crashes silently in your environment",
-                message
-            );
+            let hint = if sandbox == ChromeSandbox::Automatic {
+                "\nHint: try passing --args \"--no-sandbox\" if Chrome crashes silently in your environment"
+            } else {
+                ""
+            };
+            return format!("{} (no stderr output from Chrome){}", message, hint);
         }
         let last_lines: Vec<&String> = stderr_lines.iter().rev().take(5).collect();
         return format!(
@@ -1073,10 +1091,11 @@ fn chrome_launch_error(message: &str, stderr_lines: &[String]) -> String {
         );
     }
 
-    let hint = if relevant.iter().any(|l| {
-        let lower = l.to_lowercase();
-        lower.contains("sandbox") || lower.contains("namespace")
-    }) {
+    let hint = if sandbox == ChromeSandbox::Automatic
+        && relevant.iter().any(|l| {
+            let lower = l.to_lowercase();
+            lower.contains("sandbox") || lower.contains("namespace")
+        }) {
         "\nHint: try --args \"--no-sandbox\" (required in containers, VMs, and some Linux setups)"
     } else {
         ""
@@ -2112,7 +2131,7 @@ exec sleep 60
 
     #[test]
     fn test_chrome_launch_error_no_stderr() {
-        let msg = chrome_launch_error("Chrome exited", &[]);
+        let msg = chrome_launch_error("Chrome exited", &[], ChromeSandbox::Automatic);
         assert!(msg.contains("no stderr output"));
         assert!(msg.contains("Hint:"));
         assert!(msg.contains("--no-sandbox"));
@@ -2124,16 +2143,19 @@ exec sleep 60
             "some log line".to_string(),
             "Failed to move to new namespace: sandbox error".to_string(),
         ];
-        let msg = chrome_launch_error("Chrome exited", &lines);
+        let msg = chrome_launch_error("Chrome exited", &lines, ChromeSandbox::Automatic);
         assert!(msg.contains("sandbox error"));
         assert!(msg.contains("Hint:"));
         assert!(msg.contains("--no-sandbox"));
+        let msg = chrome_launch_error("Chrome exited", &lines, ChromeSandbox::Required);
+        assert!(msg.contains("sandbox error"));
+        assert!(!msg.contains("--no-sandbox"));
     }
 
     #[test]
     fn test_chrome_launch_error_generic() {
         let lines = vec!["info line".to_string(), "another info line".to_string()];
-        let msg = chrome_launch_error("Chrome exited", &lines);
+        let msg = chrome_launch_error("Chrome exited", &lines, ChromeSandbox::Automatic);
         assert!(msg.contains("last 2 lines"));
     }
 

@@ -113,7 +113,8 @@ impl Fixture {
     }
 
     async fn call_for(&self, owner: i64, tool: &str, input: Value) -> SdkResult<ToolInvokeOutput> {
-        self.call_plugin(&self.plugin, owner, tool, input).await
+        self.call_plugin(&self.plugin, owner, tool, input, true)
+            .await
     }
 
     async fn call_plugin(
@@ -122,11 +123,12 @@ impl Fixture {
         owner: i64,
         tool: &str,
         input: Value,
+        sandbox_enabled: bool,
     ) -> SdkResult<ToolInvokeOutput> {
         let context = HostCallbackContext {
             session_id: Some(owner),
             call_id: Some(1),
-            sandbox_enabled: Some(false),
+            sandbox_enabled: Some(sandbox_enabled),
             ..Default::default()
         };
         run_in_isolated_host_callback_context(
@@ -608,6 +610,7 @@ async fn rendered_fetch_and_interactive_browser_have_separate_lifetimes() {
             19,
             "fetch",
             json!({"url": "http://8.8.8.8/", "render_js": true, "use_cache": false}),
+            false,
         )
         .await
         .unwrap()

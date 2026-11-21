@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, mpsc};
 
 use super::driver::BrowserDriver;
-use super::runtime::{ChromeOptions, ChromeRuntime, require_browser_runtime};
+use super::runtime::{ChromeOptions, ChromeRuntime, ChromeSandbox};
 use crate::network_policy;
 use browser_tools::{
     BrowserContentInput, BrowserDiagnosticsInput, BrowserEvaluateInput, BrowserInspectInput,
@@ -72,6 +72,7 @@ impl BrowserConfig {
             self.executable_path.as_deref(),
             self.startup_timeout_secs,
             self.idle_timeout_secs,
+            ChromeSandbox::Required,
         )
     }
 

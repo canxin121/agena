@@ -1550,7 +1550,7 @@ Named Bot access to ordinary project sessions and integration grants.
 
 Interact with managed Chrome pages and workspace previews.
 
-> Start with browser.list to discover owned pages and previews, or browser.open for an HTTP(S) URL. Use browser.snapshot for controls, browser.content or browser.inspect for page data, and browser.diagnostics to investigate failures. Pass the browser session_id from browser.open or browser.list. Use browser.request_takeover when a user must sign in or operate the page in Agena Web.
+> Start with browser.list to discover owned pages and previews, or browser.open for an HTTP(S) URL. Use browser.snapshot for controls, browser.content or browser.inspect for page data, and browser.diagnostics to investigate failures. Pass the browser session_id from browser.open or browser.list. When the page requires human verification, sign-in, or another step the user must perform, request help with browser.request_takeover and continue after handback.
 
 ### action
 
@@ -3643,6 +3643,9 @@ Interact with managed Chrome pages and workspace previews.
 **Tags**: `network` `interactive` `mutate`
 
 **Runtime**: streaming `buffered`
+
+**Help**:
+> After submitting with press_enter, inspect the resulting page. Use browser.snapshot when return_snapshot is false. When the page requires verification or sign-in, read tools_help for browser.request_takeover and invoke it for this page before ending the task.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |

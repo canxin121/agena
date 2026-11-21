@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { RiFolder6Line, RiSettings3Line } from '@remixicon/vue'
-import { computed, defineAsyncComponent, isRef, provide, ref, unref, useId, watch } from 'vue'
-import { useResizeObserver, useWindowSize } from '@vueuse/core'
+import { computed, defineAsyncComponent, isRef, onScopeDispose, provide, ref, unref, useId, watch } from 'vue'
+import { useElementSize, useResizeObserver, useWindowSize } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import {
   RiArrowDownLine,
@@ -24,6 +24,8 @@ import {
 
 import BotWelcome from './BotWelcome.vue'
 import BotAvatar from '@/features/bots/BotAvatar.vue'
+import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
+import { readServerAuthTokenVersion, subscribeServerAuthTokenVersion } from '@/lib/serverAuthToken'
 import { openBrowserKey } from '@/features/browser/api'
 import { useBrowserCopy } from '@/features/browser/copy'
 import VerticalSplitPane from '@/components/ui/VerticalSplitPane.vue'
@@ -50,6 +52,7 @@ import { resolveComposerToolbarLayout } from './composerToolbarLayout'
 import { useBtwStore } from '@/stores/btw'
 import { skillCatalogKey } from './skillReferences'
 
+const SessionOperationFooter = defineAsyncComponent(() => import('@/components/chat/SessionOperationFooter.vue'))
 const SessionSchedules = defineAsyncComponent(() => import('@/components/chat/SessionSchedules.vue'))
 const WorkspaceChangesSection = defineAsyncComponent(() => import('@/components/chat/WorkspaceChangesSection.vue'))
 const BtwSection = defineAsyncComponent(() => import('@/components/chat/BtwSection.vue'))
@@ -62,29 +65,39 @@ const btw = useBtwStore()
 const props = defineProps<{ ctx: ChatPageViewContext }>()
 const ctx = props.ctx
 const commandListId = `commands-${useId()}`
+const pane = useWorkspacePaneContext()
+const paneVisible = computed(() => pane?.isVisible.value ?? true)
 const browserOpen = ref(false)
 const browserMounted = ref(false)
 const browserPageId = ref<string>()
 const browserText = useBrowserCopy()
 const browserRequestId = computed(() => ctx.chat.getBrowserTakeoverRequestId(ctx.chat.selectedSessionId || ''))
-provide(openBrowserKey, (sessionId, pageId) => {
-  if (sessionId !== ctx.chat.selectedSessionId) return
+const browserSessionId = ref('')
+const authVersion = ref(readServerAuthTokenVersion())
+onScopeDispose(
+  subscribeServerAuthTokenVersion((version) => {
+    authVersion.value = version
+  }),
+)
+function openBrowser(sessionId: string, pageId?: string) {
+  browserSessionId.value = sessionId
   browserPageId.value = pageId
   browserMounted.value = true
   browserOpen.value = true
-})
-watch(
-  () => ctx.chat.selectedSessionId,
-  () => {
-    browserOpen.value = false
-    browserPageId.value = undefined
-  },
-)
-
-function showBrowser() {
+}
+provide(openBrowserKey, openBrowser)
+watch([() => ctx.chat.selectedSessionId, authVersion], () => {
+  browserOpen.value = false
   browserPageId.value = undefined
-  browserMounted.value = true
-  browserOpen.value = true
+  browserSessionId.value = ''
+})
+
+watch(paneVisible, (visible) => {
+  if (!visible) browserOpen.value = false
+})
+
+function showBrowser(pageId?: string) {
+  if (ctx.chat.selectedSessionId) openBrowser(ctx.chat.selectedSessionId, pageId)
 }
 
 function copyKeyboardMessage(id: string) {
@@ -329,6 +342,18 @@ function handleAttachProjectFromPanel() {
 
 // A classic scrollbar reserves space in the transcript. Reserve that same
 // space beside the composer so their shared column aligns on every platform.
+const footerEl = ref<HTMLElement>()
+const { height: footerHeight } = useElementSize(footerEl)
+const extraHeight = computed(() => (unref(composerFullscreenActive) ? 0 : Math.ceil(footerHeight.value)))
+const splitMinHeight = computed(() => (ui.isCompactLayout ? 128 : 112) + extraHeight.value)
+const splitMaxHeight = computed(() => {
+  const max = unref(composerMaxHeight)
+  return max === undefined ? undefined : Math.max(splitMinHeight.value, max)
+})
+const splitHeight = computed(() =>
+  Math.min(unref(composerTargetHeight) + extraHeight.value, splitMaxHeight.value ?? Infinity),
+)
+
 const scrollbarGutter = ref(0)
 useResizeObserver(scrollEl, () => {
   const element = scrollEl.value
@@ -432,12 +457,12 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
 <template>
   <section ref="pageRef" class="h-full min-h-0 flex flex-col overflow-hidden relative">
     <VerticalSplitPane
-      :model-value="composerTargetHeight"
+      :model-value="splitHeight"
       :collapse-top="composerSplitTopCollapsed"
-      @update:model-value="handleComposerResize"
+      @update:model-value="handleComposerResize($event - extraHeight)"
       @dblclick="resetComposerHeight"
-      :min-height="ui.isCompactLayout ? 128 : 112"
-      :max-height="composerMaxHeight"
+      :min-height="splitMinHeight"
+      :max-height="splitMaxHeight"
       :disabled="ui.isCompactLayout"
     >
       <template #top>
@@ -472,7 +497,7 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                   :tooltip="browserRequestId ? browserText('requested') : browserText('browser')"
                   :aria-label="browserRequestId ? browserText('requested') : browserText('browser')"
                   data-testid="open-session-browser"
-                  @click="showBrowser"
+                  @click="showBrowser()"
                   ><RiGlobalLine class="h-4 w-4"
                 /></IconButton>
                 <template v-if="transcriptVimEnabled">
@@ -750,7 +775,7 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
           :data-keyboard-avoid="composerFullscreenActive ? 'resize' : 'shift'"
         >
           <div
-            class="chat-column flex flex-col min-h-0 h-full"
+            class="chat-column flex flex-1 flex-col min-h-0"
             :class="ui.isCompactLayout ? 'pt-1 pb-4' : 'pt-1.5 pb-4'"
           >
             <div class="relative flex flex-1 flex-col min-h-0">
@@ -1103,6 +1128,19 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
               </Composer>
             </div>
           </div>
+          <div ref="footerEl" class="shrink-0">
+            <SessionOperationFooter
+              v-if="chat.selectedSessionId && !composerFullscreenActive && paneVisible"
+              :key="`${chat.selectedSessionId}:${authVersion}`"
+              :session-id="chat.selectedSessionId"
+              :messages="chat.messages"
+              :busy="currentPhase !== 'idle'"
+              :child-count="chat.selectedSession?.child_session_count"
+              :browser-open="browserOpen"
+              :browser-requested="Boolean(browserRequestId)"
+              @browser="showBrowser"
+            />
+          </div>
         </div>
       </template>
     </VerticalSplitPane>
@@ -1140,8 +1178,8 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
   <SessionBrowser
     v-if="browserMounted && chat.selectedSessionId"
     v-model:open="browserOpen"
-    :session-id="chat.selectedSessionId"
-    :request-id="browserRequestId"
+    :session-id="browserSessionId || chat.selectedSessionId"
+    :request-id="chat.getBrowserTakeoverRequestId(browserSessionId || chat.selectedSessionId)"
     :initial-page-id="browserPageId"
   />
   <AttachmentsPanel

@@ -665,6 +665,9 @@ window.__botProbe = {activeComposerSession: () => {
                     .filter((item) => item.owner_bot_id === owner && (!surface || item.owner_surface === surface))
                   return json({ items, total: items.length, page: { has_more: false } })
                 }
+                if (/^\/api\/v1\/sessions\/\d+\/(shell\/processes|monitor\/subscriptions)$/.test(p)) return json([])
+                if (/^\/api\/v1\/sessions\/\d+\/browser$/.test(p))
+                  return json({ kind: 'state', tabs: [], human_control: false, help: null })
                 if (p === '/api/v1/sessions')
                   return json({
                     items: [session(7), ...(createdProject ? [session(8)] : [])],

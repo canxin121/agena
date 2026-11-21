@@ -212,6 +212,12 @@ pub trait MonitorService: Send + Sync + std::fmt::Debug {
         ))
     }
     fn list(&self) -> Vec<ProcessSummary>;
+    fn list_session(&self, session_id: i64, websocket: bool) -> Vec<ProcessSummary> {
+        self.list()
+            .into_iter()
+            .filter(|item| item.owner_session_id == Some(session_id) && item.websocket == websocket)
+            .collect()
+    }
     fn summary(&self, id: &str) -> Option<ProcessSummary> {
         self.list()
             .into_iter()
@@ -426,6 +432,29 @@ impl MonitorService for MonitorRegistry {
         self.terminals
             .summary(id)
             .or_else(|| self.lookup(id).map(|state| state.snapshot()))
+    }
+
+    fn list_session(&self, session_id: i64, websocket: bool) -> Vec<ProcessSummary> {
+        let mut rows: Vec<_> = self
+            .monitors
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|state| {
+                state.owner.as_ref().and_then(|owner| owner.session_id) == Some(session_id)
+                    && state.launch.ws.is_some() == websocket
+            })
+            .map(|state| state.snapshot())
+            .collect();
+        if !websocket {
+            rows.extend(self.terminals.list_session(session_id));
+        }
+        rows.sort_by(|a, b| {
+            b.started_at_ms
+                .cmp(&a.started_at_ms)
+                .then_with(|| a.process_id.cmp(&b.process_id))
+        });
+        rows
     }
 
     fn terminals(&self) -> Option<&crate::TerminalRegistry> {

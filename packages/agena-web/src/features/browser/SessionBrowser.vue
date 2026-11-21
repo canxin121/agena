@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, shallowRef, watch, watchEffect } from 'vue'
+import { useDocumentVisibility } from '@vueuse/core'
+import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import { RiHand, RiRefreshLine } from '@remixicon/vue'
 import Button from '@/components/ui/Button.vue'
 import FormDialog from '@/components/ui/FormDialog.vue'
@@ -15,6 +17,9 @@ const props = defineProps<{ open: boolean; sessionId: string; requestId?: string
 const emit = defineEmits<{ 'update:open': [open: boolean] }>()
 const chat = useChatStore()
 const t = useBrowserCopy()
+const pane = useWorkspacePaneContext()
+const documentVisibility = useDocumentVisibility()
+const viewing = computed(() => props.open && documentVisibility.value !== 'hidden' && (pane?.isVisible.value ?? true))
 const state = shallowRef<BrowserState>()
 const frame = shallowRef<BrowserFrame | null>(null)
 const pageId = ref('')
@@ -128,7 +133,7 @@ watchEffect((cleanup) => {
 })
 
 watch(
-  [() => props.open, () => props.sessionId, authVersion],
+  [viewing, () => props.sessionId, authVersion],
   ([open, sid], _, cleanup) => {
     frame.value = null
     linkedPageClosed.value = false
@@ -173,7 +178,7 @@ watch(
 )
 
 watch(
-  [() => props.open, () => props.sessionId, pageId, controlId, () => state.value?.human_control, authVersion],
+  [viewing, () => props.sessionId, pageId, controlId, () => state.value?.human_control, authVersion],
   ([open, sid, page, control, human], _, cleanup) => {
     frame.value = null
     previewError.value = ''
@@ -364,7 +369,7 @@ async function retryAnswer() {
     :open="open"
     :title="t('browser')"
     :description="t('signInHere')"
-    max-width="max-w-5xl"
+    max-width="max-w-3xl"
     @update:open="emit('update:open', $event)"
   >
     <div class="space-y-3" data-testid="session-browser">

@@ -2384,6 +2384,7 @@ export default {
       },
     },
     operations: {
+      agent: 'उप-एजेंट',
       openAgentSession: 'एजेंट की बातचीत खोलें',
       parentSession: 'मूल बातचीत',
       process: 'शेल प्रक्रिया',

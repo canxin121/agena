@@ -1579,6 +1579,7 @@ export default {
       errorBand: '错误',
     },
     operations: {
+      agent: '子 Agent',
       openAgentSession: '打开子 Agent 会话',
       parentSession: '返回父会话',
       process: 'Shell 进程',

@@ -12,7 +12,14 @@ use super::super::BrowserPage;
 
 static CAPTURES: Semaphore = Semaphore::const_new(6);
 
-async fn dimensions(page: &BrowserPage) -> SdkResult<(u32, u32)> {
+struct Viewport {
+    x: f64,
+    y: f64,
+    width: u32,
+    height: u32,
+}
+
+async fn visual_viewport(page: &BrowserPage) -> SdkResult<Viewport> {
     let metrics = page
         .driver
         .viewport_command("Page.getLayoutMetrics", json!({}))
@@ -25,10 +32,20 @@ async fn dimensions(page: &BrowserPage) -> SdkResult<(u32, u32)> {
             .map(|value| value.round() as u32)
             .ok_or_else(|| PluginError::internal("Chrome returned an invalid viewport"))
     };
-    Ok((pixels("clientWidth")?, pixels("clientHeight")?))
+    Ok(Viewport {
+        x: viewport["pageX"].as_f64().unwrap_or_default(),
+        y: viewport["pageY"].as_f64().unwrap_or_default(),
+        width: pixels("clientWidth")?,
+        height: pixels("clientHeight")?,
+    })
 }
 
-pub(super) async fn frame(page: &BrowserPage) -> SdkResult<BrowserControlResult> {
+async fn dimensions(page: &BrowserPage) -> SdkResult<(u32, u32)> {
+    let viewport = visual_viewport(page).await?;
+    Ok((viewport.width, viewport.height))
+}
+
+pub(super) async fn frame(page: &BrowserPage, thumbnail: bool) -> SdkResult<BrowserControlResult> {
     let _capture = CAPTURES.try_acquire().map_err(|_| {
         PluginError::from_kind(
             PluginErrorKind::HostUnavailable,
@@ -41,7 +58,35 @@ pub(super) async fn frame(page: &BrowserPage) -> SdkResult<BrowserControlResult>
             origin: String::new(),
             width: 0,
             height: 0,
-            dialog: Some(dialog),
+            dialog: (!thumbnail).then_some(dialog),
+        });
+    }
+    if thumbnail {
+        let Viewport {
+            x,
+            y,
+            width,
+            height,
+        } = visual_viewport(page).await?;
+        let scale = (192.0 / f64::from(width))
+            .min(108.0 / f64::from(height))
+            .min(1.0);
+        let image = page
+            .driver
+            .viewport_command(
+                "Page.captureScreenshot",
+                json!({
+                    "format": "jpeg", "quality": 55, "captureBeyondViewport": false,
+                    "clip": {"x": x, "y": y, "width": width, "height": height, "scale": scale}
+                }),
+            )
+            .await?;
+        return Ok(BrowserControlResult::Frame {
+            jpeg: jpeg_data(&image)?.to_owned(),
+            origin: String::new(),
+            width: (f64::from(width) * scale).round().max(1.0) as u32,
+            height: (f64::from(height) * scale).round().max(1.0) as u32,
+            dialog: None,
         });
     }
     let (frame, location, (width, height)) = tokio::try_join!(
@@ -52,10 +97,7 @@ pub(super) async fn frame(page: &BrowserPage) -> SdkResult<BrowserControlResult>
         page.driver.viewport_command("Page.getFrameTree", json!({})),
         dimensions(page),
     )?;
-    let jpeg = frame["data"]
-        .as_str()
-        .filter(|data| data.len() <= 2_000_000)
-        .ok_or_else(|| PluginError::internal("Chrome returned an unavailable preview frame"))?;
+    let jpeg = jpeg_data(&frame)?;
     let origin = location
         .pointer("/frameTree/frame/url")
         .and_then(Value::as_str)
@@ -70,6 +112,13 @@ pub(super) async fn frame(page: &BrowserPage) -> SdkResult<BrowserControlResult>
         height,
         dialog: None,
     })
+}
+
+fn jpeg_data(frame: &Value) -> SdkResult<&str> {
+    frame["data"]
+        .as_str()
+        .filter(|data| data.len() <= 2_000_000)
+        .ok_or_else(|| PluginError::internal("Chrome returned an unavailable preview frame"))
 }
 
 pub(super) async fn input(page: &BrowserPage, events: Vec<BrowserInput>) -> SdkResult<()> {

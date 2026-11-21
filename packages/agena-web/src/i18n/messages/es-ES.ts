@@ -2128,6 +2128,7 @@ export default {
       description: 'Actualizar el título de la sesión',
     },
     operations: {
+      agent: 'Subagente',
       openAgentSession: 'Abrir conversación del agente',
       parentSession: 'Conversación principal',
       process: 'Proceso de shell',

@@ -1515,6 +1515,19 @@ impl agena_runtime::RuntimeControlService for AgenaRuntime {
         adapter.browser_control(session_id, command, network).await
     }
 
+    fn session_processes(
+        &self,
+        session_id: i64,
+        websocket: bool,
+    ) -> Vec<agena_domain::ProcessSummary> {
+        self.activities
+            .monitor
+            .as_ref()
+            .map_or_else(Vec::new, |service| {
+                service.list_session(session_id, websocket)
+            })
+    }
+
     fn session_process(
         &self,
         session_id: i64,

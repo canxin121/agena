@@ -13,6 +13,14 @@ pub(super) fn routes() -> Router<AppState> {
                 .layer(DefaultBodyLimit::max(64 * 1024)),
         )
         .route(
+            "/api/v1/sessions/{session_id}/shell/processes",
+            get(rest::list_shell_processes),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/monitor/subscriptions",
+            get(rest::list_monitor_subscriptions),
+        )
+        .route(
             "/api/v1/sessions/{session_id}/shell/processes/{process_id}",
             get(rest::get_shell_process).delete(rest::stop_shell_process),
         )

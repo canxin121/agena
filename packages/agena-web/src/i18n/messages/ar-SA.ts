@@ -1413,6 +1413,7 @@ export default {
       },
     },
     operations: {
+      agent: 'الوكيل الفرعي',
       openAgentSession: 'افتح محادثة الوكيل',
       parentSession: 'المحادثة الأصلية',
       process: 'عملية سطر الأوامر',

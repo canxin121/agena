@@ -1760,6 +1760,7 @@ export default {
       },
     },
     operations: {
+      agent: 'Subagente',
       openAgentSession: 'Abrir conversa do agente',
       parentSession: 'Conversa principal',
       process: 'Processo do shell',

@@ -19,6 +19,8 @@ pub enum BrowserControlCommand {
     Frame {
         page_id: String,
         control_id: Option<String>,
+        #[serde(default)]
+        thumbnail: bool,
     },
     TakeControl {
         page_id: String,

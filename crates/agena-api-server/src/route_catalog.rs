@@ -252,6 +252,8 @@
 //! | Method | Path | Handlers |
 //! |---|---|---|
 //! | GET,POST | `/api/v1/sessions/{session_id}/browser` | `list_browser_tabs()`, `control_browser()` |
+//! | GET | `/api/v1/sessions/{session_id}/shell/processes` | `list_shell_processes()` |
+//! | GET | `/api/v1/sessions/{session_id}/monitor/subscriptions` | `list_monitor_subscriptions()` |
 //! | GET,DELETE | `/api/v1/sessions/{session_id}/shell/processes/{process_id}` | `get_shell_process()`, `stop_shell_process()` |
 //! | GET,DELETE | `/api/v1/sessions/{session_id}/monitor/subscriptions/{subscription_id}` | `get_monitor_subscription()`, `stop_monitor_subscription()` |
 //! | GET | `/api/v1/sessions/{session_id}/schedules` | `list_session_schedules()` |

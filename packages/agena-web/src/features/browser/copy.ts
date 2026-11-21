@@ -11,6 +11,7 @@ const copy = {
   tabs: ['浏览器标签页', 'Browser tabs'],
   preview: ['浏览器画面', 'Browser viewport'],
   signInHere: ['需要登录时，请在浏览器画面中输入。', 'Enter sign-in details in the browser viewport.'],
+  manualControl: ['手动操作中', 'Manual control'],
   previewOnly: ['仅预览', 'Preview only'],
   youControl: ['你正在操作，AI 的浏览器访问已暂停', 'You have control. AI browser access is paused.'],
   otherView: ['浏览器正在另一个视图中被接管', 'Another view has control of the browser.'],

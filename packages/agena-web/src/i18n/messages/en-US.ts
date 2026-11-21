@@ -1608,6 +1608,7 @@ export default {
       errorBand: 'Error',
     },
     operations: {
+      agent: 'Subagent',
       openAgentSession: 'Open agent conversation',
       parentSession: 'Parent conversation',
       process: 'Shell process',

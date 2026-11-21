@@ -54,6 +54,33 @@ export type TranscriptProjectionLabels = {
   runFailed?: string
 }
 
+export function transcriptProjectionLabels(
+  t: (key: string, values?: Record<string, number>) => string,
+): TranscriptProjectionLabels {
+  return {
+    attachment: String(t('chat.attachments.rowTitle')),
+    operation: String(t('chat.partTitles.operation')),
+    command: String(t('chat.partTitles.command')),
+    skill: String(t('chat.skills.title')),
+    error: String(t('chat.partTitles.error')),
+    notice: String(t('chat.partTitles.notice')),
+    compaction: String(t('chat.partTitles.compaction')),
+    compactionUnchanged: String(t('chat.partTitles.compactionUnchanged')),
+    compactionTokens: (before: number, after: number) =>
+      String(t('chat.partTitles.compactionTokens', { before, after })),
+    contextCleared: String(t('chat.partTitles.contextCleared')),
+    contextClearedSummary: String(t('chat.partTitles.contextClearedSummary')),
+    answer: String(t('chat.partTitles.answer')),
+    reasoning: String(t('chat.partTitles.reasoning')),
+    textSegment: String(t('chat.partTitles.textSegment')),
+    responseRunning: String(t('chat.partTitles.responseRunning')),
+    responseCompleted: String(t('chat.partTitles.responseCompleted')),
+    responseCancelled: String(t('chat.partTitles.responseCancelled')),
+    responseFailed: String(t('chat.partTitles.responseFailed')),
+    runFailed: String(t('chat.partTitles.runFailed')),
+  }
+}
+
 export type TranscriptProjectionOptions = {
   showReasoning: boolean
   labels?: TranscriptProjectionLabels

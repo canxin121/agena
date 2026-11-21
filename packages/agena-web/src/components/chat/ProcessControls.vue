@@ -7,26 +7,20 @@ import { captureResourceObservation } from '@/lib/resourceSync'
 import { readServerAuthTokenVersion, subscribeServerAuthTokenVersion } from '@/lib/serverAuthToken'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 
-type ProcessState = {
-  status: 'running' | 'exited' | 'timed_out' | 'stopped' | 'failed'
-  ready: boolean
-  exit_code?: number | null
-}
+import { processCollection, type ProcessKind, type SessionProcess } from '@/pages/chat/sessionProcesses'
 
-const props = defineProps<{ sessionId: string; id: string; kind: 'shell' | 'monitor' }>()
+const props = defineProps<{ sessionId: string; id: string; kind: ProcessKind }>()
+const emit = defineEmits<{ changed: [process: SessionProcess] }>()
 const { t } = useI18n()
 const pane = useWorkspacePaneContext()
-const state = ref<ProcessState>()
+const state = ref<SessionProcess>()
 const stopping = ref(false)
 const error = ref('')
 const readError = ref('')
 const authVersion = ref(readServerAuthTokenVersion())
 onScopeDispose(subscribeServerAuthTokenVersion((version) => (authVersion.value = version)))
 const visible = computed(() => pane?.isVisible.value ?? true)
-const endpoint = computed(() => {
-  const collection = props.kind === 'shell' ? 'shell/processes' : 'monitor/subscriptions'
-  return `/api/v1/sessions/${encodeURIComponent(props.sessionId)}/${collection}/${encodeURIComponent(props.id)}`
-})
+const endpoint = computed(() => `${processCollection(props.sessionId, props.kind)}/${encodeURIComponent(props.id)}`)
 let controller: AbortController | undefined
 let revision = 0
 let observedScope = ''
@@ -55,7 +49,7 @@ watch(
       const observed = revision
       const scope = captureResourceObservation(url).scope
       try {
-        const updated = await apiJson<ProcessState>(url, {
+        const updated = await apiJson<SessionProcess>(url, {
           cache: 'no-store',
           signal: AbortSignal.any([request.signal, AbortSignal.timeout(5000)]),
         })
@@ -100,11 +94,14 @@ async function stop() {
   stopping.value = true
   error.value = ''
   try {
-    const updated = await apiJson<ProcessState>(url, {
+    const updated = await apiJson<SessionProcess>(url, {
       method: 'DELETE',
       signal: AbortSignal.any([request.signal, AbortSignal.timeout(10_000)]),
     })
-    if (!request.signal.aborted && scope === captureResourceObservation(url).scope) state.value = updated
+    if (!request.signal.aborted && scope === captureResourceObservation(url).scope) {
+      state.value = updated
+      emit('changed', updated)
+    }
   } catch (cause) {
     if (!request.signal.aborted) error.value = cause instanceof Error ? cause.message : String(cause)
   } finally {

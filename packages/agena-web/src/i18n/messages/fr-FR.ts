@@ -2083,6 +2083,7 @@ export default {
       },
     },
     operations: {
+      agent: 'Sous-agent',
       openAgentSession: 'Ouvrir la conversation de l’agent',
       parentSession: 'Conversation parente',
       process: 'Processus shell',

@@ -662,6 +662,8 @@ export function sessionListResourceKey(opts?: {
     const base = `bot:${bot}:sessions`
     return opts?.ownerSurface ? `${base}:surface:${opts.ownerSurface}` : base
   }
+  const parent = Number(opts?.parentId)
+  if (Number.isSafeInteger(parent) && parent > 0) return `session:${parent}:children`
   return opts?.bucket ? `sessions:bucket:${opts.bucket}${opts.countOnly ? ':count' : ''}` : 'sessions'
 }
 

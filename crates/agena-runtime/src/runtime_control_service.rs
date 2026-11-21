@@ -65,6 +65,14 @@ pub trait RuntimeControlService: Send + Sync {
         ))
     }
 
+    fn session_processes(
+        &self,
+        _session_id: i64,
+        _websocket: bool,
+    ) -> Vec<agena_domain::ProcessSummary> {
+        Vec::new()
+    }
+
     fn session_process(
         &self,
         _session_id: i64,

@@ -293,6 +293,14 @@ impl TerminalRegistry {
         lock(&self.sessions).values().map(|s| s.summary()).collect()
     }
 
+    pub(crate) fn list_session(&self, session_id: i64) -> Vec<ProcessSummary> {
+        lock(&self.sessions)
+            .values()
+            .filter(|state| state.owner.session_id == Some(session_id))
+            .map(|state| state.summary())
+            .collect()
+    }
+
     pub(crate) fn summary(&self, id: &str) -> Option<ProcessSummary> {
         self.lookup(id, None).ok().map(|session| session.summary())
     }

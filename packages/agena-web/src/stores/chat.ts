@@ -774,7 +774,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const delay = Math.min(30_000, 500 * 2 ** (failures - 1))
     const timer = window.setTimeout(() => {
       refreshMessagesRetryTimerBySession.delete(sid)
-      if (selectedSessionId.value !== sid || (typeof document !== 'undefined' && document.visibilityState === 'hidden'))
+      if ((selectedSessionId.value !== sid && !isSessionVisible(sid)) || !isDocumentVisible())
         return
       void refreshMessages(sid, { silent: true }).catch(() => {})
     }, delay)
@@ -788,9 +788,10 @@ const useChatStoreDefinition = defineStore('chat', () => {
       messageRevalidators.get(sid)?.resume()
       statusRevalidators.get(sid)?.resume()
     }
-    const sid = selectedSessionId.value
-    if (!sid || !refreshMessagesFailuresBySession.has(sid) || refreshMessagesRetryTimerBySession.has(sid)) return
-    void refreshMessages(sid, { silent: true }).catch(() => {})
+    for (const sid of refreshMessagesFailuresBySession.keys()) {
+      if ((isSessionVisible(sid) || selectedSessionId.value === sid) && !refreshMessagesRetryTimerBySession.has(sid))
+        void refreshMessages(sid, { silent: true }).catch(() => {})
+    }
   }
   if (typeof document !== 'undefined') document.addEventListener?.('visibilitychange', resumeMessageRefresh)
   onScopeDispose(() => {
@@ -929,6 +930,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
         ])
       await reconcileLoadedParts(sid, retiredReplyIds)
       if (!isLatestRefreshMessagesRequest(sid, requestSeq, generation)) return
+      if (!messagesHydratedBySession.value[sid]) delete historyErrorBySession.value[sid]
       markMessagesHydrated(sid)
       if (page.observation && page.observation.scope === captureResourceObservation(`session:${sid}:parts`).scope)
         transcriptObservations.set(sid, page.observation)
@@ -956,6 +958,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     } catch (err) {
       if (!isLatestRefreshMessagesRequest(sid, requestSeq, generation)) return
       const msg = err instanceof Error ? err.message : String(err)
+      if (!messagesHydratedBySession.value[sid]) historyErrorBySession.value[sid] = msg
       const authRequired = err instanceof ApiError && err.status === 401 && (err.code || '').trim() === 'auth.required'
       if (selectedSessionId.value === sid) {
         messagesError.value = null

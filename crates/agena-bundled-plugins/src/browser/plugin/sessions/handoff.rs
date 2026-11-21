@@ -169,6 +169,7 @@ impl BrowserSessions {
             BrowserControlCommand::Frame {
                 page_id,
                 control_id,
+                thumbnail,
             } => {
                 let control = control.read().await;
                 if control.human.is_some() || control_id.is_some() {
@@ -177,7 +178,7 @@ impl BrowserSessions {
                 let page = self.operator_page(session_id, &page_id).await?;
                 page.verify_preview_lease().await?;
                 let _lease = self.lease()?;
-                viewport::frame(&page).await
+                viewport::frame(&page, thumbnail).await
             }
             BrowserControlCommand::TakeControl { page_id } => {
                 let network = network.ok_or_else(control_denied)?;

@@ -744,6 +744,23 @@ async fn monitor_delivers_websocket_events_and_stops_the_owned_connection() -> T
                 user.id()
             );
             let state: Value = http.get(&subscription).await?.require_success()?.json()?;
+            let rows: Vec<Value> = http
+                .get(&format!(
+                    "/api/v1/sessions/{}/monitor/subscriptions",
+                    user.id()
+                ))
+                .await?
+                .require_success()?
+                .json()?;
+            ensure!(rows.iter().any(|row| row["process_id"] == monitor_id
+                && row["websocket"] == true
+                && row["output_resource"]["resource_id"].is_string()));
+            let shells: Vec<Value> = http
+                .get(&format!("/api/v1/sessions/{}/shell/processes", user.id()))
+                .await?
+                .require_success()?
+                .json()?;
+            ensure!(!shells.iter().any(|row| row["process_id"] == monitor_id));
             ensure!(state["status"] == "running");
             ensure!(
                 user.parts()
@@ -847,6 +864,23 @@ async fn monitor_delivers_websocket_events_and_stops_the_owned_connection() -> T
             result.assert_succeeded()?;
             result.assert_assistant_text("runtime-monitor-complete")?;
             let state: Value = http.get(&subscription).await?.require_success()?.json()?;
+            let rows: Vec<Value> = http
+                .get(&format!(
+                    "/api/v1/sessions/{}/monitor/subscriptions",
+                    user.id()
+                ))
+                .await?
+                .require_success()?
+                .json()?;
+            ensure!(rows.iter().any(|row| row["process_id"] == monitor_id
+                && row["websocket"] == true
+                && row["output_resource"]["resource_id"].is_string()));
+            let shells: Vec<Value> = http
+                .get(&format!("/api/v1/sessions/{}/shell/processes", user.id()))
+                .await?
+                .require_success()?
+                .json()?;
+            ensure!(!shells.iter().any(|row| row["process_id"] == monitor_id));
             ensure!(state["status"] == "stopped");
             let shell_path = format!(
                 "/api/v1/sessions/{}/shell/processes/{monitor_id}",

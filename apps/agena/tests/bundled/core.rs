@@ -267,6 +267,12 @@ async fn shell_runs_commands_and_owns_background_jobs() -> TestResult {
 
             // Another session cannot take over a process owned by this one.
             let stranger = self::user(&case).await?;
+            let owned: Vec<Value> = http.get(&format!("/api/v1/sessions/{}/shell/processes", user.id())).await?.require_success()?.json()?;
+            assert!(owned.iter().any(|row| row["process_id"] == process_id && row["output_resource"] == running["output_resource"]));
+            for (session_id, collection) in [(stranger.id(), "shell/processes"), (user.id(), "monitor/subscriptions")] {
+                let rows: Vec<Value> = http.get(&format!("/api/v1/sessions/{session_id}/{collection}")).await?.require_success()?.json()?;
+                assert!(!rows.iter().any(|row| row["process_id"] == process_id));
+            }
             let wrong_owner = format!("/api/v1/sessions/{}/shell/processes/{process_id}", stranger.id());
             assert_eq!(
                 http.send_json(reqwest::Method::DELETE, &wrong_owner, &json!({})).await?.status,

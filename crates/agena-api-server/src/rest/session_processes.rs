@@ -26,6 +26,20 @@ async fn stop_session_process(
     process_response(process)
 }
 
+pub async fn list_shell_processes(
+    State(state): State<AppState>,
+    Path(session_id): Path<i64>,
+) -> Json<Vec<ProcessSummary>> {
+    Json(state.runtime_control().session_processes(session_id, false))
+}
+
+pub async fn list_monitor_subscriptions(
+    State(state): State<AppState>,
+    Path(session_id): Path<i64>,
+) -> Json<Vec<ProcessSummary>> {
+    Json(state.runtime_control().session_processes(session_id, true))
+}
+
 pub async fn get_shell_process(
     State(state): State<AppState>,
     Path((session_id, id)): Path<(i64, String)>,

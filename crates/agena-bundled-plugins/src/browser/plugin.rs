@@ -165,12 +165,12 @@ impl Default for BrowserPlugin {
     icon = crate::plugin_metadata::icon(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/plugin-icons/inline_ui.svg"))),
     authors = ["canxin121"],
     summary = "Interact with managed Chrome pages and workspace previews.",
-    help = "Start with browser.list to discover owned pages and previews, or browser.open for an HTTP(S) URL. Use browser.snapshot for controls, browser.content or browser.inspect for page data, and browser.diagnostics to investigate failures. Pass the browser session_id from browser.open or browser.list. Use browser.request_takeover when a user must sign in or operate the page in Agena Web.",
+    help = "Start with browser.list to discover owned pages and previews, or browser.open for an HTTP(S) URL. Use browser.snapshot for controls, browser.content or browser.inspect for page data, and browser.diagnostics to investigate failures. Pass the browser session_id from browser.open or browser.list. When the page requires human verification, sign-in, or another step the user must perform, request help with browser.request_takeover and continue after handback.",
     tags(agena_plugin_host::sdk::ToolTag::Network, agena_plugin_host::sdk::ToolTag::Interactive),
     translations(locale(
         "zh-CN",
         summary = "操作受管 Chrome 页面和工作区预览。",
-        help = "用 browser.list 查找当前会话的页面和预览，或用 browser.open 打开网页。用页面的 session_id 继续操作。browser.snapshot 查看控件，browser.content 读取页面内容，browser.evaluate 执行 JavaScript，browser.diagnostics 查看网络请求和异常。用户需要亲自登录或操作时，调用 browser.request_takeover。"
+        help = "用 browser.list 查找当前会话的页面和预览，或用 browser.open 打开网页。用页面的 session_id 继续操作。browser.snapshot 查看控件，browser.content 读取页面内容，browser.evaluate 执行 JavaScript，browser.diagnostics 查看网络请求和异常。如果页面需要人工验证、登录或其他必须由用户完成的操作，调用 browser.request_takeover 请求接管，等用户交还浏览器后继续。"
     )),
     settings = BrowserConfig,
     settings_default = BrowserConfig::default(),
@@ -759,6 +759,7 @@ impl BrowserPlugin {
         tags(network, interactive, mutate),
         name = "type",
         summary = "Fill an editable browser element by @ref or CSS selector, optionally pressing Enter.",
+        help = "After submitting with press_enter, inspect the resulting page. Use browser.snapshot when return_snapshot is false. When the page requires verification or sign-in, read tools_help for browser.request_takeover and invoke it for this page before ending the task.",
         translations(
             locale(
                 "ar-SA",
@@ -794,7 +795,8 @@ impl BrowserPlugin {
             ),
             locale(
                 "zh-CN",
-                summary = "填写由 CSS 或最新快照引用选定的浏览器输入框，可选择按回车。"
+                summary = "填写由 CSS 或最新快照引用选定的浏览器输入框，可选择按回车。",
+                help = "按回车提交后查看页面结果。return_snapshot 为 false 时可调用 browser.snapshot 查看。遇到需要用户完成的验证或登录，先用 tools_help 查看 browser.request_takeover，再为当前页面发起接管请求。"
             ),
             locale(
                 "zh-TW",

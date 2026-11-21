@@ -148,6 +148,12 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
   ],
   'runtime-session': [
     {
+      id: 'storage',
+      label: () => st('Storage management'),
+      description: () => st('Review stored data and recover space by conversation.'),
+      keywords: ['storage', 'disk', 'cleanup', 'attachments', '存储', '磁盘', '清理', '附件'],
+    },
+    {
       id: 'agent-profiles',
       aliases: ['prompt-layers', 'prompt-library'],
       label: () => st('Agent profiles'),

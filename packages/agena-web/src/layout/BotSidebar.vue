@@ -235,7 +235,7 @@ const menuItems = computed<SessionActionItem[]>(() => {
     const profile = bots.profiles.find((item) => item.id === targetId)
     items = profile
       ? buildSessionActionItemsForSessionI18n(t, { id: profile.id }, { bot: true }).filter((item) =>
-          ['edit-bot', 'archive-bot', 'rename'].includes(item.id),
+          ['edit-bot', 'archive-bot', 'rename', 'storage'].includes(item.id),
         )
       : []
   }
@@ -258,6 +258,14 @@ function openConversationMenu(profile: BotProfile, conversation: BotConversation
 async function runMenuAction(item: SessionActionItem, target: { session: { id: string } }): Promise<boolean> {
   const selected = conversationMenuTarget.value
   conversationMenuTarget.value = null
+  if (item.id === 'storage') {
+    ui.setSessionSwitcherOpen(false)
+    const query = selected
+      ? { view: 'storage', targetSessionId: selected.conversation.id, storageBot: selected.botId }
+      : { view: 'storage', storageBot: target.session.id }
+    await navigation.openMainTab('settings', { path: '/settings/runtime-session', query })
+    return true
+  }
   if (selected && selected.conversation.id === target.session.id) {
     const { botId, conversation } = selected
     try {

@@ -1081,6 +1081,11 @@ async function runSessionActionMenu(item: SessionActionItem) {
   if (item.disabled) return
   const target = sessionActionMenuTarget.value
   if (!target) return
+  if (item.id === 'storage') {
+    closeDesktopSessionActionMenu()
+    await openSessionStorage(target.session.id)
+    return
+  }
   if (item.id === 'toggle-favorite') {
     const favorite = target.session.favorite
     closeDesktopSessionActionMenu()
@@ -1093,6 +1098,14 @@ async function runSessionActionMenu(item: SessionActionItem) {
     return
   }
   await runSessionActionMenuBase(item)
+}
+
+async function openSessionStorage(sessionId: string) {
+  ui.setSessionSwitcherOpen(false)
+  await workspaceNavigation.openMainTab('settings', {
+    path: '/settings/runtime-session',
+    query: { view: 'storage', targetSessionId: sessionId },
+  })
 }
 
 async function runSessionDialogAction(item: SessionDialogActionItem) {
@@ -1136,6 +1149,10 @@ async function runSessionDialogAction(item: SessionDialogActionItem) {
   const t = sessionActionsTarget.value
   if (!t) return
   sessionActionsOpen.value = false
+  if (item.id === 'storage') {
+    await openSessionStorage(t.session.id)
+    return
+  }
   if (t.session?.id && t.session.id !== chat.selectedSessionId) {
     await selectSession(t.session.id)
   }

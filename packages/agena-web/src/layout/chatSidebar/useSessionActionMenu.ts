@@ -6,10 +6,12 @@ import {
   RiEditLine,
   RiFileUploadLine,
   RiGitBranchLine,
+  RiHardDrive2Line,
   RiStarFill,
   RiStarLine,
 } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
+import { settingsText as st } from '@/i18n/settingsText'
 
 import type { DirectoryEntry } from '@/features/sessions/model/types'
 import type { SessionMenuTarget, MenuRefEl } from './sessionMenu.types'
@@ -81,6 +83,12 @@ export function buildSessionActionItemsForSessionI18n(
       label: String(t('chat.sidebar.sessionActions.exportTranscript.label')),
       description: String(t('chat.sidebar.sessionActions.exportTranscript.description')),
       icon: RiFileUploadLine,
+    },
+    {
+      id: 'storage',
+      label: st('Storage management'),
+      description: st('Review stored data and recover space by conversation.'),
+      icon: RiHardDrive2Line,
     },
   ]
   if (options?.bot) {

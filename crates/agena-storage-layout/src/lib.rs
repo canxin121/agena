@@ -118,6 +118,9 @@ impl StorageLayout {
     pub fn session_artifacts_dir(&self, session_id: i64) -> PathBuf {
         self.session_assets_dir(session_id).join("artifacts")
     }
+    pub fn session_web_cache_dir(&self, session_id: i64) -> PathBuf {
+        self.session_assets_dir(session_id).join("web-cache")
+    }
     pub fn uploads_dir(&self, workspace: &Path) -> PathBuf {
         self.workspace_dir(workspace).join("uploads")
     }

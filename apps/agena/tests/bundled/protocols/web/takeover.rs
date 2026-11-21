@@ -1,5 +1,5 @@
 use super::*;
-use agena_testkit::{EditOptions, UserSession};
+use agena_testkit::{EditOptions, Reply, RequestMatch, UserSession};
 use axum::{http::Method, response::Html};
 use base64::Engine as _;
 use std::{
@@ -9,7 +9,10 @@ use std::{
 };
 
 const PASSWORD: &str = "fixture-only-login-value";
+const SEARCH: &str = r#"<!doctype html><title>Search fixture</title>
+<form action="/login"><label>Search <input id="query" name="q"></label><button>Search</button></form>"#;
 const LOGIN: &str = r#"<!doctype html><title>Sign in</title>
+<h1>Human verification required</h1>
 <form method="post" action="/login">
 <label>Password <input type="password" name="password" autofocus required></label>
 <button type="submit">Sign in</button>
@@ -47,6 +50,7 @@ async fn browser_takeover_blocks_the_agent_and_returns_the_signed_in_page() -> T
         })
         .before_start(move |case| async move {
             let proxy = case.serve_http_on(IpAddr::V4(Ipv4Addr::LOCALHOST), Router::new()
+                .route("/search", get(|| async { Html(SEARCH) }))
                 .route("/login", get(|| async { Html(LOGIN) }).post(|body: String| async move {
                     if body == format!("password={PASSWORD}") {
                         (
@@ -143,10 +147,69 @@ exec google-chrome --proxy-server={} "$@"
             assert_eq!(list.data()?["status"], "waiting_for_user");
             command(json!({"kind":"return_control","control_id":token})).await?.require_success()?;
 
-            let waiting = user.start_tool("browser.request_takeover", json!({"session_id":page, "reason":"Sign in to the fixture"})).await?;
+            let search = user.call_tool("browser.action", json!({
+                "session_id":page, "action":{"kind":"navigate","url":"http://8.8.8.8/search"},
+            })).await?;
+            search.assert_succeeded()?;
+
+            let request_text = "Find the result for Agena in the search fixture.";
+            let model = case.model();
+            let read_submit = model
+                .expect(RequestMatch::user_text(request_text))
+                .reply(Reply::function_call("submit-help", "tools_help", json!({"tool":"browser.type"})));
+            let submit = model
+                .expect(RequestMatch::tool_output("submit-help"))
+                .after(&read_submit)
+                .check(|request| {
+                    let text = request.tool_output_text("submit-help").context("browser.type contract")?;
+                    ensure!(text.contains("verification") && text.contains("browser.request_takeover"), "{text}");
+                    Ok(())
+                })
+                .reply(Reply::function_call("submit-search", "tools_call", json!({
+                    "tool":"browser.type", "input":{"session_id":page,"selector":"#query","text":"Agena","press_enter":true},
+                })));
+            let read_takeover = model
+                .expect(RequestMatch::tool_output("submit-search"))
+                .after(&submit)
+                .check(|request| {
+                    let text = request.tool_output_text("submit-search").context("submitted page")?;
+                    ensure!(text.contains("Human verification required"), "{text}");
+                    ensure!(text.contains("takeover_hint") && text.contains("browser.request_takeover"), "{text}");
+                    Ok(())
+                })
+                .reply(Reply::function_call("takeover-help", "tools_help", json!({"tool":"browser.request_takeover"})));
+            let take_over = model
+                .expect(RequestMatch::tool_output("takeover-help"))
+                .after(&read_takeover)
+                .reply(Reply::function_call("ask-for-browser-help", "tools_call", json!({
+                    "tool":"browser.request_takeover",
+                    "input":{"session_id":page,"reason":"Complete the human verification to view the search result."},
+                })));
+            let expected_page = page.to_owned();
+            let read_result = model
+                .expect(RequestMatch::tool_output("ask-for-browser-help"))
+                .after(&take_over)
+                .check(move |request| {
+                    let text = request.tool_output_text("ask-for-browser-help").context("browser handback")?;
+                    ensure!(text.contains("returned") && text.contains(&expected_page), "{text}");
+                    Ok(())
+                })
+                .reply(Reply::tool_call("read-signed-in-page", "browser.snapshot", json!({"session_id":page})));
+            model
+                .expect(RequestMatch::tool_output("read-signed-in-page"))
+                .after(&read_result)
+                .check(|request| {
+                    let text = request.tool_output_text("read-signed-in-page").context("result after handback")?;
+                    ensure!(text.contains("Signed in to fixture"), "{text}");
+                    Ok(())
+                })
+                .reply(Reply::text("Read the result after verification."));
+
+            let waiting = user.send(request_text).await?;
             let request = waiting.wait_user_input().await?;
             let waiting_state: Value = http.get(&path).await?.require_success()?.json()?;
             assert_eq!(waiting_state["help"]["page_id"], page);
+            assert_eq!(waiting_state["help"]["reason"], "Complete the human verification to view the search result.");
             let manual: Value = command(take).await?.require_success()?.json()?;
             let token = manual["control_id"].as_str().context("login control ID")?;
             // The live page and manual control must survive a change to MXC.
@@ -189,7 +252,7 @@ exec google-chrome --proxy-server={} "$@"
             request.answer(BTreeMap::from([("0".into(), vec!["Resume browser task".into()])])).await?;
             let resumed = waiting.wait_settled().await?;
             resumed.assert_succeeded()?;
-            assert_eq!(resumed.data()?["status"], "returned");
+            resumed.assert_assistant_text("Read the result after verification.")?;
             let reload = user.call_tool("browser.action", json!({"session_id":page, "action":{"kind":"reload"}})).await?;
             reload.assert_succeeded()?;
             reload.assert_text_contains("Signed in to fixture")?;

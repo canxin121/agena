@@ -21,7 +21,7 @@ use super::*;
 pub(super) mod events;
 pub(super) mod loss;
 mod retention;
-pub(super) use retention::prune;
+pub(super) use retention::{prune, prune_measured};
 
 pub(super) const MAX_LIVE_SOURCES: i64 = 128;
 pub(super) const MAX_APPEND_BYTES: usize = 256 * 1024;

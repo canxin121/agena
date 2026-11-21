@@ -1045,7 +1045,10 @@ struct BrowserSnapshot {
 }
 
 impl BrowserSnapshot {
-    fn output(&self, title: &str, payload: serde_json::Value) -> ToolInvokeOutput {
+    fn output(&self, title: &str, mut payload: serde_json::Value) -> ToolInvokeOutput {
+        payload["takeover_hint"] = serde_json::json!(
+            "If the page shows human verification, sign-in, or another step the user must perform, read tools_help for browser.request_takeover and invoke it with this page's session_id and a short reason before ending the task. Wait for handback, then take a fresh snapshot of the returned page and continue."
+        );
         let page_title = self.title.trim();
         let summary = if page_title.is_empty() {
             self.url.as_str()

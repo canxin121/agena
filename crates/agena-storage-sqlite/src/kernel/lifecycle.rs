@@ -1012,7 +1012,10 @@ async fn check_delete(
     }
     Ok(())
 }
-async fn delete(connection: &mut SqliteConnection, session: SessionId) -> Result<Mutation> {
+pub(super) async fn delete(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+) -> Result<Mutation> {
     let metadata = reads::metadata(connection, session).await?;
     // All owned executions are settled in bounded batches within this one
     // command transaction; shared branch membership remains immutable.

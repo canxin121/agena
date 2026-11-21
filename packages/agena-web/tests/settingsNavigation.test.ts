@@ -70,7 +70,7 @@ test('access is the default editor and old permission pages resolve without losi
 
 test('retired prompt bookmarks open agent profiles', () => {
   const pages = buildSettingsSubpages('runtime-session')
-  expect(pages.map((page) => page.id)).toEqual(['agent-profiles', 'client-versions', 'session-behavior'])
+  expect(pages.map((page) => page.id)).toEqual(['storage', 'agent-profiles', 'client-versions', 'session-behavior'])
   for (const view of ['prompt-layers', 'prompt-library']) {
     expect(resolveSettingsSubpage(view, '', pages, 'session-behavior')).toBe('agent-profiles')
   }

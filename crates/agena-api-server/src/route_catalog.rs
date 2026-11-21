@@ -251,6 +251,12 @@
 //!
 //! | Method | Path | Handlers |
 //! |---|---|---|
+//! | GET | `/api/v1/session-storage` | `list_session_storage()` |
+//! | POST | `/api/v1/session-storage/reclaim-database` | `reclaim_database_storage()` |
+//! | GET | `/api/v1/sessions/{session_id}/storage` | `session_storage()` |
+//! | GET | `/api/v1/sessions/{session_id}/storage/operation` | `session_storage_operation()` |
+//! | POST | `/api/v1/sessions/{session_id}/storage/preview` | `preview_session_storage()` |
+//! | POST | `/api/v1/sessions/{session_id}/storage/cleanup` | `confirm_session_storage()` |
 //! | GET,POST | `/api/v1/sessions/{session_id}/browser` | `list_browser_tabs()`, `control_browser()` |
 //! | GET | `/api/v1/sessions/{session_id}/shell/processes` | `list_shell_processes()` |
 //! | GET | `/api/v1/sessions/{session_id}/monitor/subscriptions` | `list_monitor_subscriptions()` |

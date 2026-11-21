@@ -12,6 +12,17 @@ pub(in crate::kernel) async fn prune(
     content: ContentId,
     before: u64,
 ) -> Result<ContentRetention> {
+    prune_measured(connection, session, content, before)
+        .await
+        .map(|(retention, _)| retention)
+}
+
+pub(in crate::kernel) async fn prune_measured(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+    content: ContentId,
+    before: u64,
+) -> Result<(ContentRetention, u64)> {
     reads::metadata(connection, session).await?;
     let owner: Option<i64> =
         sqlx::query_scalar("SELECT session_id FROM agena_content_streams WHERE id=?")
@@ -151,9 +162,12 @@ pub(in crate::kernel) async fn prune(
     }
     let pending_reclamation=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agena_content_blocks WHERE content_id=? AND logical_start<? AND logical_end<=?)")
         .bind(content.to_string()).bind(floor as i64).bind(floor as i64).fetch_one(connection).await.map_err(sql_error)?;
-    Ok(ContentRetention {
-        stream: head,
-        blocks_removed: starts.len() as u32,
-        pending_reclamation,
-    })
+    Ok((
+        ContentRetention {
+            stream: head,
+            blocks_removed: starts.len() as u32,
+            pending_reclamation,
+        },
+        bytes as u64,
+    ))
 }

@@ -301,9 +301,11 @@ that conversation. Select a tab to preview it. **Take control** gives the
 view keyboard and pointer access to the same browser the model uses. Use
 **Return to AI** when finished.
 
-The model can call `browser.request_takeover` with the page's `session_id`
-and a reason. The conversation shows an **Open browser** action and the
-tool waits for the user's response. Sign in directly in the browser panel.
+When the model sees a page that requires human verification, sign-in, or
+another user action, it calls `browser.request_takeover` with the page's
+`session_id` and a reason. The conversation shows an **Open browser** action
+and the tool waits for the user's response. Complete the requested step in
+the browser panel.
 Returning control supplies the model with the page ID and lets it take a
 fresh snapshot. The Chrome context retains its cookies and login state.
 

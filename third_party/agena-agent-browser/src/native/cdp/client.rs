@@ -848,16 +848,15 @@ impl CdpClient {
 
     /// Deliver every event whose method is in `methods` to the returned
     /// receiver without loss. The events still reach the broadcast. Dropping
-    /// the receiver ends the tap on the next matching event.
+    /// the receiver ends the tap on the next matching event or new subscription.
     pub fn subscribe_methods(
         &self,
         methods: &'static [&'static str],
     ) -> mpsc::UnboundedReceiver<CdpEvent> {
         let (tx, rx) = mpsc::unbounded_channel();
-        self.method_taps
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push((methods, tx));
+        let mut taps = self.method_taps.lock().unwrap_or_else(|e| e.into_inner());
+        taps.retain(|(_, sender)| !sender.is_closed());
+        taps.push((methods, tx));
         rx
     }
 

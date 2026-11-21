@@ -176,6 +176,9 @@ async fn serve(listener: TcpListener, requests: Arc<SyncMutex<Vec<String>>>) {
             let path = target.as_ref().map_or("/", url::Url::path);
             let (status, content_type, disposition, body) = match (method, path) {
                 ("GET", "/") => (200, "text/html; charset=utf-8", "", PAGE),
+                ("GET", "/search") => (200, "text/html; charset=utf-8", "", SEARCH_FORM),
+                ("GET", "/results") => (200, "text/html; charset=utf-8", "", SEARCH_RESULTS),
+                ("GET", "/search-api") => (200, "application/json", "", "{}"),
                 ("GET", "/frame" | "/remote") => (200, "text/html; charset=utf-8", "", FRAME),
                 ("GET", "/popup") => (
                     200,
@@ -197,7 +200,7 @@ async fn serve(listener: TcpListener, requests: Arc<SyncMutex<Vec<String>>>) {
                 ),
                 _ => (404, "text/plain", "", "fixture missing"),
             };
-            if let Some(url) = target {
+            if let Some(url) = &target {
                 requests.lock().unwrap().push(url.path().to_owned());
             }
             loop {
@@ -207,6 +210,11 @@ async fn serve(listener: TcpListener, requests: Arc<SyncMutex<Vec<String>>>) {
                     Ok(_) if line == "\r\n" => break,
                     Ok(_) => {}
                 }
+            }
+            match path {
+                "/search-api" => tokio::time::sleep(Duration::from_millis(900)).await,
+                "/unreachable" => return,
+                _ => {}
             }
             let response = format!(
                 "HTTP/1.1 {status} Fixture\r\nContent-Type: {content_type}\r\n{disposition}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -220,6 +228,101 @@ async fn serve(listener: TcpListener, requests: Arc<SyncMutex<Vec<String>>>) {
 const FRAME: &str = r#"<!doctype html><title>Frame fixture</title>
 <button id="frame-button" onclick="this.innerText='Frame clicked'">Frame button</button>
 <button id="remove-frame" onclick="frameElement.remove()">Remove frame</button>"#;
+
+const SEARCH_FORM: &str = r#"<!doctype html><title>Search fixture</title>
+<form id="search"><label>Search <input id="query" name="q"></label><button>Submit</button></form>
+<script>
+document.querySelector('#search').onsubmit = async (event) => {
+  event.preventDefault();
+  const query = new URLSearchParams(new FormData(event.target));
+  history.pushState({}, '', '/pending?' + query);
+  await fetch('/search-api');
+  setTimeout(() => location.replace('/results?' + query), 180);
+};
+</script>"#;
+
+const SEARCH_RESULTS: &str = r#"<!doctype html><title>Search results</title>
+<main><h1>Fixture search result</h1></main>
+<iframe src="http://8.8.4.4/forbidden-frame"></iframe>"#;
+
+#[tokio::test]
+#[ignore = "starts Chrome and simulates deferred search navigation through a local proxy"]
+async fn search_submission_settles_and_failed_navigation_is_recoverable() {
+    let fixture = Fixture::new().await;
+    let opened = fixture
+        .call("open", json!({"url": "http://8.8.8.8/search"}))
+        .await;
+    let page = &opened["session_id"];
+    let submitted = fixture
+        .call(
+            "type",
+            json!({
+                "session_id": page, "selector": "#query", "text": "Rust", "press_enter": true,
+            }),
+        )
+        .await;
+    assert_eq!(
+        submitted["snapshot"]["url"],
+        "http://8.8.8.8/results?q=Rust"
+    );
+    let snapshot = fixture.call("snapshot", json!({"session_id": page})).await;
+    assert!(
+        snapshot["snapshot"]["tree"]
+            .as_str()
+            .unwrap()
+            .contains("Fixture search result")
+    );
+    let text = fixture
+        .call("content", json!({"session_id": page, "selector": "main"}))
+        .await;
+    assert_eq!(text["content"], "Fixture search result");
+    assert!(
+        !fixture
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|path| path == "/forbidden-frame")
+    );
+
+    let failure = fixture.call_for(19, "action", json!({
+        "session_id": page, "action": {"kind": "navigate", "url": "http://8.8.8.8/unreachable"},
+    })).await.unwrap_err();
+    let network = fixture
+        .call(
+            "diagnostics",
+            json!({
+                "session_id": page, "query": {"kind": "network", "url_contains": "/unreachable"},
+            }),
+        )
+        .await;
+    assert_eq!(
+        network["requests"][0]["state"], "failed",
+        "{failure} {network}"
+    );
+    for tool in ["snapshot", "content"] {
+        let error = fixture
+            .call_for(19, tool, json!({"session_id": page}))
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .diagnostic_message()
+                .contains("Chrome could not load the page (net::ERR_"),
+            "{error} {network}"
+        );
+    }
+    let recovered = fixture
+        .call(
+            "action",
+            json!({
+                "session_id": page, "action": {"kind": "navigate", "url": "http://8.8.8.8/results"},
+            }),
+        )
+        .await;
+    assert_eq!(recovered["snapshot"]["title"], "Search results");
+    fixture.call("shutdown", json!({})).await;
+}
 
 const PAGE: &str = r#"<!doctype html><title>Agena fixture</title>
 <main id="main"><p class="row">第一行🙂</p><p class="row">second</p></main>

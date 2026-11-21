@@ -7,7 +7,8 @@ mod popups;
 
 use super::*;
 use crate::browser::driver::{
-    BrowserAuthorization, BrowserDriver, BrowserRequestPolicy, CdpEvent, PageEvents, console_text,
+    BrowserAuthorization, BrowserDriver, BrowserRequestPolicy, CHROME_ERROR_DOCUMENT, CdpEvent,
+    PageEvents, console_text,
 };
 use crate::browser::runtime::ChromeLease;
 use agena_plugin_host::sdk::PluginErrorKind;
@@ -221,6 +222,11 @@ impl BrowserPage {
     }
 
     async fn verify_url(&self, raw: &str) -> SdkResult<()> {
+        if raw == CHROME_ERROR_DOCUMENT {
+            return Err(self
+                .driver
+                .navigation_error(&self.driver.main_frame().await?));
+        }
         if raw == "about:blank" && self.opener_id.is_some() && self.preview.is_none() {
             return Ok(());
         }
@@ -235,23 +241,32 @@ impl BrowserPage {
     }
 
     pub(super) async fn committed_url(&self) -> SdkResult<String> {
-        let history = self
-            .driver
-            .command("Page.getNavigationHistory", serde_json::json!({}))
-            .await?;
-        history["currentIndex"]
-            .as_u64()
-            .and_then(|index| {
-                history["entries"]
-                    .get(index as usize)
-                    .and_then(|entry| entry["url"].as_str())
-            })
-            .map(str::to_owned)
-            .ok_or_else(|| PluginError::internal("Chrome did not report a committed URL"))
+        let frame = self.driver.main_frame().await?;
+        let url = frame["url"].as_str().expect("main frame URL checked");
+        if url == CHROME_ERROR_DOCUMENT || frame["unreachableUrl"].is_string() {
+            return Err(self.driver.navigation_error(&frame));
+        }
+        Ok(format!(
+            "{url}{}",
+            frame["urlFragment"].as_str().unwrap_or_default()
+        ))
     }
 
     pub(super) async fn verify_committed_url(&self) -> SdkResult<()> {
         self.verify_url(&self.committed_url().await?).await
+    }
+
+    pub(super) async fn verify_navigation_scope(&self) -> SdkResult<()> {
+        let frame = self.driver.main_frame().await?;
+        let url = frame["url"].as_str().expect("main frame URL checked");
+        if url == CHROME_ERROR_DOCUMENT {
+            return match (&self.preview, frame["unreachableUrl"].as_str()) {
+                (None, _) => Ok(()),
+                (Some(_), Some(attempted)) => self.verify_url(attempted).await,
+                (Some(_), None) => Err(self.driver.navigation_error(&frame)),
+            };
+        }
+        self.verify_url(url).await
     }
 
     async fn snapshot(&self, options: &SnapshotOptions) -> SdkResult<BrowserSnapshot> {
@@ -467,7 +482,7 @@ impl BrowserPlugin {
         if let Some(preview) = &page.preview {
             managed_preview::require_upstream_permission(preview, self.state()?.host.as_ref())
                 .await?;
-            page.verify_committed_url().await?;
+            page.verify_navigation_scope().await?;
         }
         let authorization = page
             .driver
@@ -618,7 +633,7 @@ impl BrowserPlugin {
             .driver
             .authorize(self.browser_request_policy(page.preview.clone())?)?;
         page.driver
-            .action(
+            .action_and_settle(
                 navigation_command(&url, input.timeout_ms),
                 Duration::from_millis(input.timeout_ms),
             )
@@ -820,7 +835,7 @@ impl BrowserPlugin {
         let frame_id = command["frameId"].as_str().map(str::to_owned);
         let result = match page
             .driver
-            .action(command, Duration::from_millis(timeout_ms))
+            .action_and_settle(command, Duration::from_millis(timeout_ms))
             .await
         {
             Ok(result) => result,
@@ -877,12 +892,11 @@ impl BrowserPlugin {
             }
             Ok(None) => {}
             Err(error) => {
+                let message = error.failure.user.fallback;
+                let summary = format!("Browser {action} completed. {message}");
                 payload["observation"] = serde_json::json!({
-                    "status": "failed", "kind": error.kind, "message": error.failure.user.fallback,
+                    "status": "failed", "kind": error.kind, "message": message,
                 });
-                let summary = format!(
-                    "Browser {action} completed. Page observation failed. Take a browser.snapshot to verify the result."
-                );
                 return Ok(browser_output("Browser action", summary, payload));
             }
         }

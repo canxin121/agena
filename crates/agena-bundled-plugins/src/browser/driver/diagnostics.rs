@@ -181,8 +181,9 @@ impl Diagnostics {
                 request.entry.status = None;
                 request.entry.mime_type = None;
                 request.entry.state = "pending";
+                request.entry.failure = None;
             }
-            "Network.responseReceived" => {
+            "Network.responseReceived" if request.entry.failure.is_none() => {
                 request.entry.resource_type = string(&p["type"], 40);
                 request.entry.status = p["response"]["status"].as_f64().map(|status| status as u16);
                 request.entry.mime_type = p["response"]["mimeType"]
@@ -190,8 +191,14 @@ impl Diagnostics {
                     .map(|mime| prefix(mime, 128));
                 request.entry.state = "response";
             }
-            "Network.loadingFinished" => request.entry.state = "finished",
+            // Chrome can finish the error document under the failed request ID.
+            "Network.loadingFinished" if request.entry.failure.is_none() => {
+                request.entry.state = "finished";
+            }
             "Network.loadingFailed" => {
+                if let Some(resource_type) = p["type"].as_str() {
+                    request.entry.resource_type = prefix(resource_type, 40);
+                }
                 request.entry.state = "failed";
                 request.entry.failure = Some(string(&p["errorText"], 256));
             }
@@ -257,6 +264,22 @@ impl Diagnostics {
                 entry: source.entry.clone(),
                 captured: source.captured.clone(),
             })
+    }
+
+    pub(super) fn document_failure(&self, url: &str) -> Option<&str> {
+        let url = url_text(&Value::String(url.to_owned()));
+        self.requests
+            .iter()
+            .rev()
+            .map(|request| &request.entry)
+            .find(|entry| {
+                entry.url == url
+                    && entry.frame_id == self.main_frame
+                    && entry.resource_type == "Document"
+                    && entry.state == "failed"
+            })?
+            .failure
+            .as_deref()
     }
 
     pub(super) fn request(&self, request_id: u64) -> Option<BodySource> {

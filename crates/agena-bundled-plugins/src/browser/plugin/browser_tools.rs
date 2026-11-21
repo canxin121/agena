@@ -357,7 +357,7 @@ impl BrowserPlugin {
     ) -> SdkResult<ToolInvokeOutput> {
         let access = self.browser_access(context, &input.session_id).await?;
         let page = &access.page;
-        page.verify_committed_url().await?;
+        page.verify_navigation_scope().await?;
         let (summary, mut data) = match &input.query {
             DiagnosticsQuery::Network {
                 since_seq,

@@ -7853,11 +7853,11 @@ async fn handle_reload(state: &mut DaemonState) -> Result<Value, String> {
     let mgr = state.browser.as_ref().ok_or("Browser not launched")?;
     let session_id = mgr.active_session_id()?.to_string();
 
+    let mut rx = mgr.client.subscribe();
     mgr.client
         .send_command_no_params("Page.reload", Some(&session_id))
         .await?;
 
-    let mut rx = mgr.client.subscribe();
     let _ = tokio::time::timeout(tokio::time::Duration::from_secs(10), async {
         loop {
             match rx.recv().await {

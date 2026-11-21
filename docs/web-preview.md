@@ -241,6 +241,8 @@ tab. It also supports `hover`, `double_click`, `focus`, `scroll_into_view`, and
 Actions return a refreshed snapshot by default. Pass `return_snapshot: false`
 when the next operation already has a selector. `browser.type` can submit a
 form with `press_enter: true`, or `browser.action` can press Enter separately.
+These interactions leave time for document navigation and page requests to
+settle within the active tool call before capturing the refreshed snapshot.
 An `action.status` of `completed` records the completed interaction even if
 the result also contains a failed `observation`. Take a fresh snapshot after
 `outcome_unknown` to check whether the interaction took effect.
@@ -280,8 +282,10 @@ timeout. The result reports whether the tab was closed.
 ```
 
 `browser.diagnostics` accepts `query.kind` of `network`, `request`, or `logs`.
-Use `network` to get request IDs, HTTP status, and timing. Use `request` with
-`request_id` and `include_body: true` to retrieve a retained text response.
+Use `network` to get request IDs, HTTP status, timing, and Chrome load errors
+for a page, including when a failed navigation shows Chrome's error screen.
+Use `request` with `request_id` and `include_body: true` to retrieve a retained
+text response.
 `logs` includes console events and page exceptions. Full console message text
 follows the Browser plugin’s `capture_console_text` setting.
 

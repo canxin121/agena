@@ -1,6 +1,7 @@
 //! Agena's request authorization and event consumers for the native CDP engine.
 
 mod diagnostics;
+mod navigation;
 
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
@@ -31,6 +32,7 @@ pub(crate) enum DomFormat {
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_PENDING_REQUESTS: usize = 512;
+pub(crate) const CHROME_ERROR_DOCUMENT: &str = "chrome-error://chromewebdata/";
 const PAGE_EVENTS: &[&str] = &[
     "Fetch.requestPaused",
     "Page.frameNavigated",
@@ -161,6 +163,7 @@ impl Drop for PopupScope {
 }
 
 struct PageEventsState {
+    main_frame: String,
     frame_sessions: RwLock<HashMap<String, String>>,
     frame_contexts: RwLock<HashMap<String, FrameContext>>,
     document_revision: AtomicU64,
@@ -182,6 +185,7 @@ struct FrameContext {
 impl PageEventsState {
     fn new(target: &str, popup: Option<&PopupScope>) -> Self {
         Self {
+            main_frame: target.to_owned(),
             frame_sessions: RwLock::default(),
             frame_contexts: RwLock::default(),
             document_revision: AtomicU64::new(0),
@@ -818,11 +822,8 @@ impl BrowserDriver {
         &self,
     ) -> SdkResult<Result<(String, ResponseBody), &'static str>> {
         let page = self.page()?;
-        let tree = self.command("Page.getFrameTree", json!({})).await?;
-        let loader = tree
-            .pointer("/frameTree/frame/loaderId")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
+        let frame = self.main_frame().await?;
+        let loader = frame["loaderId"].as_str().unwrap_or_default();
         let source = page.events.diagnostics().document(loader);
         let Some(source) = source else {
             return Ok(Err("not_captured"));
@@ -834,6 +835,35 @@ impl BrowserDriver {
             .read(&self.0.client)
             .await
             .map(|body| (source.url().to_owned(), body)))
+    }
+
+    pub async fn main_frame(&self) -> SdkResult<Value> {
+        let mut tree = self.command("Page.getFrameTree", json!({})).await?;
+        let frame = tree["frameTree"]["frame"].take();
+        if frame["url"].is_string() {
+            Ok(frame)
+        } else {
+            Err(PluginError::internal(
+                "Chrome did not report the main document",
+            ))
+        }
+    }
+
+    pub fn navigation_error(&self, frame: &Value) -> PluginError {
+        let reason = self.0.page.as_ref().and_then(|page| {
+            let url = frame["unreachableUrl"].as_str()?;
+            page.events
+                .diagnostics()
+                .document_failure(url)
+                .map(str::to_owned)
+        });
+        let message = match reason {
+            Some(reason) => format!("Chrome could not load the page ({reason})."),
+            None => "Chrome displayed a page load error.".into(),
+        };
+        PluginError::internal(format!(
+            "{message} Use browser.diagnostics for network details or browser.action to navigate again."
+        ))
     }
 
     pub fn network_requests(
@@ -936,6 +966,43 @@ impl BrowserDriver {
             Box::pin(engine.action(&command, frames, revision)).await
         })
         .await
+    }
+
+    pub async fn action_and_settle(&self, command: Value, timeout: Duration) -> SdkResult<Value> {
+        if !matches!(
+            command["action"].as_str(),
+            Some(
+                "navigate"
+                    | "click"
+                    | "double_click"
+                    | "fill"
+                    | "press"
+                    | "select"
+                    | "check"
+                    | "uncheck"
+                    | "dialog"
+                    | "back"
+                    | "forward"
+                    | "reload"
+            )
+        ) {
+            return self.action(command, timeout).await;
+        }
+        let page = self.page()?;
+        let events = self.0.client.subscribe_methods(navigation::SETTLE_EVENTS);
+        let deadline = permission_wait::Deadline::new(timeout);
+        let result = self.action(command, deadline.remaining()).await?;
+        if result["dialogOpened"] != true && self.dialog()?.is_none() {
+            let budget = deadline.remaining().min(navigation::SETTLE_LIMIT);
+            let _ = permission_wait::timeout(
+                budget,
+                navigation::settle_after_action(events, &page.session, &page.target),
+            )
+            .await;
+            self.check_document_failure()?;
+            self.ensure_connected()?;
+        }
+        Ok(result)
     }
 
     fn page(&self) -> SdkResult<&Page> {
@@ -1152,12 +1219,15 @@ async fn run_page_events(
                 }
                 match event.method.as_str() {
                     "Fetch.requestPaused" => {
-                        if main && event.params["resourceType"] == "Document" {
+                        let main_document = main
+                            && event.params["resourceType"] == "Document"
+                            && event.params["frameId"].as_str() == Some(state.main_frame.as_str());
+                        if main_document {
                             state.saw_document.store(true, Ordering::Release);
                         }
                         let scope = state.active_scope();
                         if requests.len() >= MAX_PENDING_REQUESTS {
-                            deny_document(scope.as_deref(), &event, PluginError::internal("Too many pending browser requests"));
+                            deny_document(scope.as_deref(), main_document, PluginError::internal("Too many pending browser requests"));
                             decide_request(client, &event, false).await?;
                             continue;
                         }
@@ -1165,7 +1235,7 @@ async fn run_page_events(
                         let slots = slots.clone();
                         requests.spawn(async move {
                             let _slot = slots.acquire_owned().await.map_err(|error| error.to_string())?;
-                            authorize_request(&client, &event, scope).await
+                            authorize_request(&client, &event, scope, main_document).await
                         });
                     }
                     "Target.attachedToTarget" if event.params["targetInfo"]["type"] == "iframe" => {
@@ -1252,6 +1322,7 @@ async fn authorize_request(
     client: &CdpClient,
     event: &CdpEvent,
     scope: Option<Arc<RequestScope>>,
+    main_document: bool,
 ) -> Result<(), String> {
     let Some(scope) = scope else {
         return decide_request(client, event, false).await;
@@ -1284,15 +1355,13 @@ async fn authorize_request(
     };
     let allowed = result.is_ok() && !scope.finished.is_cancelled();
     if let Err(error) = result {
-        deny_document(Some(&scope), event, error);
+        deny_document(Some(&scope), main_document, error);
     }
     decide_request(client, event, allowed).await
 }
 
-fn deny_document(scope: Option<&RequestScope>, event: &CdpEvent, error: PluginError) {
-    if let Some(scope) = scope
-        && event.params["resourceType"] == "Document"
-    {
+fn deny_document(scope: Option<&RequestScope>, main_document: bool, error: PluginError) {
+    if let Some(scope) = scope.filter(|_| main_document) {
         scope
             .denied_document
             .lock()
@@ -1411,21 +1480,22 @@ mod tests {
         )
         .await
         .unwrap();
-        let pause = |suffix: &str| {
+        let pause = |suffix: &str, frame: &str| {
             json!({
                 "method": "Fetch.requestPaused", "sessionId": "page",
-                "params": {"requestId": suffix, "resourceType": "Document", "request": {"url": format!("https://example.test/{suffix}")}},
+                "params": {"requestId": suffix, "frameId": frame, "resourceType": "Document", "request": {"url": format!("https://example.test/{suffix}")}},
             })
         };
-        emit.send(pause("between-calls")).await.unwrap();
+        emit.send(pause("between-calls", "target")).await.unwrap();
         assert_eq!(
             next_decision(&mut decisions).await.as_deref(),
             Some("Fetch.failRequest")
         );
         assert!(calls.lock().unwrap().is_empty());
-        for (id, suffix, expected) in [
-            (41, "deny", "Fetch.failRequest"),
-            (42, "allow", "Fetch.continueRequest"),
+        for (id, suffix, frame, expected) in [
+            (41, "deny", "target", "Fetch.failRequest"),
+            (42, "deny", "child", "Fetch.failRequest"),
+            (43, "allow", "target", "Fetch.continueRequest"),
         ] {
             host_api::run_in_isolated_host_callback_context(
                 host_api::HostCallbackContext {
@@ -1435,13 +1505,13 @@ mod tests {
                 },
                 async {
                     let _authorization = page.authorize(policy.clone()).unwrap();
-                    emit.send(pause(suffix)).await.unwrap();
+                    emit.send(pause(suffix, frame)).await.unwrap();
                     assert_eq!(
                         next_decision(&mut decisions).await.as_deref(),
                         Some(expected)
                     );
                     let reply = page.command("Page.getNavigationHistory", json!({})).await;
-                    if suffix == "deny" {
+                    if suffix == "deny" && frame == "target" {
                         assert_eq!(reply.unwrap_err().kind, PluginErrorKind::UserDeclined);
                     } else {
                         reply.unwrap();
@@ -1450,7 +1520,7 @@ mod tests {
             )
             .await;
         }
-        assert_eq!(*calls.lock().unwrap(), [41, 42]);
+        assert_eq!(*calls.lock().unwrap(), [41, 42, 43]);
         drop(page);
         server.abort();
     }

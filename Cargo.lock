@@ -1457,6 +1457,7 @@ dependencies = [
  "agena-storage-layout",
  "async-trait",
  "chrono",
+ "futures-util",
  "hex",
  "libsqlite3-sys",
  "log",
@@ -1542,6 +1543,7 @@ dependencies = [
 name = "agena-tui"
 version = "0.1.0"
 dependencies = [
+ "agena-domain",
  "agena-failure",
  "agena-tui-components",
  "anyhow",

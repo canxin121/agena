@@ -1,4 +1,5 @@
 import type { RequestPerformance } from '@/types/usage'
+import { formatUsageCount } from './usageFormatting'
 
 function finiteNonNegative(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
@@ -41,6 +42,7 @@ export function formatDurationMs(value: unknown, locale?: string): string {
 export function formatTokenRate(value: unknown, locale?: string): string {
   const rate = finiteNonNegative(value)
   if (rate === null) return '—'
+  if (rate >= 1000) return `${formatUsageCount(rate, locale)} tok/s`
   const formatted = new Intl.NumberFormat(locale, {
     minimumFractionDigits: 1,
     maximumFractionDigits: 1,

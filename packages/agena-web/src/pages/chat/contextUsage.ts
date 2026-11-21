@@ -1,3 +1,5 @@
+import { formatUsageCount } from '@/lib/usageFormatting'
+
 type Usage = {
   current_tokens?: number
   projected_tokens?: number | null
@@ -7,12 +9,6 @@ type Usage = {
 
 function finiteTokens(value: number | null | undefined): number | null {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
-}
-
-export function formatTokensK(tokens: number): string {
-  if (tokens <= 0) return '0k'
-  const value = tokens / 1_000
-  return value < 10 ? `${value.toFixed(1)}k` : `${value.toFixed(0)}k`
 }
 
 /** The server owns request admission; its current usage and input budget also own the chip. */
@@ -25,11 +21,11 @@ export function sessionContextUsage(usage: Usage) {
       : null
   return {
     tokensValue: tokens,
-    tokensLabel: tokens !== null ? `${formatTokensK(tokens)} used` : '--',
+    tokensLabel: tokens !== null ? `${formatUsageCount(tokens)} used` : '--',
     percentUsed,
     capacityLabel:
       tokens !== null && limit !== null && limit > 0
-        ? `${formatTokensK(tokens)} / ${formatTokensK(limit)} tokens`
+        ? `${formatUsageCount(tokens)} / ${formatUsageCount(limit)} tokens`
         : undefined,
   }
 }

@@ -53,6 +53,7 @@ pub fn completion_usage_own_cost_contribution(
             .or_else(|| (priced_units > 0.0).then_some(priced_units))
     };
     let incomplete = usage.cost_estimate_incomplete
+        || usage.other_tokens > 0
         || usage
             .billable_items
             .iter()

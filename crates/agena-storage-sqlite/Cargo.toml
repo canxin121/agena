@@ -18,6 +18,7 @@ agena-storage = { workspace = true }
 agena-storage-layout = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
+futures-util = { workspace = true }
 hex = { workspace = true }
 path-clean = { workspace = true }
 sea-orm = { workspace = true }

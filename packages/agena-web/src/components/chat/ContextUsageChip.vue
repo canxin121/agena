@@ -6,9 +6,9 @@ import { computed, ref, watch } from 'vue'
 import { RiPieChartLine } from '@remixicon/vue'
 
 import SessionChip from './SessionChip.vue'
-import { formatTokensK } from '@/pages/chat/contextUsage'
 import { apiJson } from '@/lib/api'
 import { settingsText as st } from '@/i18n/settingsText'
+import { formatUsageCount, formatUsagePercent } from '@/lib/usageFormatting'
 import { formatDurationMs, formatTokenRate, requestPerformanceMetrics } from '@/lib/usagePerformance'
 import type { RequestPerformance } from '@/types/usage'
 
@@ -32,6 +32,7 @@ type CostSummary = {
   cache_write_tokens?: number
   cache_input_tokens?: number
   cache_hit_rate?: number
+  other_tokens?: number
   total_tokens?: number
   total_cost_usd?: number
 }
@@ -58,26 +59,17 @@ function finite(value: unknown): number {
   return Number.isFinite(number) && number >= 0 ? number : 0
 }
 
-const percentFormatter = new Intl.NumberFormat(undefined, { style: 'percent', maximumFractionDigits: 1 })
-
-/** The server reports a 0–1 ratio; show it as a percentage. */
-function formatPercent(value: unknown): string {
-  const ratio = Number(value)
-  if (!Number.isFinite(ratio) || ratio <= 0) return '—'
-  return percentFormatter.format(Math.min(1, ratio))
-}
-
 // Keep the last request's cache measurements beside the live context state;
 // the separate conversation grid contains the cumulative measurements.
 const liveCacheRows = computed(() => {
   const usage = props.usage
   if (usage.lastCacheHitRate == null && usage.lastCacheReadTokens == null) return []
   return [
-    { key: 'live-hit', label: st('Last request cache hit'), value: formatPercent(usage.lastCacheHitRate) },
+    { key: 'live-hit', label: st('Last request cache hit'), value: formatUsagePercent(usage.lastCacheHitRate) },
     {
       key: 'live-read',
       label: st('Last request cache read'),
-      value: formatTokensK(finite(usage.lastCacheReadTokens)),
+      value: usage.lastCacheReadTokens == null ? '—' : formatUsageCount(usage.lastCacheReadTokens),
     },
   ]
 })
@@ -126,17 +118,23 @@ const rows = computed(() => {
   const reasoning = finite(value.reasoning_tokens)
   const cacheRead = finite(value.cache_read_tokens)
   const cacheWrite = finite(value.cache_write_tokens)
-  const total = finite(value.total_tokens) || input + output + reasoning + cacheRead + cacheWrite
+  const other = finite(value.other_tokens)
+  const total = finite(value.total_tokens) || input + output + reasoning + cacheRead + cacheWrite + other
   return [
-    { key: 'input', label: st('Input tokens'), value: formatTokensK(input) },
-    { key: 'output', label: st('Output tokens'), value: formatTokensK(output) },
-    { key: 'reasoning', label: st('Reasoning tokens'), value: formatTokensK(reasoning) },
-    { key: 'cache-read', label: st('Cache read tokens'), value: formatTokensK(cacheRead) },
-    { key: 'cache-write', label: st('Cache write tokens'), value: formatTokensK(cacheWrite) },
-    { key: 'cache-hit', label: st('Conversation cache hit'), value: formatPercent(value.cache_hit_rate) },
-    { key: 'requests', label: st('Requests'), value: String(finite(value.requests)) },
-    { key: 'cacheable', label: st('Cacheable input'), value: formatTokensK(finite(value.cache_input_tokens)) },
-    { key: 'total', label: st('Total tokens'), value: formatTokensK(total) },
+    { key: 'input', label: st('Uncached input tokens'), value: formatUsageCount(input) },
+    { key: 'output', label: st('Output tokens'), value: formatUsageCount(output) },
+    { key: 'reasoning', label: st('Reasoning tokens'), value: formatUsageCount(reasoning) },
+    { key: 'cache-read', label: st('Cache read tokens'), value: formatUsageCount(cacheRead) },
+    { key: 'cache-write', label: st('Cache write tokens'), value: formatUsageCount(cacheWrite) },
+    ...(other > 0 ? [{ key: 'other', label: st('Other tokens'), value: formatUsageCount(other) }] : []),
+    {
+      key: 'cache-hit',
+      label: st('Conversation cache hit'),
+      value: formatUsagePercent(value.cache_input_tokens ? value.cache_hit_rate : null),
+    },
+    { key: 'requests', label: st('Requests'), value: formatUsageCount(value.requests) },
+    { key: 'cacheable', label: st('Cacheable input'), value: formatUsageCount(value.cache_input_tokens) },
+    { key: 'total', label: st('Total tokens'), value: formatUsageCount(total) },
   ]
 })
 
@@ -215,7 +213,7 @@ watch(
           <span class="text-muted-foreground">{{ $st('Current context') }}</span>
           <div class="flex min-w-0 flex-wrap items-center gap-2">
             <span class="font-mono tabular-nums [overflow-wrap:anywhere]">
-              {{ usage.capacityLabel || (usage.tokensValue != null ? formatTokensK(usage.tokensValue) : '—') }}
+              {{ usage.capacityLabel || (usage.tokensValue != null ? formatUsageCount(usage.tokensValue) : '—') }}
             </span>
             <span
               v-if="usage.percentUsed !== null"

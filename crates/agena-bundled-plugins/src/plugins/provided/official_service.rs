@@ -1311,48 +1311,30 @@ impl CompletionUsageProviderUnits for CompletionUsage {
 
 fn parse_openai_usage(tool: &str, response: &serde_json::Value) -> CompletionUsage {
     let usage = response.get("usage").unwrap_or(response);
-    let input_inclusive = json_u64(usage, &["input_tokens", "prompt_tokens"]).unwrap_or_default();
-    let output_inclusive =
-        json_u64(usage, &["output_tokens", "completion_tokens"]).unwrap_or_default();
-    let total = json_u64(usage, &["total_tokens"]);
     let input_details = usage
         .get("input_tokens_details")
         .or_else(|| usage.get("prompt_tokens_details"));
     let output_details = usage
         .get("output_tokens_details")
         .or_else(|| usage.get("completion_tokens_details"));
-    let cache_read = input_details
-        .and_then(|value| json_u64(value, &["cached_tokens"]))
-        .unwrap_or_default();
-    let cache_write = input_details
-        .and_then(|value| json_u64(value, &["cache_write_tokens"]))
-        .unwrap_or_default();
-    let reasoning = output_details
-        .and_then(|value| json_u64(value, &["reasoning_tokens"]))
-        .unwrap_or_default();
-    let input = input_inclusive
-        .saturating_sub(cache_read)
-        .saturating_sub(cache_write);
-    let output = output_inclusive.saturating_sub(reasoning);
-    let known = input
-        .saturating_add(cache_read)
-        .saturating_add(cache_write)
-        .saturating_add(output)
-        .saturating_add(reasoning);
-    let ticks = json_u64(usage, &["cost_in_usd_ticks"]);
-    let recorded = ticks.map(|value| value as f64 / 10_000_000_000.0);
-    let mut normalized = CompletionUsage {
-        requests: 1,
-        input_tokens: input,
-        output_tokens: output,
-        reasoning_tokens: reasoning,
-        cache_write_tokens: cache_write,
-        cache_read_tokens: cache_read,
-        other_tokens: total.unwrap_or_default().saturating_sub(known),
-        recorded_cost: recorded.unwrap_or_default(),
-        recorded_cost_available: recorded.is_some(),
-        ..CompletionUsage::default()
-    };
+    let mut normalized = agena_provider::chat_usage_to_completion(agena_provider::ChatUsage {
+        input_tokens: json_u64(usage, &["input_tokens", "prompt_tokens"]),
+        output_tokens: json_u64(usage, &["output_tokens", "completion_tokens"]),
+        total_tokens: json_u64(usage, &["total_tokens"]),
+        reasoning_tokens: json_u64(usage, &["reasoning_tokens"]),
+        input_tokens_details: input_details.map(|value| agena_provider::ChatInputTokensDetails {
+            cached_tokens: json_u64(value, &["cached_tokens"]),
+            cache_write_tokens: json_u64(value, &["cache_write_tokens"]),
+            cache_creation_tokens: json_u64(value, &["cache_creation_tokens"]),
+        }),
+        output_tokens_details: output_details.map(|value| {
+            agena_provider::ChatOutputTokensDetails {
+                reasoning_tokens: json_u64(value, &["reasoning_tokens"]),
+            }
+        }),
+        cost_in_usd_ticks: json_u64(usage, &["cost_in_usd_ticks"]),
+        ..Default::default()
+    });
     if tool == "file_search" {
         normalized.cost_estimate_incomplete = true;
     }

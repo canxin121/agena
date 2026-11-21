@@ -121,6 +121,8 @@ pub struct OpenAiUsage {
     #[serde(default)]
     pub output_tokens: Option<u64>,
     #[serde(default)]
+    pub reasoning_tokens: Option<u64>,
+    #[serde(default)]
     pub output_tokens_details: Option<OpenAiOutputTokenDetails>,
     #[serde(default)]
     pub input_tokens_details: Option<OpenAiInputTokenDetails>,
@@ -129,20 +131,21 @@ pub struct OpenAiUsage {
     pub cost_in_usd_ticks: Option<u64>,
 }
 
-#[derive(Debug, Deserialize)]
-/// Wire shape of OpenAI output token details.
-pub struct OpenAiOutputTokenDetails {
-    #[serde(default)]
-    pub reasoning_tokens: Option<u64>,
-}
+pub type OpenAiOutputTokenDetails = crate::ChatOutputTokensDetails;
 
-#[derive(Debug, Deserialize)]
-/// Wire shape of OpenAI input token details.
-pub struct OpenAiInputTokenDetails {
-    #[serde(default)]
-    pub cached_tokens: Option<u64>,
-    #[serde(default)]
-    pub cache_write_tokens: Option<u64>,
+pub type OpenAiInputTokenDetails = crate::ChatInputTokensDetails;
+
+pub fn openai_responses_usage_to_completion(usage: OpenAiUsage) -> crate::CompletionUsage {
+    crate::chat_usage_to_completion(crate::ChatUsage {
+        input_tokens: usage.input_tokens,
+        output_tokens: usage.output_tokens,
+        total_tokens: usage.total_tokens,
+        reasoning_tokens: usage.reasoning_tokens,
+        input_tokens_details: usage.input_tokens_details,
+        output_tokens_details: usage.output_tokens_details,
+        cost_in_usd_ticks: usage.cost_in_usd_ticks,
+        ..Default::default()
+    })
 }
 
 pub fn openai_responses_reasoning_delta(event: &serde_json::Value) -> Option<String> {

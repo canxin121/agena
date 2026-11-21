@@ -1,10 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use agena_domain::{
-    ModelUsageBreakdown, ProviderUsageBreakdown, SessionUsageBreakdown, UsageBillableUnitTotal,
-    UsageDailyBreakdown, UsagePerformanceTotals, UsageStats, UsageStatsQuery, UsageTotals,
+    ModelRef, ModelUsageBreakdown, ProviderUsageBreakdown, SessionUsageBreakdown,
+    UsageBillableUnitTotal, UsageDailyBreakdown, UsagePerformanceTotals, UsageStats,
+    UsageStatsQuery, UsageTotals,
 };
+use agena_provider::{AttributedCompletionUsage, CompletionUsage, CompletionUsageCostContribution};
+use agena_storage::kernel::{StoredUsageObservation, StoredUsageSource};
 use chrono::{DateTime, FixedOffset, Utc};
+
+use crate::session::kernel::KernelProviderState;
 
 /// One persisted provider-usage observation used to build usage statistics.
 ///
@@ -18,10 +23,55 @@ pub struct UsageStatRecord {
     pub created_at: DateTime<Utc>,
     pub provider_id: String,
     pub model_id: String,
-    pub usage: agena_provider::CompletionUsage,
+    pub usage: CompletionUsage,
 }
 
-fn fold_billable_units(totals: &mut UsageTotals, usage: &agena_provider::CompletionUsage) {
+#[derive(serde::Deserialize)]
+struct RoundUsage {
+    version: u8,
+    model: ModelRef,
+    usage: CompletionUsage,
+}
+
+impl UsageStatRecord {
+    pub(crate) fn from_stored(observation: StoredUsageObservation) -> Option<Self> {
+        let attribution = match observation.source {
+            StoredUsageSource::Round(payload) => serde_json::from_str::<RoundUsage>(&payload)
+                .ok()
+                .filter(|round| round.version == KernelProviderState::VERSION)
+                .map(|round| {
+                    (
+                        round.model.provider_id.to_string(),
+                        round.model.model_id.to_string(),
+                        round.usage,
+                    )
+                }),
+            StoredUsageSource::Tool(payload) => {
+                serde_json::from_str::<AttributedCompletionUsage>(&payload)
+                    .ok()
+                    .map(|tool| (tool.provider_id, tool.model_id, *tool.usage))
+            }
+        };
+        let Some((provider_id, model_id, usage)) = attribution else {
+            tracing::warn!(
+                session_id = observation.session_id.get(),
+                "skipping an unreadable usage observation"
+            );
+            return None;
+        };
+        Some(Self {
+            session_id: observation.session_id.get(),
+            session_title: observation.session_title,
+            is_subagent: observation.is_subagent,
+            created_at: DateTime::from_timestamp_millis(observation.created_at_ms)?,
+            provider_id,
+            model_id,
+            usage,
+        })
+    }
+}
+
+fn fold_billable_units(totals: &mut UsageTotals, usage: &CompletionUsage) {
     for item in &usage.billable_items {
         let quantity = if item.quantity.is_finite() {
             item.quantity.max(0.0)
@@ -54,12 +104,7 @@ fn fold_billable_units(totals: &mut UsageTotals, usage: &agena_provider::Complet
     }
 }
 
-fn fold(
-    totals: &mut UsageTotals,
-    provider_id: &str,
-    model_id: &str,
-    usage: &agena_provider::CompletionUsage,
-) {
+fn fold(totals: &mut UsageTotals, usage: &CompletionUsage, cost: CompletionUsageCostContribution) {
     let requests = usage.requests.max(u64::from(usage.has_own_usage()));
     totals.requests = totals.requests.saturating_add(requests);
     totals.input_tokens = totals.input_tokens.saturating_add(usage.input_tokens);
@@ -81,7 +126,6 @@ fn fold(
         .saturating_add(usage.cache_read_tokens);
     totals.tool_use_tokens = totals.tool_use_tokens.saturating_add(usage.tool_use_tokens);
     totals.other_tokens = totals.other_tokens.saturating_add(usage.other_tokens);
-    let cost = agena_provider::completion_usage_own_cost_contribution(provider_id, model_id, usage);
     totals.total_cost_usd += cost.total_cost_usd;
     totals.recorded_cost_usd += cost.recorded_cost_usd;
     totals.estimated_cost_usd += cost.estimated_cost_usd;
@@ -94,8 +138,8 @@ fn fold(
 fn for_each_usage_observation(
     provider_id: &str,
     model_id: &str,
-    usage: &agena_provider::CompletionUsage,
-    visitor: &mut impl FnMut(&str, &str, &agena_provider::CompletionUsage),
+    usage: &CompletionUsage,
+    visitor: &mut impl FnMut(&str, &str, &CompletionUsage),
 ) {
     if usage.has_own_usage() {
         visitor(provider_id, model_id, usage);
@@ -195,12 +239,11 @@ impl TotalsAccumulator {
     fn fold(
         &mut self,
         session_id: i64,
-        provider_id: &str,
-        model_id: &str,
-        usage: &agena_provider::CompletionUsage,
+        usage: &CompletionUsage,
+        cost: CompletionUsageCostContribution,
     ) {
         self.sessions.insert(session_id);
-        fold(&mut self.totals, provider_id, model_id, usage);
+        fold(&mut self.totals, usage, cost);
         for sample in &usage.performance {
             self.performance.observe(sample);
         }
@@ -248,14 +291,12 @@ impl SessionAccumulator {
     fn fold(
         &mut self,
         record: &UsageStatRecord,
-        provider_id: &str,
-        model_id: &str,
-        usage: &agena_provider::CompletionUsage,
+        usage: &CompletionUsage,
+        cost: CompletionUsageCostContribution,
     ) {
         self.first_message_at = self.first_message_at.min(record.created_at);
         self.last_message_at = self.last_message_at.max(record.created_at);
-        self.totals
-            .fold(record.session_id, provider_id, model_id, usage);
+        self.totals.fold(record.session_id, usage, cost);
     }
 }
 
@@ -292,23 +333,25 @@ impl UsageStatsAccumulator {
                 if !query.matches(record.session_id, record.is_subagent, provider_id, model_id) {
                     return;
                 }
-                totals.fold(record.session_id, provider_id, model_id, usage);
-                by_day.entry(date_key.clone()).or_default().fold(
-                    record.session_id,
+                let cost = agena_provider::completion_usage_own_cost_contribution(
                     provider_id,
                     model_id,
                     usage,
                 );
+                totals.fold(record.session_id, usage, cost);
+                by_day
+                    .entry(date_key.clone())
+                    .or_default()
+                    .fold(record.session_id, usage, cost);
                 by_provider.entry(provider_id.to_owned()).or_default().fold(
                     record.session_id,
-                    provider_id,
-                    model_id,
                     usage,
+                    cost,
                 );
                 by_model
                     .entry((provider_id.to_owned(), model_id.to_owned()))
                     .or_default()
-                    .fold(record.session_id, provider_id, model_id, usage);
+                    .fold(record.session_id, usage, cost);
                 by_session
                     .entry(record.session_id)
                     .or_insert_with(|| SessionAccumulator {
@@ -318,7 +361,7 @@ impl UsageStatsAccumulator {
                         last_message_at: record.created_at,
                         totals: TotalsAccumulator::default(),
                     })
-                    .fold(record, provider_id, model_id, usage);
+                    .fold(record, usage, cost);
             },
         );
     }

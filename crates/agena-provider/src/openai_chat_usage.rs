@@ -3,7 +3,7 @@ use serde::Deserialize;
 use crate::CompletionUsage;
 
 /// OpenAI-compatible Chat Completions usage payload.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct ChatUsage {
     #[serde(default)]
     pub prompt_tokens: Option<u64>,
@@ -45,6 +45,8 @@ pub struct ChatInputTokensDetails {
     pub cached_tokens: Option<u64>,
     #[serde(default)]
     pub cache_write_tokens: Option<u64>,
+    #[serde(default)]
+    pub cache_creation_tokens: Option<u64>,
 }
 
 pub fn chat_usage_to_completion(usage: ChatUsage) -> CompletionUsage {
@@ -66,12 +68,12 @@ pub fn chat_usage_to_completion(usage: ChatUsage) -> CompletionUsage {
     let cache_write_tokens = usage
         .prompt_tokens_details
         .as_ref()
-        .and_then(|details| details.cache_write_tokens)
+        .and_then(|details| details.cache_write_tokens.or(details.cache_creation_tokens))
         .or_else(|| {
             usage
                 .input_tokens_details
                 .as_ref()
-                .and_then(|details| details.cache_write_tokens)
+                .and_then(|details| details.cache_write_tokens.or(details.cache_creation_tokens))
         })
         .unwrap_or_default();
     let input_tokens = prompt_tokens
@@ -89,15 +91,9 @@ pub fn chat_usage_to_completion(usage: ChatUsage) -> CompletionUsage {
         .completion_tokens
         .or(usage.output_tokens)
         .unwrap_or_default();
-    let inferred_separate_reasoning = usage.total_tokens.and_then(|total| {
-        total
-            .checked_sub(prompt_tokens.saturating_add(raw_output_tokens))
-            .filter(|tokens| *tokens > 0)
-    });
     let reasoning_tokens = usage
         .reasoning_tokens
         .or(detailed_reasoning_tokens)
-        .or(inferred_separate_reasoning)
         .unwrap_or_default();
     let total_without_separate_reasoning = prompt_tokens.saturating_add(raw_output_tokens);
     let total_with_separate_reasoning =
@@ -121,7 +117,7 @@ pub fn chat_usage_to_completion(usage: ChatUsage) -> CompletionUsage {
     let recorded_cost = usage
         .cost_in_usd_ticks
         .map(|ticks| ticks as f64 / 10_000_000_000.0);
-    CompletionUsage {
+    let mut normalized = CompletionUsage {
         requests: 1,
         input_tokens,
         output_tokens,
@@ -131,5 +127,74 @@ pub fn chat_usage_to_completion(usage: ChatUsage) -> CompletionUsage {
         recorded_cost: recorded_cost.unwrap_or_default(),
         recorded_cost_available: recorded_cost.is_some(),
         ..CompletionUsage::default()
+    };
+    let classified = normalized.own_total_tokens();
+    // A total may include extra categories or be the only counter returned by
+    // a compatible endpoint. Leave the unexplained part available for billing
+    // totals without assigning it to reasoning or generation speed.
+    normalized.other_tokens = usage
+        .total_tokens
+        .unwrap_or_default()
+        .saturating_sub(classified);
+    normalized.cost_estimate_incomplete = recorded_cost.is_none()
+        && usage
+            .total_tokens
+            .is_some_and(|total| total > 0 && total < classified);
+    normalized
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn partial_usage_preserves_unclassified_tokens_instead_of_inflating_generation() {
+        for (wire, expected_input, expected_output, expected_other) in [
+            (json!({"total_tokens": 500}), 0, 0, 500),
+            (
+                json!({"prompt_tokens": 300, "completion_tokens": 100, "total_tokens": 500}),
+                300,
+                100,
+                100,
+            ),
+        ] {
+            let usage = chat_usage_to_completion(serde_json::from_value(wire).unwrap());
+            assert_eq!(usage.input_tokens, expected_input);
+            assert_eq!(usage.output_tokens, expected_output);
+            assert_eq!(usage.reasoning_tokens, 0);
+            assert_eq!(usage.other_tokens, expected_other);
+            assert_eq!(usage.own_total_tokens(), 500);
+        }
+    }
+
+    #[test]
+    fn explicit_cache_and_reasoning_reconcile_in_chat_and_responses() {
+        let wire = json!({
+            "input_tokens": 100, "output_tokens": 40, "total_tokens": 150,
+            "input_tokens_details": {"cached_tokens": 25, "cache_creation_tokens": 5},
+            "output_tokens_details": {"reasoning_tokens": 10},
+        });
+        let chat = chat_usage_to_completion(serde_json::from_value(wire.clone()).unwrap());
+        let responses =
+            crate::openai_responses_usage_to_completion(serde_json::from_value(wire).unwrap());
+        assert_eq!(chat, responses);
+        assert_eq!(chat.input_tokens, 70);
+        assert_eq!(chat.cache_read_tokens, 25);
+        assert_eq!(chat.cache_write_tokens, 5);
+        assert_eq!(chat.output_tokens, 40);
+        assert_eq!(chat.reasoning_tokens, 10);
+        assert_eq!(chat.own_total_tokens(), 150);
+
+        let subset: ChatUsage = serde_json::from_value(json!({
+            "prompt_tokens": 100, "completion_tokens": 40, "total_tokens": 147,
+            "completion_tokens_details": {"reasoning_tokens": 10},
+        }))
+        .unwrap();
+        let usage = chat_usage_to_completion(subset);
+        assert_eq!(usage.output_tokens, 30);
+        assert_eq!(usage.reasoning_tokens, 10);
+        assert_eq!(usage.other_tokens, 7);
+        assert_eq!(usage.own_total_tokens(), 147);
     }
 }

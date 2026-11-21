@@ -257,10 +257,10 @@ pub use tool_permission_config::{
 };
 pub use tool_result::ToolResultState;
 pub use usage_period::UsagePeriod;
-pub use usage_query::UsageStatsQuery;
+pub use usage_query::{UsageStatsQuery, parse_usage_date_boundary};
 pub use usage_stats::{
     ModelUsageBreakdown, ProviderUsageBreakdown, SessionUsageBreakdown, UsageBillableUnitTotal,
-    UsageDailyBreakdown, UsagePerformanceTotals, UsageStats, UsageTotals,
+    UsageDailyBreakdown, UsagePerformanceTotals, UsageStats, UsageTotals, format_usage_count,
 };
 pub use user_input::{
     PendingInteractiveRequestKind, UserInputKind, UserInputReplyKind, UserInputSource,

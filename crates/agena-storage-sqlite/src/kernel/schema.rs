@@ -233,6 +233,7 @@ fn declarations() -> impl Iterator<Item = String> {
         .chain(BOT_LOCAL_SESSION_EXTENSION.iter().map(|s| (*s).to_owned()))
         .chain(BOT_AVATAR_EXTENSION.iter().map(|s| (*s).to_owned()))
         .chain(BOT_PROMPTS_EXTENSION.iter().map(|s| (*s).to_owned()))
+        .chain(super::usage::indexes().map(|(_, sql)| sql))
 }
 
 /// Compatible additive migration 2026-11-14. The mapping is deliberately
@@ -296,6 +297,7 @@ struct MissingExtensions {
     avatars: bool,
     prompts: bool,
     channel_participants: bool,
+    usage_indexes: Vec<String>,
 }
 
 async fn validate_objects(
@@ -314,6 +316,18 @@ async fn validate_objects(
         avatars: !actual.contains_key(&avatars),
         prompts: !actual.contains_key(&prompts),
         channel_participants: !actual.contains_key(&channel_participants),
+        usage_indexes: super::usage::indexes()
+            .into_iter()
+            .filter_map(|(name, sql)| {
+                let key = ("index".into(), name.into());
+                if actual.contains_key(&key) {
+                    None
+                } else {
+                    expected.remove(&key);
+                    Some(sql)
+                }
+            })
+            .collect(),
     };
     if missing.local_sessions {
         expected.remove(&local_sessions);
@@ -354,6 +368,7 @@ pub(crate) async fn initialize(database: &DatabaseConnection) -> Result<(), DbEr
             || missing.avatars
             || missing.prompts
             || missing.channel_participants
+            || !missing.usage_indexes.is_empty()
         {
             // Only exact known predecessors reach this path. Install missing
             // extensions and their initial projections atomically.
@@ -399,6 +414,11 @@ pub(crate) async fn initialize(database: &DatabaseConnection) -> Result<(), DbEr
                 crate::integration_repository::backfill_channel_participants(&transaction)
                     .await
                     .map_err(|error| DbErr::Custom(error.to_string()))?;
+            }
+            for sql in missing.usage_indexes {
+                transaction
+                    .execute(Statement::from_string(database.get_database_backend(), sql))
+                    .await?;
             }
             transaction.commit().await?;
             validate_objects(database, schema_objects(database).await?).await?;
@@ -497,6 +517,26 @@ mod nullable_tests {
         assert!(error.contains("migrate the database once"), "{error}");
         assert_eq!(schema_objects(&db).await.unwrap(), before);
         assert!(validate_existing(&db).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn usage_indexes_are_installed_when_an_existing_database_is_opened() {
+        let directory = tempfile::tempdir().unwrap();
+        let url = format!(
+            "sqlite://{}?mode=rwc",
+            directory.path().join("instance.sqlite").display()
+        );
+        let database = crate::connection::KernelDatabase::open(&url).await.unwrap();
+        let expected = schema_objects(&*database.writer).await.unwrap();
+        for (name, _) in super::super::usage::indexes() {
+            exec(&*database.writer, &format!("DROP INDEX {name}")).await;
+        }
+        validate_existing(&database.writer).await.unwrap();
+        database.close().await.unwrap();
+
+        let database = crate::connection::KernelDatabase::open(&url).await.unwrap();
+        assert_eq!(schema_objects(&*database.writer).await.unwrap(), expected);
+        database.close().await.unwrap();
     }
     #[tokio::test]
     async fn previous_database_is_upgraded_on_open_and_pins_legacy_local_history_once() {

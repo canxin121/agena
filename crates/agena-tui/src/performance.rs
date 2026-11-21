@@ -28,8 +28,7 @@ pub fn format_duration_ms(value: Option<f64>) -> String {
 
 pub fn format_token_rate(value: Option<f64>) -> String {
     match value.filter(|value| value.is_finite() && *value >= 0.0) {
-        Some(value) if value >= 1_000_000.0 => format!("{:.1}M", value / 1_000_000.0),
-        Some(value) if value >= 10_000.0 => format!("{:.1}K", value / 1_000.0),
+        Some(value) if value >= 1_000.0 => agena_domain::format_usage_count(value as u64),
         Some(value) => format!("{value:.1}"),
         None => "—".to_owned(),
     }
@@ -51,6 +50,6 @@ mod tests {
         assert_eq!(format_duration_ms(Some(1_250.0)), "1.25 s");
         assert_eq!(format_duration_ms(Some(90_000.0)), "1.5 min");
         assert_eq!(format_token_rate(Some(42.56)), "42.6");
-        assert_eq!(format_token_rate(Some(12_345.0)), "12.3K");
+        assert_eq!(format_token_rate(Some(12_345.0)), "12.3k");
     }
 }

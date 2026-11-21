@@ -14,6 +14,7 @@ use ratatui::{
 
 use crate::i18n::I18n;
 use crate::performance::{PerformanceSummary, format_duration_ms, format_token_rate};
+use agena_domain::format_usage_count;
 use agena_tui_components::text::{format_fixed_columns, truncate_display_text_with_suffix};
 use unicode_width::UnicodeWidthStr;
 
@@ -465,10 +466,10 @@ fn performance_lines(
     let coverage = i18n.text_args(
         "usage-performance-coverage",
         &crate::fl_args!(
-            "count" => performance.request_count,
-            "ttft" => performance.ttft_count,
-            "speed" => performance.generation_count,
-            "throughput" => performance.throughput_count,
+            "count" => format_usage_count(performance.request_count),
+            "ttft" => format_usage_count(performance.ttft_count),
+            "speed" => format_usage_count(performance.generation_count),
+            "throughput" => format_usage_count(performance.throughput_count),
         ),
     );
     lines.push(Line::from(Span::styled(
@@ -613,20 +614,20 @@ fn render_usage_metrics(
         ),
         (
             i18n.text("usage-tokens"),
-            format_tokens(totals.total_tokens),
+            format_usage_count(totals.total_tokens),
             i18n.text_args(
                 "usage-tokens-line",
                 &crate::fl_args!(
-                    "input" => format_tokens(totals.input_tokens),
-                    "output" => format_tokens(totals.output_tokens),
-                    "reasoning" => format_tokens(totals.reasoning_tokens)
+                    "input" => format_usage_count(totals.input_tokens),
+                    "output" => format_usage_count(totals.output_tokens),
+                    "reasoning" => format_usage_count(totals.reasoning_tokens)
                 ),
             ),
             agena_tui_components::theme::accent_color(),
         ),
         (
             i18n.text("usage-requests"),
-            format_count(totals.requests),
+            format_usage_count(totals.requests),
             i18n.text_args(
                 "usage-average-cost",
                 &crate::fl_args!("cost" => format_cost(data.average_cost_per_request_usd)),
@@ -635,10 +636,10 @@ fn render_usage_metrics(
         ),
         (
             i18n.text("usage-sessions"),
-            format_count(totals.sessions),
+            format_usage_count(totals.sessions),
             i18n.text_args(
                 "usage-active-days",
-                &crate::fl_args!("count" => data.active_days),
+                &crate::fl_args!("count" => format_usage_count(data.active_days)),
             ),
             agena_tui_components::theme::special_color(),
         ),
@@ -648,10 +649,10 @@ fn render_usage_metrics(
             i18n.text_args(
                 "usage-cache-line",
                 &crate::fl_args!(
-                    "read" => format_tokens(totals.cache_read_tokens),
-                    "write" => format_tokens(totals.cache_write_tokens),
-                    "write_5m" => format_tokens(totals.cache_write_5m_tokens),
-                    "write_1h" => format_tokens(totals.cache_write_1h_tokens)
+                    "read" => format_usage_count(totals.cache_read_tokens),
+                    "write" => format_usage_count(totals.cache_write_tokens),
+                    "write_5m" => format_usage_count(totals.cache_write_5m_tokens),
+                    "write_1h" => format_usage_count(totals.cache_write_1h_tokens)
                 ),
             ),
             agena_tui_components::theme::success_color(),
@@ -874,7 +875,7 @@ fn render_overview_rows(
                     Style::default().fg(agena_tui_components::theme::warning_color()),
                 ),
                 Span::raw(if daily {
-                    format!(" {:>8}", format_tokens(row.totals.total_tokens))
+                    format!(" {:>8}", format_usage_count(row.totals.total_tokens))
                 } else {
                     String::new()
                 }),
@@ -1005,8 +1006,8 @@ fn render_usage_table(
                     bar_width
                 ),
                 format_cost(row.totals.total_cost_usd),
-                format_tokens(row.totals.total_tokens),
-                format_count(row.totals.requests),
+                format_usage_count(row.totals.total_tokens),
+                format_usage_count(row.totals.requests),
                 format_percent(row.totals.cache_hit_rate),
             );
             if wide {
@@ -1069,7 +1070,7 @@ fn render_usage_footer(
                     " · {}",
                     i18n.text_args(
                         "usage-unpriced-requests",
-                        &crate::fl_args!("count" => data.totals.unpriced_requests)
+                        &crate::fl_args!("count" => format_usage_count(data.totals.unpriced_requests))
                     )
                 ));
             }
@@ -1122,28 +1123,6 @@ fn format_cost(value: f64) -> String {
         format!("${value:.4}")
     }
 }
-fn format_tokens(value: u64) -> String {
-    if value >= 1_000_000_000 {
-        format!("{:.2}B", value as f64 / 1_000_000_000.0)
-    } else if value >= 1_000_000 {
-        format!("{:.2}M", value as f64 / 1_000_000.0)
-    } else if value >= 1_000 {
-        format!("{:.1}K", value as f64 / 1_000.0)
-    } else {
-        value.to_string()
-    }
-}
-fn format_count(value: u64) -> String {
-    let digits = value.to_string();
-    let mut output = String::with_capacity(digits.len() + digits.len() / 3);
-    for (index, ch) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index).is_multiple_of(3) {
-            output.push(',');
-        }
-        output.push(ch);
-    }
-    output
-}
 fn format_percent(ratio: f64) -> String {
     format!("{:.1}%", ratio * 100.0)
 }
@@ -1161,8 +1140,9 @@ mod usage_width_tests {
         let row = UsageDashboardRow {
             label: "模型 👩‍💻".repeat(12),
             totals: UsageDashboardTotals {
+                total_tokens: 2_500_000_123,
                 performance: PerformanceSummary {
-                    request_count: 4,
+                    request_count: 4_000,
                     ttft_count: 2,
                     generation_count: 1,
                     throughput_count: 3,
@@ -1212,9 +1192,12 @@ mod usage_width_tests {
                     );
                 }
                 assert!(!text.contains("Unknown localization key"));
+                if width >= 80 {
+                    assert!(text.contains("2.5b"), "{locale} width {width}: {text}");
+                }
                 if locale == "en-US" && width >= 80 {
                     let without_isolates = text.replace(['\u{2068}', '\u{2069}'], "");
-                    for sample in ["4 timed", "2 TTFT", "1 TPS", "3 E2E"] {
+                    for sample in ["4k timed", "2 TTFT", "1 TPS", "3 E2E"] {
                         assert!(without_isolates.contains(sample), "{sample}: {text}");
                     }
                 }

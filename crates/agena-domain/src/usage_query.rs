@@ -1,4 +1,4 @@
-use chrono::{DateTime, Datelike, Duration, FixedOffset, TimeZone, Utc};
+use chrono::{DateTime, Datelike, Duration, FixedOffset, NaiveDate, TimeZone, Utc};
 
 use crate::UsagePeriod;
 
@@ -31,10 +31,7 @@ impl UsageStatsQuery {
         let today = start_of_local_day(local_now, offset);
         let (from, to) = match period {
             UsagePeriod::Today => (Some(today), Some(now)),
-            UsagePeriod::Yesterday => (
-                Some(today - Duration::days(1)),
-                Some(today - Duration::milliseconds(1)),
-            ),
+            UsagePeriod::Yesterday => (Some(today - Duration::days(1)), Some(today)),
             UsagePeriod::Last7Days => (Some(today - Duration::days(6)), Some(now)),
             UsagePeriod::Last14Days => (Some(today - Duration::days(13)), Some(now)),
             UsagePeriod::Last30Days => (Some(today - Duration::days(29)), Some(now)),
@@ -101,6 +98,18 @@ impl UsageStatsQuery {
             && matches_text_filter(self.provider_ids.as_slice(), provider_id)
             && matches_text_filter(self.model_ids.as_slice(), model_id)
     }
+}
+
+/// Parse a report bound. Date-only input denotes a UTC calendar day, with the
+/// upper bound set to the start of the next day for an exclusive range.
+pub fn parse_usage_date_boundary(raw: &str, upper: bool) -> Option<DateTime<Utc>> {
+    let raw = raw.trim();
+    if let Ok(timestamp) = DateTime::parse_from_rfc3339(raw) {
+        return Some(timestamp.with_timezone(&Utc));
+    }
+    let date = NaiveDate::parse_from_str(raw, "%Y-%m-%d").ok()?;
+    let boundary = if upper { date.succ_opt()? } else { date };
+    Some(boundary.and_hms_opt(0, 0, 0)?.and_utc())
 }
 
 fn start_of_local_day(now: DateTime<FixedOffset>, offset: FixedOffset) -> DateTime<Utc> {

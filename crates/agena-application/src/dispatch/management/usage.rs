@@ -2,7 +2,7 @@
 use super::wire;
 use crate::{Application, ApplicationError};
 use agena_api::management::UsageQuery;
-use agena_domain::{UsagePeriod, UsageStatsQuery};
+use agena_domain::{UsagePeriod, UsageStatsQuery, parse_usage_date_boundary};
 
 impl Application {
     pub async fn query_usage_stats(
@@ -45,10 +45,10 @@ fn usage_stats_query(query: UsageQuery) -> Result<UsageStatsQuery, ApplicationEr
             .transpose()?
             .or_else(|| Some(chrono::Utc::now()));
         if let (Some(from), Some(to)) = (from.as_ref(), to.as_ref())
-            && from > to
+            && from >= to
         {
             return Err(ApplicationError::bad_request(
-                "The start date must be earlier than or equal to the end date.",
+                "The start date must be earlier than the end of the usage range.",
             ));
         }
         return Ok(UsageStatsQuery::custom(from, to)
@@ -89,30 +89,19 @@ fn parse_usage_session_ids(raw: Option<&str>) -> Result<Vec<i64>, ApplicationErr
 
 fn parse_usage_datetime(
     raw: &str,
-    end_of_day: bool,
+    upper: bool,
 ) -> Result<chrono::DateTime<chrono::Utc>, ApplicationError> {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
+    if raw.trim().is_empty() {
         return Err(ApplicationError::bad_request(
             "The usage date cannot be empty.",
         ));
     }
-    if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(trimmed) {
-        return Ok(parsed.with_timezone(&chrono::Utc));
-    }
-    if let Ok(date) = chrono::NaiveDate::parse_from_str(trimmed, "%Y-%m-%d") {
-        let datetime = if end_of_day {
-            date.and_hms_milli_opt(23, 59, 59, 999)
-        } else {
-            date.and_hms_milli_opt(0, 0, 0, 0)
-        }
-        .expect("valid date boundary");
-        return Ok(datetime.and_utc());
-    }
-    Err(ApplicationError::bad_request_with_diagnostic(
-        "The usage date must use YYYY-MM-DD or RFC3339 format.",
-        format!("invalid usage date `{raw}`"),
-    ))
+    parse_usage_date_boundary(raw, upper).ok_or_else(|| {
+        ApplicationError::bad_request_with_diagnostic(
+            "The usage date must use YYYY-MM-DD or RFC3339 format.",
+            format!("invalid usage date `{raw}`"),
+        )
+    })
 }
 #[cfg(test)]
 mod tests {
@@ -135,10 +124,7 @@ mod tests {
             query.from.unwrap().to_rfc3339(),
             "2026-01-02T00:00:00+00:00"
         );
-        assert_eq!(
-            query.to.unwrap().to_rfc3339(),
-            "2026-01-03T23:59:59.999+00:00"
-        );
+        assert_eq!(query.to.unwrap().to_rfc3339(), "2026-01-04T00:00:00+00:00");
         assert_eq!(query.provider_ids, ["anthropic", "openai"]);
         assert_eq!(query.model_ids, ["claude", "gpt-5"]);
         assert_eq!(query.session_ids, [3, 7]);

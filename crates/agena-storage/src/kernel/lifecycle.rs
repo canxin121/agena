@@ -878,6 +878,17 @@ impl KernelReader {
             .await
     }
 
+    /// Visit all visible sessions' usage in one read snapshot. Storage applies
+    /// time and session filters. Runtime applies model/provider filters after
+    /// expanding any nested attribution.
+    pub async fn visit_usage_observations(
+        &self,
+        query: &agena_domain::UsageStatsQuery,
+        visit: &mut (dyn FnMut(StoredUsageObservation) + Send),
+    ) -> Result<()> {
+        self.0.backend.visit_usage_observations(query, visit).await
+    }
+
     pub fn watch_all(&self, after: Option<WatchCursor>) -> Result<KernelWatch> {
         self.0.backend.watch_all(after)
     }

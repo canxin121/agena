@@ -595,6 +595,11 @@ pub trait KernelBackend: Send + Sync {
         after: Option<ToolId>,
         limit: usize,
     ) -> Result<ReadView<Vec<OwnedToolMetadata>>>;
+    async fn visit_usage_observations(
+        &self,
+        query: &agena_domain::UsageStatsQuery,
+        visit: &mut (dyn FnMut(StoredUsageObservation) + Send),
+    ) -> Result<()>;
     fn watch_all(&self, after: Option<WatchCursor>) -> Result<KernelWatch>;
     async fn delivery(&self, session: SessionId, id: CommandId) -> Result<ReadView<DeliveryView>>;
     async fn resumed_delivery(

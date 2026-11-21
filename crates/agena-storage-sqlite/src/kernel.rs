@@ -54,6 +54,7 @@ pub(crate) mod schema;
 mod snapshots;
 
 mod stop;
+mod usage;
 
 const MAX_PENDING_BYTES: usize = 2 * 1024 * 1024;
 const MAX_CONTENT_PENDING_BYTES: usize = 14 * 1024 * 1024;
@@ -600,6 +601,13 @@ impl KernelBackend for Backend {
         limit: usize,
     ) -> Result<ReadView<Vec<OwnedToolMetadata>>> {
         lifecycle::owned_tool_metadata(self, session, after, limit).await
+    }
+    async fn visit_usage_observations(
+        &self,
+        query: &agena_domain::UsageStatsQuery,
+        visit: &mut (dyn FnMut(StoredUsageObservation) + Send),
+    ) -> Result<()> {
+        usage::visit_observations(self, query, visit).await
     }
 
     async fn delivery(

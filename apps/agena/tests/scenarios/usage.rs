@@ -2,7 +2,7 @@
 //! hosts more than one workspace.
 use std::time::Duration;
 
-use agena_domain::UsagePeriod;
+use agena_domain::{UsagePeriod, UsageStats, format_usage_count};
 use agena_testkit::TestResult;
 use anyhow::{Context, ensure};
 use serde_json::json;
@@ -61,6 +61,18 @@ async fn usage_reports_sessions_from_every_workspace_and_global_bots() -> TestRe
                 seen(bot_id),
                 "a global Bot conversation is missing from usage: {:?}",
                 stats.by_session
+            );
+            let json = case.run_cli(["usage", "--period", "all"]).await?;
+            let cli_stats: UsageStats = serde_json::from_str(&json.require_success()?.stdout)?;
+            ensure!(cli_stats.totals == stats.totals, "CLI JSON usage diverged");
+            let text = case
+                .run_cli(["usage", "--period", "all", "--format", "text"])
+                .await?;
+            let tokens = format!("{} tokens", format_usage_count(stats.totals.total_tokens));
+            ensure!(
+                text.require_success()?.stdout.contains(&tokens),
+                "CLI text did not include {tokens}: {:?}",
+                text.stdout,
             );
             Ok(())
         })

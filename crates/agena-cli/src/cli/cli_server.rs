@@ -23,11 +23,12 @@ use super::{
     ProviderListOutput, ProviderModelsOutput, ProviderSubcommand, ProviderSummary, ResumeArgs,
     ReviewArgs, SessionDetail, SessionForkOutput, SessionListArgs, SessionListOutput,
     SessionListView, SessionOutput, SessionsCommand, SessionsSubcommand, ToolDescriptor, UsageArgs,
-    async_trait, browser_login_redirect_uri, filter_session_summaries_by_view, format_apply_output,
-    format_debug_session_output, format_plugin_logs_output, normalize_login_provider,
-    normalized_mcp_server_name, paginate_session_summaries, permission_rule_output,
-    prompt_browser_login, prompt_device_login, render_serialized, review_prompt,
-    session_summary_from_resource, title_from_prompt, usage_stats_query_from_args,
+    UsageOutputFormat, async_trait, browser_login_redirect_uri, filter_session_summaries_by_view,
+    format_apply_output, format_debug_session_output, format_plugin_logs_output,
+    normalize_login_provider, normalized_mcp_server_name, paginate_session_summaries,
+    permission_rule_output, prompt_browser_login, prompt_device_login, render_serialized,
+    render_usage_text, review_prompt, session_summary_from_resource, title_from_prompt,
+    usage_stats_query_from_args,
 };
 use agena_api::{
     commands::{
@@ -1679,7 +1680,10 @@ impl AgenaCli {
             )
             .await
             .map_err(|error| client_error("failed to read usage from server", error))?;
-        render_serialized(args.format, &output)
+        match args.format {
+            UsageOutputFormat::Json => render_serialized(OutputFormat::Json, &output),
+            UsageOutputFormat::Text => Ok(render_usage_text(&output, custom_range)),
+        }
     }
 
     pub(super) async fn render_server_exec_command(

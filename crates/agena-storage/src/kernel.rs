@@ -60,6 +60,25 @@ pub use watch::{
     ChangeKind, KernelChange, KernelWatch, SessionListChange, SessionListState, WatchError,
 };
 
+/// Origin-owned usage projected from a provider round or a completed tool.
+/// The payload excludes replay, tool output and other session content.
+#[derive(Debug)]
+pub struct StoredUsageObservation {
+    pub session_id: SessionId,
+    pub session_title: String,
+    pub is_subagent: bool,
+    pub created_at_ms: i64,
+    pub source: StoredUsageSource,
+}
+
+#[derive(Debug)]
+pub enum StoredUsageSource {
+    /// Provider-state version, model reference and normalized usage as JSON.
+    Round(String),
+    /// Attributed usage stored under the provider-tool result metadata key.
+    Tool(String),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum KernelError {
     #[error("invalid command: {0}")]

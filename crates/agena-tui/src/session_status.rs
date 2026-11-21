@@ -4,6 +4,8 @@
 //! terminal-facing context percentage, compact labels, and summary ordering;
 //! it deliberately has no session, API, or Runtime dependency.
 
+use agena_domain::format_usage_count;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 /// Status of token usage in a session.
 pub enum TokenUsageStatus {
@@ -15,7 +17,7 @@ impl TokenUsageStatus {
     pub fn label(self) -> String {
         match self {
             Self::PercentUsed(percent_used) => format_token_progress_label(percent_used),
-            Self::UsedTokens(tokens) => format!("{} used", format_tokens_k(tokens)),
+            Self::UsedTokens(tokens) => format!("{} used", format_usage_count(tokens)),
         }
     }
 }
@@ -60,18 +62,6 @@ pub fn session_summary_status_parts(
 
 pub fn format_token_progress_label(percent_used: u64) -> String {
     format!("{}%", percent_used.min(100))
-}
-
-pub fn format_tokens_k(tokens: u64) -> String {
-    if tokens == 0 {
-        return "0k".to_string();
-    }
-
-    let value = tokens as f64 / 1_000.0;
-    if value < 10.0 {
-        return format!("{value:.1}k");
-    }
-    format!("{value:.0}k")
 }
 
 fn context_usage_percent_used(current_tokens: u64, input_limit_tokens: u64) -> u64 {

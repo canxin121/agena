@@ -1125,133 +1125,15 @@ impl SessionManager {
         query: agena_domain::UsageStatsQuery,
     ) -> Result<agena_domain::UsageStats, AppError> {
         let mut accumulator = crate::usage_stats::UsageStatsAccumulator::default();
-        // The server can host several projects at once. The active project
-        // dimension is therefore not a filter but one source of the browsing
-        // window: every stored session participates, so a Bot conversation or
-        // another project's history is not silently excluded from the report.
-        let workspace = self.current_workspace_id().await?;
-        let mut sessions = Vec::new();
-        let mut before = None;
-        loop {
-            let page = self
-                .kernel()
-                .reader
-                .query_summaries(SummaryQuery {
-                    workspace_id: Some(workspace),
-                    before,
-                    limit: 200,
-                    ..Default::default()
-                })
-                .await
-                .map_err(kernel_error)?;
-            let page = page.clone();
-            for session in &page.sessions {
-                sessions.push(session.clone());
-            }
-            if !page.has_more {
-                break;
-            }
-            before = page.next;
-        }
-        let mut before = None;
-        loop {
-            let page = self
-                .kernel()
-                .reader
-                .query_summaries(SummaryQuery {
-                    include_global: true,
-                    before,
-                    limit: 200,
-                    ..Default::default()
-                })
-                .await
-                .map_err(kernel_error)?;
-            let page = page.clone();
-            sessions.extend(
-                page.sessions
-                    .iter()
-                    .filter(|session| session.workspace_id != Some(workspace))
-                    .cloned(),
-            );
-            if !page.has_more {
-                break;
-            }
-            before = page.next;
-        }
-        {
-            for session in &sessions {
-                // Reporting needs only the persisted relation, already included
-                // in the summary. Loading execution configuration here would
-                // make historical usage depend on today's permission schema.
-                let is_subagent = session.relation_kind.is_subagent();
-                let mut after = None;
-                loop {
-                    let rounds = self
-                        .kernel()
-                        .reader
-                        .rounds(session.id, after, 200)
-                        .await
-                        .map_err(kernel_error)?;
-                    if rounds.is_empty() {
-                        break;
-                    }
-                    for round in rounds.iter() {
-                        if let Some(value) = &round.provider_state {
-                            // Reporting must survive one damaged or
-                            // newer-version row instead of failing the whole
-                            // dashboard; replay already reads state lossily.
-                            let Some(state) = KernelProviderState::decode_lossy(value) else {
-                                continue;
-                            };
-                            if let Some(usage) = state.usage {
-                                accumulator.observe(
-                                    &crate::UsageStatRecord {
-                                        session_id: session.id.get(),
-                                        session_title: session.title.clone(),
-                                        is_subagent,
-                                        created_at: timestamp(round.created_at_ms),
-                                        provider_id: state.model.provider_id.to_string(),
-                                        model_id: state.model.model_id.to_string(),
-                                        usage,
-                                    },
-                                    &query,
-                                );
-                            }
-                        }
-                    }
-                    after = rounds.last().map(|r| r.id);
+        self.kernel()
+            .reader
+            .visit_usage_observations(&query, &mut |stored| {
+                if let Some(record) = crate::UsageStatRecord::from_stored(stored) {
+                    accumulator.observe(&record, &query);
                 }
-                let mut after = None;
-                loop {
-                    let tools = self
-                        .kernel()
-                        .reader
-                        .owned_tool_metadata(session.id, after, 200)
-                        .await
-                        .map_err(kernel_error)?;
-                    if tools.is_empty() {
-                        break;
-                    }
-                    for tool in tools.iter() {
-                        if let Some(attributed) = provider_tool_usage(&tool.metadata)? {
-                            accumulator.observe(
-                                &crate::UsageStatRecord {
-                                    session_id: session.id.get(),
-                                    session_title: session.title.clone(),
-                                    is_subagent,
-                                    created_at: timestamp(tool.created_at_ms),
-                                    provider_id: attributed.provider_id,
-                                    model_id: attributed.model_id,
-                                    usage: *attributed.usage,
-                                },
-                                &query,
-                            );
-                        }
-                    }
-                    after = tools.last().map(|tool| tool.id);
-                }
-            }
-        }
+            })
+            .await
+            .map_err(kernel_error)?;
         Ok(accumulator.finish(&query, Utc::now()))
     }
     pub async fn pending_interactive_requests(

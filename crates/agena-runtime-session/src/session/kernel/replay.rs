@@ -29,9 +29,11 @@ pub struct KernelProviderState {
 }
 
 impl KernelProviderState {
+    pub(crate) const VERSION: u8 = 1;
+
     pub fn new(model: ModelRef, replay: Value) -> Self {
         Self {
-            version: 1,
+            version: Self::VERSION,
             model,
             replay,
             usage: None,
@@ -45,7 +47,7 @@ impl KernelProviderState {
     pub(super) fn decode(value: &Value) -> Result<Self> {
         let state: Self = serde_json::from_value(value.clone())
             .map_err(|e| KernelError::Invalid(format!("invalid provider-round state: {e}")))?;
-        if state.version != 1 {
+        if state.version != Self::VERSION {
             return Err(KernelError::Invalid(
                 "unsupported provider-round state version".into(),
             ));

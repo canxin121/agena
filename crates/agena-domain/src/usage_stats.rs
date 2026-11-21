@@ -3,6 +3,55 @@ use serde::{Deserialize, Serialize};
 
 use crate::UsagePeriod;
 
+/// Format a count using decimal usage units with at most one decimal place.
+pub fn format_usage_count(value: u64) -> String {
+    for (unit, suffix) in [
+        (1_000_000_000_000_000_000, "E"),
+        (1_000_000_000_000_000, "P"),
+        (1_000_000_000_000, "t"),
+        (1_000_000_000, "b"),
+        (1_000_000, "m"),
+        (1_000, "k"),
+    ] {
+        // A value that rounds to 1000 of the previous unit uses this unit.
+        if value >= unit - unit / 20_000 {
+            let unit = u128::from(unit);
+            let tenths = (u128::from(value) * 10 + unit / 2) / unit;
+            let whole = tenths / 10;
+            let decimal = tenths % 10;
+            return if decimal == 0 {
+                format!("{whole}{suffix}")
+            } else {
+                format!("{whole}.{decimal}{suffix}")
+            };
+        }
+    }
+    value.to_string()
+}
+
+#[cfg(test)]
+mod display_tests {
+    use super::*;
+
+    #[test]
+    fn compact_usage_promotes_rounding_boundaries_and_handles_large_counts() {
+        for (value, label) in [
+            (0, "0"),
+            (999, "999"),
+            (1_000, "1k"),
+            (1_240, "1.2k"),
+            (999_949, "999.9k"),
+            (999_950, "1m"),
+            (1_250_000, "1.3m"),
+            (2_500_000_000, "2.5b"),
+            (1_000_000_000_000, "1t"),
+            (u64::MAX, "18.4E"),
+        ] {
+            assert_eq!(format_usage_count(value), label);
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 /// Total billable units for one unit kind.
 pub struct UsageBillableUnitTotal {

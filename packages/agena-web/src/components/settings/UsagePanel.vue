@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, shallowRef, watch } from 'vue'
 import { RiRefreshLine, RiBarChartBoxLine, RiCoinsLine, RiTokenSwapLine, RiSpeedUpLine } from '@remixicon/vue'
 
 import SettingsCard from './SettingsCard.vue'
+import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import { apiJson } from '@/lib/api'
 import { settingsText as st } from '@/i18n/settingsText'
 import { usePaneRead } from '@/composables/usePaneRead'
+import { exactUsageCount, formatUsageCount, formatUsagePercent } from '@/lib/usageFormatting'
 import { formatDurationMs, formatTokenRate } from '@/lib/usagePerformance'
 import type { UsagePerformanceTotals } from '@/types/usage'
 
@@ -17,6 +19,7 @@ type UsageTotals = {
   input_tokens: number
   output_tokens: number
   reasoning_tokens: number
+  other_tokens?: number
   cache_read_tokens: number
   cache_write_tokens?: number
   cache_input_tokens?: number
@@ -37,39 +40,62 @@ type UsageBreakdown = UsageTotals & {
 }
 
 type UsageStats = {
-  generated_at: string
-  period: string
-  period_label: string
-  from?: string | null
-  to?: string | null
   totals: UsageTotals
   active_days: number
   average_cost_per_request_usd: number
   average_tokens_per_request: number
-  peak_cost_date?: string | null
-  peak_cost_usd: number
-  peak_tokens_date?: string | null
-  peak_tokens: number
   by_day: UsageBreakdown[]
   by_provider: UsageBreakdown[]
   by_model: UsageBreakdown[]
   by_session: UsageBreakdown[]
 }
 
-type UsageSection = {
-  key: keyof Pick<UsageStats, 'by_day' | 'by_provider' | 'by_model' | 'by_session'>
-  label: string
-  rows: UsageBreakdown[]
-}
+type UsageSection = keyof Pick<UsageStats, 'by_day' | 'by_provider' | 'by_model' | 'by_session'>
 
-const stats = ref<UsageStats | null>(null)
-const selectedBreakdown = ref<UsageSection['key']>('by_day')
+const periods = computed(
+  () =>
+    [
+      { period: 'today', label: st('Today') },
+      { period: 'yesterday', label: st('Yesterday') },
+      { period: 'last_7_days', label: st('Last 7 days') },
+      { period: 'last_14_days', label: st('Last 14 days') },
+      { period: 'last_30_days', label: st('Last 30 days') },
+      { period: 'last_90_days', label: st('Last 90 days') },
+      { period: 'month_to_date', label: st('Month to date') },
+      { period: 'year_to_date', label: st('Year to date') },
+      { period: 'all_time', label: st('All time') },
+    ] as const,
+)
+type UsagePeriod = (typeof periods.value)[number]['period']
+type UsageRange = { period: UsagePeriod } | { from: string; to: string }
 
-const sections = computed<UsageSection[]>(() => {
+const selectedPeriod = ref<UsagePeriod | 'custom'>('last_30_days')
+const dateFrom = ref('')
+const dateTo = ref('')
+const range = shallowRef<UsageRange>({ period: 'last_30_days' })
+const includeSubagents = ref(true)
+const filter = shallowRef<{ provider: string; model?: string } | null>(null)
+const stats = shallowRef<UsageStats | null>(null)
+const selectedBreakdown = ref<UsageSection>('by_day')
+const page = ref(1)
+const pageSize = 24
+const dateFormatter = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' })
+const rangeLabel = computed(() => {
+  if ('period' in range.value) {
+    const period = range.value.period
+    return periods.value.find((option) => option.period === period)?.label
+  }
+  const from = new Date(range.value.from)
+  const to = new Date(range.value.to)
+  to.setDate(to.getDate() - 1)
+  return dateFormatter.formatRange(from, to)
+})
+
+const sections = computed(() => {
   const value = stats.value
   if (!value) return []
-  return [
-    { key: 'by_day', label: st('By day'), rows: Array.isArray(value.by_day) ? value.by_day : [] },
+  const groups: { key: UsageSection; label: string; rows: UsageBreakdown[] }[] = [
+    { key: 'by_day', label: st('By day'), rows: Array.isArray(value.by_day) ? [...value.by_day].reverse() : [] },
     {
       key: 'by_provider',
       label: st('By provider'),
@@ -81,23 +107,26 @@ const sections = computed<UsageSection[]>(() => {
       label: st('By session'),
       rows: Array.isArray(value.by_session) ? value.by_session : [],
     },
-  ].filter((section) => section.rows.length > 0) as UsageSection[]
+  ]
+  return groups.filter((section) => section.rows.length > 0)
 })
 
 const activeBreakdown = computed(
   () => sections.value.find((section) => section.key === selectedBreakdown.value) || sections.value[0],
 )
+const pageCount = computed(() => Math.ceil((activeBreakdown.value?.rows.length ?? 0) / pageSize))
+const currentPage = computed(() => Math.min(page.value, Math.max(1, pageCount.value)))
+const visibleRows = computed(() => {
+  const start = (currentPage.value - 1) * pageSize
+  return activeBreakdown.value?.rows.slice(start, start + pageSize) ?? []
+})
+watch(selectedBreakdown, () => (page.value = 1), { flush: 'sync' })
 
 function finiteNumber(value: unknown): number {
   const number = Number(value)
   return Number.isFinite(number) ? number : 0
 }
 
-const integerFormatter = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 })
-const percentFormatter = new Intl.NumberFormat(undefined, {
-  style: 'percent',
-  maximumFractionDigits: 1,
-})
 const usdFormatter = new Intl.NumberFormat(undefined, {
   style: 'currency',
   currency: 'USD',
@@ -105,29 +134,23 @@ const usdFormatter = new Intl.NumberFormat(undefined, {
   maximumFractionDigits: 6,
 })
 
-function formatInteger(value: unknown): string {
-  return integerFormatter.format(finiteNumber(value))
-}
-
 function formatUsd(value: unknown): string {
   return usdFormatter.format(finiteNumber(value))
 }
 
-/** Cache hit rate arrives as a 0–1 ratio; render it as a percentage. */
-function formatPercent(value: unknown): string {
-  const ratio = Number(value)
-  if (!Number.isFinite(ratio) || ratio <= 0) return '—'
-  return percentFormatter.format(Math.min(1, ratio))
-}
-
-const cacheMetrics = computed(() => {
-  const totals = stats.value?.totals
-  if (!totals) return []
+const tokenDetails = computed(() => {
+  const value = stats.value
+  if (!value) return []
+  const { totals } = value
   return [
-    { key: 'hit-rate', label: st('Cache hit rate'), value: formatPercent(totals.cache_hit_rate) },
-    { key: 'cache-input', label: st('Cacheable input'), value: formatInteger(totals.cache_input_tokens) },
-    { key: 'cache-read', label: st('Cache read'), value: formatInteger(totals.cache_read_tokens) },
-    { key: 'cache-write', label: st('Cache write'), value: formatInteger(totals.cache_write_tokens) },
+    { key: 'input', label: st('Uncached input tokens'), count: totals.input_tokens },
+    { key: 'output', label: st('Output tokens'), count: totals.output_tokens },
+    { key: 'reasoning', label: st('Reasoning tokens'), count: totals.reasoning_tokens },
+    { key: 'cache-read', label: st('Cache read tokens'), count: totals.cache_read_tokens },
+    { key: 'cache-write', label: st('Cache write tokens'), count: totals.cache_write_tokens },
+    ...(totals.other_tokens ? [{ key: 'other', label: st('Other tokens'), count: totals.other_tokens }] : []),
+    { key: 'cache-input', label: st('Cacheable input'), count: totals.cache_input_tokens },
+    { key: 'average', label: st('Average per request'), count: value.average_tokens_per_request },
   ]
 })
 
@@ -179,24 +202,67 @@ const performanceMetrics = computed(() => {
   ]
 })
 
-function rowLabel(section: UsageSection['key'], row: UsageBreakdown): string {
+function rowLabel(section: UsageSection, row: UsageBreakdown): string {
   if (section === 'by_day') return String(row.date || '')
   if (section === 'by_provider') return String(row.provider_id || '')
   if (section === 'by_model') return [row.provider_id, row.model_id].filter(Boolean).join(' / ')
-  return String(row.title || `Session ${row.session_id ?? ''}`).trim()
+  return row.title?.trim() || `#${row.session_id ?? ''}`
 }
 
+function rowCanFilter(section: UsageSection, row: UsageBreakdown): boolean {
+  return (section === 'by_provider' || section === 'by_model') && Boolean(row.provider_id)
+}
+
+function filterByRow(section: UsageSection, row: UsageBreakdown) {
+  if (!row.provider_id) return
+  filter.value = { provider: row.provider_id, model: section === 'by_model' ? row.model_id : undefined }
+  selectedBreakdown.value = 'by_day'
+}
+
+watch(selectedPeriod, (period) => {
+  if (period !== 'custom') range.value = { period }
+})
+
+function applyDateRange() {
+  const from = new Date(`${dateFrom.value}T00:00:00`)
+  const to = new Date(`${dateTo.value}T00:00:00`)
+  if (!Number.isFinite(from.getTime()) || !Number.isFinite(to.getTime()) || from > to) return
+  to.setDate(to.getDate() + 1)
+  range.value = { from: from.toISOString(), to: to.toISOString() }
+}
+
+const usageUrl = computed(() => {
+  const query = new URLSearchParams(range.value)
+  query.set('include_subagents', String(includeSubagents.value))
+  const offsetDate = 'from' in range.value ? new Date(range.value.from) : new Date()
+  query.set('timezone_offset_minutes', String(-offsetDate.getTimezoneOffset()))
+  if (filter.value) {
+    query.set('provider', filter.value.provider)
+    if (filter.value.model) query.set('model', filter.value.model)
+  }
+  return `/api/v1/usage?${query}`
+})
+
 const { loading, error, refresh } = usePaneRead(
-  (signal) => {
-    const timezoneOffsetMinutes = -new Date().getTimezoneOffset()
-    return apiJson<UsageStats>(`/api/v1/usage?period=last_30_days&timezone_offset_minutes=${timezoneOffsetMinutes}`, {
-      signal,
-    })
+  async (signal) => {
+    const url = usageUrl.value
+    try {
+      const data = await apiJson<UsageStats>(url, { signal })
+      return url === usageUrl.value ? data : null
+    } catch (reason) {
+      if (url === usageUrl.value) throw reason
+      return null
+    }
   },
   (data) => {
-    stats.value = data && typeof data === 'object' ? data : null
+    if (data) stats.value = data
   },
 )
+watch(usageUrl, () => {
+  stats.value = null
+  page.value = 1
+  void refresh()
+})
 defineExpose({ refresh })
 </script>
 
@@ -206,7 +272,9 @@ defineExpose({ refresh })
       :title="$st('Usage overview')"
       :icon="RiBarChartBoxLine"
       :description="
-        stats?.period_label ? `${stats.period_label} · ${stats.active_days} ${$st('active days')}` : undefined
+        stats
+          ? `${rangeLabel} · ${$st('{count} active days', { count: formatUsageCount(stats.active_days) })}`
+          : undefined
       "
     >
       <template #actions
@@ -219,6 +287,51 @@ defineExpose({ refresh })
           @click="refresh"
           ><RiRefreshLine class="h-4 w-4" :class="loading ? 'animate-spin' : ''" /></IconButton
       ></template>
+      <div class="settings-toolbar mb-3">
+        <label class="flex min-w-0 items-center gap-2 text-xs">
+          <span class="text-muted-foreground">{{ $st('Date range') }}</span>
+          <select
+            v-model="selectedPeriod"
+            class="min-w-0 rounded-md border border-input bg-background px-2 py-1.5 text-xs"
+          >
+            <option v-for="option in periods" :key="option.period" :value="option.period">{{ option.label }}</option>
+            <option value="custom">{{ $st('Custom range') }}</option>
+          </select>
+        </label>
+        <label class="flex items-center gap-2 text-xs">
+          <input v-model="includeSubagents" type="checkbox" class="accent-primary" />
+          {{ $st('Include subagents') }}
+        </label>
+      </div>
+      <form v-if="selectedPeriod === 'custom'" class="settings-toolbar mb-3" @submit.prevent="applyDateRange">
+        <label class="flex items-center gap-2 text-xs">
+          {{ $st('Start date') }}
+          <input
+            v-model="dateFrom"
+            :max="dateTo || undefined"
+            type="date"
+            required
+            class="min-w-0 rounded-md border border-input bg-background px-2 py-1.5"
+          />
+        </label>
+        <label class="flex items-center gap-2 text-xs">
+          {{ $st('End date') }}
+          <input
+            v-model="dateTo"
+            :min="dateFrom || undefined"
+            type="date"
+            required
+            class="min-w-0 rounded-md border border-input bg-background px-2 py-1.5"
+          />
+        </label>
+        <Button type="submit" variant="outline" size="sm">{{ $st('Apply') }}</Button>
+      </form>
+      <div v-if="filter" class="settings-toolbar mb-3">
+        <span class="min-w-0 break-words font-mono text-xs">{{
+          [filter.provider, filter.model].filter(Boolean).join(' / ')
+        }}</span>
+        <Button type="button" variant="ghost" size="sm" @click="filter = null">{{ $st('Clear filters') }}</Button>
+      </div>
       <p
         v-if="error"
         role="alert"
@@ -235,20 +348,23 @@ defineExpose({ refresh })
       <dl v-else class="settings-control-grid">
         <div class="min-w-0 rounded-md border border-border/50 bg-muted/20 p-2.5">
           <dt class="text-xs text-muted-foreground">{{ $st('Requests') }}</dt>
-          <dd class="mt-1 break-all font-mono text-lg font-semibold tabular-nums">
-            {{ formatInteger(stats.totals.requests) }}
+          <dd class="mt-1 font-mono text-lg font-semibold tabular-nums" :title="exactUsageCount(stats.totals.requests)">
+            {{ formatUsageCount(stats.totals.requests) }}
           </dd>
         </div>
         <div class="min-w-0 rounded-md border border-border/50 bg-muted/20 p-2.5">
           <dt class="text-xs text-muted-foreground">{{ $st('Sessions') }}</dt>
-          <dd class="mt-1 break-all font-mono text-lg font-semibold tabular-nums">
-            {{ formatInteger(stats.totals.sessions) }}
+          <dd class="mt-1 font-mono text-lg font-semibold tabular-nums" :title="exactUsageCount(stats.totals.sessions)">
+            {{ formatUsageCount(stats.totals.sessions) }}
           </dd>
         </div>
         <div class="min-w-0 rounded-md border border-border/50 bg-muted/20 p-2.5">
           <dt class="text-xs text-muted-foreground">{{ $st('Tokens') }}</dt>
-          <dd class="mt-1 break-all font-mono text-lg font-semibold tabular-nums">
-            {{ formatInteger(stats.totals.total_tokens) }}
+          <dd
+            class="mt-1 font-mono text-lg font-semibold tabular-nums"
+            :title="exactUsageCount(stats.totals.total_tokens)"
+          >
+            {{ formatUsageCount(stats.totals.total_tokens) }}
           </dd>
         </div>
         <div class="min-w-0 rounded-md border border-primary/20 bg-primary/5 p-2.5">
@@ -265,7 +381,7 @@ defineExpose({ refresh })
         :icon="RiSpeedUpLine"
         :description="
           $st('Completed requests with timing: {count}', {
-            count: formatInteger(stats.totals.performance?.request_count),
+            count: formatUsageCount(stats.totals.performance?.request_count),
           })
         "
       >
@@ -278,7 +394,7 @@ defineExpose({ refresh })
             <dt class="text-xs text-muted-foreground" :title="metric.hint">{{ metric.label }}</dt>
             <dd class="mt-2 break-words font-mono text-lg font-semibold tabular-nums">{{ metric.value }}</dd>
             <dd class="mt-1 text-[11px] text-muted-foreground">
-              {{ $st('Samples: {count}', { count: formatInteger(metric.samples) }) }}
+              {{ $st('Samples: {count}', { count: formatUsageCount(metric.samples) }) }}
             </dd>
           </div>
         </dl>
@@ -295,27 +411,21 @@ defineExpose({ refresh })
       <div class="settings-columns">
         <SettingsCard :title="$st('Token details')" :icon="RiTokenSwapLine">
           <dl class="divide-y divide-border/50 text-xs">
-            <div class="flex flex-wrap justify-between gap-2 pb-3">
-              <dt class="text-muted-foreground">{{ $st('Input / output tokens') }}</dt>
-              <dd class="break-all font-mono tabular-nums">
-                {{ formatInteger(stats.totals.input_tokens) }} / {{ formatInteger(stats.totals.output_tokens) }}
-              </dd>
-            </div>
-            <div class="flex flex-wrap justify-between gap-2 py-3">
-              <dt class="text-muted-foreground">{{ $st('Reasoning / cache read') }}</dt>
-              <dd class="break-all font-mono tabular-nums">
-                {{ formatInteger(stats.totals.reasoning_tokens) }} / {{ formatInteger(stats.totals.cache_read_tokens) }}
-              </dd>
-            </div>
-            <div class="flex flex-wrap justify-between gap-2 pt-3">
-              <dt class="text-muted-foreground">{{ $st('Average per request') }}</dt>
-              <dd class="break-all font-mono tabular-nums">
-                {{ formatInteger(stats.average_tokens_per_request) }} {{ $st('tokens') }}
-              </dd>
-            </div>
-            <div v-for="row in cacheMetrics" :key="row.key" class="flex flex-wrap justify-between gap-2 pt-3">
+            <div
+              v-for="row in tokenDetails"
+              :key="row.key"
+              class="flex flex-wrap justify-between gap-2 py-2 first:pt-0"
+            >
               <dt class="text-muted-foreground">{{ row.label }}</dt>
-              <dd class="break-all font-mono tabular-nums">{{ row.value }}</dd>
+              <dd class="font-mono tabular-nums" :title="exactUsageCount(row.count)">
+                {{ formatUsageCount(row.count) }}
+              </dd>
+            </div>
+            <div class="flex flex-wrap justify-between gap-2 pt-2">
+              <dt class="text-muted-foreground">{{ $st('Cache hit rate') }}</dt>
+              <dd class="font-mono tabular-nums">
+                {{ formatUsagePercent(stats.totals.cache_input_tokens ? stats.totals.cache_hit_rate : null) }}
+              </dd>
             </div>
           </dl>
         </SettingsCard>
@@ -340,13 +450,13 @@ defineExpose({ refresh })
           >
             {{
               $st('{count} requests have incomplete pricing; the total may be understated.', {
-                count: formatInteger(stats.totals.unpriced_requests),
+                count: formatUsageCount(stats.totals.unpriced_requests),
               })
             }}
           </p>
         </SettingsCard>
       </div>
-      <SettingsCard :title="$st('Usage breakdown')" :count="activeBreakdown?.rows.length">
+      <SettingsCard :title="$st('Usage breakdown')">
         <p v-if="!sections.length" class="rounded-lg bg-muted/20 p-5 text-center text-sm text-muted-foreground">
           {{ $st('No usage breakdown is available.') }}
         </p>
@@ -385,20 +495,37 @@ defineExpose({ refresh })
           </div>
           <dl class="divide-y divide-border/50">
             <div
-              v-for="row in activeBreakdown.rows"
-              :key="rowLabel(activeBreakdown.key, row)"
+              v-for="row in visibleRows"
+              :key="row.session_id ?? rowLabel(activeBreakdown.key, row)"
               class="usage-breakdown-row px-1 py-2 text-xs"
             >
               <dt class="usage-breakdown-name break-all font-mono font-medium">
-                {{ rowLabel(activeBreakdown.key, row) }}
+                <button
+                  v-if="rowCanFilter(activeBreakdown.key, row)"
+                  type="button"
+                  class="text-start text-primary underline-offset-2 hover:underline"
+                  :title="$st('Filter by {value}', { value: rowLabel(activeBreakdown.key, row) })"
+                  @click="filterByRow(activeBreakdown.key, row)"
+                >
+                  {{ rowLabel(activeBreakdown.key, row) }}
+                </button>
+                <template v-else>{{ rowLabel(activeBreakdown.key, row) }}</template>
               </dt>
               <dd class="usage-breakdown-value min-w-0">
-                <span class="usage-breakdown-label mb-1 block text-[10px] text-muted-foreground">{{ $st('Requests') }}</span
-                ><span class="break-all font-mono tabular-nums">{{ formatInteger(row.requests) }}</span>
+                <span class="usage-breakdown-label mb-1 block text-[10px] text-muted-foreground">{{
+                  $st('Requests')
+                }}</span
+                ><span class="font-mono tabular-nums" :title="exactUsageCount(row.requests)">{{
+                  formatUsageCount(row.requests)
+                }}</span>
               </dd>
               <dd class="usage-breakdown-value min-w-0">
-                <span class="usage-breakdown-label mb-1 block text-[10px] text-muted-foreground">{{ $st('Tokens') }}</span
-                ><span class="break-all font-mono tabular-nums">{{ formatInteger(row.total_tokens) }}</span>
+                <span class="usage-breakdown-label mb-1 block text-[10px] text-muted-foreground">{{
+                  $st('Tokens')
+                }}</span
+                ><span class="font-mono tabular-nums" :title="exactUsageCount(row.total_tokens)">{{
+                  formatUsageCount(row.total_tokens)
+                }}</span>
               </dd>
               <dd class="usage-breakdown-value min-w-0">
                 <span class="usage-breakdown-label mb-1 block text-[10px] text-muted-foreground">{{ $st('Cost') }}</span
@@ -412,7 +539,7 @@ defineExpose({ refresh })
                   formatTokenRate(row.performance?.tokens_per_second)
                 }}</span>
                 <span class="mt-1 block text-[10px] text-muted-foreground">{{
-                  $st('Samples: {count}', { count: formatInteger(row.performance?.generation_count) })
+                  $st('Samples: {count}', { count: formatUsageCount(row.performance?.generation_count) })
                 }}</span>
               </dd>
               <dd class="usage-breakdown-value min-w-0">
@@ -423,7 +550,7 @@ defineExpose({ refresh })
                   formatDurationMs(row.performance?.average_ttft_ms)
                 }}</span>
                 <span class="mt-1 block text-[10px] text-muted-foreground">{{
-                  $st('Samples: {count}', { count: formatInteger(row.performance?.ttft_count) })
+                  $st('Samples: {count}', { count: formatUsageCount(row.performance?.ttft_count) })
                 }}</span>
               </dd>
               <dd class="usage-breakdown-value min-w-0">
@@ -434,11 +561,34 @@ defineExpose({ refresh })
                   formatDurationMs(row.performance?.average_duration_ms)
                 }}</span>
                 <span class="mt-1 block text-[10px] text-muted-foreground">{{
-                  $st('Samples: {count}', { count: formatInteger(row.performance?.request_count) })
+                  $st('Samples: {count}', { count: formatUsageCount(row.performance?.request_count) })
                 }}</span>
               </dd>
             </div>
           </dl>
+          <div v-if="pageCount > 1" class="settings-toolbar mt-2 justify-end border-t border-border/50 pt-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              :disabled="currentPage === 1"
+              @click="page = currentPage - 1"
+            >
+              {{ $st('Previous') }}
+            </Button>
+            <span class="text-xs text-muted-foreground" aria-live="polite">
+              {{ $st('Page {page} of {pages}', { page: currentPage, pages: pageCount }) }}
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              :disabled="currentPage === pageCount"
+              @click="page = currentPage + 1"
+            >
+              {{ $st('Next') }}
+            </Button>
+          </div>
         </template>
       </SettingsCard>
     </template>

@@ -5,8 +5,8 @@ import { renderToString } from '@vue/server-renderer'
 import { transformSync } from 'esbuild'
 import * as vue from 'vue'
 import { settingsTextForLocale } from '../src/i18n/settingsTextCatalog'
+import * as usageFormatting from '../src/lib/usageFormatting'
 import * as performanceFormatting from '../src/lib/usagePerformance'
-import * as contextUsage from '../src/pages/chat/contextUsage'
 import type { UsagePerformanceTotals } from '../src/types/usage'
 
 const performance: UsagePerformanceTotals = {
@@ -54,7 +54,7 @@ async function renderComponent(
     '@remixicon/vue': new Proxy({}, { get: () => icon }),
     '@/lib/api': { apiJson: async () => ({}) },
     '@/lib/usagePerformance': performanceFormatting,
-    '@/pages/chat/contextUsage': contextUsage,
+    '@/lib/usageFormatting': usageFormatting,
     '@/i18n/settingsText': { settingsText: text },
     '@/composables/usePaneRead': {
       usePaneRead(_read: unknown, apply: (value: unknown) => void) {
@@ -97,6 +97,29 @@ function stats(section = 'by_day', withPerformance = true) {
 }
 
 describe('usage performance presentation', () => {
+  it('keeps billion-scale token totals compact and exposes their exact count', async () => {
+    const usage = stats()
+    usage.totals.total_tokens = 2_500_000_123
+    const html = await renderComponent('settings/UsagePanel', {
+      stats: {
+        ...usage,
+        totals: {
+          ...usage.totals,
+          cache_input_tokens: 2_000_000,
+          cache_read_tokens: 0,
+          cache_hit_rate: 0,
+          other_tokens: 999_950,
+        },
+        by_day: [{ ...usage.totals, date: '2026-11-18' }],
+      },
+    })
+    expect(html.match(/>2\.5b</g)).toHaveLength(2)
+    expect(html).toContain('title="2,500,000,123"')
+    expect(html).toContain('>2m<')
+    expect(html).toContain('>1m<')
+    expect(html).toContain('>0%<')
+  })
+
   it('renders server aggregates with the metric-specific sample counts and P95 timings', async () => {
     const html = await renderComponent('settings/UsagePanel', { stats: stats() })
     expect(html).toContain('50.0 tok/s')

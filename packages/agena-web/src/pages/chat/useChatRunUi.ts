@@ -5,7 +5,8 @@ import { i18n } from '@/i18n'
 import { formatCurrencyUSD } from '@/i18n/intl'
 import { isAssistantMessageStreaming } from '@/lib/chatRunState'
 import { resolveComposerPrimaryActions } from './composerPrimaryActions'
-import { formatTokensK, sessionContextUsage } from './contextUsage'
+import { formatUsageCount } from '@/lib/usageFormatting'
+import { sessionContextUsage } from './contextUsage'
 import type { SessionState } from '@/types/chat'
 import type { RequestPerformance } from '@/types/usage'
 import type { CancellationOutcome } from '@/stores/chat/api'
@@ -269,7 +270,7 @@ export function useChatRunUi(opts: {
 
     return {
       tokensValue: tokenTotal,
-      tokensLabel: tokenTotal != null ? `${formatTokensK(tokenTotal)} used` : '--',
+      tokensLabel: tokenTotal != null ? `${formatUsageCount(tokenTotal)} used` : '--',
       percentUsed: null,
       costLabel,
       modelLabel: providerID && modelID ? `${providerID}/${modelID}` : undefined,

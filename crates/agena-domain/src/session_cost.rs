@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::UsageBillableUnitTotal;
+use crate::{UsageBillableUnitTotal, format_usage_count};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 /// Cost and token breakdown per model.
@@ -106,27 +106,32 @@ impl SessionCostSummary {
             .cache_write_tokens
             .saturating_add(self.cache_read_tokens);
         format!(
-            "{} in{} + {} out{} = {} tokens{} · ${:.4} over {} request{}",
-            format_count(self.input_tokens),
+            "{} in{} + {} out{}{} = {} tokens{} · ${:.4} over {} request{}",
+            format_usage_count(self.input_tokens),
             if cache_tokens > 0 {
-                format!(" + {} cache", format_count(cache_tokens))
+                format!(" + {} cache", format_usage_count(cache_tokens))
             } else {
                 String::new()
             },
-            format_count(self.output_tokens),
+            format_usage_count(self.output_tokens),
             if self.reasoning_tokens > 0 {
-                format!(" + {} reasoning", format_count(self.reasoning_tokens))
+                format!(" + {} reasoning", format_usage_count(self.reasoning_tokens))
             } else {
                 String::new()
             },
-            format_count(self.total_tokens),
+            if self.other_tokens > 0 {
+                format!(" + {} other", format_usage_count(self.other_tokens))
+            } else {
+                String::new()
+            },
+            format_usage_count(self.total_tokens),
             if self.cache_input_tokens > 0 {
                 format!(" · {:.1}% cache hit", self.cache_hit_rate * 100.0)
             } else {
                 String::new()
             },
             self.total_cost_usd,
-            self.requests,
+            format_usage_count(self.requests),
             if self.requests == 1 { "" } else { "s" },
         )
     }
@@ -138,16 +143,4 @@ fn ratio(numerator: u64, denominator: u64) -> f64 {
     } else {
         numerator as f64 / denominator as f64
     }
-}
-
-fn format_count(value: u64) -> String {
-    let digits = value.to_string();
-    let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
-    for (index, digit) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index).is_multiple_of(3) {
-            formatted.push(',');
-        }
-        formatted.push(digit);
-    }
-    formatted
 }

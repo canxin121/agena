@@ -3,6 +3,7 @@ use agena_domain::{ModelRef, RequestPerformance, UsageStatsQuery};
 use agena_provider::{
     AttributedCompletionUsage, CompletionUsage, PROVIDER_TOOL_USAGE_METADATA_KEY,
 };
+use chrono::{DateTime, Utc};
 use sea_orm::{ConnectionTrait, DbBackend, Statement};
 use serde_json::{Value, json};
 
@@ -300,5 +301,65 @@ async fn usage_stats_preserves_legacy_permission_history_and_subagent_filters() 
     for (session, _, _, encoded) in history {
         assert_eq!(persisted_configuration(&manager, session).await, encoded);
     }
+    manager.kernel().clone().shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn usage_window_preserves_exact_boundaries_and_skips_unreadable_tool_usage() {
+    let (manager, session) = fixture().await;
+    persist_accounting(&manager, session, 1).await;
+    let midnight = DateTime::parse_from_rfc3339("2026-01-03T00:00:00Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let previous = midnight - chrono::Duration::milliseconds(1);
+    let database = &manager.kernel_runtime.database;
+    database
+        .execute(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "UPDATE agena_rounds SET created_at_ms=? WHERE session_id=?",
+            [previous.timestamp_millis().into(), session.get().into()],
+        ))
+        .await
+        .unwrap();
+    database
+        .execute(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "UPDATE agena_tool_calls SET created_at_ms=?",
+            [midnight.timestamp_millis().into()],
+        ))
+        .await
+        .unwrap();
+
+    let query = UsageStatsQuery::custom(Some(previous), Some(midnight)).with_filters(
+        vec![],
+        vec![],
+        vec![session.get()],
+        true,
+    );
+    let report = manager.usage_stats(query).await.unwrap();
+    assert_eq!(report.totals.total_tokens, 120);
+    assert_eq!(report.by_day[0].date, "2026-01-02");
+
+    let query = UsageStatsQuery::custom(
+        Some(previous + chrono::Duration::nanoseconds(1)),
+        Some(midnight + chrono::Duration::nanoseconds(1)),
+    );
+    let report = manager.usage_stats(query).await.unwrap();
+    assert_eq!(report.totals.total_tokens, 60);
+    assert_eq!(report.by_provider[0].provider_id, "tool-provider");
+
+    database
+        .execute(Statement::from_string(
+            DbBackend::Sqlite,
+            r#"UPDATE agena_tool_calls SET result_json=json_set(result_json,'$.metadata."agena.provider_tool_usage"','invalid')"#,
+        ))
+        .await
+        .unwrap();
+    let report = manager
+        .usage_stats(UsageStatsQuery::custom(None, None))
+        .await
+        .unwrap();
+    assert_eq!(report.totals.requests, 1);
+    assert_eq!(report.totals.total_tokens, 120);
     manager.kernel().clone().shutdown().await.unwrap();
 }

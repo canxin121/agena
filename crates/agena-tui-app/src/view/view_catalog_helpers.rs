@@ -232,7 +232,7 @@ pub(crate) fn model_catalog_has_token_limits(entry: &CatalogModelResource) -> bo
 
 pub(crate) fn model_catalog_token_count(i18n: &I18n, value: Option<u32>) -> String {
     value
-        .map(|value| format_tokens_k(value as u64))
+        .map(|value| format_usage_count(value as u64))
         .unwrap_or_else(|| ui_text::t(i18n, "value-unset"))
 }
 
@@ -583,4 +583,4 @@ use super::{
     join_inline_segments, sanitize_display_text,
 };
 use crate::ui_text;
-use agena_tui::session_status::format_tokens_k;
+use agena_domain::format_usage_count;

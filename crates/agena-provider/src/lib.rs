@@ -187,7 +187,7 @@ mod openai_responses_wire;
 pub use openai_responses_wire::{
     OpenAiIncompleteDetails, OpenAiInputTokenDetails, OpenAiOutputContent, OpenAiOutputItem,
     OpenAiOutputTokenDetails, OpenAiReasoningSummaryContent, OpenAiResponsesResponse, OpenAiUsage,
-    openai_responses_reasoning_delta,
+    openai_responses_reasoning_delta, openai_responses_usage_to_completion,
 };
 mod openai_chat_usage;
 pub use openai_chat_usage::{

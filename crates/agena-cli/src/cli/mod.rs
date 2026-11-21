@@ -390,8 +390,16 @@ pub struct UsageArgs {
         value_parser = clap::value_parser!(i32).range(-1439..=1439)
     )]
     pub timezone_offset_minutes: i32,
-    #[arg(long, default_value = "json")]
-    pub format: OutputFormat,
+    /// Report output. Text uses compact token counts.
+    #[arg(long, default_value_t = UsageOutputFormat::Json, value_enum)]
+    pub format: UsageOutputFormat,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+/// Output format for usage reports.
+pub enum UsageOutputFormat {
+    Json,
+    Text,
 }
 
 #[derive(Debug, Clone, Args)]

@@ -63,7 +63,7 @@ struct LiteralEnum {
 
 /// Rust-side predicates used for the generated classification constants.
 mod predicates {
-    use agena_domain::{AgentStatus, BackgroundActivityStatus, ExecutionStatus, SessionStateKind};
+    use agena_domain::{AgentStatus, ExecutionStatus, SessionStateKind};
 
     pub(super) fn session_state_busy(value: &str) -> Option<bool> {
         SessionStateKind::parse(value).map(SessionStateKind::is_busy)
@@ -93,20 +93,6 @@ mod predicates {
             .parse::<ExecutionStatus>()
             .ok()
             .map(ExecutionStatus::is_terminal)
-    }
-
-    pub(super) fn background_activity_active(value: &str) -> Option<bool> {
-        value
-            .parse::<BackgroundActivityStatus>()
-            .ok()
-            .map(BackgroundActivityStatus::is_active)
-    }
-
-    pub(super) fn background_activity_terminal(value: &str) -> Option<bool> {
-        value
-            .parse::<BackgroundActivityStatus>()
-            .ok()
-            .map(BackgroundActivityStatus::is_terminal)
     }
 }
 
@@ -183,29 +169,6 @@ fn literal_enums() -> Vec<LiteralEnum> {
                     "PART_EXECUTION_TERMINAL_STATUSES",
                     "Statuses where an operation part reached a terminal outcome.",
                     predicates::execution_status_terminal,
-                ),
-            ],
-        },
-        LiteralEnum {
-            name: "BackgroundActivityKind",
-            doc: "Kind of background activity.",
-            schema: schema_of::<agena_domain::BackgroundActivityKind>(),
-            lists: Vec::new(),
-        },
-        LiteralEnum {
-            name: "BackgroundActivityStatus",
-            doc: "Lifecycle status shared by every background activity source.",
-            schema: schema_of::<agena_domain::BackgroundActivityStatus>(),
-            lists: vec![
-                (
-                    "BACKGROUND_ACTIVITY_ACTIVE_STATUSES",
-                    "Statuses where a background activity is still live.",
-                    predicates::background_activity_active,
-                ),
-                (
-                    "BACKGROUND_ACTIVITY_TERMINAL_STATUSES",
-                    "Statuses where a background activity finished for good.",
-                    predicates::background_activity_terminal,
                 ),
             ],
         },

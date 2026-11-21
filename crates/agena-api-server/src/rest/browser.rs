@@ -1,4 +1,4 @@
-use agena_plugin_host::sdk::activity::browser::BrowserControlCommand;
+use agena_plugin_host::sdk::browser::BrowserControlCommand;
 use axum::http::header::CACHE_CONTROL;
 use axum::response::Response;
 

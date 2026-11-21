@@ -99,16 +99,15 @@ impl HostClient for ScopedHostClient {
         .await
     }
 
-    async fn register_activity_source(
+    async fn register_browser_controller(
         &self,
-        kind: BackgroundActivityKind,
-        adapter: std::sync::Arc<dyn crate::sdk::activity::ActivitySourceAdapter>,
+        controller: std::sync::Arc<dyn crate::sdk::browser::BrowserController>,
     ) -> crate::sdk::Result<()> {
         self.run_callback(async {
             let inner = self.handle.inner.read().await.clone();
             host_api::run_in_host_callback_context(
                 self.context()?,
-                inner.register_activity_source(kind, adapter),
+                inner.register_browser_controller(controller),
             )
             .await
         })
@@ -792,5 +791,5 @@ use super::{
     HostToolMutationResponse, HostToolRegisterRequest, HostToolRemoveRequest,
     HostToolUpdateRequest, LogLevel, PluginError, PluginNotifyRequest, ScopedHostClient,
     ToolDescriptor, ToolInvokeOutput,
-    host_api::{self, BackgroundActivity, BackgroundActivityKind},
+    host_api::{self, BackgroundActivity},
 };

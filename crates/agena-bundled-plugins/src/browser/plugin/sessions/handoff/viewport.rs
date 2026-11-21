@@ -4,7 +4,7 @@ use agena_plugin_host::{
     PluginError,
     sdk::{PluginErrorKind, Result as SdkResult},
 };
-use agena_plugin_sdk::activity::browser::{BrowserControlResult, BrowserInput, PointerAction};
+use agena_plugin_sdk::browser::{BrowserControlResult, BrowserInput, PointerAction};
 use serde_json::{Value, json};
 use tokio::sync::Semaphore;
 

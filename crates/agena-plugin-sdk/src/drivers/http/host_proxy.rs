@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, RwLock};
 
-use crate::activity::ActivitySourceAdapter;
+use crate::browser::BrowserController;
 use crate::host_api::*;
 use crate::*;
 
@@ -70,12 +70,8 @@ crate::drivers::impl_callback_host_client!(@proxy HostClientProxy, {
         self.run(self.current().publish_activity(activity)).await
     }
 
-    async fn register_activity_source(
-        &self,
-        kind: BackgroundActivityKind,
-        adapter: Arc<dyn ActivitySourceAdapter>,
-    ) -> Result<()> {
-        self.run(self.current().register_activity_source(kind, adapter))
+    async fn register_browser_controller(&self, controller: Arc<dyn BrowserController>) -> Result<()> {
+        self.run(self.current().register_browser_controller(controller))
             .await
     }
 

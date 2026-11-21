@@ -24,11 +24,7 @@ impl HostClient for FixtureHost {
     async fn publish_activity(&self, _: BackgroundActivity) -> SdkResult<()> {
         Ok(())
     }
-    async fn register_activity_source(
-        &self,
-        _: BackgroundActivityKind,
-        _: Arc<dyn ActivitySourceAdapter>,
-    ) -> SdkResult<()> {
+    async fn register_browser_controller(&self, _: Arc<dyn BrowserController>) -> SdkResult<()> {
         Ok(())
     }
     async fn subscribe_events(&self, _: EventFilter) -> SdkResult<EventSubscription> {

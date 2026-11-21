@@ -8,11 +8,10 @@ mod popups;
 use super::*;
 use crate::browser::driver::{
     BrowserAuthorization, BrowserDriver, BrowserRequestPolicy, CHROME_ERROR_DOCUMENT, CdpEvent,
-    PageEvents, console_text,
+    PageEvents,
 };
 use crate::browser::runtime::ChromeLease;
 use agena_plugin_host::sdk::PluginErrorKind;
-use std::collections::VecDeque;
 use tokio::sync::{OwnedMutexGuard, mpsc};
 
 type BrowserOwner = agena_runtime_tools::TerminalOwner;
@@ -55,7 +54,6 @@ struct PageActivity {
     title: String,
     url: String,
     status: Option<BackgroundActivityStatus>,
-    log: BrowserSessionLog,
 }
 
 /// Keep the action gate, Chrome lease, and callback identity until the last
@@ -315,20 +313,20 @@ impl BrowserPage {
     }
 }
 
-struct BrowserActivitySource {
+struct SessionBrowserController {
     state: std::sync::Weak<BrowserSessions>,
     host: Arc<dyn HostClient>,
     fake_ip_ranges: Vec<String>,
 }
 
 #[async_trait]
-impl ActivitySourceAdapter for BrowserActivitySource {
+impl BrowserController for SessionBrowserController {
     async fn browser_control(
         &self,
         session_id: i64,
-        command: agena_plugin_sdk::activity::browser::BrowserControlCommand,
-        network: Option<Arc<dyn agena_plugin_sdk::activity::browser::BrowserNetworkAuthority>>,
-    ) -> SdkResult<agena_plugin_sdk::activity::browser::BrowserControlResult> {
+        command: agena_plugin_sdk::browser::BrowserControlCommand,
+        network: Option<Arc<dyn agena_plugin_sdk::browser::BrowserNetworkAuthority>>,
+    ) -> SdkResult<agena_plugin_sdk::browser::BrowserControlResult> {
         let state = self.state.upgrade().ok_or_else(handoff::closed)?;
         state
             .operator_command(
@@ -337,52 +335,6 @@ impl ActivitySourceAdapter for BrowserActivitySource {
                 network,
                 self.host.clone(),
                 &self.fake_ip_ranges,
-            )
-            .await
-    }
-
-    async fn read_logs(
-        &self,
-        activity_id: &str,
-        since_seq: u64,
-        limit: Option<u32>,
-        _wait_ms: u64,
-    ) -> SdkResult<BackgroundActivityLogRead> {
-        let id = activity_id.strip_prefix("browser_").unwrap_or(activity_id);
-        if let Some(state) = self.state.upgrade()
-            && let Some(page) = state.pages.lock().await.get(id).cloned()
-        {
-            return Ok(page
-                .activity
-                .lock()
-                .await
-                .log
-                .read(activity_id, since_seq, limit));
-        }
-        Ok(agena_plugin_host::sdk::activity::empty_log_read(
-            activity_id,
-        ))
-    }
-
-    async fn stop(&self, activity_id: &str) -> SdkResult<()> {
-        let id = activity_id.strip_prefix("browser_").unwrap_or(activity_id);
-        let state = self
-            .state
-            .upgrade()
-            .ok_or_else(|| PluginError::invalid_params("The browser has stopped"))?;
-        let page = state
-            .pages
-            .lock()
-            .await
-            .get(id)
-            .cloned()
-            .ok_or_else(|| PluginError::invalid_params("The browser page has closed"))?;
-        state
-            .close(
-                &page,
-                BackgroundActivityStatus::Stopped,
-                "Stopped from the activities panel.",
-                self.host.as_ref(),
             )
             .await
     }
@@ -445,23 +397,19 @@ pub(super) fn browser_owner(context: &ToolInvokeContext<'_>) -> SdkResult<Browse
 }
 
 impl BrowserPlugin {
-    async fn ensure_browser_activity_source(
-        &self,
-        control: &handoff::ControlState,
-    ) -> SdkResult<()> {
+    async fn ensure_browser_controller(&self, control: &handoff::ControlState) -> SdkResult<()> {
         let host = self.state()?.host.clone();
         let fake_ip_ranges = self.config()?.fake_ip_ranges.clone();
         control
-            .activity_source
+            .controller
             .get_or_try_init(|| async {
-                let adapter: Arc<dyn ActivitySourceAdapter> = Arc::new(BrowserActivitySource {
+                let controller: Arc<dyn BrowserController> = Arc::new(SessionBrowserController {
                     state: Arc::downgrade(&self.browser_state),
                     host: self.browser_state.activity_host(&host),
                     fake_ip_ranges,
                 });
-                host.register_activity_source(BackgroundActivityKind::Browser, adapter.clone())
-                    .await?;
-                Ok(adapter)
+                host.register_browser_controller(controller.clone()).await?;
+                Ok(controller)
             })
             .await
             .map(|_| ())
@@ -567,7 +515,7 @@ impl BrowserPlugin {
         };
         self.validate_browser_destination(preview.as_ref(), &url)
             .await?;
-        self.ensure_browser_activity_source(&agent_access).await?;
+        self.ensure_browser_controller(&agent_access).await?;
         let _lease = self.browser_state.lease()?;
         let host = self.browser_state.activity_host(&self.state()?.host);
         let capture_console = self.config()?.capture_console_text;
@@ -605,8 +553,6 @@ impl BrowserPlugin {
                 },
             )
             .await?;
-            let mut log = BrowserSessionLog::new();
-            log.append("event", format!("Opened {url}."));
             let page = Arc::new(BrowserPage {
                 id,
                 owner,
@@ -624,7 +570,6 @@ impl BrowserPlugin {
                     title: format!("Browser · {}", browser_title_target(&url)),
                     url: url.to_string(),
                     status: None,
-                    log,
                 }),
             });
             (page, opening, event_rx)
@@ -660,8 +605,7 @@ impl BrowserPlugin {
                 .await
                 .insert(page.id.clone(), page.clone());
         }
-        self.browser_state
-            .observe(&page, event_rx, host.clone(), capture_console);
+        self.browser_state.observe(&page, event_rx, host.clone());
         page.publish_snapshot(&snapshot, host.as_ref()).await;
         opening.target = None;
         Ok(snapshot.output("Open browser page", serde_json::json!({
@@ -931,15 +875,13 @@ impl BrowserSessions {
         page: &Arc<BrowserPage>,
         mut events: mpsc::Receiver<CdpEvent>,
         host: Arc<dyn HostClient>,
-        capture_console: bool,
     ) {
         let state = Arc::downgrade(self);
         let page = Arc::downgrade(page);
         tokio::spawn(async move {
             while let Some(event) = events.recv().await {
                 let Some(page) = page.upgrade() else { return };
-                page.record_event(event, capture_console, host.as_ref())
-                    .await;
+                page.record_navigation(event, host.as_ref()).await;
             }
             if let (Some(page), Some(state)) = (page.upgrade(), state.upgrade())
                 && let Err(error) = state
@@ -959,68 +901,25 @@ impl BrowserSessions {
 }
 
 impl BrowserPage {
-    async fn record_event(&self, event: CdpEvent, capture_console: bool, host: &dyn HostClient) {
-        match event.method.as_str() {
-            "Page.frameNavigated" if event.params.pointer("/frame/parentId").is_none() => {
-                let Some(url) = event
-                    .params
-                    .pointer("/frame/url")
-                    .and_then(serde_json::Value::as_str)
-                    .and_then(|raw| url::Url::parse(raw).ok())
-                else {
-                    return;
-                };
-                if !matches!(url.scheme(), "http" | "https") {
-                    return;
-                }
-                let mut meta = self.activity.lock().await;
-                if meta.url == url.as_str() {
-                    return;
-                }
-                meta.url = url.to_string();
-                meta.title = format!("Browser · {}", browser_title_target(&url));
-                meta.log.append("event", format!("Navigated to {url}."));
-                drop(meta);
-                self.publish(BackgroundActivityStatus::Running, None, host)
-                    .await;
-            }
-            "Runtime.consoleAPICalled" => {
-                let text = if capture_console {
-                    let level = event.params["type"].as_str().unwrap_or("log");
-                    let text = console_text(&event.params["args"]);
-                    format!("[{level}] {text}")
-                } else {
-                    "Console event (page payload omitted)".into()
-                };
-                self.activity.lock().await.log.append("console", text);
-            }
-            "Log.entryAdded" => {
-                let text = if capture_console {
-                    let level = event.params["entry"]["level"].as_str().unwrap_or("log");
-                    let text = event.params["entry"]["text"].as_str().unwrap_or_default();
-                    format!("[{level}] {text}")
-                } else {
-                    "Browser log event (page payload omitted)".into()
-                };
-                self.activity.lock().await.log.append("log", text);
-            }
-            "Runtime.exceptionThrown" => {
-                let details = &event.params["exceptionDetails"];
-                let text = if capture_console {
-                    details
-                        .pointer("/exception/description")
-                        .and_then(serde_json::Value::as_str)
-                } else {
-                    details
-                        .pointer("/exception/className")
-                        .and_then(serde_json::Value::as_str)
-                }
-                .or_else(|| details["text"].as_str())
-                .unwrap_or("Page exception");
-                self.activity.lock().await.log.append("exception", text);
-            }
-            _ => {}
+    async fn record_navigation(&self, event: CdpEvent, host: &dyn HostClient) {
+        let Some(url) = event
+            .params
+            .pointer("/frame/url")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|raw| url::Url::parse(raw).ok())
+            .filter(|url| matches!(url.scheme(), "http" | "https"))
+        else {
+            return;
+        };
+        let mut meta = self.activity.lock().await;
+        if meta.url == url.as_str() {
+            return;
         }
+        meta.url = url.to_string();
+        meta.title = format!("Browser · {}", browser_title_target(&url));
+        drop(meta);
+        self.publish(BackgroundActivityStatus::Running, None, host)
+            .await;
     }
 }
 
@@ -1135,87 +1034,6 @@ impl BrowserSnapshotInput {
             frame_id: self.frame_id.clone(),
             interactive: self.interactive,
             max_depth: self.max_depth,
-        }
-    }
-}
-
-/// Bounded per-session log buffer implementing the unified `since_seq` cursor
-/// protocol so the activities panel can tail browser output like any other
-/// activity.
-#[derive(Debug, Clone)]
-struct BrowserSessionLog {
-    lines: VecDeque<BackgroundActivityLogLine>,
-    next_seq: u64,
-    dropped: u64,
-}
-
-const BROWSER_LOG_CAPACITY: usize = 500;
-
-impl BrowserSessionLog {
-    fn new() -> Self {
-        Self {
-            lines: VecDeque::new(),
-            // Seq numbering follows the unified cursor protocol used by the
-            // shell monitor and plugin host logs: 0 means "no events yet" and
-            // the first line gets seq 1, so a fresh read with `since_seq = 0`
-            // (`seq > since_seq`) returns every line including the first.
-            next_seq: 1,
-            dropped: 0,
-        }
-    }
-
-    fn append(&mut self, stream: &str, text: impl Into<String>) {
-        const MAX_LOG_BYTES: usize = 16 * 1024;
-        let mut text = text.into();
-        if text.len() > MAX_LOG_BYTES {
-            let mut end = MAX_LOG_BYTES - " [truncated]".len();
-            while !text.is_char_boundary(end) {
-                end -= 1;
-            }
-            text.truncate(end);
-            text.push_str(" [truncated]");
-        }
-        let line = BackgroundActivityLogLine {
-            chunk: false,
-            seq: self.next_seq,
-            stream: stream.to_string(),
-            ts_ms: chrono::Utc::now().timestamp_millis(),
-            text,
-        };
-        self.next_seq = self.next_seq.saturating_add(1);
-        if self.lines.len() >= BROWSER_LOG_CAPACITY {
-            self.lines.pop_front();
-            self.dropped = self.dropped.saturating_add(1);
-        }
-        self.lines.push_back(line);
-    }
-
-    fn read(
-        &self,
-        activity_id: &str,
-        since_seq: u64,
-        limit: Option<u32>,
-    ) -> BackgroundActivityLogRead {
-        let mut lines = self
-            .lines
-            .iter()
-            .filter(|line| line.seq > since_seq)
-            .cloned()
-            .collect::<Vec<_>>();
-        let has_more = limit.is_some_and(|limit| lines.len() as u32 > limit);
-        if let Some(limit) = limit {
-            lines.truncate(limit as usize);
-        }
-        let last_seq = lines.last().map(|line| line.seq).unwrap_or(since_seq);
-        BackgroundActivityLogRead {
-            activity_id: activity_id.to_string(),
-            status: BackgroundActivityStatus::Running,
-            lines,
-            last_seq,
-            has_more,
-            dropped_lines: self.dropped,
-            exit_code: None,
-            completion_reason: None,
         }
     }
 }

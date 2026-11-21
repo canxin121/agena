@@ -56,20 +56,6 @@ export const PART_EXECUTION_ACTIVE_STATUSES = ['pending', 'in_progress'] as cons
 /** Statuses where an operation part reached a terminal outcome. */
 export const PART_EXECUTION_TERMINAL_STATUSES = ['completed', 'failed', 'cancelled', 'policy_denied', 'user_declined', 'capability_unavailable', 'tool_unavailable'] as const
 
-/** Kind of background activity. */
-export const BACKGROUND_ACTIVITY_KINDS = ['shell', 'monitor', 'agent', 'cron', 'runtime', 'browser'] as const
-export type BackgroundActivityKind = (typeof BACKGROUND_ACTIVITY_KINDS)[number]
-
-/** Lifecycle status shared by every background activity source. */
-export const BACKGROUND_ACTIVITY_STATUSES = ['running', 'succeeded', 'failed', 'pending', 'waiting', 'paused', 'cancelled', 'stopped'] as const
-export type BackgroundActivityStatus = (typeof BACKGROUND_ACTIVITY_STATUSES)[number]
-
-/** Statuses where a background activity is still live. */
-export const BACKGROUND_ACTIVITY_ACTIVE_STATUSES = ['running', 'pending', 'waiting', 'paused'] as const
-
-/** Statuses where a background activity finished for good. */
-export const BACKGROUND_ACTIVITY_TERMINAL_STATUSES = ['succeeded', 'failed', 'cancelled', 'stopped'] as const
-
 /** Severity of a notification. */
 export const NOTIFICATION_SEVERITIES = ['info', 'success', 'warning', 'error'] as const
 export type NotificationSeverity = (typeof NOTIFICATION_SEVERITIES)[number]
@@ -79,7 +65,7 @@ export const NOTIFICATION_SOURCES = ['runtime', 'app', 'plugin', 'background', '
 export type NotificationSource = (typeof NOTIFICATION_SOURCES)[number]
 
 /** Surface a notification is rendered on. */
-export const NOTIFICATION_SURFACES = ['banner', 'toast', 'composer_chip', 'composer_footer', 'status_line', 'terminal_title', 'terminal_progress', 'terminal_bell', 'activities_panel', 'history_search', 'permission_dialog', 'input_prompt', 'settings', 'plan_panel', 'background_task', 'log'] as const
+export const NOTIFICATION_SURFACES = ['banner', 'toast', 'composer_chip', 'composer_footer', 'status_line', 'terminal_title', 'terminal_progress', 'terminal_bell', 'history_search', 'permission_dialog', 'input_prompt', 'settings', 'plan_panel', 'log'] as const
 export type NotificationSurface = (typeof NOTIFICATION_SURFACES)[number]
 
 /** Control action of a notification. */

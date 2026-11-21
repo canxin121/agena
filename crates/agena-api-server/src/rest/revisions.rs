@@ -31,10 +31,7 @@ pub async fn resource_revisions(
 }
 
 fn valid_key(key: &str) -> bool {
-    if matches!(
-        key,
-        "sessions" | "workspaces" | "workspaces:catalog" | "activities"
-    ) {
+    if matches!(key, "sessions" | "workspaces" | "workspaces:catalog") {
         return true;
     }
     if let Some(bucket) = key.strip_prefix("sessions:bucket:") {
@@ -44,8 +41,7 @@ fn valid_key(key: &str) -> bool {
             "pinned" | "favorite" | "running" | "attention" | "recent"
         );
     }
-    if let Some(id) = key.strip_prefix("activity:") {
-        let id = id.strip_suffix(":logs").unwrap_or(id);
+    if let Some(id) = key.strip_prefix("runtime-task:") {
         return !id.is_empty()
             && id.len() <= 192
             && id
@@ -59,7 +55,11 @@ fn valid_key(key: &str) -> bool {
         .is_some_and(|id| id > 0);
     id && match fields.as_slice() {
         ["workspace", _, "sessions" | "stats"]
-        | ["session", _, "state" | "files" | "plan" | "parts"]
+        | [
+            "session",
+            _,
+            "state" | "files" | "plan" | "parts" | "schedules",
+        ]
         | ["part", _] => true,
         ["part", _, "input" | "metadata" | "output"] => true,
         ["workspace", _, "sessions", "roots"] => true,
@@ -71,5 +71,24 @@ fn valid_key(key: &str) -> bool {
             "pinned" | "favorite" | "running" | "attention" | "recent"
         ),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::valid_key;
+
+    #[test]
+    fn accepts_the_revision_keys_used_by_schedules_and_runtime_operations() {
+        assert!(valid_key("session:42:schedules"));
+        assert!(valid_key("runtime-task:rtask_123"));
+        for key in [
+            "session:0:schedules",
+            "runtime-task:",
+            "activities",
+            "activity:proc_1:logs",
+        ] {
+            assert!(!valid_key(key), "{key}");
+        }
     }
 }

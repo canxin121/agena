@@ -137,7 +137,6 @@ async fn adopt(
             || "Browser popup".to_owned(),
             |url| format!("Browser · {}", browser_title_target(&url)),
         );
-    let mut log = BrowserSessionLog::new();
     let public_url = if authority.is_human() {
         url::Url::parse(&url)
             .ok()
@@ -152,7 +151,6 @@ async fn adopt(
     } else {
         title
     };
-    log.append("event", format!("Opened from browser page {}.", opener.id));
     let page = Arc::new(BrowserPage {
         id: id.clone(),
         owner: opener.owner.clone(),
@@ -170,7 +168,6 @@ async fn adopt(
             title,
             url: public_url,
             status: None,
-            log,
         }),
     });
     page.verify_url(&url).await?;
@@ -182,7 +179,7 @@ async fn adopt(
         pages.insert(id.clone(), page.clone());
     }
     opening.target = None;
-    state.observe(&page, events, host.clone(), capture_console);
+    state.observe(&page, events, host.clone());
     authority.opened(id);
     page.publish(BackgroundActivityStatus::Running, None, host.as_ref())
         .await;

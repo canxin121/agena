@@ -426,7 +426,7 @@ mod plugin_access_tests {
     use serde_json::json;
 
     #[test]
-    fn plugins_can_use_workspace_session_policy_and_activity_commands() {
+    fn plugins_can_use_workspace_session_policy_and_runtime_commands() {
         let requests = [
             json!({"method": "create_workspace", "params": {"path": "/work"}}),
             json!({"method": "resolve_workspace", "params": {"path": "/work", "create_if_missing": true}}),
@@ -438,9 +438,8 @@ mod plugin_access_tests {
             json!({"method": "replace_permission_rule", "params": {"rule_id": 1, "mode": "ask"}}),
             json!({"method": "revoke_permission_rule", "params": {"rule_id": 1}}),
             json!({"method": "delete_permission_rule", "params": {"rule_id": 1}}),
-            json!({"method": "stop_activity", "params": {"activity_id": "activity-1"}}),
-            json!({"method": "dismiss_activity", "params": {"activity_id": "activity-1"}}),
-            json!({"method": "clear_finished_activities"}),
+            json!({"method": "list_session_tree", "params": {"root_id": 7}}),
+            json!({"method": "management", "params": {"domain": "cancel_runtime_task", "request": {"task_id": "rtask_1"}}}),
         ];
         for request in requests {
             let command: Command = serde_json::from_value(request).unwrap();

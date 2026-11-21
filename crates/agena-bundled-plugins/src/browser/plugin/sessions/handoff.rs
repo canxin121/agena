@@ -5,7 +5,7 @@ mod viewport;
 use std::sync::Arc;
 
 use agena_plugin_host::sdk::{host_api::AskUserRequest, permission_wait};
-use agena_plugin_sdk::activity::browser::{
+use agena_plugin_sdk::browser::{
     BrowserControlCommand, BrowserControlResult, BrowserHelpRequest, BrowserNetworkAuthority,
     BrowserTab,
 };
@@ -24,7 +24,7 @@ pub(super) type AgentAccess = OwnedRwLockReadGuard<ControlState>;
 
 #[derive(Default)]
 pub(super) struct ControlState {
-    pub(super) activity_source: tokio::sync::OnceCell<Arc<dyn ActivitySourceAdapter>>,
+    pub(super) controller: tokio::sync::OnceCell<Arc<dyn BrowserController>>,
     human: Option<HumanControl>,
     help: Option<HelpRequest>,
 }

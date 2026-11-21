@@ -176,8 +176,6 @@ pub enum NotificationSurface {
     TerminalProgress,
     /// 终端铃响 / 系统通知。
     TerminalBell,
-    /// 后台活动面板。
-    ActivitiesPanel,
     /// 历史搜索浮动条。
     HistorySearch,
     /// 权限请求对话框。
@@ -188,9 +186,8 @@ pub enum NotificationSurface {
     Settings,
     /// 计划/进度面板。
     PlanPanel,
-    /// 后台任务面板。
-    BackgroundTask,
     /// 仅记录（活动日志流），不主动弹出。
+    #[serde(alias = "activities_panel", alias = "background_task")]
     Log,
 }
 

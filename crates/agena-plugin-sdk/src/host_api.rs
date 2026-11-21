@@ -10,8 +10,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use crate::activity::ActivitySourceAdapter;
 use crate::attachment::AttachmentItem;
+use crate::browser::BrowserController;
 use crate::error::{PluginError, Result};
 use crate::hooks::{EventEnvelope, EventFilter, ToolInvokeOutput};
 use crate::identity::{PluginKey, ToolKey};
@@ -122,25 +122,17 @@ pub trait HostClient: Send + Sync + 'static {
 
     async fn publish_event(&self, env: EventEnvelope) -> Result<()>;
 
-    /// Publish (create or update) a background-activity record directly into
-    /// the host's unified activity registry. Plugins that own long-running
-    /// work should use this instead of publishing raw `plugin_event` records
-    /// with a serialized activity payload.
+    /// Publish a lifecycle observation for notification history.
     async fn publish_activity(&self, activity: BackgroundActivity) -> Result<()> {
         let _ = activity;
         Err(unavailable())
     }
 
-    /// Register a source adapter so the host can route log reads and stop
-    /// requests for activities of `kind` back to this plugin. Returns
-    /// `HostUnavailable` on hosts without activity-source support.
-    async fn register_activity_source(
+    /// Bind operator controls to the browser plugin instance that owns the calling session.
+    async fn register_browser_controller(
         &self,
-        kind: BackgroundActivityKind,
-        adapter: Arc<dyn ActivitySourceAdapter>,
+        _controller: Arc<dyn BrowserController>,
     ) -> Result<()> {
-        let _ = kind;
-        let _ = adapter;
         Err(unavailable())
     }
 

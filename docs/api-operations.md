@@ -141,7 +141,8 @@ Provider/model 的一般发现使用顶层 Query；Provider Studio 和配置管�
 
 ~~~json
 {
-  "method": "clear_finished_activities"
+  "method": "delete_permission_rule",
+  "params": { "rule_id": 2 }
 }
 ~~~
 
@@ -149,9 +150,9 @@ Provider/model 的一般发现使用顶层 Query；Provider Studio 和配置管�
 
 ~~~json
 {
-  "result": "activities_cleared",
+  "result": "permission_rule_deleted",
   "data": {
-    "count": 2
+    "id": 2
   }
 }
 ~~~

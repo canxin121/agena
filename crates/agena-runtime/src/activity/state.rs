@@ -14,7 +14,7 @@ use agena_failure::{
     Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility, RecoveryDirective,
     RetryDirective, UserPresentation,
 };
-use agena_plugin_sdk::activity::ActivitySourceAdapter;
+use agena_plugin_sdk::browser::BrowserController;
 use agena_runtime_contracts::part_content::SystemNotificationContent;
 use agena_runtime_session::SessionManager;
 use agena_storage::kernel::{
@@ -32,11 +32,7 @@ use crate::{
 pub(crate) struct ActivityRuntimeState {
     pub(crate) registry: ActivityRegistry,
     pub(crate) monitor: Option<Arc<dyn crate::MonitorService>>,
-    /// Adapters registered by plugins for activity kinds they own. When an
-    /// adapter exists for a kind, log reads and stop requests dispatch to it
-    /// instead of the built-in per-kind behavior.
-    sources: Arc<parking_lot::Mutex<Vec<(BackgroundActivityKind, Arc<dyn ActivitySourceAdapter>)>>>,
-    browser_sources: Arc<parking_lot::Mutex<HashMap<i64, Weak<dyn ActivitySourceAdapter>>>>,
+    browser_controllers: Arc<parking_lot::Mutex<HashMap<i64, Weak<dyn BrowserController>>>>,
 }
 
 impl ActivityRuntimeState {
@@ -47,33 +43,18 @@ impl ActivityRuntimeState {
         Self {
             registry,
             monitor,
-            sources: Arc::new(parking_lot::Mutex::new(Vec::new())),
-            browser_sources: Arc::default(),
-        }
-    }
-
-    /// Register (or replace) the plugin adapter that owns one activity kind.
-    pub(crate) fn register_source(
-        &self,
-        kind: BackgroundActivityKind,
-        adapter: Arc<dyn ActivitySourceAdapter>,
-    ) {
-        let mut sources = self.sources.lock();
-        if let Some(entry) = sources.iter_mut().find(|(existing, _)| *existing == kind) {
-            entry.1 = adapter;
-        } else {
-            sources.push((kind, adapter));
+            browser_controllers: Arc::default(),
         }
     }
 
     /// Keep each conversation bound to the plugin instance that owns its
     /// browser, including while an older runtime generation is draining.
-    pub(crate) fn register_browser_source(
+    pub(crate) fn register_browser_controller(
         &self,
         session_id: i64,
-        adapter: &Arc<dyn ActivitySourceAdapter>,
+        controller: &Arc<dyn BrowserController>,
     ) -> agena_plugin_sdk::Result<()> {
-        let mut sources = self.browser_sources.lock();
+        let mut sources = self.browser_controllers.lock();
         sources.retain(|_, source| source.strong_count() != 0);
         if sources.get(&session_id).and_then(Weak::upgrade).is_some() {
             return Err(agena_plugin_sdk::PluginError::from_kind(
@@ -81,27 +62,15 @@ impl ActivityRuntimeState {
                 "The previous browser for this conversation is still retiring. Wait for it to close.",
             ));
         }
-        sources.insert(session_id, Arc::downgrade(adapter));
+        sources.insert(session_id, Arc::downgrade(controller));
         Ok(())
     }
 
-    pub(crate) fn source_for(
-        &self,
-        kind: BackgroundActivityKind,
-        session_id: Option<i64>,
-    ) -> Option<Arc<dyn ActivitySourceAdapter>> {
-        if kind == BackgroundActivityKind::Browser {
-            return self
-                .browser_sources
-                .lock()
-                .get(&session_id?)
-                .and_then(Weak::upgrade);
-        }
-        self.sources
+    pub(crate) fn browser_controller(&self, session_id: i64) -> Option<Arc<dyn BrowserController>> {
+        self.browser_controllers
             .lock()
-            .iter()
-            .find(|(existing, _)| *existing == kind)
-            .map(|(_, adapter)| Arc::clone(adapter))
+            .get(&session_id)
+            .and_then(Weak::upgrade)
     }
 }
 

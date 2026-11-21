@@ -9,13 +9,11 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use agena_domain::{
-    BackgroundActivity, BackgroundActivityKind, BackgroundActivityLogLine,
-    BackgroundActivityLogRead, BackgroundActivityStatus,
-};
+use agena_domain::{BackgroundActivity, BackgroundActivityKind, BackgroundActivityStatus};
 use agena_plugin_host::sdk::attachment::{AttachmentItem, AttachmentKind, AttachmentSource};
 use agena_plugin_host::sdk::{
-    ActivitySourceAdapter, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput, async_trait,
+    Result as SdkResult, ToolInvokeContext, ToolInvokeOutput, async_trait,
+    browser::BrowserController,
 };
 use agena_plugin_host::{PluginError, sdk::host_api::HostClient};
 use agena_web::{managed_preview::ManagedPreviewTarget, prepare_fetch_url};
@@ -48,7 +46,7 @@ struct BrowserConfig {
     startup_timeout_secs: u64,
     /// Inactivity before Chrome closes. Zero disables idle shutdown.
     idle_timeout_secs: u64,
-    /// Include page messages in console diagnostics and activity logs.
+    /// Include page messages in console diagnostics.
     capture_console_text: bool,
     /// Additional synthetic DNS ranges owned by the local TUN proxy.
     fake_ip_ranges: Vec<String>,
@@ -111,7 +109,7 @@ fn browser_settings_metadata() -> &'static [(&'static str, &'static str, &'stati
         (
             "/capture_console_text",
             "Capture Console Text",
-            "Include page messages in diagnostics and activity logs.",
+            "Include page messages in console diagnostics.",
         ),
         (
             "/fake_ip_ranges",

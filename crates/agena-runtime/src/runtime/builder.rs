@@ -467,7 +467,7 @@ struct BrowserOperatorNetwork {
 }
 
 #[async_trait::async_trait]
-impl agena_plugin_sdk::activity::browser::BrowserNetworkAuthority for BrowserOperatorNetwork {
+impl agena_plugin_sdk::browser::BrowserNetworkAuthority for BrowserOperatorNetwork {
     async fn require(
         &self,
         target: &str,
@@ -1472,17 +1472,12 @@ impl agena_runtime::RuntimeControlService for AgenaRuntime {
     async fn browser_control(
         &self,
         session_id: i64,
-        command: agena_plugin_sdk::activity::browser::BrowserControlCommand,
-    ) -> agena_plugin_sdk::error::Result<agena_plugin_sdk::activity::browser::BrowserControlResult>
-    {
-        use agena_plugin_sdk::activity::browser::{BrowserControlCommand, BrowserControlResult};
+        command: agena_plugin_sdk::browser::BrowserControlCommand,
+    ) -> agena_plugin_sdk::error::Result<agena_plugin_sdk::browser::BrowserControlResult> {
+        use agena_plugin_sdk::browser::{BrowserControlCommand, BrowserControlResult};
         use agena_plugin_sdk::{PluginError, PluginErrorKind};
 
-        let adapter = self.activities.source_for(
-            agena_domain::BackgroundActivityKind::Browser,
-            Some(session_id),
-        );
-        let Some(adapter) = adapter else {
+        let Some(controller) = self.activities.browser_controller(session_id) else {
             return match command {
                 BrowserControlCommand::List => Ok(BrowserControlResult::State {
                     tabs: Vec::new(),
@@ -1507,12 +1502,14 @@ impl agena_runtime::RuntimeControlService for AgenaRuntime {
                 session_id,
             })
                 as Arc<
-                    dyn agena_plugin_sdk::activity::browser::BrowserNetworkAuthority,
+                    dyn agena_plugin_sdk::browser::BrowserNetworkAuthority,
                 >)
         } else {
             None
         };
-        adapter.browser_control(session_id, command, network).await
+        controller
+            .browser_control(session_id, command, network)
+            .await
     }
 
     fn session_processes(

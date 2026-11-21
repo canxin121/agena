@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
+import { computed, inject, nextTick, onBeforeUnmount, ref, useId, watch } from 'vue'
 import {
   RiArrowLeftSLine,
   RiArrowRightSLine,
@@ -18,6 +18,8 @@ import { useI18n } from 'vue-i18n'
 
 import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
 import Button from '@/components/ui/Button.vue'
+import { browserTakeoverKind, openBrowserKey } from '@/features/browser/api'
+import { useBrowserCopy } from '@/features/browser/copy'
 import { isImeComposing } from '@/lib/imeKeyboard'
 import { hasOpenKeyboardOverlay, isVisibleKeyboardTarget } from '@/lib/keyboardNavigation'
 import { interactionText } from '@/pages/chat/interactionText'
@@ -47,6 +49,8 @@ const props = defineProps<{
 const chat = useChatStore()
 const toasts = useToastsStore()
 const { t } = useI18n()
+const browserText = useBrowserCopy()
+const openBrowser = inject(openBrowserKey, null)
 
 const rootEl = ref<HTMLElement | null>(null)
 const activeControlKey = ref('')
@@ -104,6 +108,7 @@ const questionPage = computed({
 const isPermission = computed(() => Boolean(permission.value))
 const isPendingPermission = computed(() => permission.value?.pending === true)
 const isReview = computed(() => (interaction.value?.kind || '').trim().toLowerCase() === 'review')
+const isBrowserTakeover = computed(() => interaction.value?.kind === browserTakeoverKind)
 const questions = computed(() => interaction.value?.questions || [])
 const hasBody = computed(() => Boolean(interaction.value?.bodyMarkdown?.trim()))
 const isPendingInteraction = computed(() => Boolean(permission.value?.pending || interaction.value?.pending))
@@ -474,7 +479,8 @@ async function replyPermission(reply: 'once' | 'always' | 'reject') {
 }
 
 async function submitAnswers() {
-  if (!props.sessionId || !requestId.value || busy.value || !interaction.value?.pending) return
+  if (isBrowserTakeover.value || !props.sessionId || !requestId.value || busy.value || !interaction.value?.pending)
+    return
   const answers = answerState.value
   if (!answers.length || !questions.value.every((_, index) => questionAnswered(index))) {
     toasts.push('error', t('chat.attention.toasts.pleaseAnswerAllQuestions'))
@@ -887,6 +893,20 @@ onBeforeUnmount(() => {
       </div>
     </template>
 
+    <template v-else-if="interaction?.pending && isBrowserTakeover && openBrowser">
+      <div class="interaction-width space-y-2">
+        <p class="text-sm font-semibold">{{ browserText('requested') }}</p>
+        <p class="break-words text-sm">{{ questions[0]?.question }}</p>
+        <div class="flex flex-wrap gap-2">
+          <Button size="sm" data-testid="open-requested-browser" @click="openBrowser(sessionId || '')">
+            {{ browserText('open') }}
+          </Button>
+          <Button size="sm" variant="outline" :disabled="busy" @click="rejectAnswers">
+            {{ browserText('cancelRequest') }}
+          </Button>
+        </div>
+      </div>
+    </template>
     <template v-else-if="interaction">
       <p
         v-if="props.interaction?.pending && !interaction.pending"
@@ -1242,7 +1262,7 @@ onBeforeUnmount(() => {
       </div>
     </template>
     <p
-      v-if="isPendingInteraction"
+      v-if="isPendingInteraction && !isBrowserTakeover"
       :id="hintId"
       class="interaction-width mt-2 text-[10px] leading-snug text-muted-foreground"
       data-transcript-chrome="true"

@@ -135,6 +135,7 @@ fn bundled_plugins() -> Vec<(Box<dyn Plugin>, Option<String>)> {
     add!(crate::tool::new_telegram_plugin());
     add!(crate::tool::new_companion_plugin());
     add!(crate::tool::new_web_plugin());
+    add!(crate::tool::new_browser_plugin());
     plugins
 }
 
@@ -161,6 +162,47 @@ mod registration_inventory_tests {
         assert_eq!(
             ids, registered,
             "compiled capability inventory drifted from actual registrations"
+        );
+    }
+
+    #[test]
+    fn interactive_browser_tools_have_their_own_plugin_identity() {
+        let catalog = super::bundled_capability_manifest();
+        let browser = catalog
+            .plugins
+            .iter()
+            .find(|plugin| plugin.id == crate::tool::browser_plugin_id())
+            .unwrap();
+        assert_eq!(browser.tools.len(), 18);
+        assert!(
+            browser
+                .tools
+                .iter()
+                .any(|tool| tool.canonical_name == "agena.browser.open")
+        );
+        assert!(browser.tools.iter().all(|tool| {
+            tool.canonical_name.starts_with("agena.browser.")
+                && tool.tags.iter().any(|tag| tag == "interactive")
+        }));
+
+        let web = catalog
+            .plugins
+            .iter()
+            .find(|plugin| plugin.id == crate::tool::web_plugin_id())
+            .unwrap();
+        assert_eq!(
+            web.tools
+                .iter()
+                .map(|tool| tool.canonical_name.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "agena.web.crawl",
+                "agena.web.fetch",
+                "agena.web.fetch_many",
+                "agena.web.query",
+                "agena.web.read",
+                "agena.web.search"
+            ],
         );
     }
 }

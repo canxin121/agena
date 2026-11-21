@@ -6,6 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+which = { workspace = true }
 agena-async = { workspace = true }
 agena-failure = { workspace = true }
 agena-process = { workspace = true }
@@ -21,7 +22,7 @@ governor = { workspace = true }
 http = { workspace = true }
 hyper-util = { workspace = true }
 moka = { workspace = true }
-reqwest = { workspace = true, features = ["rustls", "cookies", "form"] }
+reqwest = { workspace = true, features = ["rustls", "cookies", "form", "query"] }
 redb = { workspace = true }
 robotstxt = { workspace = true }
 schemars = { workspace = true }
@@ -29,7 +30,6 @@ scraper = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 simhash = { workspace = true }
-spider = { workspace = true }
 text-splitter = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
@@ -37,16 +37,12 @@ tokio = { workspace = true, features = ["time"] }
 tracing = { workspace = true }
 url = { workspace = true, features = ["serde"] }
 urlencoding = { workspace = true }
-which = { workspace = true }
+
+[dev-dependencies]
+reqwest = { workspace = true, features = ["json"] }
 
 [lints]
 workspace = true
 
 [target.'cfg(target_endian = "little")'.dependencies]
 tantivy = { workspace = true }
-
-[target.'cfg(unix)'.dependencies]
-libc = { workspace = true }
-
-[target.'cfg(all(any(target_os = "linux", target_os = "macos", target_os = "windows"), any(target_arch = "aarch64", target_arch = "x86_64")))'.dependencies]
-spider = { workspace = true, features = ["chrome", "chrome_headless_new"] }

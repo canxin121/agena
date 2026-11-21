@@ -7,6 +7,12 @@ use crate::{AppState, rest};
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
         .route(
+            "/api/v1/sessions/{session_id}/browser",
+            get(rest::list_browser_tabs)
+                .post(rest::control_browser)
+                .layer(DefaultBodyLimit::max(64 * 1024)),
+        )
+        .route(
             "/api/v1/sessions/{session_id}/assistant",
             get(rest::get_assistant)
                 .put(rest::put_assistant)

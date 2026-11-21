@@ -558,8 +558,104 @@ fn activity_scheduler(
         .ok_or_else(|| agena_runtime::ActivityControlError::internal("scheduler unavailable"))
 }
 
+struct BrowserOperatorNetwork {
+    manager: std::sync::Weak<SessionManager>,
+    session_id: i64,
+}
+
+#[async_trait::async_trait]
+impl agena_plugin_sdk::activity::browser::BrowserNetworkAuthority for BrowserOperatorNetwork {
+    async fn require(
+        &self,
+        target: &str,
+        addresses: &[std::net::SocketAddr],
+    ) -> agena_plugin_sdk::error::Result<()> {
+        use agena_plugin_sdk::{PluginError, PluginErrorKind, host_api::SESSION_SCOPED_CALL_ID};
+
+        let denied = || {
+            PluginError::from_kind(
+                PluginErrorKind::PolicyDenied,
+                "The session's network policy does not authorize this browser request",
+            )
+        };
+        let manager = self.manager.upgrade().ok_or_else(denied)?;
+        if addresses.is_empty() {
+            return manager
+                .require_host_network_permission(
+                    self.session_id,
+                    SESSION_SCOPED_CALL_ID,
+                    target.to_owned(),
+                )
+                .await
+                .map_err(|_| denied());
+        }
+        let (executor, _) = manager
+            .host_callback_executor(Some(self.session_id), None)
+            .await
+            .map_err(|_| denied())?;
+        let policy = executor.sandbox_permission_snapshot();
+        let target = target.parse().map_err(|_| denied())?;
+        for address in addresses {
+            let resolved = address.to_string().parse().map_err(|_| denied())?;
+            if !matches!(
+                policy.authorize_resolved_network_address(&target, &resolved),
+                agena_domain::PermissionDecision::Allow
+            ) {
+                return Err(denied());
+            }
+        }
+        Ok(())
+    }
+}
+
 #[async_trait::async_trait]
 impl agena_runtime::RuntimeActivityService for AgenaRuntime {
+    async fn browser_control(
+        &self,
+        session_id: i64,
+        command: agena_plugin_sdk::activity::browser::BrowserControlCommand,
+    ) -> agena_plugin_sdk::error::Result<agena_plugin_sdk::activity::browser::BrowserControlResult>
+    {
+        use agena_plugin_sdk::activity::browser::{BrowserControlCommand, BrowserControlResult};
+        use agena_plugin_sdk::{PluginError, PluginErrorKind};
+
+        let adapter = self.activities.source_for(
+            agena_domain::BackgroundActivityKind::Browser,
+            Some(session_id),
+        );
+        let Some(adapter) = adapter else {
+            return match command {
+                BrowserControlCommand::List => Ok(BrowserControlResult::State {
+                    tabs: Vec::new(),
+                    human_control: false,
+                    help: None,
+                }),
+                _ => Err(PluginError::from_kind(
+                    PluginErrorKind::Disconnected,
+                    "The browser is no longer running",
+                )),
+            };
+        };
+        let network = if matches!(command, BrowserControlCommand::TakeControl { .. }) {
+            let manager = self.session_manager().ok_or_else(|| {
+                PluginError::from_kind(
+                    PluginErrorKind::HostUnavailable,
+                    "Session runtime unavailable",
+                )
+            })?;
+            Some(Arc::new(BrowserOperatorNetwork {
+                manager: Arc::downgrade(&manager),
+                session_id,
+            })
+                as Arc<
+                    dyn agena_plugin_sdk::activity::browser::BrowserNetworkAuthority,
+                >)
+        } else {
+            None
+        };
+        adapter.browser_control(session_id, command, network).await
+    }
+
     async fn list_activities(
         &self,
         filter: &agena_domain::BackgroundActivityFilter,
@@ -735,7 +831,10 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
         let activity = self.get_activity(activity_id).await?;
         // Plugin-registered activity sources own their log stream; dispatch
         // to them before any built-in behavior.
-        if let Some(adapter) = self.activities.source_for(activity.kind) {
+        if let Some(adapter) = self
+            .activities
+            .source_for(activity.kind, activity.session_id)
+        {
             return adapter
                 .read_logs(activity_id, since_seq, limit, wait_ms)
                 .await
@@ -770,8 +869,7 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
                     .map_err(|err| agena_runtime::ActivityControlError::internal_error(&err))
             }
             // Kinds without a registered source adapter (runtime maintenance
-            // tasks today, browser sessions before the web plugin registers
-            // its adapter) have no incremental log stream.
+            // tasks and closed browser sessions) have no incremental log stream.
             agena_domain::BackgroundActivityKind::Agent
             | agena_domain::BackgroundActivityKind::Cron
             | agena_domain::BackgroundActivityKind::Runtime
@@ -809,9 +907,12 @@ impl agena_runtime::RuntimeActivityService for AgenaRuntime {
             ));
         }
         // Plugin-registered activity sources implement stop themselves (e.g.
-        // the web plugin closes the matching browser session); the adapter
+        // the Browser plugin closes the matching tab); the adapter
         // publishes the terminal record so the refreshed activity reflects it.
-        if let Some(adapter) = self.activities.source_for(activity.kind) {
+        if let Some(adapter) = self
+            .activities
+            .source_for(activity.kind, activity.session_id)
+        {
             adapter
                 .stop(activity_id)
                 .await

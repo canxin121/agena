@@ -189,20 +189,134 @@ isolated preview gateway streams upstream responses.
 
 ## Managed browser access
 
-`browser_list` includes `previews` belonging to the current canonical workspace
-and Agena session, even if Chrome has not been started. To open one, supply its
-ID instead of a URL:
+The bundled Browser plugin registers the interactive tools under the
+`browser.*` namespace. Configure the Chrome executable, startup timeout,
+idle timeout, console capture, and synthetic DNS ranges under
+`plugins.list.agena.browser.settings`. The `AGENA_CHROME_PATH` environment
+variable can configure the executable for both interactive tools and Web
+rendering.
+
+Web fetch, crawl, and search can still render JavaScript when configured in
+`agena.web`. Rendering uses disposable pages and its own Chrome process.
+Interactive pages and their cookies belong to the Browser plugin.
+
+`browser.list` includes `previews` belonging to the current canonical workspace
+and Agena session even before Chrome starts. Pass the ID in `preview_id`.
 
 ```json
-{ "preview_id": "<id from browser_list>" }
+{ "preview_id": "<id from browser.list>" }
 ```
 
-`browser_open` accepts exactly one of `url` and `preview_id`. A public `url` keeps
+`browser.open` accepts exactly one of `url` and `preview_id`. A public `url` keeps
 the existing public-network policy. A `preview_id` resolves only when the
 preview belongs to that workspace and session and the current Agena server owns
 its live child process. A persisted PID, a stopped record, or a manually attached
 local service does not grant agent browser access. Authenticated users may still
 attach a service for human preview through the workbench.
+
+`browser.open`, `browser.snapshot`, and browser actions return the accessibility
+tree in `snapshot.tree`. Pass an element marked `[ref=e7]` as
+`"selector": "@e7"` in the same browser session. `browser.snapshot` accepts a CSS
+`selector`, `interactive: true`, and `max_depth` to focus on part of a page.
+Use refs from the latest snapshot. `snapshot.truncated` indicates that the tree
+hit the output limit.
+
+`browser.action` can navigate, go back or forward, reload, press keys, scroll,
+select options, set checkboxes, and resolve JavaScript dialogs within the same
+tab. It also supports `hover`, `double_click`, `focus`, `scroll_into_view`, and
+`drag`. A `navigate` action takes an absolute HTTP(S) URL.
+
+```json
+{
+  "session_id": "<id from browser.open>",
+  "action": {"kind": "navigate", "url": "https://example.com/"}
+}
+```
+
+Actions return a refreshed snapshot by default. Pass `return_snapshot: false`
+when the next operation already has a selector. `browser.type` can submit a
+form with `press_enter: true`, or `browser.action` can press Enter separately.
+An `action.status` of `completed` records the completed interaction even if
+the result also contains a failed `observation`. Take a fresh snapshot after
+`outcome_unknown` to check whether the interaction took effect.
+
+Use `browser.wait` with `selector` and `state` to wait for `visible`, `hidden`,
+`attached`, or `detached`. It also accepts visible `text`, a `url` pattern, or
+a `load_state` of `domcontentloaded`, `load`, or `networkidle`.
+
+`browser.frames` returns frame IDs for scoped snapshots, reads, scripts, and
+interactions. For public browser pages, a popup opened during an authorized
+action joins its opener's browser context after request interception is
+installed. The action can return `opened_sessions`, and `browser.list` shows
+each adopted tab and its `opener_session_id`.
+
+### Reading page content and diagnosing failures
+
+Use `browser.content` with `text` for visible text or `dom_html` for the live
+DOM. Pass a CSS selector or snapshot ref to read one region. `response_html`
+reads the captured main-document response for the committed navigation.
+For long captures, pass `content_id` and `next_offset` as `offset` with the
+same `session_id`. The result includes `truncated` when the capture reached
+the byte limit. `browser.inspect` gives the match count, properties, and
+frame-relative bounds of the first match.
+
+`browser.evaluate` executes JavaScript in the page, including expressions
+that return a Promise. The result contains `status` and a JSON `value`, a
+JavaScript `unserializable` marker such as `undefined`, or exception details.
+An unresolved execution can cause Chrome to close the affected tab on
+timeout. The result reports whether the tab was closed.
+
+```json
+{
+  "session_id": "<id from browser.open>",
+  "expression": "Array.from(document.querySelectorAll('h2'), h => h.innerText)",
+  "timeout_ms": 5000
+}
+```
+
+`browser.diagnostics` accepts `query.kind` of `network`, `request`, or `logs`.
+Use `network` to get request IDs, HTTP status, and timing. Use `request` with
+`request_id` and `include_body: true` to retrieve a retained text response.
+`logs` includes console events and page exceptions. Full console message text
+follows the Browser plugin’s `capture_console_text` setting.
+
+`browser.download` accepts a URL or a selector that triggers one download.
+Chrome reports completion before Agena returns the resulting attachment.
+`browser.upload` takes a file input selector and local paths, including local
+attachments. Agena checks read permission and stages the files for Chrome.
+
+### Browser control in Agena Web
+
+Open **Browser** in the conversation header to see the live Chrome pages in
+that conversation. Select a tab to preview it. **Take control** gives the
+view keyboard and pointer access to the same browser the model uses. Use
+**Return to AI** when finished.
+
+The model can call `browser.request_takeover` with the page's `session_id`
+and a reason. The conversation shows an **Open browser** action and the
+tool waits for the user's response. Sign in directly in the browser panel.
+Returning control supplies the model with the page ID and lets it take a
+fresh snapshot. The Chrome context retains its cookies and login state.
+
+The server waits for existing browser tools to finish before delivering
+operator input. The model's browser tools report the waiting state during
+takeover. Frames and inputs are sent through the authenticated conversation
+API, and only the view holding the control grant can see the browser while
+credentials are being entered. Takeover clears captured network and console
+diagnostics for the affected tabs and stops collecting them there. Chrome
+continues to enforce the conversation's network policy.
+
+Returning control checks for text left in recognized sign-in fields. Finish
+the sign-in flow or clear those fields before returning the browser. Runtime
+reloads with the same Browser and sandbox settings keep the same tabs, Chrome
+context, and control grant.
+
+Closing the panel leaves the browser in human control. The original Web tab
+can reopen the panel and return control. **Close these pages** discards the
+conversation's browser context. A control grant lasts ten minutes. The server
+closes the context if the grant expires before control is returned.
+
+### Preview authorization
 
 The preview's actual upstream still requires the applicable Agena network
 permission. A preview ID provides a narrow exception to the browser's general
@@ -331,11 +445,12 @@ It also exercises cookie mount paths, raw encoded request paths, partial/encoded
 control-proxy responses, HTTP/SSE revocation, pending-header cancellation, rejection of
 stopped managed targets, and SIGTERM cleanup with a preview still running.
 It also invokes the actual operator browser tools to verify owner/workspace
-discovery, `browser_open` by preview ID, snapshots, clicks, CSP enforcement, and
-denial of actions after a run stops. The probe enables browser tools and allows
-its loopback target only in its temporary `data/agena.json`; it does not change
-production permissions. `AGENA_PROBE_AGENT=0` skips that tool integration when
-only the gateway is being investigated.
+discovery and authorization for `browser.open` by preview ID. Where the platform
+supports host-loopback permission, the temporary `data/agena.json` grants it
+for the fixture and the probe exercises accessibility refs, clicks, waits,
+Unicode form submission, CSP enforcement, and revocation after a run stops.
+On Linux it verifies that the native host-loopback policy denies the browser
+open. `AGENA_PROBE_AGENT=0` skips the operator tool integration.
 Set `PROBE_REPORT` to retain the machine-readable result. This verifies the
 gateway's browser behavior; its small fixture UI does not replace Vue tests.
 

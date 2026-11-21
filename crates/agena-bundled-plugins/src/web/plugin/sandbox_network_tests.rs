@@ -1,6 +1,6 @@
 use super::*;
 use agena_plugin_host::sdk::{
-    EventEnvelope, EventFilter, PluginErrorKind,
+    EventEnvelope, EventFilter, PluginErrorKind, async_trait,
     host_api::{EventSubscription, LogLevel, NoopHostClient, PermissionQuery},
 };
 
@@ -170,33 +170,13 @@ async fn remote_dns_proxy_is_rejected_before_host_authorization_or_connection() 
 }
 
 #[tokio::test]
-async fn browser_gate_prevents_launcher_render_and_action_execution() {
+async fn render_gate_prevents_launching_chrome_for_sandboxed_fetch() {
     let plugin = WebPlugin::default();
-    let error = plugin.browser_endpoint().await.unwrap_err();
-    assert_eq!(error.kind, PluginErrorKind::HostUnavailable);
-    assert!(error.to_string().contains("render_js=false"));
-    let context = ToolInvokeContext {
-        caller: None,
-        tool_name: "browser_click",
-        session_id: 42,
-        call_id: 1,
-        workspace_root: "",
-        cancellation: Default::default(),
-    };
-    let error = plugin
-        .with_browser_action(&context, "never-started", async {
-            panic!("unsupported browser actions must never execute");
-            #[allow(unreachable_code)]
-            Ok::<(), PluginError>(())
-        })
-        .await
-        .unwrap_err();
-    assert_eq!(error.kind, PluginErrorKind::HostUnavailable);
     let url = url::Url::parse("https://example.org").unwrap();
-    let error = rendered_fetch::fetch(&plugin, &url, &SpiderFetchOptions::default())
+    let error = rendered_fetch::fetch(&plugin, &url, &WebFetchOptions::default())
         .await
         .unwrap_err();
     assert_eq!(error.kind, PluginErrorKind::HostUnavailable);
     assert!(plugin.state.get().is_none());
-    assert!(plugin.browser_state.clients.lock().await.is_empty());
+    assert!(!plugin.renderer.running().await.unwrap());
 }

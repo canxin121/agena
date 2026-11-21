@@ -817,26 +817,24 @@ fn tool_result_fragment(
                 return Some("exited".to_owned());
             }
         }
-        "browser_open"
-        | "web.browser_open"
-        | "browser_snapshot"
-        | "web.browser_snapshot"
-        | "browser_click"
-        | "web.browser_click"
-        | "browser_type"
-        | "web.browser_type"
-        | "browser_wait"
-        | "web.browser_wait" => {
+        "browser.open" | "browser.snapshot" | "browser.click" | "browser.type" | "browser.wait"
+        | "browser.action" => {
             if let Some(fragment) = browser_result_fragment(key, object) {
                 return Some(fragment);
             }
         }
-        "browser_close" | "web.browser_close" => {
+        "browser.close" => {
             if object.get("closed").and_then(serde_json::Value::as_bool) == Some(true) {
                 return Some("closed".to_owned());
             }
         }
-        "browser_shutdown" | "web.browser_shutdown" => {
+        "browser.shutdown" => {
+            if let Some(sessions) = object
+                .get("closed_sessions")
+                .and_then(serde_json::Value::as_array)
+            {
+                return Some(format_count(sessions.len(), "pages closed"));
+            }
             if let Some(closed) = object.get("closed").and_then(serde_json::Value::as_bool) {
                 return Some(if closed { "closed" } else { "not running" }.to_owned());
             }
@@ -970,15 +968,12 @@ fn tool_result_fragment(
                 return Some(format_count(snapshots.len(), "snapshots"));
             }
         }
-        "browser_list" | "web.browser_list" => {
+        "browser.list" => {
             if let Some(sessions) = object.get("sessions").and_then(serde_json::Value::as_array) {
                 return Some(format_count(sessions.len(), "pages"));
             }
         }
-        "browser_screenshot"
-        | "web.browser_screenshot"
-        | "browser_download"
-        | "web.browser_download" => {
+        "browser.screenshot" | "browser.download" => {
             if let Some(bytes) = object.get("size_bytes").and_then(value_as_u64) {
                 return Some(format!("saved · {}", format_bytes(bytes)));
             }
@@ -2091,6 +2086,9 @@ fn browser_result_fragment(
     let action = object
         .get("action")
         .or_else(|| result.and_then(|result| result.get("action")));
+    if action.and_then(|action| action["status"].as_str()) == Some("outcome_unknown") {
+        return Some("outcome unknown".to_owned());
+    }
     if action
         .and_then(serde_json::Value::as_object)
         .and_then(|action| action.get("ok"))
@@ -2099,6 +2097,9 @@ fn browser_result_fragment(
     {
         return Some("failed".to_owned());
     }
+    let action_kind = action
+        .and_then(|action| action.get("kind"))
+        .and_then(serde_json::Value::as_str);
     if let Some(snapshot) = snapshot {
         let title = snapshot
             .get("title")
@@ -2110,16 +2111,16 @@ fn browser_result_fragment(
             .and_then(|value| value.as_array().map(|values| values.len() as u64));
         let mut parts = Vec::new();
         match key {
-            "browser_click" | "web.browser_click" => parts.push("clicked".to_owned()),
-            "browser_type" | "web.browser_type" => parts.push("typed".to_owned()),
-            "browser_wait" | "web.browser_wait" => parts.push("ready".to_owned()),
+            "browser.click" => parts.push("clicked".to_owned()),
+            "browser.type" => parts.push("typed".to_owned()),
+            "browser.wait" => parts.push("ready".to_owned()),
+            "browser.action" => {
+                parts.extend(action_kind.map(|kind| normalize_tool_title(kind.replace('_', " "))));
+            }
             _ => {}
         }
         parts.extend(title);
-        if !matches!(
-            key,
-            "browser_click" | "web.browser_click" | "browser_type" | "web.browser_type"
-        ) {
+        if !matches!(key, "browser.click" | "browser.type") {
             parts
                 .extend(elements.map(|value| format_count(value as usize, "interactive elements")));
         }
@@ -2143,7 +2144,7 @@ fn browser_result_fragment(
     {
         return Some("completed".to_owned());
     }
-    None
+    action_kind.map(|kind| normalize_tool_title(kind.replace('_', " ")))
 }
 
 fn first_array<'a>(
@@ -2475,16 +2476,22 @@ fn tool_action_label(tool_name: &str) -> String {
         "commands.refresh" => "Refresh commands".to_owned(),
         "snapshot.status" => "Inspect snapshot".to_owned(),
         "repo.status" => "Inspect repository".to_owned(),
-        "web.browser_open" | "browser_open" => "Open page".to_owned(),
-        "web.browser_click" | "browser_click" => "Click element".to_owned(),
-        "web.browser_type" | "browser_type" => "Enter text".to_owned(),
-        "web.browser_screenshot" | "browser_screenshot" => "Capture page".to_owned(),
-        "web.browser_snapshot" | "browser_snapshot" => "Inspect page".to_owned(),
-        "web.browser_wait" | "browser_wait" => "Wait for page".to_owned(),
-        "web.browser_close" | "browser_close" => "Close page".to_owned(),
-        "web.browser_download" | "browser_download" => "Download file".to_owned(),
-        "web.browser_list" | "browser_list" => "List pages".to_owned(),
-        "web.browser_shutdown" | "browser_shutdown" => "Close browser".to_owned(),
+        "browser.open" => "Open page".to_owned(),
+        "browser.click" => "Click element".to_owned(),
+        "browser.type" => "Enter text".to_owned(),
+        "browser.screenshot" => "Capture page".to_owned(),
+        "browser.snapshot" => "Inspect page".to_owned(),
+        "browser.wait" => "Wait for page".to_owned(),
+        "browser.close" => "Close page".to_owned(),
+        "browser.download" => "Download file".to_owned(),
+        "browser.list" => "List pages".to_owned(),
+        "browser.shutdown" => "Close browser".to_owned(),
+        "browser.content" => "Read page content".to_owned(),
+        "browser.evaluate" => "Evaluate JavaScript".to_owned(),
+        "browser.frames" => "List page frames".to_owned(),
+        "browser.inspect" => "Inspect element".to_owned(),
+        "browser.diagnostics" => "Inspect browser diagnostics".to_owned(),
+        "browser.upload" => "Select upload files".to_owned(),
         "web.crawl" => "Crawl site".to_owned(),
         _ => humanize_tool_leaf(&key),
     }
@@ -2507,7 +2514,15 @@ pub fn normalized_tool_identity(tool_name: &str) -> String {
     } else if let Some(stripped) = key.strip_prefix("agena_") {
         key = stripped.replace('_', ".");
     }
-    key.to_ascii_lowercase()
+    let key = key.to_ascii_lowercase();
+    if let Some(operation) = key
+        .strip_prefix("web.browser_")
+        .or_else(|| key.strip_prefix("web.browser."))
+        .or_else(|| key.strip_prefix("browser_"))
+    {
+        return format!("browser.{operation}");
+    }
+    key
 }
 
 fn humanize_tool_leaf(key: &str) -> String {
@@ -2597,23 +2612,22 @@ pub fn invocation_title_subject(tool_name: &str, input: &serde_json::Value) -> S
     } else if key.ends_with("web.fetch")
         || key.ends_with("web.crawl")
         || key.ends_with("browser.open")
-        || key.ends_with("browser_open")
     {
-        &["url", "start_url", "uri", "url_pattern"]
-    } else if key.ends_with("browser.click") || key.ends_with("browser_click") {
+        &["url", "preview_id", "start_url", "uri", "url_pattern"]
+    } else if key.ends_with("browser.click") {
         &["selector", "ref", "session_id"]
-    } else if key.ends_with("browser.type") || key.ends_with("browser_type") {
+    } else if key.ends_with("browser.type") {
         // Do not put arbitrary typed text (which may contain secrets) in a
         // collapsed title. The target element is enough to explain the
         // action; the full input remains available in the expanded input.
         &["selector", "ref", "element", "session_id"]
-    } else if key.ends_with("browser.wait") || key.ends_with("browser_wait") {
-        &["selector", "condition", "session_id"]
-    } else if key.ends_with("browser.screenshot") || key.ends_with("browser_screenshot") {
+    } else if key.ends_with("browser.wait") {
+        &["selector", "url", "condition", "session_id"]
+    } else if key.ends_with("browser.screenshot") {
         &["session_id", "path"]
-    } else if key.ends_with("browser.download") || key.ends_with("browser_download") {
-        &["url", "session_id"]
-    } else if key.ends_with("browser.close") || key.ends_with("browser_close") {
+    } else if key.ends_with("browser.download") {
+        &["url", "selector", "session_id"]
+    } else if key.ends_with("browser.close") {
         &["session_id"]
     } else if key == "interaction.ask" || key == "ask_user" {
         &["questions", "title"]
@@ -2627,16 +2641,8 @@ pub fn invocation_title_subject(tool_name: &str, input: &serde_json::Value) -> S
         &["path", "name", "branch"]
     } else if key.ends_with("snapshot.exit") {
         &["path", "action"]
-    } else if key.starts_with("browser_") || key.starts_with("web.browser_") {
-        &[
-            "session_id",
-            "url",
-            "element",
-            "ref",
-            "text",
-            "condition",
-            "path",
-        ]
+    } else if key.starts_with("browser.") {
+        &["session_id", "selector", "url", "element", "ref", "path"]
     } else if key.starts_with("mcp.") {
         &["server", "uri", "name", "query", "cursor"]
     } else if key.ends_with("settings.set") || key.ends_with("settings.reset") {

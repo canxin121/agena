@@ -114,9 +114,7 @@ impl ToolExecutor {
     }
 
     pub fn network_permission_check(&self, target: &str) -> Result<ToolPermissionCheck, ToolError> {
-        let mut checks = Vec::with_capacity(1);
-        self.push_network_check(&mut checks, target)?;
-        Ok(checks.remove(0))
+        self.network_permission_check_with(target, crate::shell_sandbox::resolved_network_targets)
     }
 
     pub async fn network_permission_check_async(
@@ -126,6 +124,20 @@ impl ToolExecutor {
         let target = target.to_owned();
         self.run_permission_preflight(move |executor| executor.network_permission_check(&target))
             .await
+    }
+
+    /// Preflight for HTTP transport that pins and checks each returned address.
+    pub async fn pinned_http_permission_check_async(
+        &self,
+        target: String,
+    ) -> Result<ToolPermissionCheck, ToolError> {
+        self.run_permission_preflight(move |executor| {
+            executor.network_permission_check_with(
+                &target,
+                crate::shell_sandbox::resolved_pinned_http_targets,
+            )
+        })
+        .await
     }
 
     pub fn resolve_target_path(&self, raw_path: &str) -> PathBuf {
@@ -313,6 +325,18 @@ impl ToolExecutor {
         checks: &mut Vec<ToolPermissionCheck>,
         target: &str,
     ) -> Result<(), ToolError> {
+        checks.push(self.network_permission_check(target)?);
+        Ok(())
+    }
+
+    fn network_permission_check_with(
+        &self,
+        target: &str,
+        resolve: impl FnOnce(
+            &str,
+            &crate::authorization::SandboxPermissionSnapshot,
+        ) -> Result<Vec<NetworkTarget>, ToolError>,
+    ) -> Result<ToolPermissionCheck, ToolError> {
         let target: NetworkTarget = target.parse().map_err(|err| {
             ToolError::invalid_input(format!(
                 "invalid network permission target `{target}`: {err}"
@@ -330,9 +354,7 @@ impl ToolExecutor {
             decision = agena_domain::PermissionDecision::Deny {
                 reason: "native network policy denies all resolved destinations".into(),
             };
-            for resolved in
-                crate::shell_sandbox::resolved_network_targets(target.original(), &snapshot)?
-            {
+            for resolved in resolve(target.original(), &snapshot)? {
                 let candidate = if target.host() == "*" {
                     snapshot.authorize_network_connect(&resolved)
                 } else {
@@ -345,15 +367,14 @@ impl ToolExecutor {
                 decision = candidate;
             }
         }
-        checks.push(ToolPermissionCheck {
+        Ok(ToolPermissionCheck {
             action: PermissionAction::NetworkAccess {
                 target: target.original().to_string(),
                 host: target.host().to_string(),
                 port: target.port(),
             },
             decision,
-        });
-        Ok(())
+        })
     }
 
     /// Record every declared `reads`/`writes` path of a shell command.

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { RiFolder6Line, RiSettings3Line } from '@remixicon/vue'
-import { computed, defineAsyncComponent, isRef, ref, unref, useId, watch } from 'vue'
+import { computed, defineAsyncComponent, isRef, provide, ref, unref, useId, watch } from 'vue'
 import { useResizeObserver, useWindowSize } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import {
@@ -19,10 +19,13 @@ import {
   RiCommandLine,
   RiBookOpenLine,
   RiGitBranchLine,
+  RiGlobalLine,
 } from '@remixicon/vue'
 
 import BotWelcome from './BotWelcome.vue'
 import BotAvatar from '@/features/bots/BotAvatar.vue'
+import { openBrowserKey } from '@/features/browser/api'
+import { useBrowserCopy } from '@/features/browser/copy'
 import VerticalSplitPane from '@/components/ui/VerticalSplitPane.vue'
 import MessageList from '@/components/chat/MessageList.vue'
 import QueuedMessages from '@/components/chat/QueuedMessages.vue'
@@ -51,6 +54,7 @@ const SessionWorkSection = defineAsyncComponent(() => import('@/components/chat/
 const WorkspaceChangesSection = defineAsyncComponent(() => import('@/components/chat/WorkspaceChangesSection.vue'))
 const BtwSection = defineAsyncComponent(() => import('@/components/chat/BtwSection.vue'))
 const PlanSection = defineAsyncComponent(() => import('@/components/chat/PlanSection.vue'))
+const SessionBrowser = defineAsyncComponent(() => import('@/features/browser/SessionBrowser.vue'))
 const btw = useBtwStore()
 
 // This view is template-only: it takes a context bag from ChatPage.
@@ -58,6 +62,26 @@ const btw = useBtwStore()
 const props = defineProps<{ ctx: ChatPageViewContext }>()
 const ctx = props.ctx
 const commandListId = `commands-${useId()}`
+const browserOpen = ref(false)
+const browserMounted = ref(false)
+const browserText = useBrowserCopy()
+const browserRequestId = computed(() => ctx.chat.getBrowserTakeoverRequestId(ctx.chat.selectedSessionId || ''))
+provide(openBrowserKey, (sessionId) => {
+  if (sessionId !== ctx.chat.selectedSessionId) return
+  browserMounted.value = true
+  browserOpen.value = true
+})
+watch(
+  () => ctx.chat.selectedSessionId,
+  () => {
+    browserOpen.value = false
+  },
+)
+
+function showBrowser() {
+  browserMounted.value = true
+  browserOpen.value = true
+}
 
 function copyKeyboardMessage(id: string) {
   const message = ctx.chat.messages.find((message) => String(message.info.id) === id)
@@ -438,6 +462,16 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
               </div>
               <div class="flex shrink-0 items-center gap-2 font-mono text-[10px] text-muted-foreground">
                 <span v-if="currentPhase !== 'idle'">{{ currentPhase }}</span>
+                <IconButton
+                  v-if="chat.selectedSessionId"
+                  class="h-8 w-8"
+                  :class="browserRequestId ? 'bg-primary/10 text-primary' : ''"
+                  :tooltip="browserRequestId ? browserText('requested') : browserText('browser')"
+                  :aria-label="browserRequestId ? browserText('requested') : browserText('browser')"
+                  data-testid="open-session-browser"
+                  @click="showBrowser"
+                  ><RiGlobalLine class="h-4 w-4"
+                /></IconButton>
                 <template v-if="transcriptVimEnabled">
                   <span v-if="transcriptVimCommandLabel" class="text-foreground">{{ transcriptVimCommandLabel }}</span>
                   <span
@@ -1089,6 +1123,12 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
     @add="addProjectAttachment"
   />
 
+  <SessionBrowser
+    v-if="browserMounted && chat.selectedSessionId"
+    v-model:open="browserOpen"
+    :session-id="chat.selectedSessionId"
+    :request-id="browserRequestId"
+  />
   <AttachmentsPanel
     :open="attachmentsPanelOpen"
     :is-compact-touch="ui.isCompactTouch"

@@ -212,6 +212,13 @@ pub trait HostClient: Send + Sync + 'static {
         }
     }
 
+    /// Authorize an HTTP(S) URL for a transport that checks and pins its resolved addresses.
+    /// A native host may share fresh DNS answers with that transport. Embedders can use
+    /// the ordinary network check when the transport resolves separately.
+    async fn require_pinned_http_permission(&self, target: String) -> Result<()> {
+        self.require_network_permission(target).await
+    }
+
     /// Queue a reload after the originating plugin call (including its nested
     /// calls or stream) finishes. Return acceptance, never a completed report.
     /// Do not wait for completion inside the originating call: it is a barrier.

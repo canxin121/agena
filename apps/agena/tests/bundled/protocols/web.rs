@@ -20,6 +20,9 @@ use serde_json::{Value, json};
 
 use super::super::{allow_permissions, fixture, native_fixture_address};
 
+#[cfg(unix)]
+mod takeover;
+
 #[derive(Default)]
 struct SearchPeer {
     requests: Mutex<Vec<(BTreeMap<String, String>, HeaderMap)>>,
@@ -86,6 +89,8 @@ async fn search(
 fn configured_fixture(setup_peer: Arc<SearchPeer>) -> TestAgenaBuilder {
     fixture()
         .expect_plugin("agena.web")
+        // Keep the scripted turns focused on the HTTP and browser tool paths.
+        .configure_global(|config| config["plugins"]["list"]["agena.memory"]["enabled"] = json!(false))
         .before_start(move |case| async move {
             let private_peer = setup_peer.clone();
             let server = case
@@ -303,9 +308,12 @@ async fn configured_search_denial_and_tool_approval_precede_http() -> TestResult
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn browser_open_validates_typed_targets_before_browser_or_network_io() -> TestResult {
+pub(super) async fn browser_open_validates_typed_targets_before_browser_or_network_io() -> TestResult
+{
     let peer = Arc::new(SearchPeer::default());
     configured_fixture(peer.clone())
+        .expect_plugin("agena.browser")
+        .configure_global(|config| config["sandbox"] = json!(false))
         .run(move |case| async move {
             let user = case.user().new_session().await?;
             allow_permissions(&user).await?;
@@ -319,7 +327,7 @@ async fn browser_open_validates_typed_targets_before_browser_or_network_io() -> 
                 json!({"preview_id":"  "}),
                 json!({"url":private_url,"preview_id":"preview-1"}),
             ] {
-                let invalid = user.call_tool("web.browser_open", input).await?;
+                let invalid = user.call_tool("browser.open", input).await?;
                 invalid.assert_failure_kind(ModelFeedbackKind::InvalidInput)?;
                 assert_eq!(peer.private_fetches.load(Ordering::SeqCst), 0);
             }
@@ -328,14 +336,11 @@ async fn browser_open_validates_typed_targets_before_browser_or_network_io() -> 
             // distinct authorization checks and must be classified as policy
             // denials, before Chrome can be acquired or contacted.
             let public_target = user
-                .call_tool(
-                    "web.browser_open",
-                    json!({"url":format!("  {private_url}  ")}),
-                )
+                .call_tool("browser.open", json!({"url":format!("  {private_url}  ")}))
                 .await?;
             public_target.assert_failure_kind(ModelFeedbackKind::PermissionDenied)?;
             let unowned_preview = user
-                .call_tool("web.browser_open", json!({"preview_id":"  preview-1  "}))
+                .call_tool("browser.open", json!({"preview_id":"  preview-1  "}))
                 .await?;
             unowned_preview.assert_failure_kind(ModelFeedbackKind::PermissionDenied)?;
             assert_eq!(peer.private_fetches.load(Ordering::SeqCst), 0);

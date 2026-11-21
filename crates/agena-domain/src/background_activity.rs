@@ -31,7 +31,7 @@ pub enum BackgroundActivityKind {
     /// A runtime-maintained maintenance task (marketplace sync, catalog
     /// refresh, runtime reload).
     Runtime,
-    /// A managed interactive browser session (`web.browser_*`).
+    /// A managed interactive browser session (`browser.*`).
     Browser,
 }
 

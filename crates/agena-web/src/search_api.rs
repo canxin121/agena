@@ -118,12 +118,9 @@ pub async fn search_api(
             "search needs a 1–8192 byte query and a positive limit".into(),
         ));
     }
-    let builder = reqwest::Client::builder()
-        .timeout(options.timeout)
-        .user_agent(options.user_agent)
-        .redirect(reqwest::redirect::Policy::none());
-    let builder = options.route.apply(builder, options.endpoint);
-    let client = builder.build()?;
+    static CLIENTS: std::sync::LazyLock<crate::WebHttpClientPool> =
+        std::sync::LazyLock::new(crate::WebHttpClientPool::default);
+    let client = CLIENTS.client(options.endpoint, options.route, options.timeout)?;
     // Brave and Tavily support at most 20. Use a predictable common cap.
     let limit = options.limit.min(20);
     let request = match options.provider {

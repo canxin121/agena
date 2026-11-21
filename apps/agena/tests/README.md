@@ -217,7 +217,7 @@ Rust 测试发现，按名称筛选即可，不需要再维护第二套测试入
 | chatgpt | Responses、模型目录/重载、原生资源、multipart、receipt、HTTP 错误、WebSocket、SSE、异步及并发计费 |
 | claude | Messages、模型选择、原生资源、文件、batch 按模型计费、receipt、HTTP 错误 |
 | gemini | Interactions、原生资源、resumable upload/跨 origin 拒绝、WebSocket、batch、receipt、用量归属 |
-| web | SearXNG 搜索、筛选去重、部分错误、真实审批拒绝、私有 fetch、browser_open 输入/权限边界 |
+| web | SearXNG 搜索、筛选去重、部分错误、真实审批拒绝、私有 fetch、browser.open 输入/权限边界 |
 | mcp | HTTP/stdio 握手与调用、资源/提示、连接 CRUD、密钥保留/脱敏、读写/进程权限、reload 与子进程退出 |
 | lsp | 本地 stdio、hover/definition/references/diagnostics、文档版本、进程回收 |
 

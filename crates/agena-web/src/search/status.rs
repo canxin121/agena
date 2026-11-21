@@ -91,8 +91,8 @@ pub struct WebSearchPage {
 pub(super) fn parse_page(
     engine: WebSearchEngine,
     page: &WebSearchPage,
-) -> Result<Vec<WebSearchResult>, CrawlError> {
-    let doc = Html::parse_document(&page.html);
+    want_next: bool,
+) -> Result<(Vec<WebSearchResult>, Option<transport::SearchRequest>), CrawlError> {
     let fail = |kind, message: &str| {
         let mut issue = SearchIssue::new(kind, message);
         issue.http_status = Some(page.status);
@@ -105,6 +105,7 @@ pub(super) fn parse_page(
             "rate_limited: search website returned HTTP 429",
         ));
     }
+    let doc = Html::parse_document(&page.html);
     let title = doc
         .select(&selector("title"))
         .next()
@@ -157,13 +158,18 @@ pub(super) fn parse_page(
         ));
     }
     let rows = match engine {
-        WebSearchEngine::Bing => parse_bing_results(&page.html, MAX_SEARCH_RESULTS),
-        WebSearchEngine::DuckDuckGo => parse_duckduckgo_results(&page.html, MAX_SEARCH_RESULTS),
-        WebSearchEngine::Baidu => parse_baidu_results(&page.html, MAX_SEARCH_RESULTS),
+        WebSearchEngine::Bing => parse_bing_results(&doc, MAX_SEARCH_RESULTS),
+        WebSearchEngine::DuckDuckGo => parse_duckduckgo_results(&doc, MAX_SEARCH_RESULTS),
+        WebSearchEngine::Baidu => parse_baidu_results(&doc, MAX_SEARCH_RESULTS),
         _ => public_html::parse_results(engine, &doc, MAX_SEARCH_RESULTS),
     };
     if !rows.is_empty() {
-        return Ok(rows);
+        let next = if engine == WebSearchEngine::DuckDuckGo && want_next {
+            transport::duckduckgo_next(&doc, &page.final_url)
+        } else {
+            None
+        };
+        return Ok((rows, next));
     }
     let empty = selector(
         ".no-results, .no-results__message, .result--no-result, .no-results-message, .NoResults, .serp-error, #topstuff, .api_noresult_wrap, .not_found, .b_no, #b_results .b_msg, .nors, .norsSuggest",
@@ -185,7 +191,7 @@ pub(super) fn parse_page(
         .iter()
         .any(|message| text.contains(message))
     }) {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), None));
     }
     // Baidu can return only a JS HTTPS->HTTP downgrade shim. Never call it a
     // successful empty search or silently follow that downgrade.

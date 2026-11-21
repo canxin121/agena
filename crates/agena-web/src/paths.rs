@@ -44,6 +44,13 @@ pub struct CrawlDir {
 }
 
 impl CrawlDir {
+    #[cfg(test)]
+    pub(crate) fn for_test_directory(path: &Path) -> Self {
+        Self {
+            path: path.to_owned(),
+        }
+    }
+
     pub fn from_workspace(workspace_root: &Path) -> Self {
         Self {
             path: agena_base_dir()

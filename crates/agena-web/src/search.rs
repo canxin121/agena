@@ -189,8 +189,7 @@ pub fn results_to_text(results: &[WebSearchResult]) -> String {
         .join("\n\n")
 }
 
-fn parse_bing_results(html: &str, limit: usize) -> Vec<WebSearchResult> {
-    let doc = Html::parse_document(html);
+fn parse_bing_results(doc: &Html, limit: usize) -> Vec<WebSearchResult> {
     let sel_algo = selector("#b_results li.b_algo");
     let sel_h2a = selector("h2 a");
     let sel_cap = selector(".b_caption p, .b_dList li, p");
@@ -237,8 +236,7 @@ fn parse_bing_results(html: &str, limit: usize) -> Vec<WebSearchResult> {
     results
 }
 
-fn parse_duckduckgo_results(html: &str, limit: usize) -> Vec<WebSearchResult> {
-    let doc = Html::parse_document(html);
+fn parse_duckduckgo_results(doc: &Html, limit: usize) -> Vec<WebSearchResult> {
     let sel_result = selector(".result:not(.result--ad)");
     let sel_title = selector(".result__a");
     let sel_snip = selector(".result__snippet");
@@ -286,8 +284,7 @@ fn parse_duckduckgo_results(html: &str, limit: usize) -> Vec<WebSearchResult> {
     results
 }
 
-fn parse_baidu_results(html: &str, limit: usize) -> Vec<WebSearchResult> {
-    let doc = Html::parse_document(html);
+fn parse_baidu_results(doc: &Html, limit: usize) -> Vec<WebSearchResult> {
     let sel_item = selector("div.c-container, div[tpl]");
     let sel_title = selector("h3.t a, h3 a");
     let sel_desc = selector(".c-font-normal.c-color-text, .c-abstract");

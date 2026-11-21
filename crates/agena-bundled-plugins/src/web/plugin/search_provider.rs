@@ -59,6 +59,11 @@ pub(super) fn validate_config(config: &WebSearchConfig) -> SdkResult<()> {
             "search.max_limit must not exceed 50 (API providers cap each response at 20)",
         ));
     }
+    if !(1..=120).contains(&config.auto_timeout_secs) || config.auto_grace_ms > 30_000 {
+        return Err(PluginError::invalid_params(
+            "search.auto_timeout_secs must be 1–120 and search.auto_grace_ms must be 0–30000",
+        ));
+    }
     for (default_name, default, max_name, maximum, ceiling) in [
         (
             "default_results_per_engine",
@@ -177,14 +182,12 @@ async fn resolve_endpoint(
         .ok_or_else(|| PluginError::invalid_params("search endpoint has no port"))?;
     let mut addresses = tokio::time::timeout(
         timeout,
-        tokio::net::lookup_host((host.trim_matches(['[', ']']), port)),
+        agena_process::pinned_dns::resolve_async(host.trim_matches(['[', ']']), port),
     )
     .await
     .map_err(|_| PluginError::internal("search endpoint DNS lookup timed out"))?
     .map_err(|error| plugin_internal_error_with_context("resolve search endpoint", &error))?
-    .collect::<BTreeSet<_>>()
-    .into_iter()
-    .collect::<Vec<_>>();
+    .to_vec();
     if addresses.is_empty() {
         return Err(PluginError::internal(
             "search endpoint DNS lookup returned no addresses",
@@ -214,7 +217,7 @@ impl WebPlugin {
         let url = endpoint(&config.search)?;
         state
             .host
-            .require_network_permission(url.to_string())
+            .require_pinned_http_permission(url.to_string())
             .await?;
         let timeout = Duration::from_secs(config.fetch.request.timeout_secs);
         let key_env = config
@@ -236,31 +239,40 @@ impl WebPlugin {
                     })
             })
             .transpose()?;
-        state.fetch_coordinator.wait_for_url_host(&url).await;
-        let route = resolve_endpoint(
-            &config.search,
-            &config.network,
-            &url,
-            timeout,
-            state.host.as_ref(),
-        )
-        .await?;
-        let result = search_api(
-            &input.query,
-            &SearchApiOptions {
-                provider,
-                endpoint: &url,
-                route: &route,
-                api_key: key.as_deref(),
-                limit,
+        let result = agena_plugin_host::sdk::permission_wait::timeout(timeout, async {
+            let route = resolve_endpoint(
+                &config.search,
+                &config.network,
+                &url,
                 timeout,
-                user_agent: &self.user_agent,
-                allowed_domains: &input.allowed_domains,
-                blocked_domains: &input.blocked_domains,
-            },
-        )
+                state.host.as_ref(),
+            )
+            .await?;
+            let _slot = state.fetch_coordinator.admit_http(&url).await;
+            search_api(
+                &input.query,
+                &SearchApiOptions {
+                    provider,
+                    endpoint: &url,
+                    route: &route,
+                    api_key: key.as_deref(),
+                    limit,
+                    timeout,
+                    user_agent: &self.user_agent,
+                    allowed_domains: &input.allowed_domains,
+                    blocked_domains: &input.blocked_domains,
+                },
+            )
+            .await
+            .map_err(crawl_error_to_plugin)
+        })
         .await
-        .map_err(crawl_error_to_plugin)?;
+        .map_err(|_| {
+            PluginError::timeout_with_public_detail(
+                "search API active deadline elapsed, including DNS, admission and response",
+                "The search provider did not respond within the time budget.",
+            )
+        })??;
         let mut payload =
             serde_json::to_value(&result).map_err(|error| PluginError::internal_error(&error))?;
         payload["query"] = serde_json::json!(input.query);

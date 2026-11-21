@@ -50,20 +50,24 @@ where
     F: Fn(String) -> Fut,
     Fut: Future<Output = T>,
 {
-    // No detached tasks: cancellation drops every future, and task-local host
-    // bindings remain the invoking tool's bindings. buffered preserves order.
-    futures_util::stream::iter(urls)
-        .map(fetch)
-        .buffered(concurrency)
+    // Refill each slot when it finishes. Restore input order only for the final output.
+    let mut results: Vec<_> = futures_util::stream::iter(urls.into_iter().enumerate())
+        .map(|(index, url)| {
+            let page = fetch(url);
+            async move { (index, page.await) }
+        })
+        .buffer_unordered(concurrency)
         .collect()
-        .await
+        .await;
+    results.sort_unstable_by_key(|(index, _)| *index);
+    results.into_iter().map(|(_, page)| page).collect()
 }
 
 pub(super) fn unique_urls(urls: &[String]) -> SdkResult<Vec<String>> {
-    if !(1..=8).contains(&urls.len()) {
-        return Err(PluginError::invalid_params(
-            "urls must contain between 1 and 8 entries",
-        ));
+    if !(1..=MAX_FETCH_BATCH as usize).contains(&urls.len()) {
+        return Err(PluginError::invalid_params(format!(
+            "urls must contain between 1 and {MAX_FETCH_BATCH} entries"
+        )));
     }
     let mut seen = BTreeSet::new();
     Ok(urls
@@ -106,12 +110,12 @@ impl WebPlugin {
             config.browser.enabled,
             Duration::from_secs(config.fetch.request.timeout_secs),
             |render| {
-                self.fetch_page_with_extractor(
+                Box::pin(self.fetch_page_with_extractor(
                     url,
                     use_cache,
                     render,
                     extractor.unwrap_or(config.fetch.extractor),
-                )
+                ))
             },
         )
         .await
@@ -208,5 +212,37 @@ impl WebPlugin {
                 .await?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::Notify;
+
+    #[tokio::test]
+    async fn batch_refills_a_finished_slot_before_the_first_page_returns() {
+        let released = Notify::new();
+        let results = tokio::time::timeout(
+            Duration::from_secs(1),
+            batch(
+                vec!["slow".into(), "fast".into(), "last".into()],
+                2,
+                |url| {
+                    let released = &released;
+                    async move {
+                        match url.as_str() {
+                            "slow" => released.notified().await,
+                            "last" => released.notify_one(),
+                            _ => {}
+                        }
+                        url
+                    }
+                },
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(results, ["slow", "fast", "last"]);
     }
 }

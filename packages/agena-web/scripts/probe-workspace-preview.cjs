@@ -322,6 +322,18 @@ function fixtureScript(config) {
     document.getElementById('probe-click').addEventListener('click', () => {
       document.getElementById('click-result').textContent = 'Managed browser click verified';
     });
+    const shadow = document.getElementById('probe-shadow').attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<button>Shadow fixture action</button>';
+    shadow.querySelector('button').addEventListener('click', () => {
+      document.getElementById('click-result').textContent = 'Shadow browser click verified';
+    });
+    for (const selector of ['probe-covered', 'probe-cover']) {
+      document.getElementById(selector).addEventListener('click', () => {
+        document.getElementById('cover-result').textContent = 'Covered area received a click';
+      });
+    }
+    document.getElementById('probe-unapproved').href =
+      'http://127.0.0.1:' + ${JSON.stringify(config.port)} + '/mount/probe-unapproved-target';
     document.addEventListener('securitypolicyviolation', (event) => {
       if (event.effectiveDirective === 'connect-src' && event.blockedURI.startsWith(controlOrigin)) {
         document.getElementById('csp-result').textContent = 'CSP blocked external connection';
@@ -471,9 +483,26 @@ async function fixtureMain(configPath) {
       res.end()
       return
     }
+    if (route === '/probe-submit') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      res.end(
+        url.searchParams.get('q') === '中文输入'
+          ? '<p>Managed browser Unicode form verified</p>'
+          : '<p>Managed browser form payload mismatch</p>',
+      )
+      return
+    }
     res.writeHead(200, { 'content-type': 'text/html' })
     res.end(
-      '<!doctype html><html><head><title>Preview integration fixture</title></head><body><h1 id="fixture">Loading preview fixture</h1><p>Root assets, SPA navigation, login cookies, and WebSocket transport.</p><button id="probe-click">Verify browser click</button><p id="click-result">Click pending</p><button id="probe-connect">Verify connection policy</button><p id="csp-result">Connection policy pending</p><script src="/assets/app.js"></script></body></html>',
+      '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Preview integration fixture</title></head><body>' +
+        '<h1 id="fixture">Loading preview fixture</h1><p>Root assets, SPA navigation, login cookies, and WebSocket transport.</p>' +
+        '<button id="probe-click">Verify browser click</button><p id="click-result">Click pending</p><div id="probe-shadow"></div>' +
+        '<div style="position:relative;width:200px;height:36px"><button id="probe-covered">Covered fixture button</button>' +
+        '<div id="probe-cover" style="position:absolute;inset:0;background:white">Fixture overlay</div></div><p id="cover-result">Covered area untouched</p>' +
+        '<div id="probe-hidden" hidden>Hidden fixture text</div>' +
+        '<button id="probe-connect">Verify connection policy</button><p id="csp-result">Connection policy pending</p>' +
+        '<form action="/probe-submit"><label for="probe-query">Preview query</label><input id="probe-query" name="q"><button>Submit query</button></form>' +
+        '<a id="probe-unapproved">Navigate outside the preview</a><script src="/assets/app.js"></script></body></html>',
     )
   })
   server.on('connection', (socket) => {
@@ -554,6 +583,7 @@ async function runProbe(temporary, binary, chromeBinary) {
   const profile = path.join(temporary, 'chrome')
   const data = path.join(temporary, 'data')
   const probeAgent = process.env.AGENA_PROBE_AGENT !== '0'
+  const permitsHostLoopback = process.platform === 'darwin' || process.platform === 'win32'
   await Promise.all([workspace, ui, profile, data].map((directory) => fs.mkdir(directory, { recursive: true })))
   if (probeAgent) {
     // Runtime permission/plugin settings belong to the isolated data config;
@@ -562,13 +592,23 @@ async function runProbe(temporary, binary, chromeBinary) {
       path.join(data, 'agena.json'),
       JSON.stringify(
         {
-          permission: { network: { loopback: 'allow' }, tools: { default: 'allow' } },
+          sandbox: false,
+          runtime: { providers: { client_versions: { auto_update: false } } },
+          permission: {
+            network: {
+              version: 2,
+              default: 'deny',
+              allow: [{ to: '127.0.0.1' }, { to: '::1' }],
+              ...(permitsHostLoopback ? { inbound: 'allow', hostLoopback: 'allow' } : {}),
+            },
+            tools: { default: 'allow' },
+          },
           plugins: {
             list: {
-              'agena.web': {
+              'agena.browser': {
                 enabled: true,
                 package: { kind: 'static' },
-                settings: { browser: { enabled: true, executable_path: chromeBinary } },
+                settings: { executable_path: chromeBinary },
               },
             },
           },
@@ -597,6 +637,9 @@ async function runProbe(temporary, binary, chromeBinary) {
   const serverLog = await fs.open(serverLogPath, 'w')
   const chromeLog = await fs.open(chromeLogPath, 'w')
   const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('AGENA_')))
+  for (const name of Object.keys(env)) {
+    if (/^(all|http|https|no)_proxy$/i.test(name)) delete env[name]
+  }
   Object.assign(env, { AGENA_SERVER_PASSWORD: password, AGENA_DATA_DIR: data, AGENA_MCP_ENABLED: 'false' })
   let server,
     chrome,
@@ -841,7 +884,8 @@ async function runProbe(temporary, binary, chromeBinary) {
       'isolated Chrome CDP endpoint',
     )
     cdp = await Cdp.connect(endpoint)
-    const created = await cdp.send('Target.createTarget', { url: 'about:blank' })
+    const { browserContextId } = await cdp.send('Target.createBrowserContext', { disposeOnDetach: true })
+    const created = await cdp.send('Target.createTarget', { url: 'about:blank', browserContextId })
     const attached = await cdp.send('Target.attachToTarget', { targetId: created.targetId, flatten: true })
     pageSession = attached.sessionId
     await cdp.send('Page.enable', {}, pageSession)
@@ -974,15 +1018,17 @@ async function runProbe(temporary, binary, chromeBinary) {
       const tools = await api('GET', '/api/v1/operator/tools')
       assert.ok(Array.isArray(tools), 'operator discovery returns the tool descriptor array')
       const browserTools = new Map(
-        tools.filter((tool) => tool.plugin_id === 'agena.web').map((tool) => [tool.name.split('.').at(-1), tool.name]),
+        tools.filter((tool) => tool.plugin_id === 'agena.browser').map((tool) => [tool.name.split('.').at(-1), tool.name]),
       )
       for (const name of [
-        'browser_list',
-        'browser_open',
-        'browser_snapshot',
-        'browser_click',
-        'browser_wait',
-        'browser_close',
+        'list',
+        'open',
+        'snapshot',
+        'click',
+        'type',
+        'action',
+        'wait',
+        'close',
       ]) {
         assert.ok(browserTools.has(name), 'enabled operator tool exists: ' + name)
       }
@@ -1024,18 +1070,18 @@ async function runProbe(temporary, binary, chromeBinary) {
           targetUrl: upstream,
         })
       }
-      const listed = await invokeAgentTool('browser_list')
+      const listed = await invokeAgentTool('list')
       assert.ok(listed.previews.some((preview) => preview.preview_id === 'probe' && preview.state === 'running'))
       for (const record of foreignRecords) {
         assert.ok(
           !listed.previews.some((preview) => preview.preview_id === record.id),
           'foreign preview must not be discovered: ' + record.id,
         )
-        await invokeAgentTool('browser_open', { preview_id: record.id, timeout_ms: 5_000 }, { rejected: true })
+        await invokeAgentTool('open', { preview_id: record.id, timeout_ms: 5_000 }, { rejected: true })
       }
-      await invokeAgentTool('browser_list', {}, { rejected: true, workspaceId: otherWorkspace.id, status: 409 })
+      await invokeAgentTool('list', {}, { rejected: true, workspaceId: otherWorkspace.id, status: 409 })
       const publicDenied = await invokeAgentTool(
-        'browser_open',
+        'open',
         { url: upstream, timeout_ms: 5_000 },
         { rejected: true },
       )
@@ -1043,39 +1089,114 @@ async function runProbe(temporary, binary, chromeBinary) {
         rawLoopbackStatus: publicDenied.status,
       })
 
-      const opened = await invokeAgentTool('browser_open', { preview_id: 'probe', timeout_ms: 20_000 })
-      agentSession = opened.session_id
-      assert.equal(typeof agentSession, 'string')
-      assert.ok(agentSession.length > 0)
-      assert.equal(opened.preview_id, 'probe')
-      assert.ok(opened.preview_generation)
-      assert.ok(opened.managed_preview_network_policy.includes('upstream'))
-      assert.notEqual(new URL(opened.snapshot.url).origin, origin)
-      assert.notEqual(
-        new URL(opened.snapshot.url).origin,
-        new URL(grant.url).origin,
-        'agent and human preview grants use separate hosts',
-      )
-      const snapshot = await invokeAgentTool('browser_snapshot', { session_id: agentSession })
-      assert.ok(snapshot.snapshot.text.includes('Preview fixture: root asset loaded'))
-      const clicked = await invokeAgentTool('browser_click', {
-        session_id: agentSession,
-        selector: '#probe-click',
-        timeout_ms: 10_000,
-      })
-      assert.ok(clicked.result.snapshot.text.includes('Managed browser click verified'))
-      await invokeAgentTool('browser_click', {
-        session_id: agentSession,
-        selector: '#probe-connect',
-        timeout_ms: 10_000,
-      })
-      const blocked = await invokeAgentTool('browser_wait', {
-        session_id: agentSession,
-        text: 'CSP blocked external connection',
-        timeout_ms: 10_000,
-      })
-      assert.ok(blocked.result.snapshot.text.includes('CSP blocked external connection'))
-      check('Real browser_open resolves provider grant, runs CDP snapshot/click, and enforces external-connect CSP')
+      if (!permitsHostLoopback) {
+        const denied = await invokeAgentTool('open', { preview_id: 'probe' }, { rejected: true })
+        assert.match(denied.error?.problem?.user?.fallback, /native host-loopback access is denied/)
+        check('Real operator browser respects the native host-loopback denial for a running preview')
+      } else {
+        const opened = await invokeAgentTool('open', { preview_id: 'probe', timeout_ms: 20_000 })
+        agentSession = opened.session_id
+        assert.equal(typeof agentSession, 'string')
+        assert.ok(agentSession.length > 0)
+        assert.equal(opened.preview_id, 'probe')
+        assert.ok(opened.preview_generation)
+        assert.ok(opened.managed_preview_network_policy.includes('upstream'))
+        assert.notEqual(new URL(opened.snapshot.url).origin, origin)
+        assert.notEqual(
+          new URL(opened.snapshot.url).origin,
+          new URL(grant.url).origin,
+          'agent and human preview grants use separate hosts',
+        )
+        const snapshot = await invokeAgentTool('snapshot', { session_id: agentSession })
+        assert.ok(snapshot.snapshot.tree.includes('Preview fixture: root asset loaded'))
+        const reference = (tree, name) => {
+          const line = tree.split('\n').find((row) => row.includes(name) && row.includes('[ref='))
+          const ref = line?.match(/\[ref=(e\d+)\]/)?.[1]
+          assert.ok(ref, 'snapshot has a reference for ' + name + ': ' + tree)
+          return '@' + ref
+        }
+        await invokeAgentTool(
+          'click',
+          {
+            session_id: agentSession,
+            selector: '#probe-covered',
+            timeout_ms: 1_000,
+          },
+          { rejected: true },
+        )
+        await invokeAgentTool(
+          'wait',
+          {
+            session_id: agentSession,
+            selector: '#probe-hidden',
+            timeout_ms: 300,
+          },
+          { rejected: true },
+        )
+        const clicked = await invokeAgentTool('click', {
+          session_id: agentSession,
+          selector: reference(snapshot.snapshot.tree, 'Shadow fixture action'),
+          timeout_ms: 10_000,
+        })
+        assert.ok(clicked.snapshot.tree.includes('Shadow browser click verified'))
+        assert.ok(clicked.snapshot.tree.includes('Covered area untouched'))
+        await invokeAgentTool('click', {
+          session_id: agentSession,
+          selector: '#probe-connect',
+          timeout_ms: 10_000,
+        })
+        const blocked = await invokeAgentTool('wait', {
+          session_id: agentSession,
+          text: 'CSP blocked external connection',
+          timeout_ms: 10_000,
+        })
+        assert.ok(blocked.snapshot.tree.includes('CSP blocked external connection'))
+        await invokeAgentTool(
+          'click',
+          {
+            session_id: agentSession,
+            selector: '#probe-unapproved',
+            timeout_ms: 5_000,
+          },
+          { rejected: true },
+        )
+        assert.ok(!(await fs.readFile(requestsPath, 'utf8')).includes('/probe-unapproved-target'))
+
+        const form = await invokeAgentTool('open', { preview_id: 'probe', timeout_ms: 20_000 })
+        try {
+          await invokeAgentTool('type', {
+            session_id: form.session_id,
+            selector: reference(form.snapshot.tree, 'Preview query'),
+            text: '中文输入',
+            press_enter: true,
+          })
+          const submitted = await invokeAgentTool('wait', {
+            session_id: form.session_id,
+            text: 'Managed browser Unicode form verified',
+            timeout_ms: 10_000,
+          })
+          assert.ok(submitted.snapshot.tree.includes('Managed browser Unicode form verified'))
+          const navigated = await invokeAgentTool('action', {
+            session_id: form.session_id,
+            action: { kind: 'navigate', url: new URL('/', form.snapshot.url).href },
+            return_snapshot: false,
+          })
+          assert.equal(navigated.session_id, form.session_id)
+          assert.equal(navigated.snapshot, undefined)
+          const scoped = await invokeAgentTool('snapshot', {
+            session_id: form.session_id,
+            selector: 'form',
+            interactive: true,
+          })
+          assert.ok(reference(scoped.snapshot.tree, 'Preview query'))
+          assert.ok(!scoped.snapshot.tree.includes('Navigate outside the preview'))
+        } finally {
+          await invokeAgentTool('close', { session_id: form.session_id })
+        }
+        check(
+          'Rust browser actions use Shadow DOM refs, reject occluded clicks and hidden waits, submit Unicode forms, navigate within one tab, scope snapshots, and enforce preview network authorization',
+        )
+      }
       for (const record of foreignRecords) await api('DELETE', '/api/v1/workbench/preview/sessions/' + record.id)
     }
 
@@ -1100,8 +1221,8 @@ async function runProbe(temporary, binary, chromeBinary) {
     await api('GET', '/api/v1/workbench/preview/s/probe/', undefined, 409)
     check('A stopped managed preview cannot be reopened as an unowned external target')
     if (agentSession) {
-      const stale = await invokeAgentTool('browser_snapshot', { session_id: agentSession }, { rejected: true })
-      const closed = await invokeAgentTool('browser_close', { session_id: agentSession })
+      const stale = await invokeAgentTool('snapshot', { session_id: agentSession }, { rejected: true })
+      const closed = await invokeAgentTool('close', { session_id: agentSession })
       assert.equal(closed.closed, true)
       agentSession = undefined
       check('Real browser tool rejects the stopped run while still permitting owner cleanup', {
@@ -1156,7 +1277,7 @@ async function runProbe(temporary, binary, chromeBinary) {
     for (const stream of streams) stream.close()
     if (agentSession && invokeAgentTool && server?.exitCode === null && server?.signalCode === null) {
       try {
-        await invokeAgentTool('browser_close', { session_id: agentSession })
+        await invokeAgentTool('close', { session_id: agentSession })
       } catch (error) {
         cleanupErrors.push('agent browser close: ' + error)
       }

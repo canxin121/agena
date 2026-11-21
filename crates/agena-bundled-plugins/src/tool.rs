@@ -194,6 +194,16 @@ pub fn new_web_plugin() -> impl agena_plugin_host::sdk::Plugin {
     crate::web::WebPlugin::new()
 }
 
+pub fn browser_plugin_id() -> &'static str {
+    crate::browser::BROWSER_PLUGIN_ID
+}
+
+pub fn new_browser_plugin() -> impl agena_plugin_host::sdk::Plugin {
+    crate::browser::BrowserPlugin::new()
+}
+
+pub use crate::browser::BrowserSessionPool;
+
 pub fn memory_plugin_id() -> &'static str {
     crate::memory::MEMORY_PLUGIN_ID
 }

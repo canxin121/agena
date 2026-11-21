@@ -1,160 +1,48 @@
 mod content;
-mod downloads;
 mod fetch_transport;
-mod managed_preview;
-mod network_policy;
 mod rendered_fetch;
 mod search_aggregate;
 mod search_provider;
 mod search_selection;
 use search_provider::WebSearchBackend;
 use search_selection::WebSearchEngineSelection;
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
-use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-use agena_web::managed_preview::ManagedPreviewTarget;
 use agena_web::{
     BrowserRenderOptions, CrawlPageFetcher, CrawlRunOptions, CrawlRunReport, CrawlStore,
-    CrawlStoreRetention, FetchedPage, LocalBrowserOptions, SpiderFetchOptions, WebFetchCoordinator,
-    WebFetchCoordinatorConfig, WebSearchCoordinator, WebSearchEngine, WebSearchOptions,
-    WebSearchResponse, crawl_site, local_browser_endpoint, local_browser_running,
-    local_browser_touch, prepare_fetch_url, preview_text, results_to_text, shutdown_local_browser,
+    CrawlStoreRetention, FetchedPage, WebFetchCoordinator, WebFetchCoordinatorConfig,
+    WebFetchOptions, WebSearchCoordinator, WebSearchEngine, WebSearchOptions, WebSearchResponse,
+    crawl_site, prepare_fetch_url, preview_text, results_to_text,
 };
-use base64::Engine as _;
-use futures_util::{SinkExt, StreamExt};
+use futures_util::StreamExt;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, OnceCell, Semaphore, mpsc, oneshot};
+use tokio::sync::{Mutex, Semaphore, mpsc};
 
-use agena_domain::{
-    BackgroundActivity, BackgroundActivityKind, BackgroundActivityLogLine,
-    BackgroundActivityLogRead, BackgroundActivityStatus,
-};
+use crate::browser::runtime::{ChromeOptions, ChromeRuntime, require_browser_runtime};
+use crate::network_policy::{self, authorized_network_addresses, resolve_public_network_target};
+
 use agena_plugin_host::PluginError;
-use agena_plugin_host::sdk::attachment::{AttachmentItem, AttachmentKind, AttachmentSource};
 use agena_plugin_host::sdk::host_api::HostClient;
 use agena_plugin_host::sdk::{
-    ActivitySourceAdapter, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput,
-    ToolStreamSink, async_trait,
+    Result as SdkResult, ToolInvokeContext, ToolInvokeOutput, ToolStreamSink,
 };
 
 pub(crate) const WEB_PLUGIN_ID: &str = "agena.web";
-
-/// Chromium currently lacks a per-call MXC policy and an identity-bound
-/// transport that pins every connection. Keep rendering closed until that
-/// boundary exists; request interception alone cannot prevent DNS rebinding.
-fn require_browser_sandbox() -> SdkResult<()> {
-    if !agena_process::sandbox::enabled()
-        || agena_plugin_host::sdk::host_api::current_host_callback_context()
-            .is_some_and(|context| context.sandbox_enabled == Some(false))
-    {
-        return Ok(());
-    }
-    Err(PluginError::from_kind(
-        agena_plugin_host::sdk::PluginErrorKind::HostUnavailable,
-        "rendered browser isolation is not supported by the current MXC integration; use HTTP fetch with render_js=false",
-    ))
-}
-
-#[cfg(test)]
-mod browser_sandbox_mode_tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn direct_browser_calls_skip_mxc_requirement_and_restore_enclosing_scope() {
-        use agena_plugin_host::sdk::host_api::{
-            HostCallbackContext, run_in_isolated_host_callback_context,
-        };
-        let previous = require_browser_sandbox().is_err();
-        run_in_isolated_host_callback_context(
-            HostCallbackContext {
-                sandbox_enabled: Some(false),
-                ..Default::default()
-            },
-            async {
-                require_browser_sandbox().unwrap();
-            },
-        )
-        .await;
-        assert_eq!(require_browser_sandbox().is_err(), previous);
-        assert_eq!(previous, agena_process::sandbox::enabled());
-    }
-}
-
-fn browser_owner(context: &ToolInvokeContext<'_>) -> SdkResult<agena_runtime_tools::TerminalOwner> {
-    Ok(agena_runtime_tools::TerminalOwner {
-        workspace: if context.is_global() {
-            PathBuf::new()
-        } else {
-            Path::new(context.workspace_root)
-                .canonicalize()
-                .map_err(|error| PluginError::internal_error(&error))?
-        },
-        session_id: Some(context.session_id),
-    })
-}
+const MAX_FETCH_BATCH: u32 = 16;
+const DEFAULT_FETCH_BATCH_CONCURRENCY: u32 = 8;
+static HTTP_PAGE_FETCHES: Semaphore = Semaphore::const_new(64);
 
 fn web_storage_root(context: &ToolInvokeContext<'_>, project: &Path) -> PathBuf {
     if context.is_global() {
         agena_storage_layout::StorageLayout::current().session_assets_dir(context.session_id)
     } else {
         project.to_path_buf()
-    }
-}
-
-fn web_artifacts_root(context: &ToolInvokeContext<'_>, project: &Path) -> PathBuf {
-    let layout = agena_storage_layout::StorageLayout::current();
-    if context.is_global() {
-        layout.session_artifacts_dir(context.session_id)
-    } else {
-        layout.artifacts_dir(project)
-    }
-}
-
-#[cfg(test)]
-mod global_browser_owner_tests {
-    use super::*;
-
-    #[test]
-    fn global_browser_owner_has_no_workspace() {
-        let context = ToolInvokeContext {
-            caller: None,
-            tool_name: "browser",
-            session_id: 42,
-            call_id: 1,
-            workspace_root: "",
-            cancellation: Default::default(),
-        };
-        let owner = browser_owner(&context).unwrap();
-        assert!(owner.workspace.as_os_str().is_empty());
-        assert_eq!(owner.session_id, Some(42));
-        let other = ToolInvokeContext {
-            caller: None,
-            tool_name: "browser",
-            session_id: 43,
-            call_id: 1,
-            workspace_root: "",
-            cancellation: Default::default(),
-        };
-        let project = Path::new("/tmp/initial-project");
-        assert_ne!(
-            web_storage_root(&other, project),
-            web_storage_root(&context, project)
-        );
-        assert_ne!(
-            web_artifacts_root(&other, project),
-            web_artifacts_root(&context, project)
-        );
-        assert_eq!(
-            web_artifacts_root(&context, project),
-            agena_storage_layout::StorageLayout::current().session_artifacts_dir(42)
-        );
-        assert!(!web_storage_root(&context, project).starts_with(project));
     }
 }
 
@@ -167,18 +55,6 @@ fn plugin_internal_error_with_context(
     ))
 }
 
-fn plugin_internal_failure_with_context(context: &str, error: &PluginError) -> PluginError {
-    PluginError::internal(format!("{context}: {}", error.diagnostic_message()))
-}
-
-fn log_secondary_plugin_failure(operation: &str, error: &PluginError) {
-    tracing::warn!(
-        operation,
-        diagnostic = %error.diagnostic_message(),
-        "secondary browser plugin operation failed"
-    );
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub(crate) struct WebConfig {
@@ -187,7 +63,7 @@ pub(crate) struct WebConfig {
     pub crawl: WebCrawlConfig,
     pub search: WebSearchConfig,
     pub store: WebStoreConfig,
-    pub browser: WebBrowserConfig,
+    pub browser: WebRenderConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -293,7 +169,7 @@ impl Default for WebCrawlLimitsConfig {
     fn default() -> Self {
         Self {
             max_pages: 100,
-            concurrency: 8,
+            concurrency: 16,
             max_depth: 4,
         }
     }
@@ -330,6 +206,13 @@ pub struct WebSearchConfig {
     /// Default page budget for each HTML engine, including its first page.
     pub default_pages_per_engine: u32,
     pub max_pages_per_engine: u32,
+    /// Overall active budget for an automatic one-page HTML search.
+    #[schemars(range(min = 1, max = 120))]
+    pub auto_timeout_secs: u64,
+    /// Time to collect additional engines once enough distinct, filtered results are available.
+    /// Zero waits for all engines within the overall budget.
+    #[schemars(range(max = 30000))]
+    pub auto_grace_ms: u64,
     pub provider: WebSearchBackend,
     /// Full API search endpoint. SearXNG requires an explicit endpoint.
     pub endpoint: Option<String>,
@@ -348,6 +231,8 @@ impl Default for WebSearchConfig {
             max_results_per_engine: 50,
             default_pages_per_engine: 1,
             max_pages_per_engine: 5,
+            auto_timeout_secs: 8,
+            auto_grace_ms: 750,
             provider: WebSearchBackend::default(),
             endpoint: None,
             api_key_env: None,
@@ -382,37 +267,43 @@ impl Default for WebStoreRetentionConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
-/// Browser settings of the web plugin.
-pub struct WebBrowserConfig {
+/// Chrome settings for ephemeral page rendering.
+pub struct WebRenderConfig {
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub executable_path: Option<String>,
-    pub wait: WebBrowserWaitConfig,
+    pub wait: WebRenderWaitConfig,
     /// Seconds of inactivity after which the managed browser process is shut
     /// down automatically. `0` disables idle auto-close.
     #[serde(default = "default_web_browser_idle_timeout_secs")]
     pub idle_timeout_secs: u64,
-    /// Opt in to unredacted page console text. May contain sensitive page data.
-    #[serde(default)]
-    pub capture_console_text: bool,
 }
 
-impl Default for WebBrowserConfig {
+impl Default for WebRenderConfig {
     fn default() -> Self {
         Self {
             enabled: false,
             executable_path: None,
-            wait: WebBrowserWaitConfig::default(),
+            wait: WebRenderWaitConfig::default(),
             idle_timeout_secs: default_web_browser_idle_timeout_secs(),
-            capture_console_text: false,
         }
+    }
+}
+
+impl WebRenderConfig {
+    fn chrome_options(&self) -> ChromeOptions {
+        ChromeOptions::new(
+            self.executable_path.as_deref(),
+            self.wait.timeout_secs,
+            self.idle_timeout_secs,
+        )
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, deny_unknown_fields)]
-/// Wait settings of the web plugin browser.
-pub struct WebBrowserWaitConfig {
+/// Readiness conditions for rendered fetches.
+pub struct WebRenderWaitConfig {
     pub for_network_idle: bool,
     pub timeout_secs: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -420,7 +311,7 @@ pub struct WebBrowserWaitConfig {
     pub delay_ms: u64,
 }
 
-impl Default for WebBrowserWaitConfig {
+impl Default for WebRenderWaitConfig {
     fn default() -> Self {
         Self {
             for_network_idle: true,
@@ -537,12 +428,12 @@ fn web_settings_metadata() -> &'static [(&'static str, &'static str, &'static st
         (
             "/crawl/defaults/concurrency",
             "Concurrent Pages",
-            "Default simultaneous page reads per crawl (1–8).",
+            "Default simultaneous page reads per crawl, capped by the configured crawl limit.",
         ),
         (
             "/crawl/limits/concurrency",
             "Maximum Concurrent Pages",
-            "Upper bound on crawl concurrency, at most 8.",
+            "Upper bound on crawl concurrency (default 16, maximum 32).",
         ),
         (
             "/crawl/defaults/max_pages",
@@ -650,6 +541,16 @@ fn web_settings_metadata() -> &'static [(&'static str, &'static str, &'static st
             "Largest page budget callers may request for each HTML engine (default and ceiling 5). API providers do not use HTML budgets.",
         ),
         (
+            "/search/auto_timeout_secs",
+            "Automatic HTML Search Timeout (sec)",
+            "Active time budget for automatic one-page HTML searches (default 8 seconds), capped by the fetch timeout.",
+        ),
+        (
+            "/search/auto_grace_ms",
+            "Extra Time for Search Sources (ms)",
+            "Time to collect more HTML engines once enough distinct results pass the domain filters in automatic one-page mode (default 750 ms). Zero waits until all engines finish or the search times out.",
+        ),
+        (
             "/store",
             "Cache",
             "Retention defaults for the embedded crawl document cache.",
@@ -671,7 +572,7 @@ fn web_settings_metadata() -> &'static [(&'static str, &'static str, &'static st
         ),
         (
             "/browser",
-            "Browser",
+            "Rendering",
             "Optional browser rendering support for JavaScript-heavy pages.",
         ),
         (
@@ -724,24 +625,14 @@ fn default_web_config() -> WebConfig {
         crawl: WebCrawlConfig::default(),
         search: WebSearchConfig::default(),
         store: WebStoreConfig::default(),
-        browser: WebBrowserConfig::default(),
+        browser: WebRenderConfig::default(),
     }
 }
 
 pub(crate) struct WebPlugin {
     state: OnceLock<WebPluginState>,
     workspace_root: OnceLock<PathBuf>,
-    crawl_lock: Mutex<()>,
-    browser_download_lock: Arc<Mutex<()>>,
-    /// Activity-source registration must happen after the runtime installs
-    /// its live host client. Static plugins are initialized while the host is
-    /// still being assembled, so registering from `init` would hit the
-    /// temporary no-op client and lose the adapter permanently.
-    browser_activity_source: OnceCell<()>,
-    /// Shared interactive-browser session state. Owned by the plugin and by
-    /// the registered [`BrowserActivitySource`] so log reads and stop requests
-    /// can reach live sessions without going through a tool invocation.
-    browser_state: Arc<BrowserActivityState>,
+    renderer: ChromeRuntime,
     user_agent: String,
 }
 
@@ -751,308 +642,10 @@ impl Default for WebPlugin {
     }
 }
 
-/// Human-facing details for an interactive browser session, retained so the
-/// terminal activity record reuses the same title/URL/start time.
-#[derive(Debug, Clone)]
-struct BrowserSessionMeta {
-    owner: agena_runtime_tools::TerminalOwner,
-    browser_context_id: Option<String>,
-    title: String,
-    url: String,
-    started_at_ms: i64,
-}
-
-/// A CDP notification forwarded from a target session's connection.
-#[derive(Debug, Clone)]
-struct CdpEvent {
-    method: String,
-    params: serde_json::Value,
-}
-
-/// Bounded per-session log buffer implementing the unified `since_seq` cursor
-/// protocol so the activities panel can tail browser output like any other
-/// activity.
-#[derive(Debug, Clone)]
-struct BrowserSessionLog {
-    lines: VecDeque<BackgroundActivityLogLine>,
-    next_seq: u64,
-    dropped: u64,
-}
-
-const BROWSER_LOG_CAPACITY: usize = 500;
-
-impl BrowserSessionLog {
-    fn new() -> Self {
-        Self {
-            lines: VecDeque::new(),
-            // Seq numbering follows the unified cursor protocol used by the
-            // shell monitor and plugin host logs: 0 means "no events yet" and
-            // the first line gets seq 1, so a fresh read with `since_seq = 0`
-            // (`seq > since_seq`) returns every line including the first.
-            next_seq: 1,
-            dropped: 0,
-        }
-    }
-
-    fn append(&mut self, stream: &str, text: impl Into<String>) {
-        const MAX_LOG_BYTES: usize = 16 * 1024;
-        let mut text = text.into();
-        if text.len() > MAX_LOG_BYTES {
-            let mut end = MAX_LOG_BYTES - " [truncated]".len();
-            while !text.is_char_boundary(end) {
-                end -= 1;
-            }
-            text.truncate(end);
-            text.push_str(" [truncated]");
-        }
-        let line = BackgroundActivityLogLine {
-            chunk: false,
-            seq: self.next_seq,
-            stream: stream.to_string(),
-            ts_ms: chrono::Utc::now().timestamp_millis(),
-            text,
-        };
-        self.next_seq = self.next_seq.saturating_add(1);
-        if self.lines.len() >= BROWSER_LOG_CAPACITY {
-            self.lines.pop_front();
-            self.dropped = self.dropped.saturating_add(1);
-        }
-        self.lines.push_back(line);
-    }
-
-    fn read(
-        &self,
-        activity_id: &str,
-        since_seq: u64,
-        limit: Option<u32>,
-    ) -> BackgroundActivityLogRead {
-        let mut lines = self
-            .lines
-            .iter()
-            .filter(|line| line.seq > since_seq)
-            .cloned()
-            .collect::<Vec<_>>();
-        let has_more = limit.is_some_and(|limit| lines.len() as u32 > limit);
-        if let Some(limit) = limit {
-            lines.truncate(limit as usize);
-        }
-        let last_seq = lines.last().map(|line| line.seq).unwrap_or(since_seq);
-        BackgroundActivityLogRead {
-            activity_id: activity_id.to_string(),
-            status: BackgroundActivityStatus::Running,
-            lines,
-            last_seq,
-            has_more,
-            dropped_lines: self.dropped,
-            exit_code: None,
-            completion_reason: None,
-        }
-    }
-}
-
-/// Shared interactive-browser session state: live CDP clients, activity
-/// metadata, per-session log buffers, and the browser-level (root) client used
-/// to close targets. Both [`WebPlugin`] and [`BrowserActivitySource`] hold an
-/// `Arc` to this so control requests can reach the live sessions.
-#[derive(Clone)]
-struct BrowserActivityState {
-    clients: Arc<tokio::sync::Mutex<BTreeMap<String, CdpClient>>>,
-    connecting: Arc<tokio::sync::Mutex<BTreeMap<String, Arc<tokio::sync::Mutex<()>>>>>,
-    meta: Arc<tokio::sync::Mutex<BTreeMap<String, BrowserSessionMeta>>>,
-    /// Host-issued preview leases are installed before CDP attaches, including
-    /// while an opening page has not yet acquired activity metadata.
-    previews: Arc<tokio::sync::Mutex<BTreeMap<String, ManagedPreviewTarget>>>,
-    logs: Arc<tokio::sync::Mutex<BTreeMap<String, BrowserSessionLog>>>,
-    root: Arc<tokio::sync::Mutex<Option<CdpClient>>>,
-    contexts: Arc<tokio::sync::Mutex<BTreeMap<(PathBuf, Option<i64>), String>>>,
-    /// One gate per live page target. The host fans every tool in a batch out
-    /// at once, so two `browser_*` calls on the *same* page would otherwise
-    /// interleave their CDP commands and land in whatever order the socket
-    /// happened to serialize them — `click` racing `type` racing `screenshot`.
-    /// Holding the page's gate for the whole action keeps one session's
-    /// actions ordered while different sessions keep running in parallel.
-    actions: Arc<tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
-    /// Serializes "a shared Chrome process exists and this caller's browser
-    /// context exists" — the read-then-create pair in
-    /// [`WebPlugin::browser_context_for_owner`]. Different callers still run
-    /// their actions concurrently; only context creation is exclusive.
-    context_creation: Arc<tokio::sync::Mutex<()>>,
-}
-
-impl BrowserActivityState {
-    fn new() -> Self {
-        Self {
-            clients: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
-            connecting: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
-            meta: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
-            previews: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
-            logs: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
-            root: Arc::new(tokio::sync::Mutex::new(None)),
-            contexts: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
-            actions: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-            context_creation: Arc::new(tokio::sync::Mutex::new(())),
-        }
-    }
-
-    /// Clone the action gate for one page target, creating it on first use.
-    async fn action_gate(&self, target_id: &str) -> Arc<tokio::sync::Mutex<()>> {
-        Arc::clone(
-            self.actions
-                .lock()
-                .await
-                .entry(target_id.to_string())
-                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
-        )
-    }
-
-    async fn append_log(&self, target_id: &str, stream: &str, text: impl Into<String>) {
-        self.logs
-            .lock()
-            .await
-            .entry(target_id.to_string())
-            .or_insert_with(BrowserSessionLog::new)
-            .append(stream, text);
-    }
-
-    /// Close one target: ask the browser to close it over CDP, drop the local
-    /// client and metadata, append a log line, and publish the terminal
-    /// activity record. Returns whether the CDP close was acknowledged.
-    async fn close_session(
-        &self,
-        target_id: &str,
-        message: &str,
-        host: &dyn HostClient,
-    ) -> SdkResult<bool> {
-        let connect_lock = {
-            let mut connecting = self.connecting.lock().await;
-            Arc::clone(
-                connecting
-                    .entry(target_id.to_string())
-                    .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
-            )
-        };
-        let _connect_guard = connect_lock.lock().await;
-        // Clone the client under the state lock, then perform CDP I/O after
-        // releasing it. The command can wait on the browser's reader task,
-        // which must remain free to update browser state.
-        let root = self.root.lock().await.clone();
-        let close_result = match root {
-            Some(root) => root
-                .command(
-                    "Target.closeTarget",
-                    serde_json::json!({ "targetId": target_id }),
-                )
-                .await
-                .and_then(|value| {
-                    value
-                        .get("success")
-                        .and_then(serde_json::Value::as_bool)
-                        .ok_or_else(|| {
-                            PluginError::internal(
-                                "browser Target.closeTarget response had no boolean success field",
-                            )
-                        })
-                }),
-            None => Ok(false),
-        };
-        if !close_result? {
-            return Ok(false);
-        }
-        self.clients.lock().await.remove(target_id);
-        self.previews.lock().await.remove(target_id);
-        self.actions.lock().await.remove(target_id);
-        self.connecting.lock().await.remove(target_id);
-        let finished_at_ms = chrono::Utc::now().timestamp_millis();
-        let meta = self.meta.lock().await.remove(target_id);
-        self.append_log(
-            target_id,
-            "event",
-            format!("Closed browser session {target_id}."),
-        )
-        .await;
-        let now = chrono::Utc::now().timestamp_millis();
-        let activity = browser_activity(
-            format!("browser_{target_id}"),
-            meta.as_ref()
-                .map(|meta| meta.title.clone())
-                .unwrap_or_else(|| "Browser session".to_string()),
-            meta.as_ref()
-                .map(|meta| meta.url.clone())
-                .unwrap_or_else(|| format!("session {target_id}")),
-            BackgroundActivityStatus::Stopped,
-            Some(meta.as_ref().map(|meta| meta.started_at_ms).unwrap_or(now)),
-            Some(finished_at_ms),
-            Some(message.to_string()),
-        );
-        if let Err(error) = host.publish_activity(activity).await {
-            log_secondary_plugin_failure("publish stopped browser activity", &error);
-        }
-        self.logs.lock().await.remove(target_id);
-        Ok(true)
-    }
-}
-
-/// `ActivitySourceAdapter` the web plugin registers for the `Browser` kind so
-/// the host can route log reads and stop requests to the live sessions.
-struct BrowserActivitySource {
-    state: Arc<BrowserActivityState>,
-    host: Arc<dyn HostClient>,
-}
-
-#[async_trait]
-impl ActivitySourceAdapter for BrowserActivitySource {
-    async fn read_logs(
-        &self,
-        activity_id: &str,
-        since_seq: u64,
-        limit: Option<u32>,
-        _wait_ms: u64,
-    ) -> SdkResult<BackgroundActivityLogRead> {
-        let target_id = activity_id.strip_prefix("browser_").unwrap_or(activity_id);
-        let running = self.state.meta.lock().await.contains_key(target_id);
-        let mut read = self
-            .state
-            .logs
-            .lock()
-            .await
-            .get(target_id)
-            .map(|log| log.read(activity_id, since_seq, limit))
-            .unwrap_or_else(|| agena_plugin_host::sdk::activity::empty_log_read(activity_id));
-        read.status = if running {
-            BackgroundActivityStatus::Running
-        } else {
-            BackgroundActivityStatus::Stopped
-        };
-        Ok(read)
-    }
-
-    async fn stop(&self, activity_id: &str) -> SdkResult<()> {
-        let target_id = activity_id
-            .strip_prefix("browser_")
-            .unwrap_or(activity_id)
-            .to_string();
-        let gate = self.state.action_gate(&target_id).await;
-        let _guard = gate.lock().await;
-        let closed = self
-            .state
-            .close_session(
-                &target_id,
-                "Stopped from the activities panel.",
-                self.host.as_ref(),
-            )
-            .await?;
-        if !closed {
-            return Err(PluginError::invalid_params(format!(
-                "browser session '{target_id}' could not be closed"
-            )));
-        }
-        Ok(())
-    }
-}
-
 struct WebPluginState {
     config: WebConfig,
     fetch_coordinator: Arc<WebFetchCoordinator>,
+    http_transport: Arc<fetch_transport::HttpTransport>,
     search_coordinator: WebSearchCoordinator,
     snapshots: agena_web::PageSnapshots,
     host: Arc<dyn HostClient>,
@@ -1066,6 +659,7 @@ impl WebPluginState {
                 cache_capacity: config.fetch.cache.capacity,
                 per_host_delay: Duration::from_millis(config.fetch.request.delay_ms),
             })),
+            http_transport: Arc::default(),
             snapshots: agena_web::PageSnapshots::default(),
             search_coordinator: WebSearchCoordinator::new(Duration::from_millis(
                 config.fetch.request.delay_ms,
@@ -1073,66 +667,6 @@ impl WebPluginState {
             config,
             host,
         }
-    }
-}
-
-fn browser_activity(
-    id: String,
-    title: String,
-    description: String,
-    status: BackgroundActivityStatus,
-    started_at_ms: Option<i64>,
-    finished_at_ms: Option<i64>,
-    message: Option<String>,
-) -> BackgroundActivity {
-    let now = chrono::Utc::now().timestamp_millis();
-    BackgroundActivity {
-        id,
-        kind: BackgroundActivityKind::Browser,
-        status,
-        title,
-        description,
-        command: None,
-        workdir: None,
-        session_id: None,
-        parent_session_id: None,
-        operation_id: None,
-        source_part_id: None,
-        created_at_ms: started_at_ms.unwrap_or(now),
-        started_at_ms: started_at_ms.unwrap_or(now),
-        finished_at_ms,
-        next_event_at_ms: None,
-        exit_code: None,
-        message,
-        failure: None,
-        last_seq: 0,
-        has_more: false,
-        dropped_lines: 0,
-        cancellable: status.is_active(),
-        dismissible: status.is_terminal(),
-    }
-}
-
-/// Human-facing title segment for a URL: host plus the non-root path.
-fn browser_title_target(url: &url::Url) -> String {
-    let mut title = url.host_str().unwrap_or(url.as_str()).to_owned();
-    let path = url.path().trim_end_matches('/');
-    if !path.is_empty() {
-        title.push_str(path);
-    }
-    title
-}
-
-/// Human-readable text for a CDP `RemoteObject` in `Runtime.consoleAPICalled`
-/// args: prefer the structured value, fall back to the inspector description.
-fn cdp_remote_object_text(value: &serde_json::Value) -> String {
-    if let Some(description) = value.get("description").and_then(serde_json::Value::as_str) {
-        return description.to_string();
-    }
-    match value.get("value") {
-        Some(serde_json::Value::String(text)) => text.clone(),
-        Some(other) => other.to_string(),
-        None => String::new(),
     }
 }
 
@@ -1176,21 +710,21 @@ struct CrawlRunInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     /// Omit for HTTP first and one JavaScript-shell retry if browser.enabled; false forces HTTP, true forces an isolated browser.
     render_js: Option<bool>,
-    /// Concurrent page reads; default 4, hard maximum 8, capped by crawl.limits.concurrency.
+    /// Concurrent page reads; default 4, maximum 32, capped by crawl.limits.concurrency.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[schemars(range(min = 1, max = 8))]
+    #[schemars(range(min = 1, max = agena_web::MAX_CRAWL_CONCURRENCY))]
     concurrency: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, agena_plugin_sdk::ToolInput)]
 #[serde(deny_unknown_fields)]
 struct FetchManyInput {
-    /// One to eight known HTTP(S) URLs; normalized duplicates are fetched once, in first-occurrence order.
-    #[schemars(length(min = 1, max = 8))]
+    /// One to sixteen known HTTP(S) URLs; normalized duplicates are fetched once, in first-occurrence order.
+    #[schemars(length(min = 1, max = MAX_FETCH_BATCH))]
     urls: Vec<String>,
-    /// In-flight page reads, default 4, maximum 8. Per-host pacing still applies.
+    /// In-flight page reads, default 8, maximum 16. Per-host pacing still applies.
     #[serde(default)]
-    #[schemars(range(min = 1, max = 8))]
+    #[schemars(range(min = 1, max = MAX_FETCH_BATCH))]
     concurrency: Option<u32>,
     /// Per-page Unicode-character preview, default 4000, maximum 8000. Continue each page with web.read.
     #[serde(default)]
@@ -1270,140 +804,6 @@ struct CrawlWebSearchInput {
     blocked_domains: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, agena_plugin_sdk::ToolInput)]
-#[input(trim("url", "preview_id"), non_empty_if_present("url", "preview_id"))]
-#[serde(deny_unknown_fields)]
-struct BrowserOpenInput {
-    /// Public HTTP(S) URL. Supply exactly one of url and preview_id.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    url: Option<String>,
-    /// Running preview owned by this workspace and Agena session. Use browser_list
-    /// to discover IDs. Private URLs are never accepted through the url field.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    preview_id: Option<String>,
-    #[serde(default = "default_browser_action_timeout_ms")]
-    #[schemars(range(min = 1, max = 120000))]
-    timeout_ms: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, agena_plugin_sdk::ToolInput)]
-#[input(trim("session_id"), non_empty("session_id"))]
-#[serde(deny_unknown_fields)]
-struct BrowserSessionInput {
-    session_id: String,
-}
-
-#[derive(
-    Debug, Clone, Default, Serialize, Deserialize, JsonSchema, agena_plugin_sdk::ToolInput,
-)]
-#[serde(deny_unknown_fields)]
-struct BrowserListInput {}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, agena_plugin_sdk::ToolInput)]
-#[input(
-    trim("session_id", "selector"),
-    non_empty("session_id"),
-    non_empty_if_present("selector")
-)]
-#[serde(deny_unknown_fields)]
-struct BrowserClickInput {
-    session_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[arg(max_chars = 4096)]
-    selector: Option<String>,
-    /// Snapshot-local index returned by `browser_snapshot.elements[].ref`.
-    /// It is valid only while the page DOM has not materially changed.
-    #[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
-    #[schemars(range(min = 0, max = 199))]
-    element_ref: Option<u16>,
-    /// ID of the snapshot that supplied ref. Required with ref; stale refs are rejected.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[arg(max_chars = 128)]
-    snapshot_id: Option<String>,
-    #[serde(default = "default_browser_action_timeout_ms")]
-    #[schemars(range(min = 1, max = 120000))]
-    timeout_ms: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, agena_plugin_sdk::ToolInput)]
-#[input(
-    trim("session_id", "selector"),
-    non_empty("session_id"),
-    non_empty_if_present("selector")
-)]
-#[serde(deny_unknown_fields)]
-struct BrowserTypeInput {
-    session_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[arg(max_chars = 4096)]
-    selector: Option<String>,
-    #[serde(default, rename = "ref", skip_serializing_if = "Option::is_none")]
-    #[schemars(range(min = 0, max = 199))]
-    element_ref: Option<u16>,
-    /// ID of the snapshot that supplied ref. Required with ref; stale refs are rejected.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[arg(max_chars = 128)]
-    snapshot_id: Option<String>,
-    #[arg(max_chars = 65536)]
-    text: String,
-    #[serde(default)]
-    press_enter: bool,
-    #[serde(default = "default_browser_action_timeout_ms")]
-    #[schemars(range(min = 1, max = 120000))]
-    timeout_ms: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, agena_plugin_sdk::ToolInput)]
-#[input(
-    trim("session_id", "selector", "text"),
-    non_empty("session_id"),
-    non_empty_if_present("selector", "text")
-)]
-#[serde(deny_unknown_fields)]
-struct BrowserWaitInput {
-    session_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[arg(max_chars = 4096)]
-    selector: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[arg(max_chars = 4096)]
-    text: Option<String>,
-    #[serde(default = "default_browser_action_timeout_ms")]
-    #[schemars(range(min = 1, max = 120000))]
-    timeout_ms: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, agena_plugin_sdk::ToolInput)]
-#[input(trim("session_id", "path"), non_empty("session_id"))]
-#[serde(deny_unknown_fields)]
-struct BrowserScreenshotInput {
-    session_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    path: Option<String>,
-    #[serde(default)]
-    full_page: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, agena_plugin_sdk::ToolInput)]
-#[input(trim("session_id", "url"), non_empty("session_id", "url"))]
-#[serde(deny_unknown_fields)]
-struct BrowserDownloadInput {
-    /// Existing managed browser page to use for the navigation. Its browser
-    /// profile (for example, authenticated cookies) remains intact.
-    session_id: String,
-    /// HTTP(S) download URL. The artifact is always written under the
-    /// managed workspace artifact directory; callers cannot choose an
-    /// arbitrary destination path.
-    url: String,
-    #[serde(default = "default_browser_action_timeout_ms")]
-    #[schemars(range(min = 1, max = 120000))]
-    timeout_ms: u64,
-}
-
-const fn default_browser_action_timeout_ms() -> u64 {
-    30_000
-}
-
 #[agena_plugin_host::sdk::agena_plugin(
     namespace = "agena",
     name = "web",
@@ -1411,11 +811,11 @@ const fn default_browser_action_timeout_ms() -> u64 {
     display_name = "Web",
     icon = crate::plugin_metadata::icon(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/plugin-icons/web.svg"))),
     authors = ["canxin121"],
-    help = "Search, fetch and crawl web pages with a local crawl index. Deduplication and cached snapshots support later retrieval, with optional browser rendering for JavaScript pages.",
+    help = "Search, fetch and index web pages. Fetch and extract content from JavaScript-heavy pages with optional rendering.",
     tags(agena_plugin_host::sdk::ToolTag::Network, agena_plugin_host::sdk::ToolTag::Fetch, agena_plugin_host::sdk::ToolTag::Discovery),
-    summary = "Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication, and optional browser rendering.",
+    summary = "Web search, fetch and crawl with a local index and optional page rendering.",
     translations(
-        locale("zh-CN", summary = "本地网页搜索、抓取和爬取工具，内置爬取缓存与去重，并可选用浏览器渲染。", help = "搜索、读取和抓取网页，并建立本地抓取索引。去重和缓存快照支持后续检索，需要时可使用浏览器渲染 JavaScript 页面。"),
+        locale("zh-CN", summary = "搜索、抓取和索引网页，支持渲染依赖 JavaScript 的页面。", help = "搜索和抓取网页，将正文存入本地索引。可渲染依赖 JavaScript 的页面并提取内容。"),
         locale("zh-TW", summary = "本機網頁搜尋、擷取與爬取工具，內建爬取快取與去重，並可選擇使用瀏覽器呈現。"),
         locale("ja-JP", summary = "ローカルのWeb検索・取得・クロール機能です。クロール結果をキャッシュして重複を除去し、必要に応じてブラウザーで描画します。"),
         locale("ko-KR", summary = "로컬 웹 검색, 가져오기, 크롤링 도구입니다. 크롤링 캐시와 중복 제거 기능이 있으며 브라우저 렌더링을 선택할 수 있습니다."),
@@ -1435,10 +835,7 @@ impl WebPlugin {
         Self {
             state: OnceLock::new(),
             workspace_root: OnceLock::new(),
-            crawl_lock: Mutex::new(()),
-            browser_download_lock: Arc::new(Mutex::new(())),
-            browser_activity_source: OnceCell::new(),
-            browser_state: Arc::new(BrowserActivityState::new()),
+            renderer: ChromeRuntime::default(),
             user_agent: "agena-web".to_owned(),
         }
     }
@@ -1521,103 +918,63 @@ impl WebPlugin {
 
     #[hook(
         shutdown,
-        summary = "Close browser resources",
-        help = "Closes browser sessions, previews and associated browser processes during shutdown.",
+        summary = "Close the web renderer",
+        help = "Stop the Chrome process used by rendered fetches and searches.",
         translations(
             locale(
                 "zh-CN",
-                summary = "关闭浏览器资源",
-                help = "插件停止时关闭浏览器会话、预览及相关进程。"
+                summary = "关闭网页渲染器",
+                help = "停止网页抓取和搜索用于渲染的 Chrome 进程。"
             ),
             locale(
                 "zh-TW",
-                summary = "關閉瀏覽器資源",
-                help = "外掛停止時關閉瀏覽器工作階段、預覽及相關程序。"
+                summary = "關閉網頁渲染器",
+                help = "停止網頁擷取和搜尋用於渲染的 Chrome 程序。"
             ),
             locale(
                 "fr-FR",
-                summary = "Fermer les ressources du navigateur",
-                help = "Ferme les sessions, les aperçus et les processus associés au navigateur à l’arrêt du plugin."
+                summary = "Arrêter le moteur de rendu web",
+                help = "Arrête le processus Chrome qui rend les pages récupérées et les résultats de recherche."
             ),
             locale(
                 "es-ES",
-                summary = "Cerrar los recursos del navegador",
-                help = "Cierra las sesiones, vistas previas y procesos asociados al navegador cuando se detiene el plugin."
+                summary = "Detener el renderizador web",
+                help = "Detiene el proceso de Chrome que renderiza las páginas recuperadas y las de búsqueda."
             ),
             locale(
                 "pt-BR",
-                summary = "Fechar recursos do navegador",
-                help = "Fecha sessões, visualizações e processos associados ao navegador quando o plugin é encerrado."
+                summary = "Encerrar a renderização web",
+                help = "Encerra o processo do Chrome usado para renderizar páginas coletadas e de pesquisa."
             ),
             locale(
                 "de-DE",
-                summary = "Browserressourcen schließen",
-                help = "Schließt beim Beenden des Plugins Browsersitzungen, Vorschauen und zugehörige Prozesse."
+                summary = "Web-Rendering beenden",
+                help = "Beendet den Chrome-Prozess, der abgerufene Seiten und Suchergebnisse rendert."
             ),
             locale(
                 "ja-JP",
-                summary = "ブラウザーのリソースを終了",
-                help = "プラグイン停止時にブラウザーセッション、プレビュー、関連プロセスを終了します。"
+                summary = "Web レンダラーを終了",
+                help = "ページ取得や検索時のレンダリングに使用する Chrome プロセスを終了します。"
             ),
             locale(
                 "ko-KR",
-                summary = "브라우저 리소스 종료",
-                help = "플러그인 중지 시 브라우저 세션, 미리보기 및 관련 프로세스를 종료합니다."
+                summary = "웹 렌더러 종료",
+                help = "페이지 수집과 검색의 렌더링에 사용하는 Chrome 프로세스를 종료합니다."
             ),
             locale(
                 "hi-IN",
-                summary = "ब्राउज़र संसाधन बंद करें",
-                help = "प्लगइन बंद होने पर ब्राउज़र सत्र, पूर्वावलोकन और संबंधित प्रक्रियाएँ बंद करता है।"
+                summary = "वेब रेंडरर बंद करें",
+                help = "पेज प्राप्ति और खोज में रेंडरिंग के लिए इस्तेमाल होने वाली Chrome प्रक्रिया बंद करता है।"
             ),
             locale(
                 "ar-SA",
-                summary = "إغلاق موارد المتصفح",
-                help = "يغلق جلسات المتصفح والمعاينات والعمليات المرتبطة بها عند إيقاف الإضافة."
+                summary = "إيقاف عارض صفحات الويب",
+                help = "يوقف عملية Chrome التي تُستخدم لعرض الصفحات المسترجعة وصفحات البحث."
             )
         )
     )]
     async fn shutdown(&self) -> SdkResult<()> {
-        // Drop CDP sockets before killing the underlying browser process.
-        self.browser_state.clients.lock().await.clear();
-        self.browser_state.previews.lock().await.clear();
-        *self.browser_state.root.lock().await = None;
-        let finished_at_ms = chrono::Utc::now().timestamp_millis();
-        let sessions = std::mem::take(&mut *self.browser_state.meta.lock().await)
-            .into_iter()
-            .collect::<Vec<_>>();
-        for (session_id, meta) in sessions {
-            self.browser_state
-                .append_log(
-                    &session_id,
-                    "event",
-                    "Plugin shutdown closed the managed browser.",
-                )
-                .await;
-            self.publish_browser_terminal(
-                &session_id,
-                Some(&meta),
-                finished_at_ms,
-                "Plugin shutdown closed the managed browser.".to_string(),
-            )
-            .await;
-        }
-        self.browser_state.logs.lock().await.clear();
-        let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
-            .acquire()
-            .await
-            .map_err(|error| {
-                plugin_internal_error_with_context("acquire browser shutdown worker", &error)
-            })?;
-        tokio::task::spawn_blocking(move || {
-            let _worker_permit = worker_permit;
-            shutdown_local_browser()
-        })
-        .await
-        .map_err(|error| {
-            plugin_internal_error_with_context("browser shutdown task failed", &error)
-        })?
-        .map_err(crawl_error_to_plugin)?;
-        Ok(())
+        self.renderer.shutdown().await
     }
 
     fn state(&self) -> SdkResult<&WebPluginState> {
@@ -1637,80 +994,6 @@ impl WebPlugin {
             .ok_or_else(|| PluginError::internal("web plugin invoked before init"))
     }
 
-    /// Register the browser activity adapter on first real browser use. The
-    /// runtime installs its concrete callback host only after static plugin
-    /// initialization has completed; doing this lazily avoids calling the
-    /// temporary `NoopHostClient` during startup.
-    async fn ensure_browser_activity_source(&self) -> SdkResult<()> {
-        let host = self.state()?.host.clone();
-        let state = Arc::clone(&self.browser_state);
-        self.browser_activity_source
-            .get_or_try_init(|| async move {
-                let source = BrowserActivitySource {
-                    state,
-                    host: host.clone(),
-                };
-                host.register_activity_source(BackgroundActivityKind::Browser, Arc::new(source))
-                    .await
-            })
-            .await
-            .map(|_| ())
-    }
-
-    /// Publish a browser session as a unified background activity so the TUI
-    /// `/activities` panel and web `/activities` page can list and follow it.
-    /// Records go straight into the host's activity registry through the
-    /// first-class `HostClient::publish_activity` capability.
-    async fn publish_browser_activity(&self, activity: BackgroundActivity) -> SdkResult<()> {
-        let host = self.state()?.host.clone();
-        host.publish_activity(activity).await.map_err(|error| {
-            plugin_internal_failure_with_context("publish browser activity", &error)
-        })
-    }
-
-    async fn publish_browser_running(&self, session_id: &str, meta: &BrowserSessionMeta) {
-        if let Err(error) = self
-            .publish_browser_activity(browser_activity(
-                format!("browser_{session_id}"),
-                meta.title.clone(),
-                meta.url.clone(),
-                BackgroundActivityStatus::Running,
-                Some(meta.started_at_ms),
-                None,
-                None,
-            ))
-            .await
-        {
-            log_secondary_plugin_failure("publish running browser activity", &error);
-        }
-    }
-
-    async fn publish_browser_terminal(
-        &self,
-        session_id: &str,
-        meta: Option<&BrowserSessionMeta>,
-        finished_at_ms: i64,
-        message: String,
-    ) {
-        let now = chrono::Utc::now().timestamp_millis();
-        if let Err(error) = self
-            .publish_browser_activity(browser_activity(
-                format!("browser_{session_id}"),
-                meta.map(|meta| meta.title.clone())
-                    .unwrap_or_else(|| "Browser session".to_string()),
-                meta.map(|meta| meta.url.clone())
-                    .unwrap_or_else(|| format!("session {session_id}")),
-                BackgroundActivityStatus::Stopped,
-                Some(meta.map(|meta| meta.started_at_ms).unwrap_or(now)),
-                Some(finished_at_ms),
-                Some(message),
-            ))
-            .await
-        {
-            log_secondary_plugin_failure("publish terminal browser activity", &error);
-        }
-    }
-
     fn store(&self, context: &ToolInvokeContext<'_>) -> SdkResult<CrawlStore> {
         let root = web_storage_root(
             context,
@@ -1723,31 +1006,17 @@ impl WebPlugin {
         Ok(CrawlStore::for_workspace(&root))
     }
 
-    fn spider_fetch_options(&self, rendered: bool) -> SdkResult<SpiderFetchOptions> {
+    fn web_fetch_options(&self) -> SdkResult<WebFetchOptions> {
         let config = self.config()?;
         let delay = (config.browser.wait.delay_ms > 0)
             .then(|| Duration::from_millis(config.browser.wait.delay_ms));
-        Ok(SpiderFetchOptions {
+        Ok(WebFetchOptions {
             extractor: config.fetch.extractor,
             max_body_bytes: config.fetch.request.max_body_bytes as usize,
             timeout: Duration::from_secs(config.fetch.request.timeout_secs),
-            delay_ms: config.fetch.request.delay_ms,
             user_agent: self.user_agent.clone(),
             respect_robots_txt: config.fetch.request.respect_robots_txt,
             browser: BrowserRenderOptions {
-                enabled: rendered,
-                local_browser: LocalBrowserOptions {
-                    executable_path: config
-                        .browser
-                        .executable_path
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|value| !value.is_empty())
-                        .map(PathBuf::from),
-                    startup_timeout: Duration::from_secs(config.browser.wait.timeout_secs),
-                    idle_timeout: (config.browser.idle_timeout_secs > 0)
-                        .then(|| Duration::from_secs(config.browser.idle_timeout_secs)),
-                },
                 wait_for_network_idle: config.browser.wait.for_network_idle,
                 wait_for_selector: config.browser.wait.for_selector.clone(),
                 wait_timeout: Duration::from_secs(config.browser.wait.timeout_secs),
@@ -1757,573 +1026,13 @@ impl WebPlugin {
     }
 
     async fn validate_network_target(&self, url: &url::Url) -> SdkResult<()> {
-        self.state()?
-            .host
-            .require_network_permission(url.to_string())
-            .await?;
-        validate_authorized_network_target(
+        let state = self.state()?;
+        network_policy::require_browser_target(
             url,
-            &self.config()?.network,
-            self.state()?.host.as_ref(),
+            &state.config.network.fake_ip_ranges,
+            state.host.as_ref(),
         )
         .await
-    }
-
-    /// Resolve ordinary HTTP redirect hops before a managed browser target is
-    /// allowed to navigate. Each hop is independently subjected to the same
-    /// hostname/DNS permission policy as the originally requested URL. HEAD
-    /// is deliberately used with redirects disabled: this preflight never
-    /// follows a target behind the browser's back or replay a form request.
-    ///
-    /// The persistent CDP Fetch interceptor remains authoritative for the
-    /// browser's real document requests, including cookie-, JavaScript-,
-    /// form-, and method-dependent navigations. This preflight is retained as
-    /// an early error and redirect diagnostic for ordinary HTTP URLs.
-    async fn browser_preflight_redirects(&self, initial: &url::Url) -> SdkResult<Vec<String>> {
-        const MAX_REDIRECTS: usize = 10;
-        let timeout = Duration::from_secs(self.config()?.fetch.request.timeout_secs);
-        let preflight = async {
-            let mut current = initial.clone();
-            let mut checked = Vec::new();
-            for _ in 0..=MAX_REDIRECTS {
-                self.validate_network_target(&current).await?;
-                let route = resolve_public_http_route(
-                    &current,
-                    &self.config()?.network,
-                    self.state()?.host.as_ref(),
-                )
-                .await?;
-                let client = route
-                    .apply(
-                        reqwest::Client::builder()
-                            .redirect(reqwest::redirect::Policy::none())
-                            .timeout(timeout),
-                        &current,
-                    )
-                    .build()
-                    .map_err(|error| PluginError::internal_error(&error))?;
-                checked.push(current.to_string());
-                let request = client
-                    .head(current.clone())
-                    .build()
-                    .map_err(|error| PluginError::internal_error(&error.without_url()))?;
-                let response = route
-                    .execute(
-                        &client,
-                        request,
-                        timeout.min(Duration::from_secs(30)),
-                        Some(timeout),
-                        Some(0),
-                    )
-                    .await
-                    .map_err(|error| {
-                        plugin_internal_error_with_context(
-                            format!("browser redirect preflight failed for {current}").as_str(),
-                            &error,
-                        )
-                    })?;
-                if !response.status().is_redirection() {
-                    return Ok(checked);
-                }
-                let location = response
-                    .headers()
-                    .get(reqwest::header::LOCATION)
-                    .ok_or_else(|| {
-                        PluginError::internal(format!(
-                            "browser redirect from {current} had no Location header"
-                        ))
-                    })?
-                    .to_str()
-                    .map_err(|error| {
-                        plugin_internal_error_with_context(
-                            format!(
-                                "browser redirect from {current} had an invalid Location header"
-                            )
-                            .as_str(),
-                            &error,
-                        )
-                    })?;
-                current = resolve_browser_redirect(&current, location)?;
-            }
-            Err(PluginError::internal(format!(
-                "browser redirect preflight exceeded {MAX_REDIRECTS} hops"
-            )))
-        };
-        agena_plugin_host::sdk::permission_wait::timeout(timeout, preflight)
-            .await
-            .map_err(|_| PluginError::internal("browser redirect preflight deadline exceeded"))?
-    }
-
-    fn local_browser_options(&self) -> SdkResult<LocalBrowserOptions> {
-        let config = self.config()?;
-        Ok(LocalBrowserOptions {
-            executable_path: config
-                .browser
-                .executable_path
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(PathBuf::from),
-            startup_timeout: Duration::from_secs(config.browser.wait.timeout_secs),
-            idle_timeout: (config.browser.idle_timeout_secs > 0)
-                .then(|| Duration::from_secs(config.browser.idle_timeout_secs)),
-        })
-    }
-
-    /// Run one action against a single page target under that page's gate.
-    ///
-    /// Ownership is re-checked inside the gate: the check and the CDP traffic
-    /// must be one critical section, otherwise a concurrent `browser_close`
-    /// can retire the target between them.
-    async fn with_browser_action<T, F>(
-        &self,
-        context: &ToolInvokeContext<'_>,
-        target: &str,
-        action: F,
-    ) -> SdkResult<T>
-    where
-        F: std::future::Future<Output = SdkResult<T>>,
-    {
-        require_browser_sandbox()?;
-        self.require_browser_owner(context, target).await?;
-        let gate = self.browser_state.action_gate(target).await;
-        let _guard = gate.lock().await;
-        self.require_browser_owner(context, target).await?;
-        self.validate_browser_preview_state(target).await?;
-        let _lease = agena_web::local_browser_lease().map_err(crawl_error_to_plugin)?;
-        let result = action.await?;
-        self.validate_browser_preview_state(target).await?;
-        Ok(result)
-    }
-
-    /// `browser_open` creates a target this caller does not own yet, so it
-    /// cannot use [`WebPlugin::with_browser_action`]; it holds the freshly
-    /// created target's gate directly instead.
-    async fn lock_new_browser_action(&self, target: &str) -> tokio::sync::OwnedMutexGuard<()> {
-        self.browser_state
-            .action_gate(target)
-            .await
-            .lock_owned()
-            .await
-    }
-
-    async fn require_browser_owner(
-        &self,
-        context: &ToolInvokeContext<'_>,
-        target: &str,
-    ) -> SdkResult<()> {
-        let owner = browser_owner(context)?;
-        if self
-            .browser_state
-            .meta
-            .lock()
-            .await
-            .get(target)
-            .is_none_or(|meta| meta.owner != owner)
-        {
-            return Err(PluginError::invalid_params(
-                "browser page not found or not owned by this Agena session; call browser_open",
-            ));
-        }
-        Ok(())
-    }
-
-    async fn browser_preview(&self, target: &str) -> Option<ManagedPreviewTarget> {
-        self.browser_state
-            .previews
-            .lock()
-            .await
-            .get(target)
-            .cloned()
-    }
-
-    async fn validate_browser_preview_lease(&self, target: &str) -> SdkResult<()> {
-        if let Some(preview) = self.browser_preview(target).await {
-            preview.validate().await.map_err(managed_preview::denied)?;
-            managed_preview::require_upstream_permission(&preview, self.state()?.host.as_ref())
-                .await?;
-        }
-        Ok(())
-    }
-
-    async fn validate_browser_preview_state(&self, target: &str) -> SdkResult<()> {
-        let Some(preview) = self.browser_preview(target).await else {
-            return Ok(());
-        };
-        preview.validate().await.map_err(managed_preview::denied)?;
-        managed_preview::require_upstream_permission(&preview, self.state()?.host.as_ref()).await?;
-        let page = self.browser_client(Some(target)).await?;
-        let location = page.evaluate("String(location.href)").await?;
-        let location = location
-            .as_str()
-            .ok_or_else(|| managed_preview::denied("browser did not return a committed URL"))?;
-        let url = url::Url::parse(location)
-            .map_err(|_| managed_preview::denied("browser returned an invalid committed URL"))?;
-        preview
-            .validate_url(&url)
-            .await
-            .map_err(managed_preview::denied)
-    }
-
-    async fn validate_browser_url(&self, target: &str, url: &url::Url) -> SdkResult<()> {
-        let preview = self.browser_preview(target).await;
-        if managed_preview::authorize_request(
-            preview.as_ref(),
-            url,
-            true,
-            self.state()?.host.as_ref(),
-        )
-        .await?
-        {
-            return Ok(());
-        }
-        self.validate_network_target(url).await
-    }
-
-    async fn browser_context_for_owner(
-        &self,
-        browser: &CdpClient,
-        owner: &agena_runtime_tools::TerminalOwner,
-    ) -> SdkResult<String> {
-        let key = (owner.workspace.clone(), owner.session_id);
-        // Context creation is a read-then-create over shared browser state, so
-        // two concurrent opens for the same or different owners would both
-        // miss the cache and each create a context, orphaning one of them.
-        let _create_guard = self.browser_state.context_creation.lock().await;
-        let mut contexts = self.browser_state.contexts.lock().await;
-        let active = browser
-            .command("Target.getBrowserContexts", serde_json::json!({}))
-            .await?;
-        let live = active
-            .get("browserContextIds")
-            .and_then(serde_json::Value::as_array)
-            .ok_or_else(|| PluginError::internal("browser did not return context identities"))?;
-        contexts.retain(|_, id| live.iter().any(|value| value.as_str() == Some(id.as_str())));
-        if let Some(id) = contexts.get(&key).filter(|id| {
-            active
-                .get("browserContextIds")
-                .and_then(serde_json::Value::as_array)
-                .is_some_and(|ids| ids.iter().any(|value| value.as_str() == Some(id.as_str())))
-        }) {
-            return Ok(id.clone());
-        }
-        if contexts.len() >= 64 && !contexts.contains_key(&key) {
-            return Err(PluginError::invalid_params(
-                "browser context quota reached; close owned contexts before opening more",
-            ));
-        }
-        let result = browser
-            .command(
-                "Target.createBrowserContext",
-                serde_json::json!({"disposeOnDetach":true}),
-            )
-            .await?;
-        let id = result
-            .get("browserContextId")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| PluginError::internal("browser did not return a context id"))?
-            .to_owned();
-        contexts.insert(key, id.clone());
-        Ok(id)
-    }
-
-    async fn browser_endpoint(&self) -> SdkResult<String> {
-        require_browser_sandbox()?;
-        let options = self.local_browser_options()?;
-        let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
-            .acquire()
-            .await
-            .map_err(|error| {
-                plugin_internal_error_with_context("acquire browser launcher worker", &error)
-            })?;
-        tokio::task::spawn_blocking(move || {
-            let _worker_permit = worker_permit;
-            local_browser_endpoint(&options)
-        })
-        .await
-        .map_err(|error| plugin_internal_error_with_context("browser launcher failed", &error))?
-        .map_err(crawl_error_to_plugin)
-    }
-
-    async fn browser_client(&self, target_id: Option<&str>) -> SdkResult<CdpClient> {
-        self.browser_client_with_events(target_id, None).await
-    }
-
-    /// Like [`WebPlugin::browser_client`] but attaches the target session with
-    /// an optional CDP notification sink used for live activity logging.
-    async fn browser_client_with_events(
-        &self,
-        target_id: Option<&str>,
-        events: Option<mpsc::Sender<CdpEvent>>,
-    ) -> SdkResult<CdpClient> {
-        let Some(target_id) = target_id else {
-            if events.is_some() {
-                // Dedicated notification streams (such as downloads) must
-                // not replace the connection that owns browser contexts.
-                let endpoint = self.browser_endpoint().await?;
-                return CdpClient::connect(endpoint.as_str(), None, events).await;
-            }
-            let mut root = self.browser_state.root.lock().await;
-            if let Some(client) = root.as_ref().filter(|client| !client.is_closed()) {
-                return Ok(client.clone());
-            }
-            // Contexts use disposeOnDetach. Retain one root connection and
-            // coalesce initial connections, otherwise opening another page
-            // can tear down the previous caller's contexts and cookies.
-            let endpoint = self.browser_endpoint().await?;
-            let client = CdpClient::connect(endpoint.as_str(), None, None).await?;
-            *root = Some(client.clone());
-            return Ok(client);
-        };
-
-        let existing = {
-            let mut clients = self.browser_state.clients.lock().await;
-            if let Some(client) = clients.get(target_id)
-                && !client.is_closed()
-            {
-                Some(client.clone())
-            } else {
-                clients.remove(target_id);
-                None
-            }
-        };
-        if let Some(client) = existing {
-            return Ok(client);
-        }
-
-        // Coalesce concurrent first use of one target. Without the second
-        // check below, two commands can establish separate CDP sockets and
-        // whichever inserts last silently orphans the other's reader task.
-        let connect_lock = {
-            let mut connecting = self.browser_state.connecting.lock().await;
-            Arc::clone(
-                connecting
-                    .entry(target_id.to_string())
-                    .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
-            )
-        };
-        let _connect_guard = connect_lock.lock().await;
-        let existing = {
-            let mut clients = self.browser_state.clients.lock().await;
-            if let Some(client) = clients.get(target_id)
-                && !client.is_closed()
-            {
-                Some(client.clone())
-            } else {
-                clients.remove(target_id);
-                None
-            }
-        };
-        if let Some(client) = existing {
-            return Ok(client);
-        }
-
-        let endpoint = self.browser_endpoint().await?;
-        let host = self.state()?.host.clone();
-        let network = self.config()?.network.clone();
-        let preview = self.browser_preview(target_id).await;
-        let policy: BrowserRequestPolicy = Arc::new(move |raw_url, is_document| {
-            let host = host.clone();
-            let network = network.clone();
-            let preview = preview.clone();
-            Box::pin(async move {
-                let url = prepare_fetch_url(&raw_url).map_err(crawl_error_to_plugin)?;
-                if agena_plugin_host::sdk::host_api::current_host_callback_context().is_none() {
-                    return Err(PluginError::internal(
-                        "browser network authorization requires an active tool call",
-                    ));
-                }
-                // The run lease limits the private-network exception, while
-                // the live host still authorizes its actual upstream endpoint.
-                // Owning a child is not proof that it owns the selected port.
-                if managed_preview::authorize_request(
-                    preview.as_ref(),
-                    &url,
-                    is_document,
-                    host.as_ref(),
-                )
-                .await?
-                {
-                    return Ok(());
-                }
-                host.require_network_permission(raw_url).await?;
-                validate_authorized_network_target(&url, &network, host.as_ref()).await
-            })
-        });
-        let client =
-            CdpClient::connect_with_policy(endpoint.as_str(), Some(target_id), events, policy)
-                .await?;
-        client.enable_navigation_interception().await?;
-        self.browser_state
-            .clients
-            .lock()
-            .await
-            .insert(target_id.to_string(), client.clone());
-        Ok(client)
-    }
-
-    async fn forget_browser_client(&self, target_id: &str) {
-        self.browser_state.clients.lock().await.remove(target_id);
-    }
-
-    /// Consume CDP notifications for one interactive session and project
-    /// main-frame navigations, console output, and browser log entries into
-    /// the shared activity log buffer and the live activity record. Runs
-    /// detached for the session's lifetime; exits when the target connection
-    /// closes and the event channel is dropped.
-    fn spawn_browser_event_task(
-        &self,
-        session_id: &str,
-        mut rx: mpsc::Receiver<CdpEvent>,
-    ) -> SdkResult<()> {
-        let capture_console_text = self.config()?.browser.capture_console_text;
-        let state = Arc::clone(&self.browser_state);
-        let host = self.state()?.host.clone();
-        let session_id = session_id.to_string();
-        tokio::spawn(async move {
-            while let Some(event) = rx.recv().await {
-                match event.method.as_str() {
-                    "Page.frameNavigated" => {
-                        // Only the main frame drives the activity title/URL.
-                        if event.params.pointer("/frame/parentId").is_some() {
-                            continue;
-                        }
-                        let Some(raw_url) = event
-                            .params
-                            .pointer("/frame/url")
-                            .and_then(serde_json::Value::as_str)
-                        else {
-                            continue;
-                        };
-                        let Ok(parsed) = url::Url::parse(raw_url) else {
-                            continue;
-                        };
-                        if !matches!(parsed.scheme(), "http" | "https") {
-                            continue;
-                        }
-                        let title_target = browser_title_target(&parsed);
-                        let title = format!("Browser · {title_target}");
-                        let url_text = parsed.to_string();
-                        let (previous_url, started_at_ms) = {
-                            let mut meta = state.meta.lock().await;
-                            let Some(entry) = meta.get_mut(&session_id) else {
-                                continue;
-                            };
-                            let previous_url = entry.url.clone();
-                            entry.title = title.clone();
-                            entry.url = url_text.clone();
-                            (previous_url, entry.started_at_ms)
-                        };
-                        if previous_url == url_text {
-                            continue;
-                        }
-                        state
-                            .append_log(&session_id, "event", format!("Navigated to {url_text}."))
-                            .await;
-                        if let Err(error) = host
-                            .publish_activity(browser_activity(
-                                format!("browser_{session_id}"),
-                                title,
-                                url_text,
-                                BackgroundActivityStatus::Running,
-                                Some(started_at_ms),
-                                None,
-                                None,
-                            ))
-                            .await
-                        {
-                            log_secondary_plugin_failure(
-                                "publish browser navigation activity",
-                                &error,
-                            );
-                        }
-                    }
-                    "Runtime.consoleAPICalled" if !capture_console_text => {
-                        state
-                            .append_log(
-                                &session_id,
-                                "console",
-                                "Console event (page payload omitted)",
-                            )
-                            .await;
-                    }
-                    "Log.entryAdded" if !capture_console_text => {
-                        state
-                            .append_log(
-                                &session_id,
-                                "log",
-                                "Browser log event (page payload omitted)",
-                            )
-                            .await;
-                    }
-                    "Runtime.consoleAPICalled" => {
-                        let level = event
-                            .params
-                            .get("type")
-                            .and_then(serde_json::Value::as_str)
-                            .unwrap_or("log");
-                        let text = event
-                            .params
-                            .pointer("/args")
-                            .and_then(serde_json::Value::as_array)
-                            .map(|args| {
-                                args.iter()
-                                    .map(cdp_remote_object_text)
-                                    .collect::<Vec<_>>()
-                                    .join(" ")
-                            })
-                            .unwrap_or_default();
-                        if !text.trim().is_empty() {
-                            state
-                                .append_log(&session_id, "console", format!("[{level}] {text}"))
-                                .await;
-                        }
-                    }
-                    "Log.entryAdded" => {
-                        let level = event
-                            .params
-                            .pointer("/entry/level")
-                            .and_then(serde_json::Value::as_str)
-                            .unwrap_or("info");
-                        let text = event
-                            .params
-                            .pointer("/entry/text")
-                            .and_then(serde_json::Value::as_str)
-                            .unwrap_or_default();
-                        if !text.trim().is_empty() {
-                            state
-                                .append_log(&session_id, "log", format!("[{level}] {text}"))
-                                .await;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        });
-        Ok(())
-    }
-
-    async fn browser_snapshot_value(&self, target_id: &str) -> SdkResult<serde_json::Value> {
-        let client = self.browser_client(Some(target_id)).await?;
-        client
-            .command("Runtime.enable", serde_json::json!({}))
-            .await?;
-        client.evaluate(&browser_snapshot_expression()).await
-    }
-
-    /// Re-check the managed page's committed URL after an interaction as a
-    /// defense-in-depth consistency check. The persistent Fetch-domain
-    /// interceptor independently authorizes every document request before it
-    /// is continued, while this check verifies the state exposed back to the
-    /// model against the same host and DNS policy.
-    async fn ensure_browser_final_url(&self, target_id: &str) -> SdkResult<serde_json::Value> {
-        let snapshot = self.browser_snapshot_value(target_id).await?;
-        if let Some(final_url) = snapshot.get("url").and_then(serde_json::Value::as_str)
-            && let Ok(final_url) = url::Url::parse(final_url)
-        {
-            self.validate_browser_url(target_id, &final_url).await?;
-        }
-        Ok(snapshot)
     }
 
     async fn fetch_page_with_extractor(
@@ -2334,7 +1043,7 @@ impl WebPlugin {
         extractor: agena_web::ExtractionBackend,
     ) -> SdkResult<FetchedPage> {
         if render_js {
-            require_browser_sandbox()?;
+            require_browser_runtime()?;
         }
         let state = self.state()?;
         if !state.config.fetch.enabled {
@@ -2342,48 +1051,54 @@ impl WebPlugin {
                 "web fetching is disabled by plugin config `fetch.enabled`",
             ));
         }
-        state
-            .host
-            .require_network_permission(url.to_string())
-            .await?;
+        let require_page_permission = |target: String| async move {
+            if render_js {
+                state.host.require_network_permission(target).await
+            } else {
+                state.host.require_pinned_http_permission(target).await
+            }
+        };
+        require_page_permission(url.to_string()).await?;
         // Alternate per-call extractors must not pollute the configured cache.
         let use_cache = use_cache && extractor == state.config.fetch.extractor;
         let page = state
             .fetch_coordinator
             .fetch_or_cached(url, render_js, use_cache, || async {
-                static FETCHES: Semaphore = Semaphore::const_new(8);
-                let _permit = FETCHES
-                    .acquire()
-                    .await
-                    .map_err(|error| PluginError::internal_error(&error))?;
-                let mut options = self.spider_fetch_options(render_js)?;
+                let mut options = self.web_fetch_options()?;
                 options.extractor = extractor;
                 if render_js {
-                    rendered_fetch::fetch(self, url, &options).await
+                    Box::pin(rendered_fetch::fetch(self, url, &options)).await
                 } else {
-                    let source = fetch_transport::fetch(url, &options, |target| async move {
-                        state
-                            .host
-                            .require_network_permission(target.to_string())
-                            .await?;
-                        state.fetch_coordinator.wait_for_url_host(&target).await;
-                        resolve_public_http_route(
-                            &target,
-                            &state.config.network,
-                            state.host.as_ref(),
-                        )
+                    let _slot = HTTP_PAGE_FETCHES
+                        .acquire()
                         .await
-                    })
-                    .await?;
+                        .expect("page admission is never closed");
+                    let source = state
+                        .http_transport
+                        .fetch(
+                            url,
+                            &options,
+                            &state.fetch_coordinator,
+                            |target| async move {
+                                state
+                                    .host
+                                    .require_pinned_http_permission(target.to_string())
+                                    .await?;
+                                resolve_public_http_route(
+                                    &target,
+                                    &state.config.network,
+                                    state.host.as_ref(),
+                                )
+                                .await
+                            },
+                        )
+                        .await?;
                     fetch_transport::extract(source, url.clone(), extractor).await
                 }
             })
             .await?;
         if !page.final_url.is_empty() {
-            state
-                .host
-                .require_network_permission(page.final_url.clone())
-                .await?;
+            require_page_permission(page.final_url.clone()).await?;
         }
         Ok(page)
     }
@@ -2429,7 +1144,7 @@ impl WebPlugin {
 
     #[tool(
         summary = "Read several independent web pages concurrently.",
-        help = "Fetch 1–8 known URLs concurrently (default concurrency 4, maximum 8), deduplicating normalized URLs in input order. Use after search to gather independent sources in one call. Each result includes its own status/error, content_status, bounded Markdown, page_id and next_offset for web.read. Failures do not discard other pages; partial also flags unreadable or truncated sources. Per-host pacing and global HTTP/browser limits still apply. Omit render_js for HTTP first and one conditional JavaScript-shell browser retry if enabled; true forces browser, false forces HTTP. No CAPTCHA bypass. max_chars is per page (default 4000, maximum 8000).",
+        help = "Fetch 1–16 known URLs concurrently (default concurrency 8, maximum 16), deduplicating normalized URLs in input order. Use after search to gather independent sources in one call. Each result includes its own status/error, content_status, bounded Markdown, page_id and next_offset for web.read. Failures do not discard other pages; partial also flags unreadable or truncated sources. Per-host pacing and global HTTP/browser limits still apply. Omit render_js for HTTP first and one conditional JavaScript-shell browser retry if enabled; true forces browser, false forces HTTP. No CAPTCHA bypass. max_chars is per page (default 4000, maximum 8000).",
         stream = invoke_fetch_many_stream,
         tags(network, read_only),
     translations(
@@ -2465,7 +1180,12 @@ impl WebPlugin {
         progress: Option<&ToolStreamSink>,
     ) -> SdkResult<ToolInvokeOutput> {
         let urls = content::unique_urls(&input.urls)?;
-        let concurrency = content::bounded(input.concurrency, 4, 8, "concurrency")?;
+        let concurrency = content::bounded(
+            input.concurrency,
+            DEFAULT_FETCH_BATCH_CONCURRENCY,
+            MAX_FETCH_BATCH,
+            "concurrency",
+        )?;
         let max_chars = content::bounded(input.max_chars, 4000, 8000, "max_chars")?;
         let total = urls.len();
         let done = std::sync::atomic::AtomicUsize::new(0);
@@ -2676,7 +1396,7 @@ impl WebPlugin {
 
     #[tool(
         summary = "Crawl a site and cache indexed pages locally.",
-        help = "Traverse links breadth first with bounded concurrency (default 4, maximum 8; also capped by config). max_pages counts attempts and cache hits, including failures. same_host_only defaults true. Per-host pacing, robots, depth and URL-discovery budgets still apply. Omit render_js for HTTP first with conditional rendering when enabled; true forces browser and false forces HTTP. Report includes per-URL page_errors and effective concurrency. Only complete, readable 2xx documents enter storage. Use web.query to locate evidence in the resulting local index and web.read to read it.",
+        help = "Traverse links breadth first with bounded concurrency (default 4, maximum 32, capped by crawl.limits.concurrency). max_pages counts attempts and cache hits, including failures. same_host_only defaults true. Per-host pacing, robots, depth and URL-discovery budgets still apply. Omit render_js for HTTP first with conditional rendering when enabled; true forces browser and false forces HTTP. Report includes per-URL page_errors and effective concurrency. Only complete, readable 2xx documents enter storage. Use web.query to locate evidence in the resulting local index and web.read to read it.",
         stream = invoke_crawl_stream,
         tags(network, discovery, mutate),
     translations(
@@ -2723,14 +1443,13 @@ impl WebPlugin {
         let start_url =
             prepare_fetch_url(input.start_url.as_str()).map_err(crawl_error_to_plugin)?;
         let store = self.store(context)?;
-        let _guard = self.crawl_lock.lock().await;
         let config = self.config()?;
         let options = CrawlRunOptions {
             extraction_backend: config.fetch.extractor,
             concurrency: content::bounded(
                 input.concurrency,
                 config.crawl.defaults.concurrency,
-                8,
+                agena_web::MAX_CRAWL_CONCURRENCY,
                 "concurrency",
             )?
             .min(config.crawl.limits.concurrency as usize),
@@ -2783,7 +1502,7 @@ impl WebPlugin {
 
     #[tool(
         summary = "Find candidate public-web pages to fetch.",
-        help = "Discover candidate pages; fetch 1-3 relevant URLs for factual answers. Omit engine or use auto for the configured provider (HTML, Brave, Tavily, Exa or SearXNG). HTML auto searches eight free public websites (DuckDuckGo, Bing, Baidu, Yandex, Google, Yahoo, Brave and Naver) concurrently, deduplicates URLs and combines rankings. Set engine to one name or a comma-separated list such as baidu,google to search only those HTML websites, overriding API settings. Case and surrounding spaces are ignored; duplicates run once in first-occurrence order. auto must stand alone; empty and unknown names are errors. max_results caps the final total; max_results_per_engine and max_pages_per_engine independently cap each selected HTML source (defaults: 10 candidates, 1 page including the first). Increase both source budgets for deeper retrieval; filtering or a larger final limit never triggers extra pages. No global offset or continuation cursor. Effective limits appear in the HTML response. Each result's engines lists contributing engines; source is the publisher. Multi-engine HTML searches preserve successful sources with partial and engine_errors; all selected engines failing is an error. A single engine's failure is returned directly. Inspect engine_reports for per-source result counts, page counts, cache hits and structured issues. Searches to the same engine are serialized and paced; successful identical queries are reused for two minutes. Rate limits honor Retry-After and verification failures enter cooldown: respect retry_after_secs, use other working sources and avoid bursts of overlapping queries. Verification and unknown pages are failures, not empty results. A confirmed JavaScript shell gets one browser attempt per page when browser.enabled. Later-page failures preserve earlier results with partial diagnostics. Browser rendering does not solve human verification or consent. API providers return at most 20 results without switching providers and reject HTML-only budget arguments. Domain filters accept bare hostnames; exclusions win. Snippets are previews, not fetched-page evidence.",
+        help = "Discover candidate pages; fetch 1-3 relevant URLs for factual answers. Omit engine or use auto for the configured provider (HTML, Brave, Tavily, Exa or SearXNG). HTML auto searches eight free public websites (DuckDuckGo, Bing, Baidu, Yandex, Google, Yahoo, Brave and Naver) concurrently, deduplicates URLs and combines rankings. Set engine to one name or a comma-separated list such as baidu,google to search only those HTML websites, overriding API settings. Case and surrounding spaces are ignored; duplicates run once in first-occurrence order. auto must stand alone; empty and unknown names are errors. max_results caps the final total; max_results_per_engine and max_pages_per_engine independently cap each selected HTML source (defaults: 10 candidates, 1 page including the first). Increase both source budgets for deeper retrieval; filtering or a larger final limit never triggers extra pages. No global offset or continuation cursor. Effective limits appear in the HTML response. Each result's engines lists contributing engines. The source field identifies the publisher. Multi-engine HTML searches preserve successful sources with partial and engine_errors; all selected engines failing is an error. A single engine's failure is returned directly. Inspect engine_reports for per-source result counts, page counts, cache hits and structured issues. Automatic one-page HTML searches have an 8-second active budget and wait 750 ms for extra engines after reaching max_results with distinct, domain-matching URLs. Outstanding engines are marked skipped and the response is partial. Both timings are configurable. Explicit engine selections and multi-page searches wait within the configured fetch timeout. Request starts are paced per engine. Up to four requests to the same engine can overlap, and successful identical queries are reused for two minutes. Rate limits honor Retry-After and verification failures enter cooldown: respect retry_after_secs, use other working sources and avoid bursts of overlapping queries. Verification and unknown pages are failures, not empty results. A confirmed JavaScript shell gets one browser attempt per page when browser.enabled and the current tool session supports rendering. Later-page failures preserve earlier results with partial diagnostics. Browser rendering does not solve human verification or consent. API providers return at most 20 results without switching providers and reject HTML-only budget arguments. Domain filters accept bare hostnames; exclusions win. Snippets are previews, not fetched-page evidence.",
         tags(network, discovery, read_only),
         translations(
             locale("ar-SA", summary = "اعثر على صفحات ويب عامة مرشحة لجلبها."),
@@ -2828,1256 +1547,33 @@ impl WebPlugin {
             }
             return self.search_with_provider(input, limits.max_results).await;
         }
+        let fast_auto = limits.max_pages_per_engine == 1
+            && input
+                .engine
+                .as_ref()
+                .is_none_or(WebSearchEngineSelection::is_auto);
+        let timeout = if fast_auto {
+            config
+                .search
+                .auto_timeout_secs
+                .min(config.fetch.request.timeout_secs)
+        } else {
+            config.fetch.request.timeout_secs
+        };
+        let timeout = Duration::from_secs(timeout);
+        let grace = (fast_auto && config.search.auto_grace_ms > 0)
+            .then(|| Duration::from_millis(config.search.auto_grace_ms));
         search_aggregate::search(
             input,
             limits,
-            Duration::from_secs(config.fetch.request.timeout_secs),
+            timeout,
+            grace,
             |engine, source_limit, max_pages| {
-                self.search_with_engine(query, source_limit, max_pages, engine)
+                Box::pin(self.search_with_engine(query, source_limit, max_pages, engine, timeout))
             },
         )
         .await?
         .into_tool_output()
-    }
-
-    #[tool(
-        tags(network, interactive, mutate, read_only),
-        name = "browser_open",
-        summary = "Open a public page or an owned running preview in a managed interactive browser session.",
-        help = "Supply exactly one of url or preview_id. browser_list discovers owned preview IDs. preview_id grants only the registered run and exact isolated origin and still requires network permission for the real upstream URL; stop/restart revokes it. Managed previews restrict external fetch/WebSocket connections, frames, workers and popups; blocked requests are a browser policy result, not evidence the application is broken.",
-        translations(
-            locale("ar-SA", summary = "افتح صفحة في جلسة متصفح تفاعلية مُدارة."),
-            locale(
-                "de-DE",
-                summary = "Öffnet eine Seite in einer verwalteten interaktiven Browser-Sitzung."
-            ),
-            locale(
-                "es-ES",
-                summary = "Abre una página en una sesión de navegador interactiva gestionada."
-            ),
-            locale(
-                "fr-FR",
-                summary = "Ouvre une page dans une session de navigateur interactive gérée."
-            ),
-            locale("hi-IN", summary = "प्रबंधित इंटरैक्टिव ब्राउज़र सत्र में पेज खोलता है।"),
-            locale(
-                "ja-JP",
-                summary = "管理された対話型ブラウザーセッションでページを開きます。"
-            ),
-            locale(
-                "ko-KR",
-                summary = "관리되는 대화형 브라우저 세션에서 페이지를 엽니다."
-            ),
-            locale(
-                "pt-BR",
-                summary = "Abre uma página em uma sessão de navegador interativa gerenciada."
-            ),
-            locale("zh-CN", summary = "在受管交互式浏览器会话中打开页面。"),
-            locale("zh-TW", summary = "在受管理的互動式瀏覽器工作階段中開啟頁面。")
-        )
-    )]
-    async fn browser_open(
-        &self,
-        context: &ToolInvokeContext<'_>,
-        input: &BrowserOpenInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        require_browser_sandbox()?;
-        let owner = browser_owner(context)?;
-        let (url, preview) = match managed_preview::open_target(input)? {
-            managed_preview::OpenTarget::Public(raw_url) => {
-                let url = prepare_fetch_url(raw_url).map_err(crawl_error_to_plugin)?;
-                self.validate_network_target(&url).await?;
-                (url, None)
-            }
-            managed_preview::OpenTarget::Preview(preview_id) => {
-                let preview = agena_web::managed_preview::resolve_managed_preview(
-                    &owner.workspace,
-                    &context.session_id.to_string(),
-                    preview_id,
-                )
-                .await
-                .map_err(managed_preview::denied)?;
-                preview.validate().await.map_err(managed_preview::denied)?;
-                managed_preview::require_upstream_permission(&preview, self.state()?.host.as_ref())
-                    .await?;
-                (preview.url().clone(), Some(preview))
-            }
-        };
-        let _lease = agena_web::local_browser_lease().map_err(crawl_error_to_plugin)?;
-        self.ensure_browser_activity_source().await?;
-        // Do not send the capability through the public HTTP preflight route.
-        // The gateway validates every real request and Fetch checks every
-        // document redirect against this exact origin before dispatch.
-        let preflight_redirects = if preview.is_some() {
-            Vec::new()
-        } else {
-            self.browser_preflight_redirects(&url).await?
-        };
-        let browser = self.browser_client(None).await?;
-        let browser_context_id = self.browser_context_for_owner(&browser, &owner).await?;
-        let created = browser
-            .command(
-                "Target.createTarget",
-                serde_json::json!({ "url": "about:blank", "browserContextId": browser_context_id }),
-            )
-            .await?;
-        let target_id = created
-            .get("targetId")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| PluginError::internal("browser did not return a target id"))?
-            .to_string();
-        // The target is not this caller's yet, so ownership cannot be checked
-        // before attaching; take the target's action gate to keep every later
-        // action on this page behind the initialization below.
-        let _action_guard = self.lock_new_browser_action(&target_id).await;
-        if let Some(preview) = &preview {
-            self.browser_state
-                .previews
-                .lock()
-                .await
-                .insert(target_id.clone(), preview.clone());
-        }
-        let mut opening_guard = managed_preview::OpeningGuard::new(
-            self.browser_state.clone(),
-            target_id.clone(),
-            self.state()?.host.clone(),
-        );
-        let (event_tx, event_rx) = mpsc::channel::<CdpEvent>(512);
-        let page = match self
-            .browser_client_with_events(Some(target_id.as_str()), Some(event_tx))
-            .await
-        {
-            Ok(page) => page,
-            Err(error) => {
-                self.browser_state.previews.lock().await.remove(&target_id);
-                self.browser_state.actions.lock().await.remove(&target_id);
-                self.browser_state
-                    .connecting
-                    .lock()
-                    .await
-                    .remove(&target_id);
-                if let Err(cleanup_error) = browser
-                    .command(
-                        "Target.closeTarget",
-                        serde_json::json!({ "targetId": &target_id }),
-                    )
-                    .await
-                {
-                    log_secondary_plugin_failure(
-                        "close browser target after target attachment failed",
-                        &cleanup_error,
-                    );
-                }
-                return Err(error);
-            }
-        };
-        if let Err(error) = async {
-            page.command("Page.enable", serde_json::json!({})).await?;
-            page.command("Runtime.enable", serde_json::json!({}))
-                .await?;
-            page.command("Log.enable", serde_json::json!({})).await?;
-            SdkResult::Ok(())
-        }
-        .await
-        {
-            self.forget_browser_client(&target_id).await;
-            self.browser_state.previews.lock().await.remove(&target_id);
-            self.browser_state.actions.lock().await.remove(&target_id);
-            self.browser_state
-                .connecting
-                .lock()
-                .await
-                .remove(&target_id);
-            if let Err(cleanup_error) = browser
-                .command(
-                    "Target.closeTarget",
-                    serde_json::json!({ "targetId": &target_id }),
-                )
-                .await
-            {
-                log_secondary_plugin_failure(
-                    "close browser target after page initialization failed",
-                    &cleanup_error,
-                );
-            }
-            return Err(error);
-        }
-        let title_target = browser_title_target(&url);
-        let started_at_ms = chrono::Utc::now().timestamp_millis();
-        let meta = BrowserSessionMeta {
-            owner,
-            browser_context_id: Some(browser_context_id),
-            title: format!("Browser · {title_target}"),
-            url: url.to_string(),
-            started_at_ms,
-        };
-        // Register the session before navigation so CDP notifications for the
-        // initial load and any redirects land in the activity log and update
-        // the live record's title/URL.
-        self.browser_state
-            .meta
-            .lock()
-            .await
-            .insert(target_id.clone(), meta.clone());
-        self.browser_state
-            .append_log(&target_id, "event", format!("Opened {url}."))
-            .await;
-        self.publish_browser_running(&target_id, &meta).await;
-        self.spawn_browser_event_task(&target_id, event_rx)?;
-        if let Err(error) = page
-            .command("Page.navigate", serde_json::json!({ "url": url.as_str() }))
-            .await
-        {
-            self.forget_browser_client(target_id.as_str()).await;
-            self.browser_state.previews.lock().await.remove(&target_id);
-            self.browser_state.actions.lock().await.remove(&target_id);
-            self.browser_state
-                .connecting
-                .lock()
-                .await
-                .remove(&target_id);
-            self.browser_state.meta.lock().await.remove(&target_id);
-            self.browser_state.logs.lock().await.remove(&target_id);
-            let finished_at_ms = chrono::Utc::now().timestamp_millis();
-            if let Err(activity_error) = self
-                .publish_browser_activity(browser_activity(
-                    format!("browser_{target_id}"),
-                    meta.title.clone(),
-                    meta.url.clone(),
-                    BackgroundActivityStatus::Failed,
-                    Some(started_at_ms),
-                    Some(finished_at_ms),
-                    Some(format!("Navigation to {url} failed.")),
-                ))
-                .await
-            {
-                log_secondary_plugin_failure(
-                    "publish failed browser navigation activity",
-                    &activity_error,
-                );
-            }
-            if let Err(cleanup_error) = browser
-                .command(
-                    "Target.closeTarget",
-                    serde_json::json!({ "targetId": &target_id }),
-                )
-                .await
-            {
-                log_secondary_plugin_failure(
-                    "close browser target after navigation failed",
-                    &cleanup_error,
-                );
-            }
-            return Err(error);
-        }
-        let ready = async {
-            self.wait_for_browser_condition(target_id.as_str(), None, None, input.timeout_ms)
-                .await?;
-            self.ensure_browser_final_url(target_id.as_str()).await
-        }
-        .await;
-        let snapshot = match ready {
-            Ok(snapshot) => snapshot,
-            Err(error) => {
-                match self
-                    .browser_state
-                    .close_session(
-                        &target_id,
-                        "Browser open failed.",
-                        self.state()?.host.as_ref(),
-                    )
-                    .await
-                {
-                    Ok(true) => {}
-                    Ok(false) => {
-                        return Err(PluginError::internal(format!(
-                            "{}; additionally, failed to close the incomplete browser target",
-                            error.diagnostic_message()
-                        )));
-                    }
-                    Err(cleanup) => {
-                        return Err(PluginError::internal(format!(
-                            "{}; additionally, browser target cleanup failed: {}",
-                            error.diagnostic_message(),
-                            cleanup.diagnostic_message()
-                        )));
-                    }
-                }
-                return Err(error);
-            }
-        };
-        self.validate_browser_preview_state(&target_id).await?;
-        opening_guard.disarm();
-        Ok(ToolInvokeOutput::from_parts(
-            format!("Open browser · {title_target}"),
-            browser_snapshot_summary(&snapshot),
-            format!(
-                "Opened {} in browser session {}.\n\n{}",
-                url,
-                target_id,
-                format_browser_snapshot(&snapshot)
-            ),
-            Some(serde_json::json!({
-                "session_id": target_id,
-                "snapshot": snapshot,
-                "preflight_redirects": preflight_redirects,
-                "document_requests_intercepted": true,
-                "preview_id": preview.as_ref().map(ManagedPreviewTarget::preview_id),
-                "preview_generation": preview.as_ref().map(ManagedPreviewTarget::generation),
-                "managed_preview_network_policy": preview.as_ref().map(|_| managed_preview::POLICY_DESCRIPTION),
-            })),
-            std::collections::BTreeMap::new(),
-            Vec::new(),
-        ))
-    }
-
-    #[tool(
-        tags(network, interactive, query, discovery, read_only),
-        name = "browser_list",
-        summary = "List open page targets in the managed interactive browser.",
-        translations(
-            locale(
-                "ar-SA",
-                summary = "اعرض أهداف الصفحات المفتوحة في المتصفح التفاعلي المُدار."
-            ),
-            locale(
-                "de-DE",
-                summary = "Listet offene Seitenziele im verwalteten interaktiven Browser auf."
-            ),
-            locale(
-                "es-ES",
-                summary = "Lista los destinos de página abiertos en el navegador interactivo gestionado."
-            ),
-            locale(
-                "fr-FR",
-                summary = "Liste les cibles de page ouvertes dans le navigateur interactif géré."
-            ),
-            locale(
-                "hi-IN",
-                summary = "प्रबंधित इंटरैक्टिव ब्राउज़र में खुले पेज लक्ष्यों की सूची बनाता है।"
-            ),
-            locale(
-                "ja-JP",
-                summary = "管理された対話型ブラウザーで開いているページターゲットを一覧表示します。"
-            ),
-            locale(
-                "ko-KR",
-                summary = "관리되는 대화형 브라우저에서 열린 페이지 대상을 나열합니다."
-            ),
-            locale(
-                "pt-BR",
-                summary = "Lista os destinos de página abertos no navegador interativo gerenciado."
-            ),
-            locale("zh-CN", summary = "列出受管交互式浏览器中打开的页面目标。"),
-            locale("zh-TW", summary = "列出受管理互動式瀏覽器中開啟的頁面目標。")
-        )
-    )]
-    async fn browser_list(
-        &self,
-        context: &ToolInvokeContext<'_>,
-        _input: &BrowserListInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        let owner = browser_owner(context)?;
-        let previews = agena_web::managed_preview::list_managed_previews(
-            &owner.workspace,
-            &context.session_id.to_string(),
-        )
-        .await
-        .map_err(managed_preview::denied)?;
-        let owned: BTreeSet<String> = self
-            .browser_state
-            .meta
-            .lock()
-            .await
-            .iter()
-            .filter(|(_, meta)| meta.owner == owner)
-            .map(|(id, _)| id.clone())
-            .collect();
-        // Listing must never start the managed browser. Report the current
-        // process state first and only connect when it is already running.
-        let worker_permit = crate::BLOCKING_PLUGIN_WORKERS
-            .acquire()
-            .await
-            .map_err(|error| {
-                plugin_internal_error_with_context("acquire browser shutdown worker", &error)
-            })?;
-        let running = tokio::task::spawn_blocking(move || {
-            let _worker_permit = worker_permit;
-            local_browser_running()
-        })
-        .await
-        .map_err(|error| {
-            PluginError::internal(agena_failure::diagnostic::format_error_chain_with_context(
-                "browser status task failed",
-                &error,
-            ))
-        })?
-        .map_err(crawl_error_to_plugin)?;
-        if !running {
-            return Ok(ToolInvokeOutput::from_parts(
-                "browser list",
-                "0 open pages",
-                "The managed browser is not running. Use browser_open to start it.",
-                Some(serde_json::json!({
-                    "browser_running": false,
-                    "interaction_backend": "native",
-                    "sessions": [],
-                    "previews": previews,
-                })),
-                std::collections::BTreeMap::new(),
-                Vec::new(),
-            ));
-        }
-        let browser = self.browser_client(None).await?;
-        let result = browser
-            .command("Target.getTargets", serde_json::json!({}))
-            .await?;
-        let sessions = result
-            .get("targetInfos")
-            .and_then(serde_json::Value::as_array)
-            .map(|targets| {
-                targets
-                    .iter()
-                    .filter(|target| {
-                        target.get("type").and_then(serde_json::Value::as_str) == Some("page")
-                            && target.get("targetId").and_then(serde_json::Value::as_str).is_some_and(|id|owned.contains(id))
-                    })
-                    .map(|target| {
-                        serde_json::json!({
-                            "session_id": target.get("targetId").and_then(serde_json::Value::as_str),
-                            "title": target.get("title").and_then(serde_json::Value::as_str),
-                            "url": target.get("url").and_then(serde_json::Value::as_str),
-                            "attached": target.get("attached").and_then(serde_json::Value::as_bool),
-                        })
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        Ok(ToolInvokeOutput::from_parts(
-            "browser list",
-            format!("{} open pages", sessions.len()),
-            format!("{} managed browser page target(s).", sessions.len()),
-            Some(serde_json::json!({
-                "browser_running": true,
-                "interaction_backend": "native",
-                "sessions": sessions,
-                "previews": previews,
-            })),
-            std::collections::BTreeMap::new(),
-            Vec::new(),
-        ))
-    }
-
-    #[tool(
-        tags(network, interactive, mutate),
-        name = "browser_close",
-        summary = "Close one page target in the managed interactive browser.",
-        translations(
-            locale("ar-SA", summary = "أغلق هدف صفحة واحدًا في المتصفح التفاعلي المُدار."),
-            locale(
-                "de-DE",
-                summary = "Schließt ein Seitenziel im verwalteten interaktiven Browser."
-            ),
-            locale(
-                "es-ES",
-                summary = "Cierra un destino de página en el navegador interactivo gestionado."
-            ),
-            locale(
-                "fr-FR",
-                summary = "Ferme une cible de page dans le navigateur interactif géré."
-            ),
-            locale("hi-IN", summary = "प्रबंधित इंटरैक्टिव ब्राउज़र में एक पेज लक्ष्य बंद करता है।"),
-            locale(
-                "ja-JP",
-                summary = "管理された対話型ブラウザーのページターゲットを1つ閉じます。"
-            ),
-            locale(
-                "ko-KR",
-                summary = "관리되는 대화형 브라우저에서 페이지 대상 하나를 닫습니다."
-            ),
-            locale(
-                "pt-BR",
-                summary = "Fecha um destino de página no navegador interativo gerenciado."
-            ),
-            locale("zh-CN", summary = "关闭受管交互式浏览器中的一个页面目标。"),
-            locale("zh-TW", summary = "關閉受管理互動式瀏覽器中的一個頁面目標。")
-        )
-    )]
-    async fn browser_close(
-        &self,
-        context: &ToolInvokeContext<'_>,
-        input: &BrowserSessionInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        let host = self.state()?.host.clone();
-        self.require_browser_owner(context, &input.session_id)
-            .await?;
-        let gate = self.browser_state.action_gate(&input.session_id).await;
-        let _guard = gate.lock().await;
-        self.require_browser_owner(context, &input.session_id)
-            .await?;
-        let closed = self
-            .browser_state
-            .close_session(
-                &input.session_id,
-                &format!("Closed browser session {}.", input.session_id),
-                host.as_ref(),
-            )
-            .await?;
-        if !closed {
-            return Err(PluginError::invalid_params(format!(
-                "browser session '{}' could not be closed",
-                input.session_id
-            )));
-        }
-        Ok(ToolInvokeOutput::from_parts(
-            "Close browser",
-            "Closed",
-            format!("Closed browser session {}.", input.session_id),
-            Some(serde_json::json!({ "session_id": input.session_id, "closed": true })),
-            std::collections::BTreeMap::new(),
-            Vec::new(),
-        ))
-    }
-    #[tool(
-        tags(network, interactive, mutate),
-        name = "browser_shutdown",
-        summary = "Close browser pages owned by the current Agena session without affecting other callers.",
-        help = "Caller-scoped shutdown closes owned pages only. The shared Chrome process and other sessions are not stopped. Global browser shutdown is reserved for trusted host lifecycle control.",
-        translations(
-            locale(
-                "ar-SA",
-                summary = "أغلق صفحات المتصفح التي تملكها جلسة Agena الحالية دون التأثير على المتصلين الآخرين."
-            ),
-            locale(
-                "de-DE",
-                summary = "Schließt Browserseiten der aktuellen Agena-Sitzung, ohne andere Aufrufer zu beeinflussen."
-            ),
-            locale(
-                "es-ES",
-                summary = "Cierra las páginas del navegador de la sesión actual de Agena sin afectar a otros usuarios."
-            ),
-            locale(
-                "fr-FR",
-                summary = "Ferme les pages du navigateur de la session Agena en cours sans affecter les autres appelants."
-            ),
-            locale(
-                "hi-IN",
-                summary = "वर्तमान Agena सत्र के स्वामित्व वाले ब्राउज़र पेज बंद करता है, अन्य कॉलर प्रभावित नहीं होते।"
-            ),
-            locale(
-                "ja-JP",
-                summary = "現在の Agena セッションが所有するブラウザーのページを閉じます。他の呼び出し元には影響しません。"
-            ),
-            locale(
-                "ko-KR",
-                summary = "현재 Agena 세션이 소유한 브라우저 페이지를 닫습니다. 다른 호출자에는 영향을 주지 않습니다."
-            ),
-            locale(
-                "pt-BR",
-                summary = "Fecha as páginas do navegador pertencentes à sessão atual do Agena sem afetar outros chamadores."
-            ),
-            locale(
-                "zh-CN",
-                summary = "关闭当前 Agena 会话拥有的浏览器页面，不影响其他调用方。"
-            ),
-            locale(
-                "zh-TW",
-                summary = "關閉目前 Agena 工作階段擁有的瀏覽器頁面，不影響其他呼叫方。"
-            )
-        )
-    )]
-    async fn browser_shutdown(
-        &self,
-        context: &ToolInvokeContext<'_>,
-        _input: &BrowserListInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        let owner = browser_owner(context)?;
-        let targets = self
-            .browser_state
-            .meta
-            .lock()
-            .await
-            .iter()
-            .filter(|(_, meta)| meta.owner == owner)
-            .map(|(id, _)| id.clone())
-            .collect::<Vec<_>>();
-        let key = (owner.workspace.clone(), owner.session_id);
-        let mut closed = Vec::new();
-        let mut failures = Vec::new();
-        for target in targets {
-            // Nothing to close means nothing to publish, so a caller-scoped
-            // shutdown with no owned pages stays valid before init.
-            let host = self.state()?.host.clone();
-            let gate = self.browser_state.action_gate(&target).await;
-            let _guard = gate.lock().await;
-            match self
-                .browser_state
-                .close_session(&target, "Closed by owning session", host.as_ref())
-                .await
-            {
-                Ok(true) => closed.push(target),
-                Ok(false) => failures.push(format!("{target}: not acknowledged")),
-                Err(error) => failures.push(format!("{target}: {}", error.failure.user.fallback)),
-            }
-        }
-        if failures.is_empty() {
-            let context_id = self.browser_state.contexts.lock().await.get(&key).cloned();
-            if let Some(context_id) = context_id {
-                let root = self.browser_state.root.lock().await.clone();
-                match root {
-                    Some(root) => match root
-                        .command(
-                            "Target.disposeBrowserContext",
-                            serde_json::json!({"browserContextId":context_id}),
-                        )
-                        .await
-                    {
-                        Ok(_) => {
-                            self.browser_state.contexts.lock().await.remove(&key);
-                        }
-                        Err(error) => failures.push(format!(
-                            "owned context cleanup failed: {}",
-                            error.failure.user.fallback
-                        )),
-                    },
-                    None => failures.push(
-                        "owned context cleanup could not reach the browser; state retained".into(),
-                    ),
-                }
-            }
-        }
-        Ok(ToolInvokeOutput::from_parts(
-            "Close owned browser pages",
-            format!("{} closed · {} failures", closed.len(), failures.len()),
-            format!(
-                "Closed {} page(s) owned by this Agena session. Shared browser process was not shut down.\n{}",
-                closed.len(),
-                failures.join("\n")
-            ),
-            Some(
-                serde_json::json!({"closed_sessions":closed,"failures":failures,"process_shutdown":false}),
-            ),
-            Default::default(),
-            Vec::new(),
-        ))
-    }
-
-    #[tool(
-        tags(network, interactive, query, read_only),
-        name = "browser_snapshot",
-        summary = "Inspect visible text and interactive elements in a browser session.",
-        translations(
-            locale(
-                "ar-SA",
-                summary = "افحص النص المرئي والعناصر التفاعلية في جلسة متصفح."
-            ),
-            locale(
-                "de-DE",
-                summary = "Prüft sichtbaren Text und interaktive Elemente in einer Browser-Sitzung."
-            ),
-            locale(
-                "es-ES",
-                summary = "Inspecciona el texto visible y los elementos interactivos de una sesión de navegador."
-            ),
-            locale(
-                "fr-FR",
-                summary = "Inspecte le texte visible et les éléments interactifs d’une session de navigateur."
-            ),
-            locale(
-                "hi-IN",
-                summary = "ब्राउज़र सत्र में दिखाई देने वाला पाठ और इंटरैक्टिव तत्व देखता है।"
-            ),
-            locale(
-                "ja-JP",
-                summary = "ブラウザーセッションの表示テキストと操作可能な要素を確認します。"
-            ),
-            locale(
-                "ko-KR",
-                summary = "브라우저 세션에서 표시되는 텍스트와 상호작용 요소를 확인합니다."
-            ),
-            locale(
-                "pt-BR",
-                summary = "Inspeciona o texto visível e os elementos interativos de uma sessão de navegador."
-            ),
-            locale("zh-CN", summary = "检查浏览器会话中的可见文本和交互元素。"),
-            locale("zh-TW", summary = "檢查瀏覽器工作階段中的可見文字與互動元素。")
-        )
-    )]
-    async fn browser_snapshot(
-        &self,
-        context: &ToolInvokeContext<'_>,
-        input: &BrowserSessionInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        let snapshot = self
-            .with_browser_action(
-                context,
-                &input.session_id,
-                self.browser_snapshot_value(&input.session_id),
-            )
-            .await?;
-        let text = format_browser_snapshot(&snapshot);
-        Ok(ToolInvokeOutput::from_parts(
-            "Browser snapshot",
-            browser_snapshot_summary(&snapshot),
-            text,
-            Some(serde_json::json!({
-                "session_id": input.session_id,
-                "snapshot": snapshot,
-            })),
-            std::collections::BTreeMap::new(),
-            Vec::new(),
-        ))
-    }
-
-    #[tool(
-        tags(network, interactive, mutate),
-        name = "browser_click",
-        summary = "Click a browser element selected by CSS or the latest snapshot ref.",
-        translations(
-            locale("ar-SA", summary = "انقر عنصر متصفح محددًا بـ CSS أو مرجع أحدث لقطة."),
-            locale(
-                "de-DE",
-                summary = "Klickt ein Browserelement an, das per CSS oder neuester Snapshot-Referenz gewählt wurde."
-            ),
-            locale(
-                "es-ES",
-                summary = "Hace clic en un elemento del navegador seleccionado por CSS o la referencia de la última instantánea."
-            ),
-            locale(
-                "fr-FR",
-                summary = "Clique sur un élément du navigateur sélectionné par CSS ou la référence du dernier instantané."
-            ),
-            locale(
-                "hi-IN",
-                summary = "CSS या नवीनतम स्नैपशॉट संदर्भ से चुने गए ब्राउज़र तत्व पर क्लिक करता है।"
-            ),
-            locale(
-                "ja-JP",
-                summary = "CSS または最新スナップショットの参照で選んだブラウザー要素をクリックします。"
-            ),
-            locale(
-                "ko-KR",
-                summary = "CSS 또는 최신 스냅샷 참조로 선택한 브라우저 요소를 클릭합니다."
-            ),
-            locale(
-                "pt-BR",
-                summary = "Clica em um elemento do navegador selecionado por CSS ou pela referência do instantâneo mais recente."
-            ),
-            locale("zh-CN", summary = "点击由 CSS 或最新快照引用选定的浏览器元素。"),
-            locale("zh-TW", summary = "點擊由 CSS 或最新快照參照選定的瀏覽器元素。")
-        )
-    )]
-    async fn browser_click(
-        &self,
-        context: &ToolInvokeContext<'_>,
-        input: &BrowserClickInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        let target = browser_element_expression(
-            input.selector.as_deref(),
-            input.element_ref,
-            input.snapshot_id.as_deref(),
-        )?;
-        let expression = format!(
-            "(() => {{ const el = {target}; if (!el) return {{ok:false,error:'browser element not found'}}; if (el.disabled) return {{ok:false,error:'element is disabled'}}; el.scrollIntoView({{block:'center'}}); el.focus(); el.click(); return {{ok:true}}; }})()"
-        );
-        self.with_browser_action(context, input.session_id.as_str(), async {
-            let client = self.browser_client(Some(input.session_id.as_str())).await?;
-            let result = agena_plugin_host::sdk::permission_wait::timeout(
-                Duration::from_millis(input.timeout_ms),
-                client.evaluate(expression.as_str()),
-            )
-            .await
-            .map_err(|_| PluginError::internal("browser click timed out"))??;
-            ensure_browser_action(&result)?;
-            let snapshot = self
-                .ensure_browser_final_url(input.session_id.as_str())
-                .await?;
-            Ok(browser_action_output(
-                "browser click",
-                input.session_id.as_str(),
-                serde_json::json!({ "action": result, "snapshot": snapshot }),
-            ))
-        })
-        .await
-    }
-
-    #[tool(
-        tags(network, interactive, mutate),
-        name = "browser_type",
-        summary = "Fill a browser input selected by CSS or the latest snapshot ref, optionally pressing Enter.",
-        translations(
-            locale(
-                "ar-SA",
-                summary = "املأ حقل إدخال في المتصفح محددًا بـ CSS أو مرجع أحدث لقطة، مع إمكانية الضغط على Enter."
-            ),
-            locale(
-                "de-DE",
-                summary = "Füllt ein Browser-Eingabefeld, das per CSS oder neuester Snapshot-Referenz gewählt wurde, optional mit Enter."
-            ),
-            locale(
-                "es-ES",
-                summary = "Rellena un campo del navegador seleccionado por CSS o la referencia de la última instantánea, opcionalmente pulsando Enter."
-            ),
-            locale(
-                "fr-FR",
-                summary = "Remplit un champ du navigateur sélectionné par CSS ou la référence du dernier instantané, avec Entrée en option."
-            ),
-            locale(
-                "hi-IN",
-                summary = "CSS या नवीनतम स्नैपशॉट संदर्भ से चुने गए ब्राउज़र इनपुट को भरता है, वैकल्पिक रूप से Enter दबाता है।"
-            ),
-            locale(
-                "ja-JP",
-                summary = "CSS または最新スナップショットの参照で選んだブラウザーの入力欄を埋め、必要に応じて Enter を押します。"
-            ),
-            locale(
-                "ko-KR",
-                summary = "CSS 또는 최신 스냅샷 참조로 선택한 브라우저 입력란을 채우고 선택적으로 Enter를 누릅니다."
-            ),
-            locale(
-                "pt-BR",
-                summary = "Preenche um campo do navegador selecionado por CSS ou pela referência do instantâneo mais recente, opcionalmente pressionando Enter."
-            ),
-            locale(
-                "zh-CN",
-                summary = "填写由 CSS 或最新快照引用选定的浏览器输入框，可选择按回车。"
-            ),
-            locale(
-                "zh-TW",
-                summary = "填寫由 CSS 或最新快照參照選定的瀏覽器輸入框，可選擇按下 Enter。"
-            )
-        )
-    )]
-    async fn browser_type(
-        &self,
-        context: &ToolInvokeContext<'_>,
-        input: &BrowserTypeInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        let expression = browser_type_expression(
-            input.selector.as_deref(),
-            input.element_ref,
-            input.snapshot_id.as_deref(),
-            input.text.as_str(),
-            input.press_enter,
-        )?;
-        self.with_browser_action(context, input.session_id.as_str(), async {
-            let client = self.browser_client(Some(input.session_id.as_str())).await?;
-            let result = agena_plugin_host::sdk::permission_wait::timeout(
-                Duration::from_millis(input.timeout_ms),
-                client.evaluate(expression.as_str()),
-            )
-            .await
-            .map_err(|_| PluginError::internal("browser type timed out"))??;
-            ensure_browser_action(&result)?;
-            let snapshot = self
-                .ensure_browser_final_url(input.session_id.as_str())
-                .await?;
-            Ok(browser_action_output(
-                "browser type",
-                input.session_id.as_str(),
-                serde_json::json!({ "action": result, "snapshot": snapshot }),
-            ))
-        })
-        .await
-    }
-
-    #[tool(
-        tags(network, interactive, query, read_only),
-        name = "browser_wait",
-        summary = "Wait for page readiness, a CSS selector, or visible text.",
-        translations(
-            locale("ar-SA", summary = "انتظر جاهزية الصفحة أو محدد CSS أو نصًا مرئيًا."),
-            locale(
-                "de-DE",
-                summary = "Wartet auf Seitenbereitschaft, einen CSS-Selektor oder sichtbaren Text."
-            ),
-            locale(
-                "es-ES",
-                summary = "Espera a que la página esté lista, a un selector CSS o a un texto visible."
-            ),
-            locale(
-                "fr-FR",
-                summary = "Attend que la page soit prête, un sélecteur CSS ou un texte visible."
-            ),
-            locale(
-                "hi-IN",
-                summary = "पेज तैयार होने, CSS चयनकर्ता या दिखाई देने वाले पाठ की प्रतीक्षा करता है।"
-            ),
-            locale(
-                "ja-JP",
-                summary = "ページの準備完了、CSS セレクター、または表示テキストを待ちます。"
-            ),
-            locale(
-                "ko-KR",
-                summary = "페이지 준비, CSS 선택자 또는 표시 텍스트를 기다립니다."
-            ),
-            locale(
-                "pt-BR",
-                summary = "Aguarda a página ficar pronta, um seletor CSS ou um texto visível."
-            ),
-            locale("zh-CN", summary = "等待页面就绪、CSS 选择器或可见文本。"),
-            locale("zh-TW", summary = "等待頁面就緒、CSS 選擇器或可見文字。")
-        )
-    )]
-    async fn browser_wait(
-        &self,
-        context: &ToolInvokeContext<'_>,
-        input: &BrowserWaitInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        if input.selector.is_some() && input.text.is_some() {
-            return Err(PluginError::invalid_params(
-                "browser_wait accepts selector or text, not both",
-            ));
-        }
-        self.with_browser_action(context, input.session_id.as_str(), async {
-            self.wait_for_browser_condition(
-                input.session_id.as_str(),
-                input.selector.as_deref(),
-                input.text.as_deref(),
-                input.timeout_ms,
-            )
-            .await?;
-            let snapshot = self
-                .ensure_browser_final_url(input.session_id.as_str())
-                .await?;
-            Ok(browser_action_output(
-                "browser wait",
-                input.session_id.as_str(),
-                serde_json::json!({ "ok": true, "snapshot": snapshot }),
-            ))
-        })
-        .await
-    }
-
-    #[tool(
-        tags(network, interactive, mutate, filesystem),
-        name = "browser_screenshot",
-        summary = "Capture a browser screenshot and return it as an image attachment.",
-        translations(
-            locale("ar-SA", summary = "التقط لقطة شاشة للمتصفح وأعِدها كمرفق صورة."),
-            locale(
-                "de-DE",
-                summary = "Erstellt einen Browser-Screenshot und gibt ihn als Bildanhang zurück."
-            ),
-            locale(
-                "es-ES",
-                summary = "Captura una captura de pantalla del navegador y la devuelve como adjunto de imagen."
-            ),
-            locale(
-                "fr-FR",
-                summary = "Capture une capture d’écran du navigateur et la renvoie comme pièce jointe image."
-            ),
-            locale(
-                "hi-IN",
-                summary = "ब्राउज़र स्क्रीनशॉट लेता है और उसे छवि अनुलग्नक के रूप में लौटाता है।"
-            ),
-            locale(
-                "ja-JP",
-                summary = "ブラウザーのスクリーンショットを取得し、画像添付として返します。"
-            ),
-            locale(
-                "ko-KR",
-                summary = "브라우저 스크린샷을 캡처해 이미지 첨부로 반환합니다."
-            ),
-            locale(
-                "pt-BR",
-                summary = "Captura uma captura de tela do navegador e a retorna como anexo de imagem."
-            ),
-            locale("zh-CN", summary = "捕获浏览器截图并将其作为图片附件返回。"),
-            locale("zh-TW", summary = "擷取瀏覽器截圖並將其以圖片附件形式傳回。")
-        )
-    )]
-    async fn browser_screenshot(
-        &self,
-        context: &ToolInvokeContext<'_>,
-        input: &BrowserScreenshotInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        let bytes = self
-            .with_browser_action(context, input.session_id.as_str(), async {
-                let client = self.browser_client(Some(input.session_id.as_str())).await?;
-                client.command("Page.enable", serde_json::json!({})).await?;
-                let result = client
-                    .command(
-                        "Page.captureScreenshot",
-                        serde_json::json!({
-                            "format": "png",
-                            "captureBeyondViewport": input.full_page,
-                        }),
-                    )
-                    .await?;
-                Ok(result)
-            })
-            .await
-            .and_then(|result| {
-                let encoded = result
-                    .get("data")
-                    .and_then(serde_json::Value::as_str)
-                    .ok_or_else(|| {
-                        PluginError::internal("browser screenshot returned no image data")
-                    })?;
-                base64::engine::general_purpose::STANDARD
-                    .decode(encoded)
-                    .map_err(|error| {
-                        plugin_internal_error_with_context("invalid screenshot data", &error)
-                    })
-            })?;
-        let path = match input.path.as_deref() {
-            Some(path) if Path::new(path).is_absolute() => PathBuf::from(path),
-            Some(_) if context.is_global() => {
-                return Err(PluginError::invalid_params(
-                    "global sessions require an explicit full absolute path",
-                ));
-            }
-            Some(path) => self.workspace_root()?.join(path),
-            None => web_artifacts_root(
-                context,
-                if context.is_global() {
-                    Path::new("")
-                } else {
-                    self.workspace_root()?
-                },
-            )
-            .join("browser")
-            .join(format!("{}.png", uuid::Uuid::new_v4())),
-        };
-        if input.path.is_some() {
-            self.state()?
-                .host
-                .require_path_permission(
-                    agena_plugin_host::sdk::host_api::PathPermissionQuery::write(
-                        path.to_string_lossy(),
-                    ),
-                )
-                .await?;
-        }
-        let size_bytes = bytes.len() as u64;
-        crate::artifact_file::persist_replace_or_create(path.clone(), bytes, "browser screenshot")
-            .await?;
-        let attachment = AttachmentItem {
-            kind: AttachmentKind::Image,
-            mime: "image/png".to_string(),
-            source: AttachmentSource::LocalPath {
-                path: path.to_string_lossy().to_string(),
-            },
-            filename: path
-                .file_name()
-                .and_then(|value| value.to_str())
-                .map(ToOwned::to_owned),
-            title: Some(format!("Browser screenshot {}", input.session_id)),
-            size_bytes: Some(size_bytes),
-            sha256: None,
-            width: None,
-            height: None,
-            duration_ms: None,
-            page_count: None,
-        };
-        Ok(ToolInvokeOutput::from_parts(
-            "browser screenshot",
-            format!("image/png · {size_bytes} bytes"),
-            format!("Saved browser screenshot to '{}'.", path.display()),
-            Some(serde_json::json!({
-                "session_id": input.session_id,
-                "path": path,
-                "size_bytes": size_bytes,
-            })),
-            std::collections::BTreeMap::from([
-                ("agena.effect".to_string(), "file_changes".to_string()),
-                ("path".to_string(), path.to_string_lossy().to_string()),
-            ]),
-            vec![attachment],
-        ))
-    }
-
-    #[tool(
-        tags(network, interactive, mutate, filesystem),
-        name = "browser_download",
-        summary = "Download one HTTP(S) URL through a managed browser session and return a local artifact.",
-        translations(
-            locale(
-                "ar-SA",
-                summary = "نزّل عنوان HTTP(S) واحدًا عبر جلسة متصفح مُدارة وأعِد ملفًا محليًا."
-            ),
-            locale(
-                "de-DE",
-                summary = "Lädt eine HTTP(S)-URL über eine verwaltete Browser-Sitzung herunter und liefert ein lokales Artefakt."
-            ),
-            locale(
-                "es-ES",
-                summary = "Descarga una URL HTTP(S) a través de una sesión de navegador gestionada y devuelve un archivo local."
-            ),
-            locale(
-                "fr-FR",
-                summary = "Télécharge une URL HTTP(S) via une session de navigateur gérée et renvoie un artefact local."
-            ),
-            locale(
-                "hi-IN",
-                summary = "प्रबंधित ब्राउज़र सत्र के माध्यम से एक HTTP(S) URL डाउनलोड करता है और स्थानीय फ़ाइल लौटाता है।"
-            ),
-            locale(
-                "ja-JP",
-                summary = "管理されたブラウザーセッション経由で HTTP(S) URL を1件ダウンロードし、ローカル成果物を返します。"
-            ),
-            locale(
-                "ko-KR",
-                summary = "관리되는 브라우저 세션을 통해 HTTP(S) URL 하나를 다운로드하고 로컬 산출물을 반환합니다."
-            ),
-            locale(
-                "pt-BR",
-                summary = "Baixa uma URL HTTP(S) por meio de uma sessão de navegador gerenciada e retorna um artefato local."
-            ),
-            locale(
-                "zh-CN",
-                summary = "通过受管浏览器会话下载一个 HTTP(S) URL，并返回本地文件。"
-            ),
-            locale(
-                "zh-TW",
-                summary = "透過受管理瀏覽器工作階段下載一個 HTTP(S) URL，並傳回本機產物。"
-            )
-        )
-    )]
-    async fn browser_download(
-        &self,
-        context: &ToolInvokeContext<'_>,
-        input: &BrowserDownloadInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        require_browser_sandbox()?;
-        let action_guard = self
-            .browser_state
-            .action_gate(&input.session_id)
-            .await
-            .lock_owned()
-            .await;
-        let _lease = agena_web::local_browser_lease().map_err(crawl_error_to_plugin)?;
-        self.require_browser_owner(context, &input.session_id)
-            .await?;
-        self.validate_browser_preview_state(&input.session_id)
-            .await?;
-        const MAX_DOWNLOAD_BYTES: u64 = 100 * 1024 * 1024;
-        let url = prepare_fetch_url(input.url.as_str()).map_err(crawl_error_to_plugin)?;
-        self.validate_browser_url(&input.session_id, &url).await?;
-        let preflight_redirects = if self.browser_preview(&input.session_id).await.is_some() {
-            Vec::new()
-        } else {
-            self.browser_preflight_redirects(&url).await?
-        };
-        let download_dir = web_artifacts_root(
-            context,
-            if context.is_global() {
-                Path::new("")
-            } else {
-                self.workspace_root()?
-            },
-        )
-        .join("browser/downloads")
-        .join(uuid::Uuid::new_v4().simple().to_string());
-        let endpoint = self.browser_endpoint().await?;
-        let browser_context_id = self
-            .browser_state
-            .meta
-            .lock()
-            .await
-            .get(&input.session_id)
-            .and_then(|meta| meta.browser_context_id.clone());
-        let page = self.browser_client(Some(&input.session_id)).await?;
-        page.refresh_callback_context()?;
-        let result = downloads::transfer(
-            endpoint,
-            browser_context_id,
-            input.session_id.clone(),
-            url.to_string(),
-            download_dir,
-            MAX_DOWNLOAD_BYTES,
-            Duration::from_millis(input.timeout_ms),
-            Arc::clone(&self.browser_download_lock),
-            Some(action_guard),
-        )
-        .await?;
-        self.validate_browser_preview_lease(&input.session_id)
-            .await?;
-        let filename = result
-            .path
-            .file_name()
-            .and_then(|value| value.to_str())
-            .map(str::to_owned);
-        let attachment = AttachmentItem {
-            kind: AttachmentKind::detect("", filename.as_deref()),
-            mime: "application/octet-stream".into(),
-            source: AttachmentSource::LocalPath {
-                path: result.path.display().to_string(),
-            },
-            filename,
-            title: Some(format!("Browser download from {url}")),
-            size_bytes: Some(result.size),
-            sha256: None,
-            width: None,
-            height: None,
-            duration_ms: None,
-            page_count: None,
-        };
-        Ok(ToolInvokeOutput::from_parts(
-            "browser download",
-            format!("{} bytes · completed GUID {}", result.size, result.guid),
-            format!(
-                "Saved completed browser download at {}.\n{}",
-                result.path.display(),
-                result.warnings.join("\n")
-            ),
-            Some(
-                serde_json::json!({"session_id":input.session_id,"url":url,"path":result.path,"size_bytes":result.size,"download_guid":result.guid,"state":"completed","cleanup_warnings":result.warnings,"preflight_redirects":preflight_redirects}),
-            ),
-            Default::default(),
-            vec![attachment],
-        ))
-    }
-
-    async fn wait_for_browser_condition(
-        &self,
-        target_id: &str,
-        selector: Option<&str>,
-        text: Option<&str>,
-        timeout_ms: u64,
-    ) -> SdkResult<()> {
-        let deadline = agena_plugin_host::sdk::permission_wait::Deadline::new(
-            Duration::from_millis(timeout_ms),
-        );
-        let selector = selector
-            .map(serde_json::to_string)
-            .transpose()
-            .map_err(|error| PluginError::invalid_params_error(&error))?;
-        let text = text
-            .map(serde_json::to_string)
-            .transpose()
-            .map_err(|error| PluginError::invalid_params_error(&error))?;
-        loop {
-            let expression = if let Some(selector) = selector.as_deref() {
-                format!("Boolean(document.querySelector({selector}))")
-            } else if let Some(text) = text.as_deref() {
-                format!("Boolean(document.body && document.body.innerText.includes({text}))")
-            } else {
-                "document.readyState === 'complete' || document.readyState === 'interactive'"
-                    .to_string()
-            };
-            let probe = async {
-                let client = self.browser_client(Some(target_id)).await?;
-                client.evaluate(expression.as_str()).await
-            };
-            match deadline.run(probe).await {
-                Ok(Ok(value)) if value.as_bool() == Some(true) => return Ok(()),
-                Ok(Ok(_)) => {}
-                Ok(Err(error)) => return Err(error),
-                Err(_) => {
-                    return Err(PluginError::internal(format!(
-                        "browser wait exceeded {timeout_ms} ms"
-                    )));
-                }
-            }
-            if deadline.remaining().is_zero() {
-                return Err(PluginError::internal(format!(
-                    "browser wait timed out after {timeout_ms} ms"
-                )));
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
     }
 
     async fn search_with_engine(
@@ -4086,29 +1582,29 @@ impl WebPlugin {
         limit: usize,
         max_pages: usize,
         engine: WebSearchEngine,
+        timeout: Duration,
     ) -> SdkResult<WebSearchResponse> {
+        // Let a later page return already collected results before the aggregate ends.
+        let deadline = agena_plugin_host::sdk::permission_wait::Deadline::new(
+            timeout.saturating_sub(Duration::from_millis(50)),
+        );
         let engine_url = url::Url::parse(engine.permission_url())
             .map_err(|err| PluginError::internal_error(&err))?;
         let state = self.state()?;
         state
             .host
-            .require_network_permission(engine_url.to_string())
+            .require_pinned_http_permission(engine_url.to_string())
             .await?;
         let route =
             resolve_public_http_route(&engine_url, &state.config.network, state.host.as_ref())
                 .await?;
-        // Reserve a small completion margin inside the aggregate deadline so
-        // a timed-out later page can return its already collected results.
-        let deadline = tokio::time::Instant::now()
-            + Duration::from_secs(state.config.fetch.request.timeout_secs)
-                .saturating_sub(Duration::from_millis(50));
         let config = &state.config;
         let options = WebSearchOptions {
             engine,
             route: Some(route),
             limit,
             max_pages,
-            timeout: deadline.saturating_duration_since(tokio::time::Instant::now()),
+            timeout: deadline.remaining(),
             user_agent: self.user_agent.clone(),
         };
         state
@@ -4116,12 +1612,14 @@ impl WebPlugin {
             .search_with_renderer(
                 query,
                 &options,
-                config.browser.enabled,
-                |url, remaining| async move {
-                    rendered_fetch::search_source(self, &url, remaining)
-                        .await
-                        .map(Some)
-                        .map_err(plugin_error_to_crawl)
+                config.browser.enabled && require_browser_runtime().is_ok(),
+                |url, remaining| {
+                    Box::pin(async move {
+                        rendered_fetch::search_source(self, &url, remaining)
+                            .await
+                            .map(Some)
+                            .map_err(plugin_error_to_crawl)
+                    })
                 },
             )
             .await
@@ -4147,889 +1645,6 @@ async fn resolve_public_http_route(
     crate::sandbox_operations::http_route(host, url, route.with_addresses(addresses)).await
 }
 
-/// Transports without a pinned resolver may not select a denied member of a
-/// mixed DNS answer. This is an extra check; the browser sandbox gate remains
-/// closed until the real connection can enforce the same pinned destinations.
-async fn validate_authorized_network_target(
-    url: &url::Url,
-    network: &network_policy::WebNetworkConfig,
-    host: &dyn HostClient,
-) -> SdkResult<()> {
-    let addresses = resolve_network_addresses(url).await?;
-    network_policy::validate_addresses(url, addresses.clone(), network)?;
-    authorized_network_addresses(url, addresses, host, true).await?;
-    Ok(())
-}
-
-async fn authorized_network_addresses(
-    url: &url::Url,
-    addresses: Vec<std::net::SocketAddr>,
-    host: &dyn HostClient,
-    require_all: bool,
-) -> SdkResult<Vec<std::net::SocketAddr>> {
-    use agena_plugin_host::sdk::host_api::PermissionQuery;
-
-    let mut permitted = Vec::new();
-    for address in addresses {
-        match host
-            .check_resolved_network_permission(url.to_string(), address.to_string())
-            .await?
-        {
-            PermissionQuery::Allow {} => permitted.push(address),
-            PermissionQuery::Deny { reason } | PermissionQuery::Ask { reason } => {
-                if require_all {
-                    return Err(PluginError::from_kind(
-                        agena_plugin_host::sdk::PluginErrorKind::PolicyDenied,
-                        format!("resolved address {address} is not permitted: {reason}"),
-                    ));
-                }
-            }
-        }
-    }
-    if permitted.is_empty() {
-        return Err(PluginError::from_kind(
-            agena_plugin_host::sdk::PluginErrorKind::PolicyDenied,
-            format!(
-                "no resolved IP address for {} is allowed by the active network permissions",
-                url.host_str().unwrap_or_default(),
-            ),
-        ));
-    }
-    Ok(permitted)
-}
-
-async fn validate_public_network_target(
-    url: &url::Url,
-    network: &network_policy::WebNetworkConfig,
-) -> SdkResult<()> {
-    let addresses = resolve_network_addresses(url).await?;
-    network_policy::validate_addresses(url, addresses, network)
-}
-
-async fn resolve_public_network_target(
-    url: &url::Url,
-    network: &network_policy::WebNetworkConfig,
-) -> SdkResult<Vec<std::net::SocketAddr>> {
-    let addresses = resolve_network_addresses(url).await?;
-    network_policy::permitted_addresses(url, addresses, network)
-}
-
-async fn resolve_network_addresses(url: &url::Url) -> SdkResult<Vec<std::net::SocketAddr>> {
-    network_policy::validate_proxy_target(url)?;
-    let host = url
-        .host_str()
-        .ok_or_else(|| PluginError::invalid_params("web URL has no host"))?;
-    let port = url
-        .port_or_known_default()
-        .ok_or_else(|| PluginError::invalid_params("web URL has no known port"))?;
-
-    let addresses: BTreeSet<std::net::SocketAddr> = match url.host() {
-        Some(url::Host::Ipv4(ip)) => [std::net::SocketAddr::new(ip.into(), port)]
-            .into_iter()
-            .collect(),
-        Some(url::Host::Ipv6(ip)) => [std::net::SocketAddr::new(ip.into(), port)]
-            .into_iter()
-            .collect(),
-        _ => tokio::net::lookup_host((host, port))
-            .await
-            .map_err(|error| {
-                plugin_internal_error_with_context("failed to resolve fetch host", &error)
-            })?
-            .collect(),
-    };
-    if addresses.is_empty() {
-        return Err(PluginError::internal(format!(
-            "DNS resolution returned no addresses for {host}"
-        )));
-    }
-    Ok(addresses.into_iter().collect())
-}
-
-type CdpSocket =
-    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
-type CdpSink = futures_util::stream::SplitSink<CdpSocket, tokio_tungstenite::tungstenite::Message>;
-
-struct CdpCommandRequest {
-    method: String,
-    params: serde_json::Value,
-    response: oneshot::Sender<Result<serde_json::Value, String>>,
-}
-
-enum PendingCdpCommand {
-    Caller {
-        method: String,
-        response: oneshot::Sender<Result<serde_json::Value, String>>,
-    },
-    Interception {
-        method: &'static str,
-    },
-}
-
-struct NavigationDecision {
-    request_id: String,
-    url: String,
-    call: Option<(i64, i64)>,
-    result: SdkResult<()>,
-}
-
-struct NavigationFailure {
-    call: Option<(i64, i64)>,
-    error: PluginError,
-}
-
-const CDP_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-const CDP_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
-
-type BrowserRequestPolicy =
-    Arc<dyn Fn(String, bool) -> Pin<Box<dyn Future<Output = SdkResult<()>> + Send>> + Send + Sync>;
-
-type BrowserCallbackContext =
-    Arc<std::sync::Mutex<Option<agena_plugin_host::sdk::host_api::HostCallbackContext>>>;
-struct CdpAuthorization {
-    policy: BrowserRequestPolicy,
-    context: BrowserCallbackContext,
-}
-
-#[derive(Clone)]
-struct CdpClient {
-    commands: mpsc::Sender<CdpCommandRequest>,
-    navigation_interception_enabled: Arc<OnceLock<()>>,
-    navigation_errors: Arc<std::sync::Mutex<VecDeque<NavigationFailure>>>,
-    callback_context: BrowserCallbackContext,
-}
-
-impl CdpClient {
-    fn refresh_callback_context(&self) -> SdkResult<()> {
-        if let Some(context) = agena_plugin_host::sdk::host_api::current_host_callback_context() {
-            *self
-                .callback_context
-                .lock()
-                .map_err(|_| PluginError::internal("browser callback context lock poisoned"))? =
-                Some(context);
-        }
-        Ok(())
-    }
-    async fn connect(
-        endpoint: &str,
-        target_id: Option<&str>,
-        events: Option<mpsc::Sender<CdpEvent>>,
-    ) -> SdkResult<Self> {
-        Self::connect_with_policy(
-            endpoint,
-            target_id,
-            events,
-            Arc::new(|url, _| {
-                Box::pin(async move { authorize_browser_document_request(&url).await })
-            }),
-        )
-        .await
-    }
-
-    async fn connect_with_policy(
-        endpoint: &str,
-        target_id: Option<&str>,
-        events: Option<mpsc::Sender<CdpEvent>>,
-        policy: BrowserRequestPolicy,
-    ) -> SdkResult<Self> {
-        let (mut socket, _) = agena_plugin_host::sdk::permission_wait::timeout(
-            CDP_CONNECT_TIMEOUT,
-            tokio_tungstenite::connect_async(endpoint),
-        )
-        .await
-        .map_err(|error| {
-            plugin_internal_error_with_context("timed out connecting to browser CDP", &error)
-        })?
-        .map_err(|error| {
-            plugin_internal_error_with_context("cannot connect to browser CDP", &error)
-        })?;
-
-        let (session_id, next_id) = if let Some(target_id) = target_id {
-            let result = agena_plugin_host::sdk::permission_wait::timeout(
-                CDP_CONNECT_TIMEOUT,
-                cdp_attach_target(&mut socket, target_id),
-            )
-            .await
-            .map_err(|error| {
-                plugin_internal_error_with_context("timed out attaching browser CDP target", &error)
-            })??;
-            let session_id = result
-                .get("sessionId")
-                .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| {
-                    PluginError::internal("browser target attach returned no session id")
-                })?
-                .to_string();
-            (Some(session_id), 2)
-        } else {
-            (None, 1)
-        };
-
-        let (commands, command_receiver) = mpsc::channel(32);
-        let navigation_interception_enabled = Arc::new(OnceLock::new());
-        let navigation_errors = Arc::new(std::sync::Mutex::new(VecDeque::new()));
-        let callback_context = Arc::new(std::sync::Mutex::new(
-            agena_plugin_host::sdk::host_api::current_host_callback_context(),
-        ));
-        tokio::spawn(run_cdp_connection(
-            socket,
-            session_id,
-            next_id,
-            command_receiver,
-            Arc::clone(&navigation_errors),
-            events,
-            CdpAuthorization {
-                policy,
-                context: callback_context.clone(),
-            },
-        ));
-
-        Ok(Self {
-            commands,
-            navigation_interception_enabled,
-            navigation_errors,
-            callback_context,
-        })
-    }
-
-    async fn enable_navigation_interception(&self) -> SdkResult<()> {
-        if self.navigation_interception_enabled.get().is_some() {
-            return Ok(());
-        }
-        self.command(
-            "Network.setBypassServiceWorker",
-            serde_json::json!({"bypass":true}),
-        )
-        .await?;
-        self.command(
-            "Network.setCacheDisabled",
-            serde_json::json!({"cacheDisabled":true}),
-        )
-        .await?;
-        self.command(
-            "Fetch.enable",
-            serde_json::json!({
-                "patterns": [{ "urlPattern": "*", "requestStage": "Request" }],
-            }),
-        )
-        .await?;
-        if self.navigation_interception_enabled.set(()).is_err() {
-            tracing::debug!(
-                "browser navigation interception was concurrently enabled by another task"
-            );
-        }
-        Ok(())
-    }
-
-    async fn command(
-        &self,
-        method: &str,
-        params: serde_json::Value,
-    ) -> SdkResult<serde_json::Value> {
-        self.command_with_timeout(method, params, CDP_COMMAND_TIMEOUT)
-            .await
-    }
-
-    async fn command_with_timeout(
-        &self,
-        method: &str,
-        params: serde_json::Value,
-        command_timeout: Duration,
-    ) -> SdkResult<serde_json::Value> {
-        // Every CDP exchange is browser activity: restart the idle auto-close
-        // timer so a session mid-flight is never torn down underneath us.
-        local_browser_touch().map_err(crawl_error_to_plugin)?;
-        // Tokio tasks do not inherit task-local host authority. Refresh it on
-        // each foreground command and echo it for intercepted requests. The
-        // host rejects an expired authority; no background workspace fallback.
-        self.refresh_callback_context()?;
-        if let Some(error) = self.take_navigation_error() {
-            return Err(error);
-        }
-
-        let (response, receiver) = oneshot::channel();
-        let result = agena_plugin_host::sdk::permission_wait::timeout(command_timeout, async {
-            self.commands
-                .send(CdpCommandRequest {
-                    method: method.to_string(),
-                    params,
-                    response,
-                })
-                .await
-                .map_err(|error| {
-                    PluginError::internal(format!(
-                        "browser CDP connection ended while sending `{method}`: {error}"
-                    ))
-                })?;
-            receiver.await.map_err(|error| {
-                plugin_internal_error_with_context(
-                    format!("browser CDP connection ended while awaiting `{method}`").as_str(),
-                    &error,
-                )
-            })
-        })
-        .await
-        .map_err(|error| {
-            plugin_internal_error_with_context(
-                format!(
-                    "browser CDP command `{method}` timed out after {}s",
-                    command_timeout.as_secs_f64()
-                )
-                .as_str(),
-                &error,
-            )
-        })??;
-
-        if let Some(error) = self.take_navigation_error() {
-            return Err(error);
-        }
-        result.map_err(PluginError::internal)
-    }
-
-    async fn evaluate(&self, expression: &str) -> SdkResult<serde_json::Value> {
-        let result = self
-            .command(
-                "Runtime.evaluate",
-                serde_json::json!({
-                    "expression": expression,
-                    "returnByValue": true,
-                    "awaitPromise": true,
-                }),
-            )
-            .await?;
-        if let Some(exception) = result.get("exceptionDetails") {
-            return Err(PluginError::internal(format!(
-                "browser JavaScript evaluation failed: {exception}"
-            )));
-        }
-        Ok(result
-            .pointer("/result/value")
-            .cloned()
-            .unwrap_or(serde_json::Value::Null))
-    }
-
-    fn take_navigation_error(&self) -> Option<PluginError> {
-        let current = agena_plugin_host::sdk::host_api::current_host_callback_context()
-            .and_then(|context| context.session_id.zip(context.call_id));
-        let mut errors = self
-            .navigation_errors
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        // Deferred requests from a completed tool retain its old authority.
-        // Their rejection must not fail the next, independently authorized call.
-        while let Some(failure) = errors.pop_front() {
-            if failure.call.is_none() || failure.call == current {
-                return Some(failure.error);
-            }
-            tracing::debug!(call = ?failure.call, "discarded browser rejection from an earlier call");
-        }
-        None
-    }
-
-    fn is_closed(&self) -> bool {
-        self.commands.is_closed()
-    }
-}
-
-async fn cdp_attach_target(
-    socket: &mut CdpSocket,
-    target_id: &str,
-) -> SdkResult<serde_json::Value> {
-    let request = serde_json::json!({
-        "id": 1,
-        "method": "Target.attachToTarget",
-        "params": {
-            "targetId": target_id,
-            "flatten": true,
-        },
-    });
-    socket
-        .send(tokio_tungstenite::tungstenite::Message::Text(
-            request.to_string().into(),
-        ))
-        .await
-        .map_err(|error| plugin_internal_error_with_context("browser CDP send failed", &error))?;
-
-    while let Some(message) = socket.next().await {
-        let message = message.map_err(|error| {
-            plugin_internal_error_with_context("browser CDP read failed", &error)
-        })?;
-        let Some(value) = cdp_message_value(socket, message).await? else {
-            continue;
-        };
-        if value.get("id").and_then(serde_json::Value::as_u64) != Some(1) {
-            continue;
-        }
-        if let Some(error) = value.get("error") {
-            return Err(PluginError::internal(format!(
-                "browser CDP Target.attachToTarget failed: {error}"
-            )));
-        }
-        return Ok(value
-            .get("result")
-            .cloned()
-            .unwrap_or(serde_json::Value::Null));
-    }
-    Err(PluginError::internal("browser CDP connection ended"))
-}
-
-async fn cdp_message_value(
-    socket: &mut CdpSocket,
-    message: tokio_tungstenite::tungstenite::Message,
-) -> SdkResult<Option<serde_json::Value>> {
-    let text = match message {
-        tokio_tungstenite::tungstenite::Message::Text(text) => text.to_string(),
-        tokio_tungstenite::tungstenite::Message::Binary(bytes) => String::from_utf8(bytes.to_vec())
-            .map_err(|error| {
-                plugin_internal_error_with_context("browser CDP returned non-UTF-8 data", &error)
-            })?,
-        tokio_tungstenite::tungstenite::Message::Ping(payload) => {
-            socket
-                .send(tokio_tungstenite::tungstenite::Message::Pong(payload))
-                .await
-                .map_err(|error| {
-                    plugin_internal_error_with_context("browser CDP pong failed", &error)
-                })?;
-            return Ok(None);
-        }
-        tokio_tungstenite::tungstenite::Message::Pong(_)
-        | tokio_tungstenite::tungstenite::Message::Frame(_) => return Ok(None),
-        tokio_tungstenite::tungstenite::Message::Close(_) => {
-            return Err(PluginError::internal("browser CDP connection closed"));
-        }
-    };
-    serde_json::from_str(text.as_str())
-        .map(Some)
-        .map_err(|error| plugin_internal_error_with_context("invalid browser CDP response", &error))
-}
-
-async fn run_cdp_connection(
-    socket: CdpSocket,
-    session_id: Option<String>,
-    mut next_id: u64,
-    mut commands: mpsc::Receiver<CdpCommandRequest>,
-    navigation_errors: Arc<std::sync::Mutex<VecDeque<NavigationFailure>>>,
-    events: Option<mpsc::Sender<CdpEvent>>,
-    authorization: CdpAuthorization,
-) {
-    let (mut sink, mut source) = socket.split();
-    // At most sixteen authorization checks can be active, so one result slot
-    // per check is sufficient and gives the CDP loop deterministic memory use.
-    let (decisions, mut decision_receiver) = mpsc::channel::<NavigationDecision>(16);
-    let authorization_slots = Arc::new(Semaphore::new(16));
-    let mut pending = BTreeMap::<u64, PendingCdpCommand>::new();
-    let mut checks = tokio::task::JoinSet::new();
-
-    loop {
-        tokio::select! {
-            result = checks.join_next(), if !checks.is_empty() => {
-                if let Some(Err(error)) = result {
-                    push_navigation_error(&navigation_errors, format!("browser request authorization worker failed: {error}"));
-                }
-            }
-            command = commands.recv() => {
-                let Some(command) = command else {
-                    if let Err(error) = sink.close().await {
-                        tracing::warn!(
-                            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                                "failed to close the managed browser CDP connection after its command channel closed",
-                                &error,
-                            ),
-                            "managed browser CDP connection did not close cleanly"
-                        );
-                    }
-                    break;
-                };
-                let id = next_id;
-                pending.retain(|_, command| match command {
-                    PendingCdpCommand::Caller { response, .. } => !response.is_closed(),
-                    PendingCdpCommand::Interception { .. } => true,
-                });
-                next_id = next_id.saturating_add(1);
-                match send_cdp_request(
-                    &mut sink,
-                    id,
-                    command.method.as_str(),
-                    command.params,
-                    session_id.as_deref(),
-                )
-                .await
-                {
-                    Ok(()) => {
-                        pending.insert(
-                            id,
-                            PendingCdpCommand::Caller {
-                                method: command.method,
-                                response: command.response,
-                            },
-                        );
-                    }
-                    Err(error) => {
-                        if command.response.send(Err(error)).is_err() {
-                            tracing::debug!(
-                                command_id = id,
-                                "browser CDP command response receiver closed before send failure could be delivered"
-                            );
-                        }
-                    }
-                }
-            }
-            decision = decision_receiver.recv() => {
-                let Some(decision) = decision else {
-                    continue;
-                };
-                let (method, params) = match decision.result {
-                    Ok(()) => (
-                        "Fetch.continueRequest",
-                        serde_json::json!({ "requestId": decision.request_id }),
-                    ),
-                    Err(error) => {
-                        push_navigation_failure(&navigation_errors, decision.call, error);
-                        (
-                            "Fetch.failRequest",
-                            serde_json::json!({
-                                "requestId": decision.request_id,
-                                "errorReason": "BlockedByClient",
-                            }),
-                        )
-                    }
-                };
-                let id = next_id;
-                next_id = next_id.saturating_add(1);
-                match send_cdp_request(
-                    &mut sink,
-                    id,
-                    method,
-                    params,
-                    session_id.as_deref(),
-                )
-                .await
-                {
-                    Ok(()) => {
-                        pending.insert(id, PendingCdpCommand::Interception { method });
-                    }
-                    Err(error) => {
-                        push_navigation_error(&navigation_errors, error);
-                    }
-                }
-            }
-            message = source.next() => {
-                let Some(message) = message else {
-                    fail_pending_commands(&mut pending, "browser CDP connection ended");
-                    break;
-                };
-                let value = match message {
-                    Ok(tokio_tungstenite::tungstenite::Message::Text(text)) => {
-                        serde_json::from_str::<serde_json::Value>(text.as_ref())
-                            .map_err(|error| format!("invalid browser CDP response: {error}"))
-                    }
-                    Ok(tokio_tungstenite::tungstenite::Message::Binary(bytes)) => {
-                        String::from_utf8(bytes.to_vec())
-                            .map_err(|error| format!("browser CDP returned non-UTF-8 data: {error}"))
-                            .and_then(|text| serde_json::from_str(text.as_str())
-                                .map_err(|error| format!("invalid browser CDP response: {error}")))
-                    }
-                    Ok(tokio_tungstenite::tungstenite::Message::Ping(payload)) => {
-                        if let Err(error) = sink
-                            .send(tokio_tungstenite::tungstenite::Message::Pong(payload))
-                            .await
-                        {
-                            fail_pending_commands(
-                                &mut pending,
-                                format!("browser CDP pong failed: {error}").as_str(),
-                            );
-                            break;
-                        }
-                        continue;
-                    }
-                    Ok(tokio_tungstenite::tungstenite::Message::Pong(_))
-                    | Ok(tokio_tungstenite::tungstenite::Message::Frame(_)) => continue,
-                    Ok(tokio_tungstenite::tungstenite::Message::Close(_)) => {
-                        fail_pending_commands(&mut pending, "browser CDP connection closed");
-                        break;
-                    }
-                    Err(error) => Err(format!("browser CDP read failed: {error}")),
-                };
-                let value = match value {
-                    Ok(value) => value,
-                    Err(error) => {
-                        fail_pending_commands(&mut pending, error.as_str());
-                        break;
-                    }
-                };
-
-                if let Some(id) = value.get("id").and_then(serde_json::Value::as_u64) {
-                    complete_cdp_command(id, value, &mut pending, &navigation_errors);
-                    continue;
-                }
-
-                // Forward CDP notifications to the live activity-logging sink
-                // before the navigation-interception branch consumes them.
-                if let Some(events) = &events
-                    && let Some(method) =
-                        value.get("method").and_then(serde_json::Value::as_str)
-                {
-                    let event = CdpEvent {
-                        method: method.to_string(),
-                        params: value
-                            .get("params")
-                            .cloned()
-                            .unwrap_or(serde_json::Value::Null),
-                    };
-                    if let Err(error) = events.try_send(event) {
-                        let event = error.into_inner();
-                        tracing::warn!(
-                            event_method = %event.method,
-                            queue_state = if events.is_closed() { "closed" } else { "full" },
-                            "browser CDP activity event was dropped before projection"
-                        );
-                    }
-                }
-
-                if value.get("method").and_then(serde_json::Value::as_str)
-                    != Some("Fetch.requestPaused")
-                {
-                    continue;
-                }
-                let Some(request_id) = value
-                    .pointer("/params/requestId")
-                    .and_then(serde_json::Value::as_str)
-                    .map(ToOwned::to_owned)
-                else {
-                    push_navigation_error(
-                        &navigation_errors,
-                        "browser Fetch.requestPaused notification had no request id".to_string(),
-                    );
-                    continue;
-                };
-                let url = value
-                    .pointer("/params/request/url")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or_default()
-                    .to_string();
-                let is_document = value
-                    .pointer("/params/resourceType")
-                    .and_then(serde_json::Value::as_str)
-                    == Some("Document");
-                let decisions = decisions.clone();
-                let authorization_slot = Arc::clone(&authorization_slots).try_acquire_owned();
-                let Ok(authorization_slot) = authorization_slot else {
-                    let error =
-                        "browser document interception exceeded 16 concurrent network safety checks";
-                    push_navigation_error(
-                        &navigation_errors,
-                        format!(
-                            "browser document request to '{url}' was blocked before dispatch: {error}"
-                        ),
-                    );
-                    let id = next_id;
-                    next_id = next_id.saturating_add(1);
-                    match send_cdp_request(
-                        &mut sink,
-                        id,
-                        "Fetch.failRequest",
-                        serde_json::json!({
-                            "requestId": request_id,
-                            "errorReason": "BlockedByClient",
-                        }),
-                        session_id.as_deref(),
-                    )
-                    .await
-                    {
-                        Ok(()) => {
-                            pending.insert(
-                                id,
-                                PendingCdpCommand::Interception {
-                                    method: "Fetch.failRequest",
-                                },
-                            );
-                        }
-                        Err(error) => push_navigation_error(&navigation_errors, error),
-                    }
-                    continue;
-                };
-                let policy = authorization.policy.clone();
-                let context = match authorization.context.lock() {
-                    Ok(context) => context.clone(),
-                    Err(_) => { push_navigation_error(&navigation_errors, "browser callback context lock poisoned".to_owned()); break; }
-                };
-                let call = context.as_ref().and_then(|context| context.session_id.zip(context.call_id));
-                checks.spawn(async move {
-                    let _authorization_slot = authorization_slot;
-                    let authorized = agena_plugin_host::sdk::host_api::run_in_isolated_host_callback_context(
-                        context.unwrap_or_default(),
-                        agena_plugin_host::sdk::permission_wait::timeout(CDP_COMMAND_TIMEOUT, async { policy(url.clone(), is_document).await }),
-                    );
-                    let result = authorized.await.unwrap_or_else(|_| Err(PluginError::from_kind(agena_plugin_host::sdk::PluginErrorKind::Timeout, "browser request authorization timed out")));
-                    if let Err(error) = decisions
-                        .send(NavigationDecision {
-                            request_id,
-                            url,
-                            call,
-                            result,
-                        })
-                        .await
-                    {
-                        let decision = error.0;
-                        tracing::warn!(
-                            request_id = %decision.request_id,
-                            url = %decision.url,
-                            "browser navigation authorization decision could not be delivered because the CDP connection ended"
-                        );
-                    }
-                });
-            }
-        }
-    }
-}
-
-async fn authorize_browser_document_request(raw_url: &str) -> SdkResult<()> {
-    let url = url::Url::parse(raw_url)
-        .map_err(|error| PluginError::invalid_params(format!("invalid document URL: {error}")))?;
-    if !matches!(url.scheme(), "http" | "https") {
-        return Err(PluginError::invalid_params(format!(
-            "unsupported document URL scheme '{}'; only HTTP(S) navigation is allowed",
-            url.scheme()
-        )));
-    }
-    validate_public_network_target(&url, &network_policy::WebNetworkConfig::default()).await
-}
-
-async fn send_cdp_request(
-    sink: &mut CdpSink,
-    id: u64,
-    method: &str,
-    params: serde_json::Value,
-    session_id: Option<&str>,
-) -> Result<(), String> {
-    let mut request = serde_json::json!({
-        "id": id,
-        "method": method,
-        "params": params,
-    });
-    if let Some(session_id) = session_id {
-        request["sessionId"] = serde_json::Value::String(session_id.to_string());
-    }
-    sink.send(tokio_tungstenite::tungstenite::Message::Text(
-        request.to_string().into(),
-    ))
-    .await
-    .map_err(|error| format!("browser CDP {method} send failed: {error}"))
-}
-
-fn complete_cdp_command(
-    id: u64,
-    response: serde_json::Value,
-    pending: &mut BTreeMap<u64, PendingCdpCommand>,
-    navigation_errors: &Arc<std::sync::Mutex<VecDeque<NavigationFailure>>>,
-) {
-    let Some(command) = pending.remove(&id) else {
-        return;
-    };
-    match command {
-        PendingCdpCommand::Caller {
-            method,
-            response: tx,
-        } => {
-            let result = if let Some(error) = response.get("error") {
-                Err(format!("browser CDP {method} failed: {error}"))
-            } else {
-                Ok(response
-                    .get("result")
-                    .cloned()
-                    .unwrap_or(serde_json::Value::Null))
-            };
-            if tx.send(result).is_err() {
-                tracing::debug!(
-                    command_id = id,
-                    command_method = %method,
-                    "browser CDP command response receiver closed before delivery"
-                );
-            }
-        }
-        PendingCdpCommand::Interception { method } => {
-            if let Some(error) = response.get("error") {
-                push_navigation_error(
-                    navigation_errors,
-                    format!("browser CDP {method} failed: {error}"),
-                );
-            }
-        }
-    }
-}
-
-fn fail_pending_commands(pending: &mut BTreeMap<u64, PendingCdpCommand>, error: &str) {
-    for (command_id, command) in std::mem::take(pending) {
-        if let PendingCdpCommand::Caller { response, .. } = command
-            && response.send(Err(error.to_string())).is_err()
-        {
-            tracing::debug!(
-                command_id,
-                "browser CDP failure response receiver closed before delivery"
-            );
-        }
-    }
-}
-
-enum NavigationError {
-    Typed(PluginError),
-    Text(String),
-}
-impl From<PluginError> for NavigationError {
-    fn from(error: PluginError) -> Self {
-        Self::Typed(error)
-    }
-}
-impl From<String> for NavigationError {
-    fn from(error: String) -> Self {
-        Self::Text(error)
-    }
-}
-
-fn push_navigation_error(
-    errors: &Arc<std::sync::Mutex<VecDeque<NavigationFailure>>>,
-    error: impl Into<NavigationError>,
-) {
-    let error = match error.into() {
-        NavigationError::Typed(error) => error,
-        NavigationError::Text(error) => PluginError::internal(error),
-    };
-    push_navigation_failure(errors, None, error);
-}
-
-fn push_navigation_failure(
-    errors: &Arc<std::sync::Mutex<VecDeque<NavigationFailure>>>,
-    call: Option<(i64, i64)>,
-    error: PluginError,
-) {
-    let mut errors = errors
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if errors.len() >= 32 {
-        errors.pop_front();
-    }
-    errors.push_back(NavigationFailure { call, error });
-}
-
-fn ensure_browser_action(result: &serde_json::Value) -> SdkResult<()> {
-    if result.get("ok").and_then(serde_json::Value::as_bool) == Some(true) {
-        return Ok(());
-    }
-    Err(PluginError::invalid_params(
-        result
-            .get("error")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("browser action failed"),
-    ))
-}
-
-/// Build a browser-side input operation that cooperates with React-style
-/// controlled inputs. Assigning `el.value` directly updates React's private
-/// value tracker in many versions, so the subsequent synthetic `input` event
-/// is ignored. Calling the native prototype setter and resetting the tracker
-/// to the previous value lets the framework observe a real value transition.
-///
-/// This runs only in the already attached CDP target, and it does not
-/// introduce a separate browser/plugin execution surface.
 fn ensure_search_available(successes: usize, failures: &[String]) -> SdkResult<()> {
     if successes == 0 && !failures.is_empty() {
         let mut error = PluginError::internal(format!(
@@ -5041,232 +1656,6 @@ fn ensure_search_available(successes: usize, failures: &[String]) -> SdkResult<(
         return Err(error);
     }
     Ok(())
-}
-
-fn browser_snapshot_expression() -> String {
-    include_str!("browser/snapshot.js").replace(
-        "__AGENA_SNAPSHOT_ID__",
-        &format!("\"{}\"", uuid::Uuid::new_v4()),
-    )
-}
-
-fn browser_element_expression(
-    selector: Option<&str>,
-    element_ref: Option<u16>,
-    snapshot_id: Option<&str>,
-) -> SdkResult<String> {
-    match (
-        selector.filter(|value| !value.trim().is_empty()),
-        element_ref,
-    ) {
-        (Some(selector), None) if snapshot_id.is_none() => serde_json::to_string(selector)
-            .map(|selector| format!("document.querySelector({selector})"))
-            .map_err(|error| PluginError::invalid_params_error(&error)),
-        (None, Some(element_ref)) => {
-            let id = snapshot_id.filter(|id| !id.is_empty()).ok_or_else(|| {
-                PluginError::invalid_params(
-                    "ref requires snapshot_id from browser_snapshot; refresh before retrying",
-                )
-            })?;
-            let id = serde_json::to_string(id)
-                .map_err(|error| PluginError::invalid_params_error(&error))?;
-            Ok(format!(
-                r#"(() => {{
-                const state = globalThis[Symbol.for('agena.browser.snapshot')];
-                if (!state || state.id !== {id} || state.document !== document || state.url !== location.href) throw new Error('stale browser snapshot; refresh before acting');
-                const el = state.nodes[{element_ref}];
-                if (!el || !el.isConnected || el.ownerDocument !== document || state.signature(el) !== state.signatures[{element_ref}]) throw new Error('stale browser element; refresh before acting');
-                return el;
-            }})()"#
-            ))
-        }
-        _ => Err(PluginError::invalid_params(
-            "provide selector alone, or ref together with snapshot_id",
-        )),
-    }
-}
-
-fn browser_type_expression(
-    selector: Option<&str>,
-    element_ref: Option<u16>,
-    snapshot_id: Option<&str>,
-    text: &str,
-    press_enter: bool,
-) -> SdkResult<String> {
-    let target = browser_element_expression(selector, element_ref, snapshot_id)?;
-    let text =
-        serde_json::to_string(text).map_err(|error| PluginError::invalid_params_error(&error))?;
-    let enter = if press_enter {
-        "el.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',code:'Enter',bubbles:true})); el.dispatchEvent(new KeyboardEvent('keypress',{key:'Enter',code:'Enter',bubbles:true})); el.dispatchEvent(new KeyboardEvent('keyup',{key:'Enter',code:'Enter',bubbles:true}));"
-    } else {
-        ""
-    };
-    Ok(format!(
-        r#"(() => {{
-            const el = {target};
-            if (!el) return {{ok:false,error:'browser element not found'}};
-            if (el.disabled || el.readOnly) return {{ok:false,error:'element is disabled or read-only'}};
-            el.scrollIntoView({{block:'center'}});
-            el.focus();
-            const next = {text};
-            let method = 'direct';
-            let value = '';
-            if (el.isContentEditable) {{
-                el.textContent = next;
-                value = el.textContent || '';
-                method = 'contenteditable';
-            }} else {{
-                if (!('value' in el)) return {{ok:false,error:'selector does not target an editable element'}};
-                if (String(el.type || '').toLowerCase() === 'file') return {{ok:false,error:'file inputs cannot be filled'}};
-                const previous = String(el.value ?? '');
-                const prototype = el instanceof HTMLTextAreaElement
-                    ? HTMLTextAreaElement.prototype
-                    : el instanceof HTMLSelectElement
-                        ? HTMLSelectElement.prototype
-                        : HTMLInputElement.prototype;
-                const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
-                if (typeof setter === 'function') {{
-                    setter.call(el, next);
-                    method = 'native_setter';
-                }} else {{
-                    el.value = next;
-                }}
-                // React's value tracker compares against this old value while
-                // handling the event. Do not depend on it existing: it is an
-                // implementation detail and other frameworks ignore it.
-                const tracker = el._valueTracker;
-                if (tracker && typeof tracker.setValue === 'function') tracker.setValue(previous);
-                value = String(el.value ?? '');
-            }}
-            let inputEvent;
-            try {{
-                inputEvent = new InputEvent('input', {{bubbles:true,inputType:'insertText',data:next}});
-            }} catch (_) {{
-                inputEvent = new Event('input', {{bubbles:true}});
-            }}
-            el.dispatchEvent(inputEvent);
-            el.dispatchEvent(new Event('change', {{bubbles:true}}));
-            {enter}
-            return {{ok:true,method,value_omitted:true}};
-        }})()"#
-    ))
-}
-
-fn browser_action_output(
-    title: &str,
-    session_id: &str,
-    result: serde_json::Value,
-) -> ToolInvokeOutput {
-    let summary = result
-        .get("snapshot")
-        .map(browser_snapshot_summary)
-        .unwrap_or_else(|| "Completed".to_string());
-    ToolInvokeOutput::from_parts(
-        title,
-        summary,
-        format!(
-            "Browser action acknowledged: {title} in session {session_id}.\n\n{}",
-            result
-                .get("snapshot")
-                .map(format_browser_snapshot)
-                .unwrap_or_default()
-        ),
-        Some(serde_json::json!({
-            "session_id": session_id,
-            "result": result,
-        })),
-        std::collections::BTreeMap::new(),
-        Vec::new(),
-    )
-}
-
-fn browser_snapshot_summary(snapshot: &serde_json::Value) -> String {
-    let title = snapshot
-        .get("title")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|title| !title.is_empty())
-        .unwrap_or("Untitled page");
-    let element_count = snapshot
-        .get("elements")
-        .and_then(serde_json::Value::as_array)
-        .map_or(0, Vec::len);
-    format!("{title} · {element_count} interactive elements")
-}
-
-fn browser_text_prefix(text: &str, max_bytes: usize) -> &str {
-    let mut end = text.len().min(max_bytes);
-    while !text.is_char_boundary(end) {
-        end -= 1;
-    }
-    &text[..end]
-}
-
-fn format_browser_snapshot(snapshot: &serde_json::Value) -> String {
-    let value = |key| {
-        snapshot
-            .get(key)
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-    };
-    let mut text = format!(
-        "Snapshot ID: {}\nTitle: {}\nURL: {}\nReady state: {}\nUse ref together with this snapshot_id; form values are omitted.\n",
-        value("snapshot_id"),
-        browser_text_prefix(value("title"), 512),
-        browser_text_prefix(value("url"), 1024),
-        value("ready_state")
-    );
-    if let Some(elements) = snapshot
-        .get("elements")
-        .and_then(serde_json::Value::as_array)
-    {
-        text.push_str(&format!("Interactive elements: {}\n", elements.len()));
-        for (index, element) in elements.iter().enumerate() {
-            let label = element
-                .get("text")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default();
-            let tag = element
-                .get("tag")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default();
-            let row = format!(
-                "ref {} [{}] {}{}\n",
-                element
-                    .get("ref")
-                    .and_then(serde_json::Value::as_u64)
-                    .unwrap_or(index as u64),
-                browser_text_prefix(tag, 32),
-                browser_text_prefix(label, 128),
-                if element.get("disabled").and_then(serde_json::Value::as_bool) == Some(true) {
-                    " (disabled)"
-                } else {
-                    ""
-                }
-            );
-            if text.len() + row.len() > 20000 {
-                text.push_str("Additional element rows omitted from the text preview.\n");
-                break;
-            }
-            text.push_str(&row);
-        }
-    }
-    text.push_str("\nVisible text:\n");
-    let remaining = 32000usize.saturating_sub(text.len());
-    text.push_str(browser_text_prefix(value("text"), remaining));
-    text
-}
-
-fn resolve_browser_redirect(base: &url::Url, location: &str) -> SdkResult<url::Url> {
-    let redirect = base.join(location).map_err(|error| {
-        PluginError::invalid_params(format!("invalid browser redirect Location: {error}"))
-    })?;
-    match redirect.scheme() {
-        "http" | "https" => Ok(redirect),
-        scheme => Err(PluginError::invalid_params(format!(
-            "browser redirect uses unsupported scheme `{scheme}`"
-        ))),
-    }
 }
 
 fn plugin_error_to_crawl(error: PluginError) -> agena_web::CrawlError {
@@ -5325,12 +1714,15 @@ impl CrawlPageFetcher for PluginPageFetcher<'_> {
                         .into(),
                 ));
             }
+            let mut checked = BTreeSet::new();
             for url in [requested_url.as_str(), &document.url, &document.final_url] {
-                state
-                    .host
-                    .require_network_permission(url.to_owned())
-                    .await
-                    .map_err(plugin_error_to_crawl)?;
+                if checked.insert(url) {
+                    state
+                        .host
+                        .require_network_permission(url.to_owned())
+                        .await
+                        .map_err(plugin_error_to_crawl)?;
+                }
             }
             Ok(())
         })
@@ -5376,13 +1768,14 @@ fn validate_web_config(web: &WebConfig) -> SdkResult<()> {
             "fetch.request allows at most 32 MiB and 120 seconds",
         ));
     }
-    if !(1..=8).contains(&web.crawl.limits.concurrency)
+    if !(1..=agena_web::MAX_CRAWL_CONCURRENCY).contains(&web.crawl.limits.concurrency)
         || web.crawl.defaults.concurrency == 0
         || web.crawl.defaults.concurrency > web.crawl.limits.concurrency
     {
-        return Err(PluginError::invalid_params(
-            "crawl concurrency requires 1 <= defaults.concurrency <= limits.concurrency <= 8",
-        ));
+        return Err(PluginError::invalid_params(format!(
+            "crawl concurrency requires 1 <= defaults.concurrency <= limits.concurrency <= {}",
+            agena_web::MAX_CRAWL_CONCURRENCY
+        )));
     }
     if web.crawl.limits.max_pages > 1000 || web.crawl.limits.max_depth > 16 {
         return Err(PluginError::invalid_params(
@@ -5450,16 +1843,7 @@ fn validate_web_config(web: &WebConfig) -> SdkResult<()> {
             "web plugin config `search.default_limit` must be less than or equal to `search.max_limit`",
         ));
     }
-    if web
-        .browser
-        .executable_path
-        .as_deref()
-        .is_some_and(|value| value.trim().is_empty())
-    {
-        return Err(PluginError::internal(
-            "web plugin config `browser.executable_path` must not be empty when set",
-        ));
-    }
+    web.browser.chrome_options().validate()?;
     if web
         .browser
         .wait

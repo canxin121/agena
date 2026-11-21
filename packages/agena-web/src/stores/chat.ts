@@ -1317,6 +1317,13 @@ const useChatStoreDefinition = defineStore('chat', () => {
     )
   }
 
+  function getBrowserTakeoverRequestId(sessionId: string) {
+    return interactiveBySession.value[sessionId]?.requests.find(
+      ({ kind, request }) =>
+        kind === 'user_input' && request.source === 'host' && request.input_kind === 'browser_takeover',
+    )?.requestId
+  }
+
   function hasInteractionSnapshot(sessionId: string) {
     return Boolean(interactiveBySession.value[sessionId])
   }
@@ -2723,6 +2730,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     getSessionAttention,
     getInteractionDraft,
     getPendingInteraction,
+    getBrowserTakeoverRequestId,
     hasInteractionSnapshot,
     getSessionRunConfig,
     selectedSessionCreatedMs,

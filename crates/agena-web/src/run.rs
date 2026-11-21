@@ -1,14 +1,17 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::Duration;
 
 use chrono::Utc;
-use futures_util::future::join_all;
+use futures_util::{StreamExt, stream::FuturesUnordered};
 use serde::{Deserialize, Serialize};
+use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, mpsc};
 use url::Url;
 
 use crate::{
-    CrawlDocumentSummary, CrawlError, CrawlStore, CrawlStorePruneReport, CrawlStoreRetention,
-    FetchedPage, StoredDocument, prepare_fetch_url,
+    CrawlDocumentSummary, CrawlError, CrawlStore, CrawlStoreRetention, FetchedPage, StoredDocument,
+    prepare_fetch_url,
 };
 
 #[derive(Debug, Clone)]
@@ -92,6 +95,40 @@ enum Retrieved {
     Fetched(FetchedPage),
 }
 
+pub const MAX_CRAWL_CONCURRENCY: u32 = 32;
+
+struct DocumentFingerprint {
+    raw: String,
+    markdown: String,
+    simhash: u64,
+}
+
+impl From<&StoredDocument> for DocumentFingerprint {
+    fn from(document: &StoredDocument) -> Self {
+        Self {
+            raw: document.raw_html_hash.clone(),
+            markdown: document.markdown_hash.clone(),
+            simhash: document.simhash,
+        }
+    }
+}
+
+async fn lock_crawl(path: &Path) -> OwnedMutexGuard<()> {
+    type CrawlLocks = HashMap<PathBuf, Weak<AsyncMutex<()>>>;
+    static RUNS: LazyLock<Mutex<CrawlLocks>> = LazyLock::new(Mutex::default);
+    let lock = {
+        let mut runs = RUNS.lock().expect("web crawl locks");
+        runs.retain(|_, lock| lock.strong_count() > 0);
+        let current = runs.entry(path.to_owned()).or_default();
+        current.upgrade().unwrap_or_else(|| {
+            let lock = Arc::new(AsyncMutex::new(()));
+            *current = Arc::downgrade(&lock);
+            lock
+        })
+    };
+    lock.lock_owned().await
+}
+
 /// Fetcher used by a crawl run.
 pub trait CrawlPageFetcher: Sync {
     /// Revalidate access before exposing stored content, including its actual
@@ -114,6 +151,83 @@ pub trait CrawlPageFetcher: Sync {
 
 static CRAWL_CONTENT: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 
+type PageOutcome = (Url, Result<Retrieved, (&'static str, CrawlError)>);
+
+async fn retrieve_page(
+    url: &Url,
+    cached_id: Option<String>,
+    store: &CrawlStore,
+    options: &CrawlRunOptions,
+    fetcher: &impl CrawlPageFetcher,
+) -> Result<Result<Retrieved, (&'static str, CrawlError)>, CrawlError> {
+    if let Some(id) = cached_id {
+        let existing = store
+            .read_async(move |store| store.get_document(&id))
+            .await?;
+        if (document_matches_render_mode(&existing, options.render_js)
+            || (options.allow_rendered_cache && existing.rendered))
+            && existing.extraction_backend == options.extraction_backend
+            && !existing.extraction_strategy.is_empty()
+            && !existing.final_url.is_empty()
+            && is_document_fresh(&existing, options.document_cache_ttl)
+            && !existing.truncated
+            && existing.content_status == crate::PageContentStatus::Readable
+            && (200..300).contains(&existing.status)
+        {
+            return Ok(fetcher
+                .authorize_cached(url, &existing)
+                .await
+                .map(|()| Retrieved::Cached(existing))
+                .map_err(|error| ("authorization_denied", error)));
+        }
+    }
+    Ok(fetcher
+        .fetch_page(url, options.use_cache, options.render_js)
+        .await
+        .map(Retrieved::Fetched)
+        .map_err(|error| ("fetch_failed", error)))
+}
+
+async fn retrieve_depth(
+    pages: Vec<(Url, Option<String>)>,
+    store: &CrawlStore,
+    options: &CrawlRunOptions,
+    fetcher: &impl CrawlPageFetcher,
+    send: mpsc::Sender<PageOutcome>,
+) -> Result<(), CrawlError> {
+    let mut pages = pages.into_iter().enumerate();
+    let mut active = FuturesUnordered::new();
+    let mut ready = BTreeMap::new();
+    let mut submitted = 0;
+    let mut next = 0;
+    loop {
+        // Refill freed slots while limiting how many pages can wait behind a
+        // slow one. The consumer still commits in BFS discovery order.
+        while active.len() < options.concurrency && submitted < next + 2 * options.concurrency {
+            let Some((index, (url, cached_id))) = pages.next() else {
+                break;
+            };
+            active.push(async move {
+                let result = retrieve_page(&url, cached_id, store, options, fetcher).await?;
+                Ok::<_, CrawlError>((index, (url, result)))
+            });
+            submitted += 1;
+        }
+        let Some(outcome) = active.next().await else {
+            break;
+        };
+        let (index, page) = outcome?;
+        ready.insert(index, page);
+        while let Some(page) = ready.remove(&next) {
+            if send.send(page).await.is_err() {
+                return Ok(());
+            }
+            next += 1;
+        }
+    }
+    Ok(())
+}
+
 pub async fn crawl_site(
     start_url: &Url,
     store: &CrawlStore,
@@ -123,11 +237,11 @@ pub async fn crawl_site(
     if options.max_pages == 0
         || options.max_pages > 1000
         || options.max_depth > 16
-        || !(1..=8).contains(&options.concurrency)
+        || !(1..=MAX_CRAWL_CONCURRENCY as usize).contains(&options.concurrency)
     {
-        return Err(CrawlError::InvalidInput(
-            "crawl requires 1–1000 pages, depth at most 16, and concurrency 1–8".into(),
-        ));
+        return Err(CrawlError::InvalidInput(format!(
+            "crawl requires 1–1000 pages, depth at most 16, and concurrency 1–{MAX_CRAWL_CONCURRENCY}"
+        )));
     }
     let max_urls = options.max_pages.saturating_mul(32).clamp(128, 32_000);
     let mut truncated = false;
@@ -142,17 +256,22 @@ pub async fn crawl_site(
     let mut cached_count = 0usize;
     let mut duplicate_count = 0usize;
     let mut near_duplicate_count = 0usize;
-    let mut known_simhashes = store
-        .read_async(|store| {
-            store.ensure_exists()?;
-            Ok(store
-                .list_documents()?
-                .into_iter()
-                .map(|document| (document.id, document.simhash))
-                .collect::<HashMap<_, _>>())
+    store.read_async(CrawlStore::ensure_exists).await?;
+    let path = tokio::fs::canonicalize(store.dir()).await?;
+    let _crawl = lock_crawl(&path).await;
+    let writer = agena_async::WriteQueue::named(path);
+    // Join any write still finishing after a cancelled crawl before taking this snapshot.
+    let (mut cached_urls, mut fingerprints) = store
+        .mutate_async(&writer, |store| {
+            let mut urls = HashMap::new();
+            let mut fingerprints = HashMap::new();
+            for document in store.list_documents()? {
+                fingerprints.insert(document.id.clone(), DocumentFingerprint::from(&document));
+                urls.entry(document.canonical_url).or_insert(document.id);
+            }
+            Ok((urls, fingerprints))
         })
         .await?;
-    let writer = agena_async::WriteQueue::for_file(store.dir()).await?;
 
     while !queue.is_empty() {
         let remaining = options
@@ -162,108 +281,30 @@ pub async fn crawl_site(
             truncated = true;
             break;
         }
-        // Reserve every slot before dispatch; failures and cache hits consume
-        // the same page budget. Batches stay within one BFS depth and results
-        // are processed in discovery order, independent of network timing.
+        // Failures and cache hits both consume the page budget. Finish a BFS
+        // depth before starting the next so newly discovered links stay ordered.
         let depth = queue.front().expect("nonempty queue").1;
-        let mut batch = Vec::new();
-        while batch.len() < remaining.min(options.concurrency)
-            && queue.front().is_some_and(|entry| entry.1 == depth)
-        {
-            let (url, depth) = queue.pop_front().expect("checked front");
-            let cached = if options.use_cache {
-                let cache_url = url.to_string();
-                store
-                    .read_async(move |store| store.find_by_url(&cache_url))
-                    .await?
+        let mut pages = Vec::new();
+        while pages.len() < remaining && queue.front().is_some_and(|entry| entry.1 == depth) {
+            let (url, _) = queue.pop_front().expect("checked front");
+            let cached_id = if options.use_cache {
+                cached_urls.get(url.as_str()).cloned()
             } else {
                 None
             };
-            let cached = cached.filter(|existing| {
-                (document_matches_render_mode(existing, options.render_js)
-                    || (options.allow_rendered_cache && existing.rendered))
-                    && existing.extraction_backend == options.extraction_backend
-                    && !existing.extraction_strategy.is_empty()
-                    && !existing.final_url.is_empty()
-                    && is_document_fresh(existing, options.document_cache_ttl)
-                    && !existing.truncated
-                    && existing.content_status == crate::PageContentStatus::Readable
-                    && (200..300).contains(&existing.status)
-            });
-            batch.push(async move {
-                let result = if let Some(existing) = cached {
-                    fetcher
-                        .authorize_cached(&url, &existing)
-                        .await
-                        .map(|()| Retrieved::Cached(existing))
-                        .map_err(|error| ("authorization_denied", error))
-                } else {
-                    fetcher
-                        .fetch_page(&url, options.use_cache, options.render_js)
-                        .await
-                        .map(Retrieved::Fetched)
-                        .map_err(|error| ("fetch_failed", error))
-                };
-                (url, depth, result)
-            });
+            pages.push((url, cached_id));
         }
-        // These futures run in the caller's task. Dropping the crawl drops all
-        // in-flight work and preserves task-local host authority.
-        for (url, depth, result) in join_all(batch).await {
-            if let Ok(Retrieved::Cached(existing)) = result {
-                if depth < options.max_depth {
-                    enqueue_document_links(
-                        start_url,
-                        &existing,
-                        depth,
-                        options.same_host_only,
-                        &mut queue,
-                        &mut seen_urls,
-                        max_urls,
-                        &mut truncated,
-                    );
-                }
-                rendered_count += usize::from(existing.rendered);
-                cached_count += 1;
-                documents.push(existing.summary());
-                continue;
-            }
-            attempted_count += 1;
-            match result {
-                Ok(Retrieved::Fetched(page)) => {
-                    if !(200..300).contains(&page.status)
-                        || page.content_status != crate::PageContentStatus::Readable
-                        || page.truncated
-                    {
-                        page_errors.push(CrawlPageError {
-                            url: url.to_string(),
-                            reason: if page.truncated {
-                                "incomplete"
-                            } else if !(200..300).contains(&page.status) {
-                                "http_error"
-                            } else {
-                                "unreadable"
-                            }
-                            .into(),
-                            status: Some(page.status),
-                            content_status: Some(page.content_status),
-                        });
-                        truncated |= page.truncated;
-                        let failure = crawl_page_failure();
-                        tracing::warn!(
-                            failure_id = %failure.id,
-                            url = %url,
-                            http_status = page.status,
-                        "crawl page is not reusable content"
-                        );
-                        failures.push(failure.into());
-                        continue;
-                    }
-                    rendered_count += usize::from(page.rendered);
+        let (send, mut receive) = mpsc::channel(options.concurrency);
+        // Drive both stages in the caller's task. Disk writes overlap network
+        // reads, and both stop with the owning invocation.
+        let retrieve = retrieve_depth(pages, store, options, fetcher, send);
+        let process = async {
+            while let Some((url, result)) = receive.recv().await {
+                if let Ok(Retrieved::Cached(existing)) = result {
                     if depth < options.max_depth {
-                        enqueue_links(
+                        enqueue_document_links(
                             start_url,
-                            &page,
+                            &existing,
                             depth,
                             options.same_host_only,
                             &mut queue,
@@ -272,87 +313,129 @@ pub async fn crawl_site(
                             &mut truncated,
                         );
                     }
-                    let max_chunk_chars = options.max_chunk_chars;
-                    let document = CRAWL_CONTENT
-                        .run(move || {
-                            StoredDocument::from_fetched_page(page, depth, max_chunk_chars)
-                        })
-                        .await
-                        .map_err(|error| {
-                            CrawlError::Io(std::io::Error::other(format!(
-                                "crawl content worker failed: {error}"
-                            )))
-                        })?;
-                    // A refresh of the same document must replace old text and
-                    // timestamps even when its hash is unchanged or similar.
-                    let refreshing = known_simhashes.contains_key(&document.id);
-                    let hash_document = &document;
-                    let raw_hash = hash_document.raw_html_hash.clone();
-                    let markdown_hash = hash_document.markdown_hash.clone();
-                    if !refreshing
-                        && store
-                            .read_async(move |store| {
-                                Ok(store.find_by_raw_hash(&raw_hash)?.is_some()
-                                    || store.find_by_markdown_hash(&markdown_hash)?.is_some())
-                            })
-                            .await?
-                    {
-                        duplicate_count += 1;
-                        continue;
-                    }
-                    if !refreshing
-                        && is_near_duplicate(
-                            document.simhash,
-                            known_simhashes.values().copied(),
-                            options.near_duplicate_hamming_distance,
-                        )
-                    {
-                        near_duplicate_count += 1;
-                        continue;
-                    }
-
-                    let document = store
-                        .mutate_async(&writer, move |store| {
-                            store.save_document(&document)?;
-                            Ok(document)
-                        })
-                        .await?;
-                    known_simhashes.insert(document.id.clone(), document.simhash);
-                    stored_count += 1;
-                    documents.push(document.summary());
+                    rendered_count += usize::from(existing.rendered);
+                    cached_count += 1;
+                    documents.push(existing.summary());
+                    continue;
                 }
-                Ok(Retrieved::Cached(_)) => unreachable!("cache handled above"),
-                Err((_, err @ CrawlError::AccessRejected(_))) => return Err(err),
-                Err((reason, err)) => {
-                    page_errors.push(CrawlPageError {
-                        url: url.to_string(),
-                        reason: reason.into(),
-                        status: None,
-                        content_status: None,
-                    });
-                    let failure = crawl_page_failure();
-                    tracing::warn!(
-                        failure_id = %failure.id,
-                        url = %url,
-                        diagnostic = %err,
-                        "crawl page fetch failed"
-                    );
-                    failures.push(failure.into());
+                attempted_count += 1;
+                match result {
+                    Ok(Retrieved::Fetched(page)) => {
+                        if !(200..300).contains(&page.status)
+                            || page.content_status != crate::PageContentStatus::Readable
+                            || page.truncated
+                        {
+                            page_errors.push(CrawlPageError {
+                                url: url.to_string(),
+                                reason: if page.truncated {
+                                    "incomplete"
+                                } else if !(200..300).contains(&page.status) {
+                                    "http_error"
+                                } else {
+                                    "unreadable"
+                                }
+                                .into(),
+                                status: Some(page.status),
+                                content_status: Some(page.content_status),
+                            });
+                            truncated |= page.truncated;
+                            let failure = crawl_page_failure();
+                            tracing::warn!(
+                                failure_id = %failure.id,
+                                url = %url,
+                                http_status = page.status,
+                            "crawl page is not reusable content"
+                            );
+                            failures.push(failure.into());
+                            continue;
+                        }
+                        rendered_count += usize::from(page.rendered);
+                        if depth < options.max_depth {
+                            enqueue_links(
+                                start_url,
+                                &page,
+                                depth,
+                                options.same_host_only,
+                                &mut queue,
+                                &mut seen_urls,
+                                max_urls,
+                                &mut truncated,
+                            );
+                        }
+                        let max_chunk_chars = options.max_chunk_chars;
+                        let document = CRAWL_CONTENT
+                            .run(move || {
+                                StoredDocument::from_fetched_page(page, depth, max_chunk_chars)
+                            })
+                            .await
+                            .map_err(|error| {
+                                CrawlError::Io(std::io::Error::other(format!(
+                                    "crawl content worker failed: {error}"
+                                )))
+                            })?;
+                        // A refresh of the same document must replace old text and
+                        // timestamps even when its hash is unchanged or similar.
+                        let refreshing = fingerprints.contains_key(&document.id);
+                        if !refreshing
+                            && fingerprints.values().any(|known| {
+                                known.raw == document.raw_html_hash
+                                    || known.markdown == document.markdown_hash
+                            })
+                        {
+                            duplicate_count += 1;
+                            continue;
+                        }
+                        if !refreshing
+                            && is_near_duplicate(
+                                document.simhash,
+                                fingerprints.values().map(|known| known.simhash),
+                                options.near_duplicate_hamming_distance,
+                            )
+                        {
+                            near_duplicate_count += 1;
+                            continue;
+                        }
+
+                        let document = store
+                            .mutate_async(&writer, move |store| {
+                                store.save_document(&document)?;
+                                Ok(document)
+                            })
+                            .await?;
+                        cached_urls.insert(document.canonical_url.clone(), document.id.clone());
+                        fingerprints
+                            .insert(document.id.clone(), DocumentFingerprint::from(&document));
+                        stored_count += 1;
+                        documents.push(document.summary());
+                    }
+                    Ok(Retrieved::Cached(_)) => unreachable!("cache handled above"),
+                    Err((_, err @ CrawlError::AccessRejected(_))) => return Err(err),
+                    Err((reason, err)) => {
+                        page_errors.push(CrawlPageError {
+                            url: url.to_string(),
+                            reason: reason.into(),
+                            status: None,
+                            content_status: None,
+                        });
+                        let failure = crawl_page_failure();
+                        tracing::warn!(
+                            failure_id = %failure.id,
+                            url = %url,
+                            diagnostic = %err,
+                            "crawl page fetch failed"
+                        );
+                        failures.push(failure.into());
+                    }
                 }
             }
-        }
+            Ok::<_, CrawlError>(())
+        };
+        tokio::try_join!(retrieve, process)?;
     }
 
     let retention = options.store_retention;
     let (prune_report, total_documents) = store
-        .mutate_async(&writer, move |store| {
-            let prune = match retention {
-                Some(retention) => store.prune(retention)?,
-                None => CrawlStorePruneReport::default(),
-            };
-            store.rebuild_index()?;
-            Ok((prune, store.list_documents()?.len()))
-        })
+        .mutate_async(&writer, move |store| store.finish_crawl(retention))
         .await?;
     Ok(CrawlRunReport {
         start_url: start_url.to_string(),
@@ -427,6 +510,118 @@ fn is_near_duplicate(
     max_distance: u32,
 ) -> bool {
     existing.any(|value| simhash::hamming_distance(candidate, value) <= max_distance)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::Notify;
+
+    #[derive(Default)]
+    struct Fetcher {
+        third_started: Notify,
+        fetched: AtomicUsize,
+        authorized: AtomicUsize,
+    }
+
+    impl CrawlPageFetcher for Fetcher {
+        fn authorize_cached<'a>(
+            &'a self,
+            _url: &'a Url,
+            _document: &'a StoredDocument,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), CrawlError>> + Send + 'a>>
+        {
+            self.authorized.fetch_add(1, Ordering::Relaxed);
+            Box::pin(async { Ok(()) })
+        }
+
+        fn fetch_page<'a>(
+            &'a self,
+            url: &'a Url,
+            _: bool,
+            _: bool,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<FetchedPage, CrawlError>> + Send + 'a>,
+        > {
+            Box::pin(async move {
+                self.fetched.fetch_add(1, Ordering::Relaxed);
+                let body = match url.path() {
+                    "/" => "Crawl entry point",
+                    "/first" => {
+                        self.third_started.notified().await;
+                        "Snow leopard habitat"
+                    }
+                    "/second" => "Astronomy radio telescope",
+                    "/third" => {
+                        self.third_started.notify_one();
+                        "Ceramic kiln temperature"
+                    }
+                    _ => unreachable!(),
+                };
+                let mut page = crate::extract_page_from_body(
+                    url,
+                    url,
+                    "text/plain",
+                    200,
+                    false,
+                    false,
+                    body,
+                    None,
+                    None,
+                );
+                if url.path() == "/" {
+                    page.links = ["first", "second", "third"]
+                        .map(|link| url.join(link).unwrap().to_string())
+                        .into();
+                }
+                Ok(page)
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn crawl_refills_slots_and_stores_pages_in_breadth_first_order() {
+        let root = tempfile::tempdir().unwrap();
+        let store = CrawlStore::for_test_directory(root.path());
+        let fetcher = Fetcher::default();
+        let url = prepare_fetch_url("https://example.org/").unwrap();
+        let options = CrawlRunOptions {
+            concurrency: 2,
+            max_pages: 4,
+            near_duplicate_hamming_distance: 0,
+            ..Default::default()
+        };
+        let first = tokio::time::timeout(
+            Duration::from_secs(5),
+            crawl_site(&url, &store, &options, &fetcher),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(first.stored_count, 4);
+        assert_eq!(first.total_documents, 4);
+        assert_eq!(
+            first
+                .documents
+                .iter()
+                .map(|document| document.url.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "https://example.org/",
+                "https://example.org/first",
+                "https://example.org/second",
+                "https://example.org/third"
+            ]
+        );
+        let hits = store.search_async("telescope".into(), 4).await.unwrap();
+        assert_eq!(hits[0].0.url, "https://example.org/second");
+
+        let second = crawl_site(&url, &store, &options, &fetcher).await.unwrap();
+        assert_eq!(second.cached_count, 4);
+        assert_eq!(fetcher.fetched.load(Ordering::Relaxed), 4);
+        assert_eq!(fetcher.authorized.load(Ordering::Relaxed), 4);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

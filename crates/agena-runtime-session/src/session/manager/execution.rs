@@ -995,13 +995,18 @@ impl SessionManager {
         };
         // Persisted workspace rules follow the owning session, independently
         // of the server's default workspace or this tool's effective cwd.
-        let workspace = self
-            .kernel()
-            .reader
-            .metadata(control.session)
-            .await
-            .map_err(|e| ToolError::invalid_input(e.to_string()))?
-            .workspace_id;
+        let workspace = {
+            let _admission = super::host::HOST_POLICY_READS
+                .acquire()
+                .await
+                .expect("host policy admission is never closed");
+            self.kernel()
+                .reader
+                .metadata(control.session)
+                .await
+                .map_err(|e| ToolError::invalid_input(e.to_string()))?
+                .workspace_id
+        };
         for check in checks {
             if control.cancel.is_cancelled() {
                 return Err(ToolError::Cancelled);

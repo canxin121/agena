@@ -233,6 +233,18 @@
           }
         }
       },
+      "agena.browser": {
+        "package": {
+          "kind": "static"
+        },
+        "settings": {
+          "executable_path": null,
+          "startup_timeout_secs": 10,
+          "idle_timeout_secs": 300,
+          "capture_console_text": false,
+          "fake_ip_ranges": []
+        }
+      },
       "agena.web": {
         "package": {
           "kind": "static"
@@ -254,11 +266,13 @@
           "crawl": {
             "defaults": {
               "max_pages": 10,
+              "concurrency": 4,
               "max_depth": 1,
               "same_host_only": true
             },
             "limits": {
               "max_pages": 100,
+              "concurrency": 16,
               "max_depth": 4
             },
             "indexing": {
@@ -269,7 +283,9 @@
           },
           "search": {
             "default_limit": 5,
-            "max_limit": 20
+            "max_limit": 20,
+            "auto_timeout_secs": 8,
+            "auto_grace_ms": 750
           },
           "store": {
             "retention": {

@@ -16,6 +16,7 @@ hex = { workspace = true }
 http = { workspace = true }
 http-body = { workspace = true }
 http-body-util = { workspace = true }
+moka = { workspace = true, features = ["sync"] }
 mxc-sdk = { workspace = true }
 reqwest = { workspace = true, features = ["rustls", "stream"] }
 serde = { workspace = true }

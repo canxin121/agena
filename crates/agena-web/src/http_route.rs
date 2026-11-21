@@ -1,12 +1,62 @@
 //! Snapshot proxy selection once, so authorization and connection use the
 //! same route. Proxy-side DNS must not be replaced with local DNS checks.
-use std::net::SocketAddr;
-use std::time::Duration;
+use std::{collections::VecDeque, net::SocketAddr, sync::Mutex, time::Duration};
 
 use hyper_util::client::proxy::matcher::Matcher;
 use url::Url;
 
 use crate::CrawlError;
+
+#[derive(PartialEq, Eq)]
+struct HttpClientKey {
+    origin: url::Origin,
+    route: String,
+    timeout: Duration,
+}
+
+/// Reuse direct HTTP connections only when the current call authorized the
+/// same origin, proxy and pinned addresses. Each call supplies its own route.
+#[derive(Default)]
+pub struct WebHttpClientPool {
+    clients: Mutex<VecDeque<(HttpClientKey, reqwest::Client)>>,
+}
+
+impl WebHttpClientPool {
+    pub fn client(
+        &self,
+        url: &Url,
+        route: &WebHttpRoute,
+        timeout: Duration,
+    ) -> Result<reqwest::Client, CrawlError> {
+        let key = HttpClientKey {
+            origin: url.origin(),
+            route: route.cache_key(),
+            timeout,
+        };
+        let mut clients = self.clients.lock().expect("HTTP client pool");
+        let client = if let Some(index) = clients.iter().position(|(cached, _)| *cached == key) {
+            clients.remove(index).expect("cached HTTP client").1
+        } else {
+            let client = route
+                .apply(
+                    reqwest::Client::builder()
+                        .timeout(timeout)
+                        .connect_timeout(timeout.min(Duration::from_secs(30)))
+                        .redirect(reqwest::redirect::Policy::none())
+                        .pool_max_idle_per_host(4)
+                        .pool_idle_timeout(Duration::from_secs(60)),
+                    url,
+                )
+                .build()?;
+            if clients.len() == 64 {
+                clients.pop_front();
+            }
+            client
+        };
+        clients.push_back((key, client.clone()));
+        Ok(client)
+    }
+}
 
 #[derive(Clone, Default)]
 pub struct WebHttpRoute {
@@ -159,7 +209,8 @@ impl WebHttpRoute {
                     "HTTP destination changed after sandbox authorization".into(),
                 ));
             }
-            return agena_process::sandbox_http::execute(
+            // Keep the worker state out of the direct HTTP future.
+            return Box::pin(agena_process::sandbox_http::execute(
                 request,
                 agena_process::sandbox_http::HttpOptions {
                     policy: policy.clone(),
@@ -172,7 +223,7 @@ impl WebHttpRoute {
                     max_response_bytes,
                     cancellation: self.cancellation.clone(),
                 },
-            )
+            ))
             .await
             .map_err(CrawlError::Io);
         }

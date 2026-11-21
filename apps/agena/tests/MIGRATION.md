@@ -167,7 +167,7 @@ receipt；外部协议对端会检查请求方法、目标、header、body、顺
 | `non_public_fetch_targets_keep_their_policy_denial_classification` | `configured_search_uses_real_http`：实际私网 fetch 返回 PermissionDenied，完整 FailureCategory 也正确，HTTP handler 零请求；删除旧测试 |
 | `denied_search_sources_keep_typed_denial_and_partial_sources_stay_visible` 的 all-denied 分支 | `configured_search_permission_decline_precedes_http`：真实配置的 SearXNG → network ask → deny，核对审批目标及前后零 HTTP，模型收到 UserDeclined；删除该分支 |
 | `browser_open_requires_one_typed_target` | `browser_open_validates_typed_targets_before_browser_or_network_io`：无目标、空目标、两个目标分别为 InvalidInput；合法单目标进入权限分支，私网和未持有 preview 均被拒且无网络；删除旧测试 |
-| `no_preview_grant_never_authorizes_a_private_request` | 真实 fetch 和 browser_open 的类型化拒绝及零 HTTP；删除旧测试 |
+| `no_preview_grant_never_authorizes_a_private_request` | 真实 `web.fetch` 和 `browser.open` 的类型化拒绝及零 HTTP；删除旧测试 |
 
 混合来源的聚合断言仍保留，改名 `mixed_search_sources_keep_success_and_report_denied_sources`：
 成功来源不能被另一来源的拒绝抹掉，partial/unavailable 必须准确。

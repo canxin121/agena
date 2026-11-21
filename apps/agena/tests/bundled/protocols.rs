@@ -17,6 +17,10 @@ pub(super) const CASES: &[(&str, fn() -> TestResult)] = &[
     ("agena.gemini", providers::gemini_uses_the_session_provider),
     ("agena.web", web::configured_search_uses_real_http),
     (
+        "agena.browser",
+        web::browser_open_validates_typed_targets_before_browser_or_network_io,
+    ),
+    (
         "agena.lsp",
         lsp::language_server_navigation_and_document_versions,
     ),

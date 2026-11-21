@@ -5,10 +5,14 @@
 //! together with their detailed help text, tags, runtime flags, and JSON
 //! Schema contracts.
 
+#![recursion_limit = "256"]
+
 mod artifact_file;
+mod browser;
 pub mod capability_manifest;
 pub mod docs_reference;
 pub mod memory;
+mod network_policy;
 mod permissions;
 mod plugin_metadata;
 mod plugin_settings_docs;

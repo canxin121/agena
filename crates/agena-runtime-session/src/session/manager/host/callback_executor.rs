@@ -30,6 +30,29 @@ impl SessionManager {
         session: Option<i64>,
         call: Option<i64>,
     ) -> Result<(ToolExecutor, Option<SessionExecutionContext>), AppError> {
+        self.prepare_callback_executor(session, call, true).await
+    }
+
+    pub async fn host_resource_callback_executor(
+        &self,
+        session: Option<i64>,
+        call: Option<i64>,
+    ) -> Result<ToolExecutor, AppError> {
+        self.prepare_callback_executor(session, call, false)
+            .await
+            .map(|(executor, _)| executor)
+    }
+
+    async fn prepare_callback_executor(
+        &self,
+        session: Option<i64>,
+        call: Option<i64>,
+        include_tool_catalog: bool,
+    ) -> Result<(ToolExecutor, Option<SessionExecutionContext>), AppError> {
+        let _admission = HOST_POLICY_READS
+            .acquire()
+            .await
+            .expect("host policy admission is never closed");
         if self.shutdown.is_cancelled() {
             return Err(AppError::Cancelled);
         }
@@ -66,11 +89,12 @@ impl SessionManager {
                 .as_ref()
                 .map(|(_, control)| control.cancel.clone())
                 .unwrap_or_else(|| self.shutdown.child_token());
-            let executor = state
-                .executor
-                .for_session_context_async(&context)
-                .await
-                .with_cancellation_token(Some(cancel.clone()));
+            let executor = if include_tool_catalog {
+                state.executor.for_session_context_async(&context).await
+            } else {
+                state.executor.for_session_resource_context(&context)
+            }
+            .with_cancellation_token(Some(cancel.clone()));
             // Scoping deliberately clears inherited snapshots. Bind the
             // owning session/workspace records only after that boundary.
             let executor = self

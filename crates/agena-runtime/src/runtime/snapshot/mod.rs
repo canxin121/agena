@@ -20,6 +20,7 @@ use crate::{
     session::{ContextGovernor, SessionManager, SessionProcessor},
     tool::ToolExecutor,
 };
+use agena_bundled_plugins::tool::{BrowserSessionPool, browser_plugin_id};
 use agena_domain::ModelRef;
 use agena_plugin_host::PluginHost;
 use agena_provider::{ModelCatalogResponse, decorate_provider_models};
@@ -39,6 +40,34 @@ pub(super) type RuntimeServices = agena_runtime::RuntimeServiceBundle<
 
 type SnapshotState = agena_runtime::RuntimeSnapshotState<Arc<ResolvedConfig>, RuntimeServices>;
 
+struct BrowserConfiguration {
+    sandbox: bool,
+    plugin: Option<agena_plugin_host::ConfiguredPlugin>,
+    sessions: BrowserSessionPool,
+}
+
+impl BrowserConfiguration {
+    fn resolve(
+        config: &ResolvedConfig,
+        host: Arc<super::host_client::RuntimeHostClient>,
+        previous: Option<&Self>,
+    ) -> Self {
+        let sandbox = config.sandbox;
+        let plugin = config.plugins.list.get(browser_plugin_id()).cloned();
+        let sessions = previous
+            .filter(|previous| previous.sandbox == sandbox && previous.plugin == plugin)
+            .map_or_else(
+                || BrowserSessionPool::new(host),
+                |previous| previous.sessions.clone(),
+            );
+        Self {
+            sandbox,
+            plugin,
+            sessions,
+        }
+    }
+}
+
 fn resolve_bundled_plugins(
     configured: agena_plugin_host::PluginsConfig,
 ) -> Result<agena_plugin_host::PluginsConfig, AppError> {
@@ -47,17 +76,31 @@ fn resolve_bundled_plugins(
         agena_bundled_plugins::plugins::sources::bundled_plugin_entries(),
     )
     .map_err(AppError::Config)?;
-    // Strip retired browser settings after applying profiles and before manifest validation.
-    if let Some(web) = plugins
+    // Resolve the former interactive-only setting before validating the two manifests.
+    let legacy_capture_console = plugins
         .list
         .get_mut(agena_bundled_plugins::tool::web_plugin_id())
-        && matches!(web.package, agena_plugin_host::PluginPackage::Static {})
-        && let Some(browser) = web
-            .settings
-            .get_mut("browser")
-            .and_then(serde_json::Value::as_object_mut)
+        .filter(|web| matches!(web.package, agena_plugin_host::PluginPackage::Static {}))
+        .and_then(|web| web.settings.get_mut("browser"))
+        .and_then(serde_json::Value::as_object_mut)
+        .and_then(|rendering| {
+            rendering.remove("interaction_backend");
+            rendering.remove("capture_console_text")
+        });
+    if let Some(capture_console) = legacy_capture_console
+        && let Some(browser) = plugins
+            .list
+            .get_mut(agena_bundled_plugins::tool::browser_plugin_id())
+        && matches!(browser.package, agena_plugin_host::PluginPackage::Static {})
     {
-        browser.remove("interaction_backend");
+        if browser.settings.is_null() {
+            browser.settings = serde_json::json!({});
+        }
+        if let Some(settings) = browser.settings.as_object_mut() {
+            settings
+                .entry("capture_console_text")
+                .or_insert(capture_console);
+        }
     }
     Ok(plugins)
 }
@@ -76,6 +119,8 @@ pub(crate) struct RuntimeSnapshot {
     plugin_shutdown: agena_runtime::PluginShutdownCoordinator,
     global_plugins: Arc<PluginHost>,
     global_plugin_config: agena_plugin_host::PluginsConfig,
+    project_browser: BrowserConfiguration,
+    global_browser: BrowserConfiguration,
     _global_mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
     _global_plugin_shutdown: Option<Arc<agena_runtime::CallbackOnDrop>>,
     _global_lsp_registration: Option<Arc<agena_runtime::AbortOnDrop>>,
@@ -116,6 +161,8 @@ impl RuntimeSnapshot {
     /// their instance binds the host handle during `meta/init`, so they are
     /// always recreated against the new handle instead of reused, keeping
     /// display contributions (plan chip, terminal activity) on the live host.
+    /// Browser instances share their Chrome sessions when the browser
+    /// configuration stays the same.
     pub(crate) async fn build_with_previous(
         generation: u64,
         loader: &ConfigLoader<ProcessEnvironment>,
@@ -251,6 +298,16 @@ impl RuntimeSnapshot {
             generation,
             agena_runtime::config_resolution_json_value(&global_resolution)?,
         );
+        let project_browser = BrowserConfiguration::resolve(
+            &resolution.config,
+            host_client.clone(),
+            previous.as_ref().map(|previous| &previous.project_browser),
+        );
+        let global_browser = BrowserConfiguration::resolve(
+            &global_resolution.config,
+            global_host_client.clone(),
+            previous.as_ref().map(|previous| &previous.global_browser),
+        );
         let plugins = build_plugin_services(
             agena_runtime::PluginCompositionInputs {
                 sandbox_enabled: resolution.config.sandbox,
@@ -273,6 +330,7 @@ impl RuntimeSnapshot {
                     reader: kernel.ports.reader.clone(),
                     state: kernel.instance_state.clone(),
                 }),
+            project_browser.sessions.clone(),
         )
         .await?;
         // Own successful plugin initialization across every later service
@@ -312,6 +370,7 @@ impl RuntimeSnapshot {
                     reader: kernel.ports.reader.clone(),
                     state: kernel.instance_state.clone(),
                 }),
+            global_browser.sessions.clone(),
         )
         .await?;
         let global_plugin_shutdown =
@@ -429,6 +488,8 @@ impl RuntimeSnapshot {
             plugin_shutdown: plugin_shutdown_coordinator,
             global_plugins,
             global_plugin_config: global_resolution.config.plugins,
+            project_browser,
+            global_browser,
             _global_mcp_manager: global_mcp_manager,
             _global_plugin_shutdown: global_plugin_shutdown,
             _global_lsp_registration: global_lsp_registration,
@@ -830,7 +891,11 @@ mod global_plugin_tests {
                         "agena.web": {
                             "action": "patch",
                             "settings_patch": {
-                                "browser": {"interaction_backend": "playwright", "enabled": true}
+                                "browser": {
+                                    "interaction_backend": "playwright",
+                                    "enabled": true,
+                                    "capture_console_text": true
+                                }
                             }
                         }
                     }
@@ -843,6 +908,10 @@ mod global_plugin_tests {
         assert_eq!(
             plugins.list["agena.web"].settings,
             serde_json::json!({"browser": {"enabled": true}}),
+        );
+        assert_eq!(
+            plugins.list["agena.browser"].settings,
+            serde_json::json!({"capture_console_text": true}),
         );
     }
 
@@ -929,6 +998,7 @@ mod global_plugin_tests {
                 host_client: global_client,
             },
             None,
+            BrowserSessionPool::default(),
         )
         .await
         .unwrap();
@@ -945,6 +1015,7 @@ mod global_plugin_tests {
                 host_client: project_client,
             },
             None,
+            BrowserSessionPool::default(),
         )
         .await
         .unwrap();

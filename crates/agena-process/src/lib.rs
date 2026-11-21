@@ -9,6 +9,7 @@ use std::process::{ExitStatus, Output, Stdio};
 use std::time::Duration;
 
 pub mod blocking;
+pub mod pinned_dns;
 pub mod pty;
 pub mod sandbox;
 pub mod sandbox_check;

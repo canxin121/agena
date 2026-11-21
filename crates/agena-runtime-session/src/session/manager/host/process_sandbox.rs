@@ -99,6 +99,10 @@ impl SessionManager {
             Some((_, control)) => control.state.clone(),
             None => self.state_for_session(key).await?,
         };
+        let admission = HOST_POLICY_READS
+            .acquire()
+            .await
+            .expect("host policy admission is never closed");
         let context = self.execution_context_value(key).await?;
         let cancel = live
             .as_ref()
@@ -106,9 +110,9 @@ impl SessionManager {
             .unwrap_or_else(|| self.shutdown.child_token());
         let executor = state
             .executor
-            .for_session_context_async(&context)
-            .await
+            .for_session_resource_context(&context)
             .with_cancellation_token(Some(cancel.clone()));
+        drop(admission);
         let resources = if worker {
             executor.resolve_worker_sandbox_resources(resources)
         } else {
@@ -127,10 +131,15 @@ impl SessionManager {
             self.authorize_session_scoped_checks(session, &executor, checks)
                 .await?;
         }
-        let executor = self
-            .sandbox_executor_for_session(&executor, session)
-            .await
-            .map_err(tool_error)?;
+        let executor = {
+            let _admission = HOST_POLICY_READS
+                .acquire()
+                .await
+                .expect("host policy admission is never closed");
+            self.sandbox_executor_for_session(&executor, session)
+                .await
+                .map_err(tool_error)?
+        };
         let cwd = resources
             .cwd
             .clone()

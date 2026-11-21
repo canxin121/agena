@@ -4741,22 +4741,30 @@ impl BuiltinHumanRenderer {
             .get("action")
             .or_else(|| result.and_then(|result| result.get("action")));
         let label = match key {
-            "browser_open" | "web.browser_open" => "opened",
-            "browser_snapshot" | "web.browser_snapshot" => "inspected",
-            "browser_click" | "web.browser_click" => "clicked",
-            "browser_type" | "web.browser_type" => "typed",
-            "browser_wait" | "web.browser_wait" => "ready",
+            "browser.open" => "opened",
+            "browser.snapshot" => "inspected",
+            "browser.click" => "clicked",
+            "browser.type" => "typed",
+            "browser.wait" => "ready",
             _ => "completed",
         };
         let Some(action) = action else {
             return label.to_owned();
         };
         if let Some(action) = action.as_object() {
+            if action.get("status").and_then(Value::as_str) == Some("outcome_unknown") {
+                return "outcome unknown".to_owned();
+            }
             if action.get("ok").and_then(Value::as_bool) == Some(false) {
                 return "failed".to_owned();
             }
             if let Some(method) = action.get("method").and_then(Value::as_str) {
                 return format!("{label} via {method}");
+            }
+            if key == "browser.action"
+                && let Some(kind) = action.get("kind").and_then(Value::as_str)
+            {
+                return kind.replace('_', " ");
             }
         }
         label.to_owned()
@@ -4768,7 +4776,7 @@ impl BuiltinHumanRenderer {
     ) -> Vec<ViewBlock> {
         let mut blocks = Vec::new();
         match key {
-            "browser_list" | "web.browser_list" => {
+            "browser.list" => {
                 if let Some(sessions) = Self::object_array(object, "sessions") {
                     if !sessions.is_empty()
                         && let Some(table) = Self::scalar_table(
@@ -4777,6 +4785,7 @@ impl BuiltinHumanRenderer {
                             sessions,
                             &[
                                 ("session_id", "Session"),
+                                ("opener_session_id", "Opened from"),
                                 ("title", "Title"),
                                 ("url", "URL"),
                                 ("attached", "Attached"),
@@ -4801,20 +4810,20 @@ impl BuiltinHumanRenderer {
                     blocks.push(block);
                 }
             }
-            "browser_open"
-            | "web.browser_open"
-            | "browser_snapshot"
-            | "web.browser_snapshot"
-            | "browser_click"
-            | "web.browser_click"
-            | "browser_type"
-            | "web.browser_type"
-            | "browser_wait"
-            | "web.browser_wait" => {
+            "browser.open" | "browser.snapshot" | "browser.click" | "browser.type"
+            | "browser.wait" | "browser.action" => {
                 let snapshot = Self::browser_snapshot_object(object);
                 let fields = [
                     ("Session", Self::object_text(object, "session_id")),
                     ("Action", Self::browser_action_summary(key, object)),
+                    (
+                        "Observation",
+                        object
+                            .get("observation")
+                            .and_then(Value::as_object)
+                            .map(|observation| Self::object_text(observation, "message"))
+                            .unwrap_or_default(),
+                    ),
                     (
                         "Title",
                         snapshot
@@ -4839,9 +4848,11 @@ impl BuiltinHumanRenderer {
                 {
                     blocks.push(block);
                 }
-                if let Some(result) = object.get("result").and_then(Value::as_object)
-                    && let Some(action) = result.get("action")
-                {
+                let action = object
+                    .get("action")
+                    .and_then(|action| action.get("result"))
+                    .or_else(|| object.get("result").and_then(|result| result.get("action")));
+                if let Some(action) = action {
                     blocks.extend(Self::generic_value_blocks(
                         "browser-action",
                         "Action",
@@ -4865,7 +4876,20 @@ impl BuiltinHumanRenderer {
                     {
                         blocks.push(table);
                     }
-                    if let Some(text) = Self::object_string(snapshot, "text") {
+                    if let Some(tree) = Self::object_string(snapshot, "tree") {
+                        let heading =
+                            if snapshot.get("truncated").and_then(Value::as_bool) == Some(true) {
+                                "Accessibility tree (truncated)"
+                            } else {
+                                "Accessibility tree"
+                            };
+                        blocks.push(Self::markdown_code_block(
+                            "browser-tree",
+                            heading,
+                            &tree,
+                            None,
+                        ));
+                    } else if let Some(text) = Self::object_string(snapshot, "text") {
                         blocks.push(Self::markdown_block(
                             "browser-text",
                             format!("### Page text\n{}", Self::bounded_generic_text(&text)),
@@ -4873,7 +4897,7 @@ impl BuiltinHumanRenderer {
                     }
                 }
             }
-            "browser_close" | "web.browser_close" => {
+            "browser.close" => {
                 let fields = [
                     ("Session", Self::object_text(object, "session_id")),
                     ("Closed", Self::object_text(object, "closed")),
@@ -4884,15 +4908,18 @@ impl BuiltinHumanRenderer {
                     blocks.push(block);
                 }
             }
-            "browser_shutdown" | "web.browser_shutdown" => {
-                let fields = [("Closed", Self::object_text(object, "closed"))];
+            "browser.shutdown" => {
+                let closed_pages = Self::object_array(object, "closed_sessions")
+                    .map(|pages| pages.len().to_string())
+                    .unwrap_or_else(|| Self::object_text(object, "closed"));
+                let fields = [("Closed", closed_pages)];
                 if let Some(block) =
                     Self::details_block_if_nonempty("browser-shutdown", "Browser shutdown", &fields)
                 {
                     blocks.push(block);
                 }
             }
-            "browser_screenshot" | "web.browser_screenshot" => {
+            "browser.screenshot" => {
                 let fields = [
                     ("Session", Self::object_text(object, "session_id")),
                     ("Path", Self::object_text(object, "path")),
@@ -4904,10 +4931,11 @@ impl BuiltinHumanRenderer {
                     blocks.push(block);
                 }
             }
-            "browser_download" | "web.browser_download" => {
+            "browser.download" => {
                 let fields = [
                     ("Session", Self::object_text(object, "session_id")),
                     ("URL", Self::object_text(object, "url")),
+                    ("Filename", Self::object_text(object, "filename")),
                     ("Path", Self::object_text(object, "path")),
                     ("Size", Self::object_text(object, "size_bytes")),
                 ];
@@ -5184,10 +5212,10 @@ impl BuiltinHumanRenderer {
             value if value.starts_with("settings.") => {
                 blocks.extend(Self::specific_settings_blocks(value, &object));
             }
-            value if value.starts_with("web.") && !value.starts_with("web.browser_") => {
+            value if value.starts_with("web.") => {
                 blocks.extend(Self::specific_web_blocks(value, &object));
             }
-            value if value.starts_with("browser_") || value.starts_with("web.browser_") => {
+            value if value.starts_with("browser.") => {
                 blocks.extend(Self::specific_browser_blocks(value, &object));
             }
             "repo.status" | "snapshot.status" | "snapshot.enter" | "snapshot.exit" => {

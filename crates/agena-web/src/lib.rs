@@ -12,11 +12,11 @@
 //! - [`WebFetchCoordinator`] — coordinates concurrent fetches under a shared
 //!   fetch budget.
 
-mod browser;
 mod error;
 mod extract;
 mod fetch;
 mod fetch_coordinator;
+mod fetch_options;
 mod index;
 pub mod managed_preview;
 mod metadata;
@@ -27,13 +27,8 @@ mod run;
 mod search;
 mod search_api;
 mod snapshots;
-mod spider;
 mod store;
 
-pub use browser::{
-    LocalBrowserLease, local_browser_endpoint, local_browser_lease, local_browser_running,
-    local_browser_touch, shutdown_local_browser,
-};
 pub use error::CrawlError;
 pub use extract::{
     ExtractionBackend, decode_response_body, extract_page_from_body, extract_with_backend,
@@ -44,6 +39,7 @@ pub use fetch::{
     canonicalize_url, fetch_page, fetch_page_with_client, prepare_fetch_url, resolve_link_url,
 };
 pub use fetch_coordinator::{WebFetchCoordinator, WebFetchCoordinatorConfig};
+pub use fetch_options::{BrowserRenderOptions, WebFetchOptions};
 pub use index::{rebuild_search_index, search_documents};
 pub use model::{
     CrawlDocumentSummary, CrawlSearchHit, FetchedPage, PageContentStatus, StoredDocument,
@@ -51,8 +47,8 @@ pub use model::{
 };
 pub use paths::{CrawlDir, workspace_key};
 pub use run::{
-    CrawlPageError, CrawlPageFetcher, CrawlRunOptions, CrawlRunReport, crawl_site,
-    document_matches_render_mode, ensure_index_exists,
+    CrawlPageError, CrawlPageFetcher, CrawlRunOptions, CrawlRunReport, MAX_CRAWL_CONCURRENCY,
+    crawl_site, document_matches_render_mode, ensure_index_exists,
 };
 pub use search::{
     SearchIssue, SearchIssueKind, WebSearchCoordinator, WebSearchEngine, WebSearchOptions,
@@ -63,9 +59,6 @@ pub use search_api::{
     SearchApiOptions, SearchApiProvider, SearchApiResponse, search_api, search_domain_allowed,
 };
 pub use snapshots::{PageSlice, PageSnapshots, page_slice};
-pub use spider::{
-    BrowserRenderOptions, LocalBrowserOptions, SpiderFetchOptions, fetch_page_with_spider,
-};
 pub use store::{CrawlStore, CrawlStorePruneReport, CrawlStoreRetention};
 mod http_route;
-pub use http_route::WebHttpRoute;
+pub use http_route::{WebHttpClientPool, WebHttpRoute};

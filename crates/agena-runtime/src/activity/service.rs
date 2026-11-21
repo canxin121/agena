@@ -12,6 +12,7 @@ use agena_domain::{
     BackgroundActivity, BackgroundActivityFilter, BackgroundActivityLogRead,
     BackgroundActivityStatus,
 };
+use agena_plugin_sdk::activity::browser::{BrowserControlCommand, BrowserControlResult};
 
 #[derive(Debug, Clone, Error, PartialEq, Eq)]
 #[error("background activity control failed: {message}")]
@@ -66,6 +67,12 @@ impl ActivityControlError {
 /// contributes transient detail and terminal history.
 #[async_trait]
 pub trait RuntimeActivityService: Send + Sync {
+    async fn browser_control(
+        &self,
+        session_id: i64,
+        command: BrowserControlCommand,
+    ) -> agena_plugin_sdk::error::Result<BrowserControlResult>;
+
     async fn list_activities(
         &self,
         filter: &BackgroundActivityFilter,

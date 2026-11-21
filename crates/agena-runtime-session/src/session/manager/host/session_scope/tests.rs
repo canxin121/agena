@@ -578,6 +578,17 @@ async fn callback_network_snapshot_retains_session_policy_and_permission_ceiling
                 .await
                 .is_err()
         );
+        assert!(matches!(
+            fixture
+                .manager
+                .require_host_pinned_http_permission(
+                    session,
+                    host_api::SESSION_SCOPED_CALL_ID,
+                    "https://192.0.2.20/".into(),
+                )
+                .await,
+            Err(AppError::PolicyDenied(_)),
+        ));
     }
     fixture.shutdown().await;
 }

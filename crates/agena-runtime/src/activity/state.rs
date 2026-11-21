@@ -7,7 +7,7 @@
 
 use std::{
     collections::{HashMap, VecDeque},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, Weak},
     time::Duration,
 };
 
@@ -42,6 +42,7 @@ pub(crate) struct ActivityRuntimeState {
     /// adapter exists for a kind, log reads and stop requests dispatch to it
     /// instead of the built-in per-kind behavior.
     sources: Arc<parking_lot::Mutex<Vec<(BackgroundActivityKind, Arc<dyn ActivitySourceAdapter>)>>>,
+    browser_sources: Arc<parking_lot::Mutex<HashMap<i64, Weak<dyn ActivitySourceAdapter>>>>,
 }
 
 impl ActivityRuntimeState {
@@ -53,6 +54,7 @@ impl ActivityRuntimeState {
             registry,
             monitor,
             sources: Arc::new(parking_lot::Mutex::new(Vec::new())),
+            browser_sources: Arc::default(),
         }
     }
 
@@ -70,11 +72,37 @@ impl ActivityRuntimeState {
         }
     }
 
-    /// Look up the adapter registered for a kind, if any.
+    /// Keep each conversation bound to the plugin instance that owns its
+    /// browser, including while an older runtime generation is draining.
+    pub(crate) fn register_browser_source(
+        &self,
+        session_id: i64,
+        adapter: &Arc<dyn ActivitySourceAdapter>,
+    ) -> agena_plugin_sdk::Result<()> {
+        let mut sources = self.browser_sources.lock();
+        sources.retain(|_, source| source.strong_count() != 0);
+        if sources.get(&session_id).and_then(Weak::upgrade).is_some() {
+            return Err(agena_plugin_sdk::PluginError::from_kind(
+                agena_plugin_sdk::PluginErrorKind::PolicyDenied,
+                "The previous browser for this conversation is still retiring. Wait for it to close.",
+            ));
+        }
+        sources.insert(session_id, Arc::downgrade(adapter));
+        Ok(())
+    }
+
     pub(crate) fn source_for(
         &self,
         kind: BackgroundActivityKind,
+        session_id: Option<i64>,
     ) -> Option<Arc<dyn ActivitySourceAdapter>> {
+        if kind == BackgroundActivityKind::Browser {
+            return self
+                .browser_sources
+                .lock()
+                .get(&session_id?)
+                .and_then(Weak::upgrade);
+        }
         self.sources
             .lock()
             .iter()

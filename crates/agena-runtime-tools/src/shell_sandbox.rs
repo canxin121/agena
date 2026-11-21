@@ -481,6 +481,42 @@ pub(crate) fn resolved_network_targets(
     declaration: &str,
     snapshot: &crate::authorization::SandboxPermissionSnapshot,
 ) -> Result<Vec<NetworkTarget>, ToolError> {
+    resolve_network_targets(declaration, snapshot, |host, port| {
+        Ok((host, port)
+            .to_socket_addrs()?
+            .map(|address| address.ip())
+            .collect())
+    })
+}
+
+pub(crate) fn resolved_pinned_http_targets(
+    declaration: &str,
+    snapshot: &SandboxPermissionSnapshot,
+) -> Result<Vec<NetworkTarget>, ToolError> {
+    let url = url::Url::parse(declaration)
+        .map_err(|_| ToolError::invalid_input("pinned HTTP requires an absolute URL"))?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(ToolError::invalid_input(
+            "pinned HTTP requires an HTTP(S) URL without credentials",
+        ));
+    }
+    resolve_network_targets(declaration, snapshot, |host, port| {
+        Ok(agena_process::pinned_dns::resolve_blocking(host, port)?
+            .iter()
+            .map(|address| address.ip())
+            .collect())
+    })
+}
+
+fn resolve_network_targets(
+    declaration: &str,
+    snapshot: &SandboxPermissionSnapshot,
+    lookup: impl FnOnce(&str, u16) -> io::Result<Vec<IpAddr>>,
+) -> Result<Vec<NetworkTarget>, ToolError> {
     declared_network_targets(&[declaration.to_owned()])?;
     let target: NetworkTarget = declaration
         .parse()
@@ -491,16 +527,12 @@ pub(crate) fn resolved_network_targets(
     if let PermissionDecision::Deny { reason } = hostname_resolution_permission(snapshot) {
         return Err(ToolError::invalid_input(reason));
     }
-    let mut addresses = (target.host(), target.port().unwrap_or(0))
-        .to_socket_addrs()
-        .map_err(|error| {
-            ToolError::invalid_input(format!(
-                "resolve network destination {}: {error}",
-                target.host()
-            ))
-        })?
-        .map(|address| address.ip())
-        .collect::<Vec<_>>();
+    let mut addresses = lookup(target.host(), target.port().unwrap_or(0)).map_err(|error| {
+        ToolError::invalid_input(format!(
+            "resolve network destination {}: {error}",
+            target.host()
+        ))
+    })?;
     addresses.sort();
     addresses.dedup();
     if addresses.is_empty() {

@@ -366,7 +366,7 @@ fn help(plugin: &str, tool: &str, locale: &str) -> Option<&'static str> {
             "اعثر على صفحات عامة مرشحة؛ وللإجابات الواقعية اجلب لاحقًا من 1 إلى 3 عناوين مناسبة. المقتطفات معاينات وليست أدلة من صفحة تم جلبها.",
             "Encontre páginas públicas candidatas; para respostas factuais, busque depois de 1 a 3 URLs relevantes. Trechos são prévias, não evidências de uma página obtida.",
         ],
-        ("web", "browser_shutdown") => [
+        ("browser", "shutdown") => [
             "只关闭当前 Agena 会话拥有的浏览器页面，不会停止共享 Chrome 进程或影响其他会话。",
             "只會關閉目前 Agena 工作階段擁有的瀏覽器頁面，不會停止共用 Chrome 程序或影響其他工作階段。",
             "現在の Agena セッションが所有するページだけを閉じます。共有 Chrome プロセスや他のセッションには影響しません。",
@@ -590,7 +590,7 @@ fn summaries(plugin: &str, tool: &str) -> Option<[&'static str; 10]> {
             "ابحث عن صفحات ويب عامة لجلبها لاحقًا.",
             "Busca páginas públicas da web para obter depois.",
         ],
-        ("web", "browser_open") => [
+        ("browser", "open") => [
             "在受管浏览器会话中打开网页。",
             "在受管理的瀏覽器工作階段中開啟網頁。",
             "管理対象のブラウザーセッションでページを開きます。",
@@ -602,7 +602,7 @@ fn summaries(plugin: &str, tool: &str) -> Option<[&'static str; 10]> {
             "افتح صفحة في جلسة متصفح مُدارة.",
             "Abre uma página em uma sessão de navegador gerenciada.",
         ],
-        ("web", "browser_list") => [
+        ("browser", "list") => [
             "列出受管浏览器中已打开的页面目标。",
             "列出受管理瀏覽器中已開啟的頁面目標。",
             "管理対象ブラウザーで開いているページを一覧表示します。",
@@ -614,7 +614,7 @@ fn summaries(plugin: &str, tool: &str) -> Option<[&'static str; 10]> {
             "اعرض الصفحات المفتوحة في المتصفح المُدار.",
             "Lista as páginas abertas no navegador gerenciado.",
         ],
-        ("web", "browser_close") => [
+        ("browser", "close") => [
             "关闭受管浏览器中的一个页面。",
             "關閉受管理瀏覽器中的一個頁面。",
             "管理対象ブラウザーのページを 1 件閉じます。",
@@ -626,7 +626,7 @@ fn summaries(plugin: &str, tool: &str) -> Option<[&'static str; 10]> {
             "أغلق صفحة واحدة في المتصفح المُدار.",
             "Fecha uma página no navegador gerenciado.",
         ],
-        ("web", "browser_shutdown") => [
+        ("browser", "shutdown") => [
             "关闭当前 Agena 会话拥有的浏览器页面。",
             "關閉目前 Agena 工作階段擁有的瀏覽器頁面。",
             "現在の Agena セッションが所有するブラウザーページを閉じます。",
@@ -638,7 +638,7 @@ fn summaries(plugin: &str, tool: &str) -> Option<[&'static str; 10]> {
             "أغلق صفحات المتصفح التابعة لجلسة Agena الحالية.",
             "Fecha as páginas do navegador pertencentes à sessão atual do Agena.",
         ],
-        ("web", "browser_snapshot") => [
+        ("browser", "snapshot") => [
             "查看浏览器会话中的可见文本和交互元素。",
             "檢視瀏覽器工作階段中的可見文字與互動元素。",
             "ブラウザーセッションに表示されたテキストと操作可能な要素を確認します。",
@@ -650,7 +650,7 @@ fn summaries(plugin: &str, tool: &str) -> Option<[&'static str; 10]> {
             "افحص النص الظاهر والعناصر التفاعلية في جلسة المتصفح.",
             "Inspeciona o texto visível e os elementos interativos de uma sessão do navegador.",
         ],
-        ("web", "browser_click") => [
+        ("browser", "click") => [
             "点击由 CSS 选择器或最新快照引用标识的浏览器元素。",
             "點擊由 CSS 選擇器或最新快照參照所指定的瀏覽器元素。",
             "CSS セレクターまたは最新スナップショットの参照で指定した要素をクリックします。",
@@ -662,7 +662,7 @@ fn summaries(plugin: &str, tool: &str) -> Option<[&'static str; 10]> {
             "انقر عنصرًا حدده محدد CSS أو مرجع أحدث لقطة.",
             "Clica em um elemento indicado por um seletor CSS ou pela referência da captura mais recente.",
         ],
-        ("web", "browser_type") => [
+        ("browser", "type") => [
             "在指定的浏览器输入框中填写内容，并可选择按回车。",
             "在指定的瀏覽器輸入欄位中填入內容，並可選擇按下 Enter。",
             "指定したブラウザー入力欄に入力し、必要に応じて Enter を押します。",
@@ -674,7 +674,7 @@ fn summaries(plugin: &str, tool: &str) -> Option<[&'static str; 10]> {
             "املأ حقلًا في المتصفح واضغط Enter عند الحاجة.",
             "Preenche um campo do navegador e, se necessário, pressiona Enter.",
         ],
-        ("web", "browser_wait") => [
+        ("browser", "wait") => [
             "等待页面就绪、指定选择器出现或指定文本可见。",
             "等待頁面就緒、指定選擇器出現或指定文字可見。",
             "ページの準備完了、指定セレクターの出現、または指定テキストの表示を待ちます。",
@@ -686,7 +686,7 @@ fn summaries(plugin: &str, tool: &str) -> Option<[&'static str; 10]> {
             "انتظر حتى تصبح الصفحة جاهزة أو يظهر محدد أو نص معين.",
             "Aguarda a página ficar pronta, um seletor aparecer ou um texto ficar visível.",
         ],
-        ("web", "browser_screenshot") => [
+        ("browser", "screenshot") => [
             "截取浏览器页面并作为图片附件返回。",
             "擷取瀏覽器畫面並以圖片附件回傳。",
             "ブラウザー画面を撮影し、画像添付として返します。",
@@ -698,7 +698,7 @@ fn summaries(plugin: &str, tool: &str) -> Option<[&'static str; 10]> {
             "التقط صورة للشاشة في المتصفح وأعدها كمرفق صورة.",
             "Captura a tela do navegador e retorna como anexo de imagem.",
         ],
-        ("web", "browser_download") => [
+        ("browser", "download") => [
             "通过受管浏览器会话下载 HTTP(S) 网址并返回本地文件。",
             "透過受管理的瀏覽器工作階段下載 HTTP(S) 網址並回傳本機檔案。",
             "管理対象のブラウザーセッションで HTTP(S) URL をダウンロードし、ローカル成果物を返します。",

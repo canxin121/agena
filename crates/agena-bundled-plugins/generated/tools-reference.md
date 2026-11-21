@@ -6,7 +6,7 @@
 > agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
-This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **27 plugins and 210 tool definitions**.
+This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **28 plugins and 218 tool definitions**.
 
 - Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, the streaming runtime flag, an input parameter table, and the full input / output JSON Schema.
 - This catalog contains plugin execution tools only. The runtime-owned Tool API protocol (`plugins_list`, `tools_list`, `tools_help`, `tools_call`) has its own registry and is excluded from plugin and tool counts.
@@ -16,6 +16,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 
 - [`agena.agent`](#agenaagent) — Agent communication and delegation. (5 tools)
 - [`agena.bot`](#agenabot) — Named Bot access to ordinary project sessions and integration grants. (2 tools)
+- [`agena.browser`](#agenabrowser) — Interact with managed Chrome pages and workspace previews. (18 tools)
 - [`agena.chatgpt`](#agenachatgpt) — Model-based tools default to the current session model. Use an OpenAI model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. OpenAI cloud inference, files, knowledge stores, images, audio, realtime voice, batches and agent APIs. Inputs leave this computer; no local execution fallback. (27 tools)
 - [`agena.claude`](#agenaclaude) — Model-based tools default to the current session model. Use an Anthropic Claude model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. Anthropic cloud inference, search, code execution, files, Skills, batches and managed-agent APIs. Inputs leave this computer; no local execution fallback. (15 tools)
 - [`agena.code`](#agenacode) — Structured code search and syntax inspection tools. (3 tools)
@@ -40,7 +41,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.shell`](#agenashell) — Shell commands: exec waits, spawn runs in background, watch monitors output events, open provides an interactive terminal/PTY; shared logs and lifecycle controls manage them. (11 tools)
 - [`agena.skills`](#agenaskills) — Discover, install, author, and manage complete Agent Skills packages. (12 tools)
 - [`agena.telegram`](#agenatelegram) — Telegram channel adapter: direct chats, groups and channels over the official Bot API. (0 tools)
-- [`agena.web`](#agenaweb) — Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication, and optional browser rendering. (16 tools)
+- [`agena.web`](#agenaweb) — Web search, fetch and crawl with a local index and optional page rendering. (6 tools)
 
 ## agena.agent
 
@@ -1540,6 +1541,2668 @@ Named Bot access to ordinary project sessions and integration grants.
     }
   },
   "additionalProperties": false
+}
+```
+
+## agena.browser
+
+**Version** `0.1.0` · **Tools** 18 · **Tags** `network` `interactive`
+
+Interact with managed Chrome pages and workspace previews.
+
+> Start with browser.list to discover owned pages and previews, or browser.open for an HTTP(S) URL. Use browser.snapshot for controls, browser.content or browser.inspect for page data, and browser.diagnostics to investigate failures. Pass the browser session_id from browser.open or browser.list. Use browser.request_takeover when a user must sign in or operate the page in Agena Web.
+
+### action
+
+`agena.browser.action` · **Summary**: Navigate, press keys, scroll, hover, double-click, focus, drag, operate form controls, or resolve a dialog.
+
+**Tags**: `network` `interactive` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Use an owned session_id from browser.open or browser.list and select an action.kind. Element actions accept an optional frame_id from browser.frames. Take a fresh browser.snapshot when a ref becomes stale or an action outcome is unknown. A completed action can include an observation error; verify its result before retrying.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `BrowserAction` | ✓ | — |  |
+| `frame_id` | `string / null` | — | — | Frame ID from browser.frames for an element action. |
+| `return_snapshot` | `boolean` | — | `true` | Return a fresh accessibility snapshot after the action. |
+| `session_id` | `string` | ✓ | — |  |
+| `timeout_ms` | `integer` | — | `30000` |  |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "BrowserAction": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "url": {
+              "description": "Absolute HTTP(S) URL. For a managed preview, use its own origin.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "navigate"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "url"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "back"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "forward"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "reload"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "description": "A key or chord in the focused control, such as Enter or Control+a.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "kind": {
+              "type": "string",
+              "const": "press"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "key"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "direction": {
+              "$ref": "#/$defs/ScrollDirection"
+            },
+            "amount": {
+              "description": "Pixel distance. Chrome scrolls by 300 pixels when omitted.",
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint32",
+              "minimum": 1,
+              "maximum": 100000
+            },
+            "selector": {
+              "description": "Optional @eN ref or CSS selector for a scrollable element.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "kind": {
+              "type": "string",
+              "const": "scroll"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "direction"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "selector": {
+              "description": "The select element, identified by @eN or a CSS selector.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "values": {
+              "description": "The option values or visible labels to select.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "maxItems": 32
+            },
+            "kind": {
+              "type": "string",
+              "const": "select"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "selector",
+            "values"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "selector": {
+              "description": "The checkbox or radio control, identified by @eN or a CSS selector.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "checked": {
+              "type": "boolean"
+            },
+            "kind": {
+              "type": "string",
+              "const": "set_checked"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "selector",
+            "checked"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "selector": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "kind": {
+              "type": "string",
+              "const": "hover"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "selector"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "selector": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "kind": {
+              "type": "string",
+              "const": "double_click"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "selector"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "selector": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "kind": {
+              "type": "string",
+              "const": "focus"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "selector"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "selector": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "kind": {
+              "type": "string",
+              "const": "scroll_into_view"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "selector"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "source": {
+              "description": "Source element, as a selector or snapshot ref.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "target": {
+              "description": "Destination element, as a selector or snapshot ref.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "kind": {
+              "type": "string",
+              "const": "drag"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "source",
+            "target"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "accept": {
+              "description": "Accept the open JavaScript dialog when true, dismiss it when false.",
+              "type": "boolean"
+            },
+            "prompt_text": {
+              "description": "Value to submit to a JavaScript prompt.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 4096
+            },
+            "kind": {
+              "type": "string",
+              "const": "dialog"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "accept"
+          ]
+        }
+      ],
+      "type": "object",
+      "properties": {},
+      "x-agena-order": "000001"
+    },
+    "ScrollDirection": {
+      "type": "string",
+      "enum": [
+        "up",
+        "down",
+        "left",
+        "right"
+      ]
+    }
+  },
+  "required": [
+    "session_id",
+    "action"
+  ],
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "action": {
+      "$ref": "#/$defs/BrowserAction"
+    },
+    "frame_id": {
+      "description": "Frame ID from browser.frames for an element action.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000",
+      "maxLength": 128,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 1,
+      "maximum": 120000,
+      "default": 30000,
+      "x-agena-order": "000003"
+    },
+    "return_snapshot": {
+      "description": "Return a fresh accessibility snapshot after the action.",
+      "type": "boolean",
+      "default": true,
+      "x-agena-order": "000004"
+    }
+  },
+  "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "session_id": {}
+          },
+          "required": [
+            "session_id"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "session_id"
+        ]
+      }
+    ]
+  }
+}
+```
+
+### click
+
+`agena.browser.click` · **Summary**: Click a browser element by @ref from the latest snapshot or by CSS selector.
+
+**Tags**: `network` `interactive` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `frame_id` | `string / null` | — | — | Frame ID from browser.frames for a CSS selector. Refs can identify their own frame. |
+| `return_snapshot` | `boolean` | — | `true` | Return the updated accessibility snapshot. Disable when the next action already has a selector. |
+| `selector` | `string` | ✓ | — | Use @eN from the latest browser snapshot or a CSS selector. |
+| `session_id` | `string` | ✓ | — |  |
+| `timeout_ms` | `integer` | — | `30000` |  |
+
+**Input schema**:
+```json
+{
+  "required": [
+    "session_id",
+    "selector"
+  ],
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "selector": {
+      "description": "Use @eN from the latest browser snapshot or a CSS selector.",
+      "type": "string",
+      "x-agena-order": "000000",
+      "maxLength": 4096,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "frame_id": {
+      "description": "Frame ID from browser.frames for a CSS selector. Refs can identify their own frame.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "maxLength": 128,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 1,
+      "maximum": 120000,
+      "default": 30000,
+      "x-agena-order": "000003"
+    },
+    "return_snapshot": {
+      "description": "Return the updated accessibility snapshot. Disable when the next action already has a selector.",
+      "type": "boolean",
+      "default": true,
+      "x-agena-order": "000004"
+    }
+  },
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "session_id": {}
+          },
+          "required": [
+            "session_id"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "session_id"
+        ]
+      },
+      {
+        "anyOf": [
+          {
+            "not": {
+              "type": "object",
+              "properties": {
+                "selector": {}
+              },
+              "required": [
+                "selector"
+              ]
+            }
+          },
+          {
+            "type": "object",
+            "properties": {
+              "selector": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+                  },
+                  {
+                    "type": "array",
+                    "maxItems": 0
+                  },
+                  {
+                    "type": "object",
+                    "maxProperties": 0,
+                    "properties": {}
+                  }
+                ]
+              }
+            },
+            "required": [
+              "selector"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### close
+
+`agena.browser.close` · **Summary**: Close one page target in the managed interactive browser.
+
+**Tags**: `network` `interactive` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `session_id` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "required": [
+    "session_id"
+  ],
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    }
+  },
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "session_id": {}
+          },
+          "required": [
+            "session_id"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "session_id"
+        ]
+      }
+    ]
+  }
+}
+```
+
+### content
+
+`agena.browser.content` · **Summary**: Read visible text, current DOM HTML, or the captured main-document HTTP response.
+
+**Tags**: `network` `interactive` `query` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Use text or dom_html with an optional selector and frame_id to read the current page. Use response_html for the main document's captured HTTP response. Continue the same immutable capture using session_id, content_id and next_offset as offset. Check truncated for the capture size limit and status for an unavailable response.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `content_id` | `string / null` | — | — | Read the same capture again using its content_id, next_offset and the owning session_id. |
+| `format` | `BrowserContentFormat / null` | — | — |  |
+| `frame_id` | `string / null` | — | — | Frame ID from browser.frames. Scoped DOM reads default to the main document. |
+| `max_chars` | `integer` | — | `8000` | Maximum Unicode characters to include in this slice. |
+| `offset` | `integer` | — | `0` |  |
+| `selector` | `string / null` | — | — | CSS selector or snapshot @eN for a DOM fragment. |
+| `session_id` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "BrowserContentFormat": {
+      "oneOf": [
+        {
+          "description": "Visible text at capture time.",
+          "type": "string",
+          "const": "text"
+        },
+        {
+          "description": "Serialized DOM at capture time, including dynamic changes.",
+          "type": "string",
+          "const": "dom_html"
+        },
+        {
+          "description": "Captured HTTP response for the current main document navigation.",
+          "type": "string",
+          "const": "response_html"
+        }
+      ]
+    }
+  },
+  "required": [
+    "session_id"
+  ],
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "format": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/BrowserContentFormat"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "x-agena-order": "000001"
+    },
+    "selector": {
+      "description": "CSS selector or snapshot @eN for a DOM fragment.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000",
+      "maxLength": 4096,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "frame_id": {
+      "description": "Frame ID from browser.frames. Scoped DOM reads default to the main document.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "maxLength": 128,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "content_id": {
+      "description": "Read the same capture again using its content_id, next_offset and the owning session_id.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002",
+      "maxLength": 64,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "offset": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0,
+      "maximum": 1048576,
+      "default": 0,
+      "x-agena-order": "000005"
+    },
+    "max_chars": {
+      "description": "Maximum Unicode characters to include in this slice.",
+      "type": "integer",
+      "format": "uint",
+      "minimum": 1,
+      "maximum": 24000,
+      "default": 8000,
+      "x-agena-order": "000006"
+    }
+  },
+  "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "session_id": {}
+          },
+          "required": [
+            "session_id"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "session_id"
+        ]
+      }
+    ]
+  }
+}
+```
+
+### diagnostics
+
+`agena.browser.diagnostics` · **Summary**: Read a browser page's recent network requests, selected response body, console, or exceptions.
+
+**Tags**: `network` `interactive` `query` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Use query.kind network to locate requests, request with request_id for details and an optional text body, or logs for console and exceptions. Pass next_seq as since_seq to continue. Console message text follows the capture_console_text plugin setting. Inspect body.status for unavailable and non-text responses.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `query` | `DiagnosticsQuery` | ✓ | — |  |
+| `session_id` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "DiagnosticsQuery": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "since_seq": {
+              "description": "Continue using next_seq from a previous network query.",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0,
+              "default": 0
+            },
+            "limit": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 1,
+              "maximum": 40,
+              "default": 20
+            },
+            "url_contains": {
+              "description": "Substring filter for request URLs.",
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1,
+              "maxLength": 2048
+            },
+            "kind": {
+              "type": "string",
+              "const": "network"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "request_id": {
+              "description": "Request ID returned by a network query for this page.",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "include_body": {
+              "description": "Fetch the captured text response body for this request.",
+              "type": "boolean",
+              "default": false
+            },
+            "max_chars": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 1,
+              "maximum": 24000,
+              "default": 8000
+            },
+            "kind": {
+              "type": "string",
+              "const": "request"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "request_id"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "since_seq": {
+              "description": "Continue using next_seq from a previous log query.",
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0,
+              "default": 0
+            },
+            "limit": {
+              "type": "integer",
+              "format": "uint",
+              "minimum": 1,
+              "maximum": 40,
+              "default": 20
+            },
+            "kind": {
+              "type": "string",
+              "const": "logs"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind"
+          ]
+        }
+      ],
+      "type": "object",
+      "properties": {},
+      "x-agena-order": "000001"
+    }
+  },
+  "required": [
+    "session_id",
+    "query"
+  ],
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "query": {
+      "$ref": "#/$defs/DiagnosticsQuery"
+    }
+  },
+  "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "session_id": {}
+          },
+          "required": [
+            "session_id"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "session_id"
+        ]
+      }
+    ]
+  }
+}
+```
+
+### download
+
+`agena.browser.download` · **Summary**: Collect a browser download triggered by an HTTP(S) URL or by clicking a page control.
+
+**Tags**: `network` `interactive` `mutate` `filesystem`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Supply exactly one of url or selector. Use selector for an export button or a browser-generated file. Chrome download events confirm completion before the tool returns a managed file attachment.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `frame_id` | `string / null` | — | — | Optional frame for selector. Discover it with browser.frames. |
+| `selector` | `string / null` | — | — | Click this CSS selector or snapshot @ref after Chrome starts listening for a download. |
+| `session_id` | `string` | ✓ | — | Existing managed browser page to use for the navigation. Its browser<br>profile (for example, authenticated cookies) remains intact. |
+| `timeout_ms` | `integer` | — | `30000` |  |
+| `url` | `string / null` | — | — | Navigate to this HTTP(S) download URL. Supply url or selector. |
+
+**Input schema**:
+```json
+{
+  "required": [
+    "session_id"
+  ],
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "description": "Existing managed browser page to use for the navigation. Its browser\nprofile (for example, authenticated cookies) remains intact.",
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "url": {
+      "description": "Navigate to this HTTP(S) download URL. Supply url or selector.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000",
+      "maxLength": 8192,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "selector": {
+      "description": "Click this CSS selector or snapshot @ref after Chrome starts listening for a download.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "maxLength": 4096,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "frame_id": {
+      "description": "Optional frame for selector. Discover it with browser.frames.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002",
+      "maxLength": 128,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 1,
+      "maximum": 120000,
+      "default": 30000,
+      "x-agena-order": "000004"
+    }
+  },
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "session_id": {}
+          },
+          "required": [
+            "session_id"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "session_id"
+        ]
+      }
+    ]
+  }
+}
+```
+
+### evaluate
+
+`agena.browser.evaluate` · **Summary**: Execute JavaScript in an owned browser page or frame and return a bounded structured result.
+
+**Tags**: `network` `interactive` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Pass an expression such as document.title, an immediately invoked function, or a Promise. Use browser.frames for frame_id. The script runs in the page and can change it. Use browser.content or browser.inspect for standard reads. Check status for exceptions, timeout and context changes. Inspect page state before retrying a script with side effects.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `expression` | `string` | ✓ | — | JavaScript to evaluate in the page, including an async expression returning a Promise. |
+| `frame_id` | `string / null` | — | — | Frame from browser.frames. The default is the main document. |
+| `max_result_bytes` | `integer` | — | `24000` | Maximum JSON bytes to return inline. |
+| `session_id` | `string` | ✓ | — |  |
+| `timeout_ms` | `integer` | — | `5000` | Execution deadline in milliseconds. A still-running page may be closed on timeout. |
+
+**Input schema**:
+```json
+{
+  "required": [
+    "session_id",
+    "expression"
+  ],
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "expression": {
+      "description": "JavaScript to evaluate in the page, including an async expression returning a Promise.",
+      "type": "string",
+      "x-agena-order": "000000",
+      "maxLength": 32768,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "frame_id": {
+      "description": "Frame from browser.frames. The default is the main document.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "maxLength": 128,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "timeout_ms": {
+      "description": "Execution deadline in milliseconds. A still-running page may be closed on timeout.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 50,
+      "maximum": 30000,
+      "default": 5000,
+      "x-agena-order": "000003"
+    },
+    "max_result_bytes": {
+      "description": "Maximum JSON bytes to return inline.",
+      "type": "integer",
+      "format": "uint",
+      "minimum": 256,
+      "maximum": 64000,
+      "default": 24000,
+      "x-agena-order": "000004"
+    }
+  },
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "session_id": {}
+          },
+          "required": [
+            "session_id"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "session_id"
+        ]
+      },
+      {
+        "anyOf": [
+          {
+            "not": {
+              "type": "object",
+              "properties": {
+                "expression": {}
+              },
+              "required": [
+                "expression"
+              ]
+            }
+          },
+          {
+            "type": "object",
+            "properties": {
+              "expression": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+                  },
+                  {
+                    "type": "array",
+                    "maxItems": 0
+                  },
+                  {
+                    "type": "object",
+                    "maxProperties": 0,
+                    "properties": {}
+                  }
+                ]
+              }
+            },
+            "required": [
+              "expression"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### frames
+
+`agena.browser.frames` · **Summary**: List frames in an owned browser page, including frame IDs, ancestry, and URLs.
+
+**Tags**: `network` `interactive` `query` `discovery` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Pass frame_id to browser.snapshot, browser.content, browser.inspect, browser.evaluate or an element operation. Refresh the list if a frame was removed or its execution context is still loading.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `session_id` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "required": [
+    "session_id"
+  ],
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    }
+  },
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "session_id": {}
+          },
+          "required": [
+            "session_id"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "session_id"
+        ]
+      }
+    ]
+  }
+}
+```
+
+### inspect
+
+`agena.browser.inspect` · **Summary**: Read element properties and match count for a CSS selector or a snapshot ref.
+
+**Tags**: `network` `interactive` `query` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Returns text, form value, visible, enabled, checked, requested attributes, and bounds of the first match. Bounds use CSS pixels relative to the element's own frame viewport. Use match_count to detect missing or ambiguous CSS matches.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `attributes` | `array<string>` | — | `[]` | Attribute names to retrieve, for example href, aria-label or data-state. |
+| `frame_id` | `string / null` | — | — | Frame from browser.frames. Snapshot refs can identify their own frame. |
+| `selector` | `string` | ✓ | — | CSS selector or @eN from the latest snapshot. |
+| `session_id` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "required": [
+    "session_id",
+    "selector"
+  ],
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "selector": {
+      "description": "CSS selector or @eN from the latest snapshot.",
+      "type": "string",
+      "x-agena-order": "000000",
+      "maxLength": 4096,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "frame_id": {
+      "description": "Frame from browser.frames. Snapshot refs can identify their own frame.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "maxLength": 128,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "attributes": {
+      "description": "Attribute names to retrieve, for example href, aria-label or data-state.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 12,
+      "default": [],
+      "x-agena-order": "000003"
+    }
+  },
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "session_id": {}
+          },
+          "required": [
+            "session_id"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "session_id"
+        ]
+      },
+      {
+        "anyOf": [
+          {
+            "not": {
+              "type": "object",
+              "properties": {
+                "selector": {}
+              },
+              "required": [
+                "selector"
+              ]
+            }
+          },
+          {
+            "type": "object",
+            "properties": {
+              "selector": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+                  },
+                  {
+                    "type": "array",
+                    "maxItems": 0
+                  },
+                  {
+                    "type": "object",
+                    "maxProperties": 0,
+                    "properties": {}
+                  }
+                ]
+              }
+            },
+            "required": [
+              "selector"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### list
+
+`agena.browser.list` · **Summary**: List open page targets in the managed interactive browser.
+
+**Tags**: `network` `interactive` `query` `discovery` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {}
+}
+```
+
+### open
+
+`agena.browser.open` · **Summary**: Open a public page or an owned running preview in a managed interactive browser session.
+
+**Tags**: `network` `interactive` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Supply exactly one of url or preview_id. browser.list discovers owned preview IDs. preview_id grants only the registered run and exact isolated origin and still requires network permission for the real upstream URL; stop/restart revokes it. Managed previews restrict external fetch/WebSocket connections, frames, workers and popups; blocked requests are a browser policy result, not evidence the application is broken.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `preview_id` | `string / null` | — | — | Running preview owned by this workspace and Agena session. Use browser.list<br>to discover IDs. Private URLs are never accepted through the url field. |
+| `timeout_ms` | `integer` | — | `30000` |  |
+| `url` | `string / null` | — | — | Public HTTP(S) URL. Supply exactly one of url and preview_id. |
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "url": {
+      "description": "Public HTTP(S) URL. Supply exactly one of url and preview_id.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "preview_id": {
+      "description": "Running preview owned by this workspace and Agena session. Use browser.list\nto discover IDs. Private URLs are never accepted through the url field.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 1,
+      "maximum": 120000,
+      "default": 30000,
+      "x-agena-order": "000002"
+    }
+  },
+  "type": "object"
+}
+```
+
+### request_takeover
+
+`agena.browser.request_takeover` · **Summary**: Pause the browser task so the user can operate the current page in Agena Web.
+
+**Tags**: `interactive`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Open the page first. Request takeover for sign-in, verification or other steps the user needs to perform. State what the user should do in reason. Ask the user to enter credentials only in the browser. When status is returned, take a fresh snapshot of the returned session_id. If browser.list reports waiting_for_user, wait for the user before doing more browser work.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `reason` | `string` | ✓ | — | What the user needs to do in the browser. |
+| `session_id` | `string` | ✓ | — | Page ID returned by browser.open or browser.list. |
+
+**Input schema**:
+```json
+{
+  "required": [
+    "session_id",
+    "reason"
+  ],
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "description": "Page ID returned by browser.open or browser.list.",
+      "type": "string",
+      "x-agena-order": "000000",
+      "maxLength": 128,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "reason": {
+      "description": "What the user needs to do in the browser.",
+      "type": "string",
+      "x-agena-order": "000001",
+      "maxLength": 300,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    }
+  },
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "session_id": {}
+          },
+          "required": [
+            "session_id"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "session_id"
+        ]
+      },
+      {
+        "anyOf": [
+          {
+            "not": {
+              "type": "object",
+              "properties": {
+                "reason": {}
+              },
+              "required": [
+                "reason"
+              ]
+            }
+          },
+          {
+            "type": "object",
+            "properties": {
+              "reason": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+                  },
+                  {
+                    "type": "array",
+                    "maxItems": 0
+                  },
+                  {
+                    "type": "object",
+                    "maxProperties": 0,
+                    "properties": {}
+                  }
+                ]
+              }
+            },
+            "required": [
+              "reason"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### screenshot
+
+`agena.browser.screenshot` · **Summary**: Capture a browser screenshot and return it as an image attachment.
+
+**Tags**: `network` `interactive` `mutate` `filesystem`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `full_page` | `boolean` | — | `false` |  |
+| `path` | `string / null` | — | — |  |
+| `session_id` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "required": [
+    "session_id"
+  ],
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "path": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "full_page": {
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000002"
+    }
+  },
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "session_id": {}
+          },
+          "required": [
+            "session_id"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "session_id"
+        ]
+      }
+    ]
+  }
+}
+```
+
+### shutdown
+
+`agena.browser.shutdown` · **Summary**: Close browser pages owned by the current Agena session without affecting other callers.
+
+**Tags**: `network` `interactive` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Caller-scoped shutdown closes owned pages only. The shared Chrome process and other sessions are not stopped. Global browser shutdown is reserved for trusted host lifecycle control.
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {}
+}
+```
+
+### snapshot
+
+`agena.browser.snapshot` · **Summary**: Read the browser accessibility tree and get element refs for browser actions.
+
+**Tags**: `network` `interactive` `query` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Read snapshot.tree for page text and controls. For a node marked [ref=e7], use @e7 as a selector in browser.click, browser.type or browser.action. If the tree is truncated, pass selector to inspect a specific CSS region, interactive to focus on controls, or max_depth for a shallower tree. Use refs from the latest snapshot in the same session.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `frame_id` | `string / null` | — | — | Frame ID from browser.frames. Defaults to the main document. |
+| `interactive` | `boolean` | — | `false` | Return interactive controls and omit static page content. |
+| `max_depth` | `integer / null` | — | — | Limit how deep the accessibility tree descends. |
+| `selector` | `string / null` | — | — | Scope the accessibility tree to a CSS selector in the page. |
+| `session_id` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "required": [
+    "session_id"
+  ],
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "selector": {
+      "description": "Scope the accessibility tree to a CSS selector in the page.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000",
+      "maxLength": 4096,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "frame_id": {
+      "description": "Frame ID from browser.frames. Defaults to the main document.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "maxLength": 128,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "interactive": {
+      "description": "Return interactive controls and omit static page content.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000003"
+    },
+    "max_depth": {
+      "description": "Limit how deep the accessibility tree descends.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint8",
+      "minimum": 1,
+      "maximum": 30,
+      "x-agena-order": "000004"
+    }
+  },
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "session_id": {}
+          },
+          "required": [
+            "session_id"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "session_id"
+        ]
+      }
+    ]
+  }
+}
+```
+
+### type
+
+`agena.browser.type` · **Summary**: Fill an editable browser element by @ref or CSS selector, optionally pressing Enter.
+
+**Tags**: `network` `interactive` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `frame_id` | `string / null` | — | — | Frame ID from browser.frames for a CSS selector. Refs can identify their own frame. |
+| `press_enter` | `boolean` | — | `false` | Press the real Enter key after filling the field. |
+| `return_snapshot` | `boolean` | — | `true` | Return the updated accessibility snapshot. Disable when the next action already has a selector. |
+| `selector` | `string` | ✓ | — | Use @eN from the latest browser snapshot or a CSS selector. |
+| `session_id` | `string` | ✓ | — |  |
+| `text` | `string` | ✓ | — |  |
+| `timeout_ms` | `integer` | — | `30000` |  |
+
+**Input schema**:
+```json
+{
+  "required": [
+    "session_id",
+    "selector",
+    "text"
+  ],
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "selector": {
+      "description": "Use @eN from the latest browser snapshot or a CSS selector.",
+      "type": "string",
+      "x-agena-order": "000000",
+      "maxLength": 4096,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "frame_id": {
+      "description": "Frame ID from browser.frames for a CSS selector. Refs can identify their own frame.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "maxLength": 128,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "text": {
+      "type": "string",
+      "x-agena-order": "000002",
+      "maxLength": 65536
+    },
+    "press_enter": {
+      "description": "Press the real Enter key after filling the field.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000004"
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 1,
+      "maximum": 120000,
+      "default": 30000,
+      "x-agena-order": "000005"
+    },
+    "return_snapshot": {
+      "description": "Return the updated accessibility snapshot. Disable when the next action already has a selector.",
+      "type": "boolean",
+      "default": true,
+      "x-agena-order": "000006"
+    }
+  },
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "session_id": {}
+          },
+          "required": [
+            "session_id"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "session_id"
+        ]
+      },
+      {
+        "anyOf": [
+          {
+            "not": {
+              "type": "object",
+              "properties": {
+                "selector": {}
+              },
+              "required": [
+                "selector"
+              ]
+            }
+          },
+          {
+            "type": "object",
+            "properties": {
+              "selector": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+                  },
+                  {
+                    "type": "array",
+                    "maxItems": 0
+                  },
+                  {
+                    "type": "object",
+                    "maxProperties": 0,
+                    "properties": {}
+                  }
+                ]
+              }
+            },
+            "required": [
+              "selector"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### upload
+
+`agena.browser.upload` · **Summary**: Set a browser file input using authorized workspace files or local attachments.
+
+**Tags**: `network` `interactive` `mutate` `filesystem`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Pass a CSS selector or snapshot ref for the file input and a list of local file paths. Workspace-relative paths resolve inside the current workspace. Select an element, then use the normal page action to submit the form if needed.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `files` | `array<string>` | ✓ | — | Workspace-relative or absolute paths, including local attachment paths. |
+| `frame_id` | `string / null` | — | — | Discover frame_id with browser.frames. |
+| `return_snapshot` | `boolean` | — | `true` |  |
+| `selector` | `string` | ✓ | — | CSS or @eN selector for an input of type file. |
+| `session_id` | `string` | ✓ | — |  |
+| `timeout_ms` | `integer` | — | `30000` |  |
+
+**Input schema**:
+```json
+{
+  "required": [
+    "session_id",
+    "selector",
+    "files"
+  ],
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "selector": {
+      "description": "CSS or @eN selector for an input of type file.",
+      "type": "string",
+      "x-agena-order": "000000",
+      "maxLength": 4096,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "files": {
+      "description": "Workspace-relative or absolute paths, including local attachment paths.",
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "maxItems": 16,
+      "x-agena-order": "000002"
+    },
+    "frame_id": {
+      "description": "Discover frame_id with browser.frames.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "maxLength": 128,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "return_snapshot": {
+      "type": "boolean",
+      "default": true,
+      "x-agena-order": "000004"
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 1,
+      "maximum": 120000,
+      "default": 30000,
+      "x-agena-order": "000005"
+    }
+  },
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "session_id": {}
+          },
+          "required": [
+            "session_id"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "session_id"
+        ]
+      },
+      {
+        "anyOf": [
+          {
+            "not": {
+              "type": "object",
+              "properties": {
+                "selector": {}
+              },
+              "required": [
+                "selector"
+              ]
+            }
+          },
+          {
+            "type": "object",
+            "properties": {
+              "selector": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+                  },
+                  {
+                    "type": "array",
+                    "maxItems": 0
+                  },
+                  {
+                    "type": "object",
+                    "maxProperties": 0,
+                    "properties": {}
+                  }
+                ]
+              }
+            },
+            "required": [
+              "selector"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### wait
+
+`agena.browser.wait` · **Summary**: Wait for an element state, visible text, a URL pattern, or a page load condition.
+
+**Tags**: `network` `interactive` `query` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Supply selector, text, url, or load_state. With selector, use state visible, hidden, attached, or detached. The default wait is domcontentloaded. A frame_id scopes the condition to that frame, and networkidle applies to the whole page.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `frame_id` | `string / null` | — | — | Frame ID from browser.frames. Defaults to the main document. |
+| `load_state` | `BrowserLoadState / null` | — | — | Page readiness condition. Network idle applies to the whole page. |
+| `return_snapshot` | `boolean` | — | `true` | Return the updated accessibility snapshot. Disable when the next action already has a selector. |
+| `selector` | `string / null` | — | — | CSS selector or @eN ref from the latest snapshot. |
+| `session_id` | `string` | ✓ | — |  |
+| `state` | `BrowserElementState / null` | — | — | Element state to wait for. Use with selector. |
+| `text` | `string / null` | — | — |  |
+| `timeout_ms` | `integer` | — | `30000` |  |
+| `url` | `string / null` | — | — | Substring or wildcard pattern for the page or frame URL. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "BrowserElementState": {
+      "type": "string",
+      "enum": [
+        "visible",
+        "hidden",
+        "attached",
+        "detached"
+      ]
+    },
+    "BrowserLoadState": {
+      "type": "string",
+      "enum": [
+        "domcontentloaded",
+        "load",
+        "networkidle"
+      ]
+    }
+  },
+  "required": [
+    "session_id"
+  ],
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "selector": {
+      "description": "CSS selector or @eN ref from the latest snapshot.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000",
+      "maxLength": 4096,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "text": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "maxLength": 4096,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "url": {
+      "description": "Substring or wildcard pattern for the page or frame URL.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002",
+      "maxLength": 4096,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "state": {
+      "description": "Element state to wait for. Use with selector.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/BrowserElementState"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "x-agena-order": "000004"
+    },
+    "load_state": {
+      "description": "Page readiness condition. Network idle applies to the whole page.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/BrowserLoadState"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "x-agena-order": "000005"
+    },
+    "frame_id": {
+      "description": "Frame ID from browser.frames. Defaults to the main document.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003",
+      "maxLength": 128,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 1,
+      "maximum": 120000,
+      "default": 30000,
+      "x-agena-order": "000007"
+    },
+    "return_snapshot": {
+      "description": "Return the updated accessibility snapshot. Disable when the next action already has a selector.",
+      "type": "boolean",
+      "default": true,
+      "x-agena-order": "000008"
+    }
+  },
+  "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "session_id": {}
+          },
+          "required": [
+            "session_id"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "session_id"
+        ]
+      }
+    ]
+  }
 }
 ```
 
@@ -25849,888 +28512,11 @@ Telegram channel adapter: direct chats, groups and channels over the official Bo
 
 ## agena.web
 
-**Version** `0.1.0` · **Tools** 16 · **Tags** `network` `fetch` `discovery`
+**Version** `0.1.0` · **Tools** 6 · **Tags** `network` `fetch` `discovery`
 
-Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication, and optional browser rendering.
+Web search, fetch and crawl with a local index and optional page rendering.
 
-> Search, fetch and crawl web pages with a local crawl index. Deduplication and cached snapshots support later retrieval, with optional browser rendering for JavaScript pages.
-
-### browser_click
-
-`agena.web.browser_click` · **Summary**: Click a browser element selected by CSS or the latest snapshot ref.
-
-**Tags**: `network` `interactive` `mutate`
-
-**Runtime**: streaming `buffered`
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `ref` | `integer / null` | — | — | Snapshot-local index returned by `browser_snapshot.elements[].ref`.<br>It is valid only while the page DOM has not materially changed. |
-| `selector` | `string / null` | — | — |  |
-| `session_id` | `string` | ✓ | — |  |
-| `snapshot_id` | `string / null` | — | — | ID of the snapshot that supplied ref. Required with ref; stale refs are rejected. |
-| `timeout_ms` | `integer` | — | `30000` |  |
-
-**Input schema**:
-```json
-{
-  "required": [
-    "session_id"
-  ],
-  "additionalProperties": false,
-  "type": "object",
-  "properties": {
-    "session_id": {
-      "type": "string",
-      "x-agena-order": "000000",
-      "x-agena-non-empty": true,
-      "minLength": 1,
-      "not": {
-        "type": "string",
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
-      }
-    },
-    "selector": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000",
-      "maxLength": 4096,
-      "x-agena-non-empty": true,
-      "minLength": 1,
-      "not": {
-        "type": "string",
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
-      }
-    },
-    "ref": {
-      "description": "Snapshot-local index returned by `browser_snapshot.elements[].ref`.\nIt is valid only while the page DOM has not materially changed.",
-      "type": [
-        "integer",
-        "null"
-      ],
-      "format": "uint16",
-      "minimum": 0,
-      "maximum": 199,
-      "x-agena-order": "000002"
-    },
-    "snapshot_id": {
-      "description": "ID of the snapshot that supplied ref. Required with ref; stale refs are rejected.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001",
-      "maxLength": 128
-    },
-    "timeout_ms": {
-      "type": "integer",
-      "format": "uint64",
-      "minimum": 1,
-      "maximum": 120000,
-      "default": 30000,
-      "x-agena-order": "000004"
-    }
-  },
-  "not": {
-    "anyOf": [
-      {
-        "not": {
-          "type": "object",
-          "properties": {
-            "session_id": {}
-          },
-          "required": [
-            "session_id"
-          ]
-        }
-      },
-      {
-        "type": "object",
-        "properties": {
-          "session_id": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "type": "string",
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
-              },
-              {
-                "type": "array",
-                "maxItems": 0
-              },
-              {
-                "type": "object",
-                "maxProperties": 0,
-                "properties": {}
-              }
-            ]
-          }
-        },
-        "required": [
-          "session_id"
-        ]
-      }
-    ]
-  }
-}
-```
-
-### browser_close
-
-`agena.web.browser_close` · **Summary**: Close one page target in the managed interactive browser.
-
-**Tags**: `network` `interactive` `mutate`
-
-**Runtime**: streaming `buffered`
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `session_id` | `string` | ✓ | — |  |
-
-**Input schema**:
-```json
-{
-  "required": [
-    "session_id"
-  ],
-  "additionalProperties": false,
-  "type": "object",
-  "properties": {
-    "session_id": {
-      "type": "string",
-      "x-agena-order": "000000",
-      "x-agena-non-empty": true,
-      "minLength": 1,
-      "not": {
-        "type": "string",
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
-      }
-    }
-  },
-  "not": {
-    "anyOf": [
-      {
-        "not": {
-          "type": "object",
-          "properties": {
-            "session_id": {}
-          },
-          "required": [
-            "session_id"
-          ]
-        }
-      },
-      {
-        "type": "object",
-        "properties": {
-          "session_id": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "type": "string",
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
-              },
-              {
-                "type": "array",
-                "maxItems": 0
-              },
-              {
-                "type": "object",
-                "maxProperties": 0,
-                "properties": {}
-              }
-            ]
-          }
-        },
-        "required": [
-          "session_id"
-        ]
-      }
-    ]
-  }
-}
-```
-
-### browser_download
-
-`agena.web.browser_download` · **Summary**: Download one HTTP(S) URL through a managed browser session and return a local artifact.
-
-**Tags**: `network` `interactive` `mutate` `filesystem`
-
-**Runtime**: streaming `buffered`
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `session_id` | `string` | ✓ | — | Existing managed browser page to use for the navigation. Its browser<br>profile (for example, authenticated cookies) remains intact. |
-| `timeout_ms` | `integer` | — | `30000` |  |
-| `url` | `string` | ✓ | — | HTTP(S) download URL. The artifact is always written under the<br>managed workspace artifact directory; callers cannot choose an<br>arbitrary destination path. |
-
-**Input schema**:
-```json
-{
-  "required": [
-    "session_id",
-    "url"
-  ],
-  "additionalProperties": false,
-  "type": "object",
-  "properties": {
-    "session_id": {
-      "description": "Existing managed browser page to use for the navigation. Its browser\nprofile (for example, authenticated cookies) remains intact.",
-      "type": "string",
-      "x-agena-order": "000000",
-      "x-agena-non-empty": true,
-      "minLength": 1,
-      "not": {
-        "type": "string",
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
-      }
-    },
-    "url": {
-      "description": "HTTP(S) download URL. The artifact is always written under the\nmanaged workspace artifact directory; callers cannot choose an\narbitrary destination path.",
-      "type": "string",
-      "x-agena-order": "000001",
-      "x-agena-non-empty": true,
-      "minLength": 1,
-      "not": {
-        "type": "string",
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
-      }
-    },
-    "timeout_ms": {
-      "type": "integer",
-      "format": "uint64",
-      "minimum": 1,
-      "maximum": 120000,
-      "default": 30000,
-      "x-agena-order": "000002"
-    }
-  },
-  "not": {
-    "anyOf": [
-      {
-        "not": {
-          "type": "object",
-          "properties": {
-            "session_id": {}
-          },
-          "required": [
-            "session_id"
-          ]
-        }
-      },
-      {
-        "type": "object",
-        "properties": {
-          "session_id": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "type": "string",
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
-              },
-              {
-                "type": "array",
-                "maxItems": 0
-              },
-              {
-                "type": "object",
-                "maxProperties": 0,
-                "properties": {}
-              }
-            ]
-          }
-        },
-        "required": [
-          "session_id"
-        ]
-      },
-      {
-        "anyOf": [
-          {
-            "not": {
-              "type": "object",
-              "properties": {
-                "url": {}
-              },
-              "required": [
-                "url"
-              ]
-            }
-          },
-          {
-            "type": "object",
-            "properties": {
-              "url": {
-                "anyOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "type": "string",
-                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
-                  },
-                  {
-                    "type": "array",
-                    "maxItems": 0
-                  },
-                  {
-                    "type": "object",
-                    "maxProperties": 0,
-                    "properties": {}
-                  }
-                ]
-              }
-            },
-            "required": [
-              "url"
-            ]
-          }
-        ]
-      }
-    ]
-  }
-}
-```
-
-### browser_list
-
-`agena.web.browser_list` · **Summary**: List open page targets in the managed interactive browser.
-
-**Tags**: `network` `interactive` `query` `discovery` `read_only`
-
-**Runtime**: streaming `buffered`
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "type": "object",
-  "properties": {}
-}
-```
-
-### browser_open
-
-`agena.web.browser_open` · **Summary**: Open a public page or an owned running preview in a managed interactive browser session.
-
-**Tags**: `network` `interactive` `mutate` `read_only`
-
-**Runtime**: streaming `buffered`
-
-**Help**:
-> Supply exactly one of url or preview_id. browser_list discovers owned preview IDs. preview_id grants only the registered run and exact isolated origin and still requires network permission for the real upstream URL; stop/restart revokes it. Managed previews restrict external fetch/WebSocket connections, frames, workers and popups; blocked requests are a browser policy result, not evidence the application is broken.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `preview_id` | `string / null` | — | — | Running preview owned by this workspace and Agena session. Use browser_list<br>to discover IDs. Private URLs are never accepted through the url field. |
-| `timeout_ms` | `integer` | — | `30000` |  |
-| `url` | `string / null` | — | — | Public HTTP(S) URL. Supply exactly one of url and preview_id. |
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "url": {
-      "description": "Public HTTP(S) URL. Supply exactly one of url and preview_id.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000",
-      "x-agena-non-empty": true,
-      "minLength": 1,
-      "not": {
-        "type": "string",
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
-      }
-    },
-    "preview_id": {
-      "description": "Running preview owned by this workspace and Agena session. Use browser_list\nto discover IDs. Private URLs are never accepted through the url field.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001",
-      "x-agena-non-empty": true,
-      "minLength": 1,
-      "not": {
-        "type": "string",
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
-      }
-    },
-    "timeout_ms": {
-      "type": "integer",
-      "format": "uint64",
-      "minimum": 1,
-      "maximum": 120000,
-      "default": 30000,
-      "x-agena-order": "000002"
-    }
-  },
-  "type": "object"
-}
-```
-
-### browser_screenshot
-
-`agena.web.browser_screenshot` · **Summary**: Capture a browser screenshot and return it as an image attachment.
-
-**Tags**: `network` `interactive` `mutate` `filesystem`
-
-**Runtime**: streaming `buffered`
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `full_page` | `boolean` | — | `false` |  |
-| `path` | `string / null` | — | — |  |
-| `session_id` | `string` | ✓ | — |  |
-
-**Input schema**:
-```json
-{
-  "required": [
-    "session_id"
-  ],
-  "additionalProperties": false,
-  "type": "object",
-  "properties": {
-    "session_id": {
-      "type": "string",
-      "x-agena-order": "000000",
-      "x-agena-non-empty": true,
-      "minLength": 1,
-      "not": {
-        "type": "string",
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
-      }
-    },
-    "path": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001"
-    },
-    "full_page": {
-      "type": "boolean",
-      "default": false,
-      "x-agena-order": "000002"
-    }
-  },
-  "not": {
-    "anyOf": [
-      {
-        "not": {
-          "type": "object",
-          "properties": {
-            "session_id": {}
-          },
-          "required": [
-            "session_id"
-          ]
-        }
-      },
-      {
-        "type": "object",
-        "properties": {
-          "session_id": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "type": "string",
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
-              },
-              {
-                "type": "array",
-                "maxItems": 0
-              },
-              {
-                "type": "object",
-                "maxProperties": 0,
-                "properties": {}
-              }
-            ]
-          }
-        },
-        "required": [
-          "session_id"
-        ]
-      }
-    ]
-  }
-}
-```
-
-### browser_shutdown
-
-`agena.web.browser_shutdown` · **Summary**: Close browser pages owned by the current Agena session without affecting other callers.
-
-**Tags**: `network` `interactive` `mutate`
-
-**Runtime**: streaming `buffered`
-
-**Help**:
-> Caller-scoped shutdown closes owned pages only. The shared Chrome process and other sessions are not stopped. Global browser shutdown is reserved for trusted host lifecycle control.
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "type": "object",
-  "properties": {}
-}
-```
-
-### browser_snapshot
-
-`agena.web.browser_snapshot` · **Summary**: Inspect visible text and interactive elements in a browser session.
-
-**Tags**: `network` `interactive` `query` `read_only`
-
-**Runtime**: streaming `buffered`
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `session_id` | `string` | ✓ | — |  |
-
-**Input schema**:
-```json
-{
-  "required": [
-    "session_id"
-  ],
-  "additionalProperties": false,
-  "type": "object",
-  "properties": {
-    "session_id": {
-      "type": "string",
-      "x-agena-order": "000000",
-      "x-agena-non-empty": true,
-      "minLength": 1,
-      "not": {
-        "type": "string",
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
-      }
-    }
-  },
-  "not": {
-    "anyOf": [
-      {
-        "not": {
-          "type": "object",
-          "properties": {
-            "session_id": {}
-          },
-          "required": [
-            "session_id"
-          ]
-        }
-      },
-      {
-        "type": "object",
-        "properties": {
-          "session_id": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "type": "string",
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
-              },
-              {
-                "type": "array",
-                "maxItems": 0
-              },
-              {
-                "type": "object",
-                "maxProperties": 0,
-                "properties": {}
-              }
-            ]
-          }
-        },
-        "required": [
-          "session_id"
-        ]
-      }
-    ]
-  }
-}
-```
-
-### browser_type
-
-`agena.web.browser_type` · **Summary**: Fill a browser input selected by CSS or the latest snapshot ref, optionally pressing Enter.
-
-**Tags**: `network` `interactive` `mutate`
-
-**Runtime**: streaming `buffered`
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `press_enter` | `boolean` | — | `false` |  |
-| `ref` | `integer / null` | — | — |  |
-| `selector` | `string / null` | — | — |  |
-| `session_id` | `string` | ✓ | — |  |
-| `snapshot_id` | `string / null` | — | — | ID of the snapshot that supplied ref. Required with ref; stale refs are rejected. |
-| `text` | `string` | ✓ | — |  |
-| `timeout_ms` | `integer` | — | `30000` |  |
-
-**Input schema**:
-```json
-{
-  "required": [
-    "session_id",
-    "text"
-  ],
-  "additionalProperties": false,
-  "type": "object",
-  "properties": {
-    "session_id": {
-      "type": "string",
-      "x-agena-order": "000000",
-      "x-agena-non-empty": true,
-      "minLength": 1,
-      "not": {
-        "type": "string",
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
-      }
-    },
-    "selector": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000",
-      "maxLength": 4096,
-      "x-agena-non-empty": true,
-      "minLength": 1,
-      "not": {
-        "type": "string",
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
-      }
-    },
-    "ref": {
-      "type": [
-        "integer",
-        "null"
-      ],
-      "format": "uint16",
-      "minimum": 0,
-      "maximum": 199,
-      "x-agena-order": "000002"
-    },
-    "snapshot_id": {
-      "description": "ID of the snapshot that supplied ref. Required with ref; stale refs are rejected.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001",
-      "maxLength": 128
-    },
-    "text": {
-      "type": "string",
-      "x-agena-order": "000002",
-      "maxLength": 65536
-    },
-    "press_enter": {
-      "type": "boolean",
-      "default": false,
-      "x-agena-order": "000005"
-    },
-    "timeout_ms": {
-      "type": "integer",
-      "format": "uint64",
-      "minimum": 1,
-      "maximum": 120000,
-      "default": 30000,
-      "x-agena-order": "000006"
-    }
-  },
-  "not": {
-    "anyOf": [
-      {
-        "not": {
-          "type": "object",
-          "properties": {
-            "session_id": {}
-          },
-          "required": [
-            "session_id"
-          ]
-        }
-      },
-      {
-        "type": "object",
-        "properties": {
-          "session_id": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "type": "string",
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
-              },
-              {
-                "type": "array",
-                "maxItems": 0
-              },
-              {
-                "type": "object",
-                "maxProperties": 0,
-                "properties": {}
-              }
-            ]
-          }
-        },
-        "required": [
-          "session_id"
-        ]
-      }
-    ]
-  }
-}
-```
-
-### browser_wait
-
-`agena.web.browser_wait` · **Summary**: Wait for page readiness, a CSS selector, or visible text.
-
-**Tags**: `network` `interactive` `query` `read_only`
-
-**Runtime**: streaming `buffered`
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `selector` | `string / null` | — | — |  |
-| `session_id` | `string` | ✓ | — |  |
-| `text` | `string / null` | — | — |  |
-| `timeout_ms` | `integer` | — | `30000` |  |
-
-**Input schema**:
-```json
-{
-  "required": [
-    "session_id"
-  ],
-  "additionalProperties": false,
-  "type": "object",
-  "properties": {
-    "session_id": {
-      "type": "string",
-      "x-agena-order": "000000",
-      "x-agena-non-empty": true,
-      "minLength": 1,
-      "not": {
-        "type": "string",
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
-      }
-    },
-    "selector": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000000",
-      "maxLength": 4096,
-      "x-agena-non-empty": true,
-      "minLength": 1,
-      "not": {
-        "type": "string",
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
-      }
-    },
-    "text": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "x-agena-order": "000001",
-      "maxLength": 4096,
-      "x-agena-non-empty": true,
-      "minLength": 1,
-      "not": {
-        "type": "string",
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
-      }
-    },
-    "timeout_ms": {
-      "type": "integer",
-      "format": "uint64",
-      "minimum": 1,
-      "maximum": 120000,
-      "default": 30000,
-      "x-agena-order": "000003"
-    }
-  },
-  "not": {
-    "anyOf": [
-      {
-        "not": {
-          "type": "object",
-          "properties": {
-            "session_id": {}
-          },
-          "required": [
-            "session_id"
-          ]
-        }
-      },
-      {
-        "type": "object",
-        "properties": {
-          "session_id": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "type": "string",
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
-              },
-              {
-                "type": "array",
-                "maxItems": 0
-              },
-              {
-                "type": "object",
-                "maxProperties": 0,
-                "properties": {}
-              }
-            ]
-          }
-        },
-        "required": [
-          "session_id"
-        ]
-      }
-    ]
-  }
-}
-```
+> Search, fetch and index web pages. Fetch and extract content from JavaScript-heavy pages with optional rendering.
 
 ### crawl
 
@@ -26741,12 +28527,12 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 **Runtime**: streaming `streaming`
 
 **Help**:
-> Traverse links breadth first with bounded concurrency (default 4, maximum 8; also capped by config). max_pages counts attempts and cache hits, including failures. same_host_only defaults true. Per-host pacing, robots, depth and URL-discovery budgets still apply. Omit render_js for HTTP first with conditional rendering when enabled; true forces browser and false forces HTTP. Report includes per-URL page_errors and effective concurrency. Only complete, readable 2xx documents enter storage. Use web.query to locate evidence in the resulting local index and web.read to read it.
+> Traverse links breadth first with bounded concurrency (default 4, maximum 32, capped by crawl.limits.concurrency). max_pages counts attempts and cache hits, including failures. same_host_only defaults true. Per-host pacing, robots, depth and URL-discovery budgets still apply. Omit render_js for HTTP first with conditional rendering when enabled; true forces browser and false forces HTTP. Report includes per-URL page_errors and effective concurrency. Only complete, readable 2xx documents enter storage. Use web.query to locate evidence in the resulting local index and web.read to read it.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `concurrency` | `integer / null` | — | — | Concurrent page reads; default 4, hard maximum 8, capped by crawl.limits.concurrency. |
+| `concurrency` | `integer / null` | — | — | Concurrent page reads; default 4, maximum 32, capped by crawl.limits.concurrency. |
 | `max_depth` | `integer / null` | — | — |  |
 | `max_pages` | `integer / null` | — | — |  |
 | `render_js` | `boolean / null` | — | — | Omit for HTTP first and one JavaScript-shell retry if browser.enabled; false forces HTTP, true forces an isolated browser. |
@@ -26811,14 +28597,14 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
       "x-agena-order": "000005"
     },
     "concurrency": {
-      "description": "Concurrent page reads; default 4, hard maximum 8, capped by crawl.limits.concurrency.",
+      "description": "Concurrent page reads; default 4, maximum 32, capped by crawl.limits.concurrency.",
       "type": [
         "integer",
         "null"
       ],
       "format": "uint32",
       "minimum": 1,
-      "maximum": 8,
+      "maximum": 32,
       "x-agena-order": "000006"
     }
   },
@@ -27020,16 +28806,16 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 **Runtime**: streaming `streaming`
 
 **Help**:
-> Fetch 1–8 known URLs concurrently (default concurrency 4, maximum 8), deduplicating normalized URLs in input order. Use after search to gather independent sources in one call. Each result includes its own status/error, content_status, bounded Markdown, page_id and next_offset for web.read. Failures do not discard other pages; partial also flags unreadable or truncated sources. Per-host pacing and global HTTP/browser limits still apply. Omit render_js for HTTP first and one conditional JavaScript-shell browser retry if enabled; true forces browser, false forces HTTP. No CAPTCHA bypass. max_chars is per page (default 4000, maximum 8000).
+> Fetch 1–16 known URLs concurrently (default concurrency 8, maximum 16), deduplicating normalized URLs in input order. Use after search to gather independent sources in one call. Each result includes its own status/error, content_status, bounded Markdown, page_id and next_offset for web.read. Failures do not discard other pages; partial also flags unreadable or truncated sources. Per-host pacing and global HTTP/browser limits still apply. Omit render_js for HTTP first and one conditional JavaScript-shell browser retry if enabled; true forces browser, false forces HTTP. No CAPTCHA bypass. max_chars is per page (default 4000, maximum 8000).
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `concurrency` | `integer / null` | — | `null` | In-flight page reads, default 4, maximum 8. Per-host pacing still applies. |
+| `concurrency` | `integer / null` | — | `null` | In-flight page reads, default 8, maximum 16. Per-host pacing still applies. |
 | `extractor` | `ExtractionBackend / null` | — | `null` |  |
 | `max_chars` | `integer / null` | — | `null` | Per-page Unicode-character preview, default 4000, maximum 8000. Continue each page with web.read. |
 | `render_js` | `boolean / null` | — | `null` | Omit for HTTP first with conditional rendering when browser.enabled; false forces HTTP; true forces browser. |
-| `urls` | `array<string>` | ✓ | — | One to eight known HTTP(S) URLs; normalized duplicates are fetched once, in first-occurrence order. |
+| `urls` | `array<string>` | ✓ | — | One to sixteen known HTTP(S) URLs; normalized duplicates are fetched once, in first-occurrence order. |
 | `use_cache` | `boolean` | — | `true` |  |
 
 **Input schema**:
@@ -27050,24 +28836,24 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
   "type": "object",
   "properties": {
     "urls": {
-      "description": "One to eight known HTTP(S) URLs; normalized duplicates are fetched once, in first-occurrence order.",
+      "description": "One to sixteen known HTTP(S) URLs; normalized duplicates are fetched once, in first-occurrence order.",
       "type": "array",
       "items": {
         "type": "string"
       },
       "minItems": 1,
-      "maxItems": 8,
+      "maxItems": 16,
       "x-agena-order": "000000"
     },
     "concurrency": {
-      "description": "In-flight page reads, default 4, maximum 8. Per-host pacing still applies.",
+      "description": "In-flight page reads, default 8, maximum 16. Per-host pacing still applies.",
       "type": [
         "integer",
         "null"
       ],
       "format": "uint32",
       "minimum": 1,
-      "maximum": 8,
+      "maximum": 16,
       "default": null,
       "x-agena-order": "000001"
     },
@@ -27324,7 +29110,7 @@ Local web search/fetch/crawl plugin with an embedded crawl cache, deduplication,
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Discover candidate pages; fetch 1-3 relevant URLs for factual answers. Omit engine or use auto for the configured provider (HTML, Brave, Tavily, Exa or SearXNG). HTML auto searches eight free public websites (DuckDuckGo, Bing, Baidu, Yandex, Google, Yahoo, Brave and Naver) concurrently, deduplicates URLs and combines rankings. Set engine to one name or a comma-separated list such as baidu,google to search only those HTML websites, overriding API settings. Case and surrounding spaces are ignored; duplicates run once in first-occurrence order. auto must stand alone; empty and unknown names are errors. max_results caps the final total; max_results_per_engine and max_pages_per_engine independently cap each selected HTML source (defaults: 10 candidates, 1 page including the first). Increase both source budgets for deeper retrieval; filtering or a larger final limit never triggers extra pages. No global offset or continuation cursor. Effective limits appear in the HTML response. Each result's engines lists contributing engines; source is the publisher. Multi-engine HTML searches preserve successful sources with partial and engine_errors; all selected engines failing is an error. A single engine's failure is returned directly. Inspect engine_reports for per-source result counts, page counts, cache hits and structured issues. Searches to the same engine are serialized and paced; successful identical queries are reused for two minutes. Rate limits honor Retry-After and verification failures enter cooldown: respect retry_after_secs, use other working sources and avoid bursts of overlapping queries. Verification and unknown pages are failures, not empty results. A confirmed JavaScript shell gets one browser attempt per page when browser.enabled. Later-page failures preserve earlier results with partial diagnostics. Browser rendering does not solve human verification or consent. API providers return at most 20 results without switching providers and reject HTML-only budget arguments. Domain filters accept bare hostnames; exclusions win. Snippets are previews, not fetched-page evidence.
+> Discover candidate pages; fetch 1-3 relevant URLs for factual answers. Omit engine or use auto for the configured provider (HTML, Brave, Tavily, Exa or SearXNG). HTML auto searches eight free public websites (DuckDuckGo, Bing, Baidu, Yandex, Google, Yahoo, Brave and Naver) concurrently, deduplicates URLs and combines rankings. Set engine to one name or a comma-separated list such as baidu,google to search only those HTML websites, overriding API settings. Case and surrounding spaces are ignored; duplicates run once in first-occurrence order. auto must stand alone; empty and unknown names are errors. max_results caps the final total; max_results_per_engine and max_pages_per_engine independently cap each selected HTML source (defaults: 10 candidates, 1 page including the first). Increase both source budgets for deeper retrieval; filtering or a larger final limit never triggers extra pages. No global offset or continuation cursor. Effective limits appear in the HTML response. Each result's engines lists contributing engines. The source field identifies the publisher. Multi-engine HTML searches preserve successful sources with partial and engine_errors; all selected engines failing is an error. A single engine's failure is returned directly. Inspect engine_reports for per-source result counts, page counts, cache hits and structured issues. Automatic one-page HTML searches have an 8-second active budget and wait 750 ms for extra engines after reaching max_results with distinct, domain-matching URLs. Outstanding engines are marked skipped and the response is partial. Both timings are configurable. Explicit engine selections and multi-page searches wait within the configured fetch timeout. Request starts are paced per engine. Up to four requests to the same engine can overlap, and successful identical queries are reused for two minutes. Rate limits honor Retry-After and verification failures enter cooldown: respect retry_after_secs, use other working sources and avoid bursts of overlapping queries. Verification and unknown pages are failures, not empty results. A confirmed JavaScript shell gets one browser attempt per page when browser.enabled and the current tool session supports rendering. Later-page failures preserve earlier results with partial diagnostics. Browser rendering does not solve human verification or consent. API providers return at most 20 results without switching providers and reject HTML-only budget arguments. Domain filters accept bare hostnames; exclusions win. Snippets are previews, not fetched-page evidence.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |

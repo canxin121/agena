@@ -5,6 +5,7 @@ use agena_domain::{
     ToolInvocation, UserInputReply, UserInputReplyKind, UserInputRequest, UserInputSource,
 };
 use agena_plugin_host::sdk::host_api::AskUserResponse;
+use tokio::sync::Semaphore;
 
 mod callback_executor;
 mod operator;
@@ -14,6 +15,10 @@ mod session_scope;
 // ToolInvokeInput uses this existing wire sentinel for a call without a
 // session. It never identifies a kernel session or a live transcript tool.
 const OPERATOR_SESSION: i64 = -1;
+
+// Each context can use two of the kernel's eight control reads. Keep slots
+// available for status and cancellation when a tool fans out many requests.
+pub(super) static HOST_POLICY_READS: Semaphore = Semaphore::const_new(3);
 
 pub(super) fn parent_interaction_required(
     reason: &str,
@@ -160,8 +165,41 @@ impl SessionManager {
         call: i64,
         target: String,
     ) -> Result<(), AppError> {
-        self.require_host_permission(session, call, move |executor| async move {
+        self.require_host_network_check(session, call, move |executor| async move {
             executor.network_permission_check_async(&target).await
+        })
+        .await
+    }
+
+    pub async fn require_host_pinned_http_permission(
+        &self,
+        session: i64,
+        call: i64,
+        target: String,
+    ) -> Result<(), AppError> {
+        self.require_host_network_check(session, call, move |executor| async move {
+            executor.pinned_http_permission_check_async(target).await
+        })
+        .await
+    }
+
+    async fn require_host_network_check<F>(
+        &self,
+        session: i64,
+        call: i64,
+        check: impl FnOnce(ToolExecutor) -> F,
+    ) -> Result<(), AppError>
+    where
+        F: std::future::Future<Output = Result<agena_tool::ToolPermissionCheck, ToolError>>,
+    {
+        let admission = HOST_POLICY_READS
+            .acquire()
+            .await
+            .expect("host policy admission is never closed");
+        self.require_host_permission(session, call, move |executor| {
+            // DNS preflight and user review can outlast the policy read.
+            drop(admission);
+            check(executor)
         })
         .await
     }
@@ -196,8 +234,7 @@ impl SessionManager {
             let context = self.execution_context_with_state(key, &state).await?;
             let executor = state
                 .executor
-                .for_session_context_async(&context)
-                .await
+                .for_session_resource_context(&context)
                 .with_cancellation_token(Some(self.shutdown.child_token()));
             let executor = self
                 .sandbox_executor_for_session(&executor, session)
@@ -211,12 +248,11 @@ impl SessionManager {
         let (tool, control) = self.live_tool(session, call)?;
         let state = control.state.clone();
         let context = self
-            .execution_context_with_state(session_id(session)?, &state)
+            .execution_context_for_execution(session_id(session)?, &state, Some(control.execution))
             .await?;
         let executor = state
             .executor
-            .for_session_context_async(&context)
-            .await
+            .for_session_resource_context(&context)
             .with_cancellation_token(Some(control.cancel.clone()));
         let executor = self
             .sandbox_executor_for_session(&executor, session)

@@ -77,7 +77,7 @@ members = [
 # Keep the repository-root edit loop focused on the terminal application.
 # Full validation remains explicit through `--workspace`.
 default-members = ["apps/agena"]
-exclude = ["third_party/crossterm", "third_party/ratatui-image", "third_party/codex-mermaid"]
+exclude = ["third_party/agena-agent-browser", "third_party/crossterm", "third_party/ratatui-image", "third_party/codex-mermaid"]
 
 [workspace.package]
 version = "0.1.0"
@@ -111,6 +111,7 @@ agena-runtime-provider-adapters = { path = "crates/agena-runtime-provider-adapte
 agena-runtime-tools = { path = "crates/agena-runtime-tools" }
 agena-runtime-plugins = { path = "crates/agena-runtime-plugins" }
 agena-bundled-plugins = { path = "crates/agena-bundled-plugins" }
+agena-agent-browser = { path = "third_party/agena-agent-browser" }
 agena-runtime-session = { path = "crates/agena-runtime-session" }
 agena-runtime-session-core = { path = "crates/agena-runtime-session-core" }
 agena-runtime-notifications = { path = "crates/agena-runtime-notifications" }
@@ -230,7 +231,6 @@ dom_smoothie = "0.18.2"
 dom_query = "0.28.0"
 htmd = "0.5.5"
 scraper = "0.27.0"
-spider = { version = "2.52.9", default-features = false, features = ["sync", "cookies", "encoding", "headers", "time"] }
 sea-orm = { version = "1.1.20", default-features = false, features = ["sqlx-sqlite", "runtime-tokio-rustls", "macros", "with-json"] }
 # Reuse SQLx's exact SQLite linkage for opt-in debug fault VFS callbacks.
 libsqlite3-sys = "0.30.1"
@@ -435,7 +435,6 @@ abi_stable = { path = "third_party/abi_stable" }
 blake3 = { path = "third_party/blake3" }
 constant_time_eq = { path = "third_party/constant_time_eq" }
 cpufeatures = { path = "third_party/cpufeatures" }
-compact_str = { path = "third_party/compact_str-0.8", version = "0.8.2" }
 compact_str_09 = { package = "compact_str", path = "third_party/compact_str-0.9", version = "0.9.1" }
 cpufeatures-0-3 = { package = "cpufeatures", path = "third_party/cpufeatures-0.3" }
 libgit2-sys = { path = "third_party/libgit2-sys" }
@@ -452,7 +451,6 @@ winapi = { path = "third_party/winapi-0.3" }
 windows-sys-0-52 = { package = "windows-sys", path = "third_party/windows-sys-0.52.0" }
 windows-sys-0-60 = { package = "windows-sys", path = "third_party/windows-sys-0.60.2" }
 windows-sys-0-61 = { package = "windows-sys", path = "third_party/windows-sys-0.61.2" }
-spider_fingerprint = { path = "third_party/spider_fingerprint" }
 # Agena performs response-bearing terminal queries while the TUI is running.
 # Upstream Crossterm 0.29 treats OSC replies as Alt-key input because its
 # public event model has no terminal-response event. Keep the parser extension

@@ -66,6 +66,14 @@ impl Drop for SharedMetadata {
 }
 
 impl CrawlStore {
+    #[cfg(test)]
+    pub(crate) fn for_test_directory(path: &Path) -> Self {
+        Self {
+            dir: CrawlDir::for_test_directory(path),
+            metadata: Default::default(),
+        }
+    }
+
     pub fn for_workspace(workspace_root: &Path) -> Self {
         Self {
             dir: CrawlDir::from_workspace(workspace_root),
@@ -168,29 +176,47 @@ impl CrawlStore {
         retention: CrawlStoreRetention,
     ) -> Result<CrawlStorePruneReport, CrawlError> {
         self.ensure_exists()?;
-        let entries = self.document_entries_with_sizes()?;
-        let mut remaining_count = entries.len();
+        self.prune_entries(&mut self.document_entries_with_sizes()?, retention)
+    }
+
+    pub(crate) fn finish_crawl(
+        &self,
+        retention: Option<CrawlStoreRetention>,
+    ) -> Result<(CrawlStorePruneReport, usize), CrawlError> {
+        let mut entries = self.document_entries_with_sizes()?;
+        let prune = match retention {
+            Some(retention) => self.prune_entries(&mut entries, retention)?,
+            None => CrawlStorePruneReport::default(),
+        };
+        let documents: Vec<_> = entries.into_iter().map(|(document, _)| document).collect();
+        rebuild_search_index(&self.dir.index_dir(), &documents)?;
+        Ok((prune, documents.len()))
+    }
+
+    fn prune_entries(
+        &self,
+        entries: &mut Vec<(StoredDocument, u64)>,
+        retention: CrawlStoreRetention,
+    ) -> Result<CrawlStorePruneReport, CrawlError> {
         let mut remaining_bytes = entries.iter().map(|(_, bytes)| *bytes).sum::<u64>();
         let mut removed_document_count = 0usize;
         let mut removed_bytes = 0u64;
 
-        for (document, bytes) in entries.iter().rev() {
-            if remaining_count <= retention.max_documents
-                && remaining_bytes <= retention.max_total_bytes
-            {
-                break;
-            }
+        while (entries.len() > retention.max_documents
+            || remaining_bytes > retention.max_total_bytes)
+            && let Some((document, bytes)) = entries.last()
+        {
             self.delete_loaded_document(document)?;
-            remaining_count = remaining_count.saturating_sub(1);
             remaining_bytes = remaining_bytes.saturating_sub(*bytes);
             removed_document_count += 1;
             removed_bytes = removed_bytes.saturating_add(*bytes);
+            entries.pop();
         }
 
         Ok(CrawlStorePruneReport {
             removed_document_count,
             removed_bytes,
-            remaining_document_count: remaining_count,
+            remaining_document_count: entries.len(),
             remaining_bytes,
         })
     }

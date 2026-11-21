@@ -5,9 +5,9 @@ use std::future::Future;
 use std::time::Duration;
 
 use agena_plugin_host::PluginError;
-use agena_plugin_host::sdk::{Result as SdkResult, ToolInvokeOutput};
+use agena_plugin_host::sdk::{Result as SdkResult, ToolInvokeOutput, permission_wait::Deadline};
 use agena_web::{WebSearchEngine, WebSearchResponse, WebSearchResult, canonicalize_url};
-use futures_util::future::join_all;
+use futures_util::{StreamExt, stream::FuturesUnordered};
 use serde::Serialize;
 
 use super::{
@@ -81,6 +81,7 @@ pub(super) async fn search<F, Fut, Batch>(
     input: &CrawlWebSearchInput,
     limits: HtmlSearchLimits,
     timeout: Duration,
+    grace: Option<Duration>,
     search_engine: F,
 ) -> SdkResult<HtmlSearchOutput>
 where
@@ -93,14 +94,11 @@ where
         .as_ref()
         .unwrap_or(&WebSearchEngineSelection::Auto);
     let engines = selection.engines();
-    // Fixed fanout (at most eight). These futures run in the caller's task,
-    // preserving host callback authority and cancellation without detached work.
-    // Time out each complete source, excluding approval waits, with pacing, DNS and all
-    // pages. A slow source cannot discard another source's completed results.
-    let outcomes = join_all(engines.iter().copied().map(|engine| {
+    // Keep each source in the caller's task to preserve its host authority.
+    let mut pending = engines.iter().copied().enumerate().map(|(index, engine)| {
         let search_engine = &search_engine;
         async move {
-            agena_plugin_host::sdk::permission_wait::timeout(
+            let outcome = agena_plugin_host::sdk::permission_wait::timeout(
                 timeout,
                 search_engine(
                     engine,
@@ -116,7 +114,7 @@ where
                         issue: agena_web::SearchIssue {
                             kind: agena_web::SearchIssueKind::Timeout,
                             message: format!(
-                                "search timed out after {} ms, of active time, including DNS and queueing",
+                                "search timed out after {} ms of active time, including DNS and queueing",
                                 timeout.as_millis()
                             ),
                             http_status: None,
@@ -124,22 +122,45 @@ where
                         },
                     },
                 ))
-            })
+            }).map(Into::into);
+            (index, outcome)
         }
-    }))
-    .await;
+    }).collect::<FuturesUnordered<_>>();
 
-    // join_all preserves selection order, so network completion order cannot
-    // affect rank ties, representative snippets, provenance or diagnostics.
+    let mut outcomes = vec![None; engines.len()];
+    let mut distinct = BTreeSet::new();
+    let mut finish: Option<Deadline> = None;
+    loop {
+        let next = if let Some(deadline) = &finish {
+            deadline.run(pending.next()).await.ok().flatten()
+        } else {
+            pending.next().await
+        };
+        let Some((index, outcome)) = next else { break };
+        if let (Some(grace), None, Ok(batch)) = (grace, &finish, &outcome) {
+            distinct.extend(batch.results.iter().filter_map(|row| {
+                let url = canonicalize_url(&row.url).ok()?.to_string();
+                domain_allowed(&url, &input.allowed_domains, &input.blocked_domains).then_some(url)
+            }));
+            if distinct.len() >= limits.max_results {
+                finish = Some(Deadline::new(grace));
+            }
+        }
+        outcomes[index] = Some(outcome);
+    }
+    // Cancel any sources still pending after filling the result budget.
+    drop(pending);
+
+    // Process completed sources in selection order for stable ranking and diagnostics.
     let mut batches = Vec::new();
     let mut successful_engines = Vec::new();
     let mut engine_errors = Vec::new();
     let mut engine_reports = Vec::new();
     let mut permission_error = None;
+    let mut skipped = false;
     for (engine, outcome) in engines.iter().copied().zip(outcomes) {
         match outcome {
-            Ok(batch) => {
-                let batch = batch.into();
+            Some(Ok(batch)) => {
                 engine_reports.push(EngineReport {
                     engine: engine.to_string(),
                     status: if !batch.warnings.is_empty() {
@@ -164,8 +185,8 @@ where
                 successful_engines.push(engine.to_string());
                 batches.push((engine, batch.results));
             }
-            Err(error) if engines.len() == 1 => return Err(error),
-            Err(error) => {
+            Some(Err(error)) if engines.len() == 1 => return Err(error),
+            Some(Err(error)) => {
                 engine_reports.push(EngineReport {
                     engine: engine.to_string(),
                     status: "unavailable",
@@ -189,6 +210,18 @@ where
                     permission_error.get_or_insert(error);
                 }
             }
+            None => {
+                skipped = true;
+                engine_reports.push(EngineReport {
+                    engine: engine.to_string(),
+                    status: "skipped",
+                    result_count: 0,
+                    pages_fetched: 0,
+                    cache_hit: false,
+                    rendered: false,
+                    issue: None,
+                });
+            }
         }
     }
     if successful_engines.is_empty()
@@ -209,7 +242,7 @@ where
         successful_engines,
         limits,
         results: merge_results(batches, input, limits.max_results),
-        partial: !engine_errors.is_empty(),
+        partial: skipped || !engine_errors.is_empty(),
         engine_errors,
         engine_reports,
     })
@@ -337,7 +370,7 @@ impl HtmlSearchOutput {
             self.limits.max_pages_per_engine,
             self.limits.max_results,
         ));
-        if self.partial {
+        if !self.engine_errors.is_empty() {
             lines.push(format!(
                 "Search partially degraded: {}",
                 self.engine_errors.join("; ")
@@ -345,6 +378,13 @@ impl HtmlSearchOutput {
             if self.results.is_empty() {
                 lines.push("No usable results were returned by the available sources. Unavailable engines did not establish that no matches exist; try another selected engine or a broader query, and respect retry_after_secs instead of immediately repeating blocked requests.".into());
             }
+        }
+        if self
+            .engine_reports
+            .iter()
+            .any(|report| report.status == "skipped")
+        {
+            lines.push("Additional search sources were skipped after the requested result count was reached.".into());
         }
         lines.push(format!(
             "Source results before filtering: {}.",
@@ -377,5 +417,70 @@ impl HtmlSearchOutput {
             ));
         }
         lines.join("\n")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn result(url: &str) -> WebSearchResult {
+        WebSearchResult {
+            title: "Fixture".into(),
+            url: url.into(),
+            description: String::new(),
+            source: String::new(),
+            engine: String::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn auto_grace_counts_distinct_filtered_results_and_releases_slow_sources() {
+        let input: CrawlWebSearchInput = serde_json::from_value(serde_json::json!({
+            "query": "fixture", "max_results": 2, "allowed_domains": ["example.org"]
+        }))
+        .unwrap();
+        let limits = HtmlSearchLimits::from_input(&input, &WebSearchConfig::default());
+        let output = tokio::time::timeout(
+            Duration::from_secs(2),
+            search(
+                &input,
+                limits,
+                Duration::from_secs(20),
+                Some(Duration::from_millis(15)),
+                |engine, _, _| async move {
+                    let rows = match engine {
+                        WebSearchEngine::DuckDuckGo => vec![
+                            result("https://example.org/1"),
+                            result("https://excluded.example/page"),
+                        ],
+                        WebSearchEngine::Bing => vec![result("https://example.org/1#duplicate")],
+                        WebSearchEngine::Naver => {
+                            tokio::time::sleep(Duration::from_millis(60)).await;
+                            vec![result("https://example.org/2")]
+                        }
+                        WebSearchEngine::Google => std::future::pending().await,
+                        _ => Vec::new(),
+                    };
+                    Ok(rows)
+                },
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(output.results.len(), 2);
+        assert_eq!(output.results[0].engines, ["duckduckgo", "bing"]);
+        assert_eq!(
+            output
+                .engine_reports
+                .iter()
+                .find(|entry| entry.engine == "google")
+                .unwrap()
+                .status,
+            "skipped"
+        );
+        assert!(output.partial);
+        assert!(output.engine_errors.is_empty());
     }
 }

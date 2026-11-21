@@ -241,6 +241,19 @@ impl RuntimeHostClient {
             .map_err(plugin_error_from_app)
     }
 
+    async fn callback_scoped_resource_executor(
+        &self,
+    ) -> Result<crate::tool::ToolExecutor, PluginError> {
+        let callback = current_host_callback_context();
+        self.session_manager()?
+            .host_resource_callback_executor(
+                callback.as_ref().and_then(|context| context.session_id),
+                callback.as_ref().and_then(|context| context.call_id),
+            )
+            .await
+            .map_err(plugin_error_from_app)
+    }
+
     async fn require_callback_invocation(
         &self,
         name: &str,
@@ -484,7 +497,24 @@ impl HostClient for RuntimeHostClient {
         kind: agena_domain::BackgroundActivityKind,
         adapter: Arc<dyn agena_plugin_sdk::activity::ActivitySourceAdapter>,
     ) -> Result<(), PluginError> {
-        self.runtime()?.activities.register_source(kind, adapter);
+        let runtime = self.runtime()?;
+        if kind == agena_domain::BackgroundActivityKind::Browser {
+            let session_id = current_host_callback_context()
+                .filter(|context| {
+                    context.plugin_id.as_deref() == Some(agena_bundled_plugins::tool::browser_plugin_id())
+                })
+                .and_then(|context| context.session_id)
+                .ok_or_else(|| {
+                    PluginError::from_kind(
+                        agena_plugin_sdk::PluginErrorKind::PolicyDenied,
+                        "Browser controls must be registered by the Browser plugin for its owning session",
+                    )
+                })?;
+            return runtime
+                .activities
+                .register_browser_source(session_id, &adapter);
+        }
+        runtime.activities.register_source(kind, adapter);
         Ok(())
     }
 
@@ -541,7 +571,7 @@ impl HostClient for RuntimeHostClient {
         &self,
         target: String,
     ) -> Result<PermissionQuery, PluginError> {
-        let (executor, _) = self.callback_scoped_tool_executor().await?;
+        let executor = self.callback_scoped_resource_executor().await?;
         let check = executor
             .network_permission_check_async(&target)
             .await
@@ -562,7 +592,7 @@ impl HostClient for RuntimeHostClient {
             .map_err(|error| PluginError::invalid_params_error(&error))?;
         // Reload all current numeric-IP decisions in the original callback
         // authority; an exact lookup by the hostname cannot find these denies.
-        let (executor, _) = self.callback_scoped_tool_executor().await?;
+        let executor = self.callback_scoped_resource_executor().await?;
         Ok(permission_query(
             executor
                 .sandbox_permission_snapshot()
@@ -585,6 +615,14 @@ impl HostClient for RuntimeHostClient {
         let (session, call) = self.callback_scope()?;
         self.session_manager()?
             .require_host_network_permission(session, call, target)
+            .await
+            .map_err(plugin_error_from_app)
+    }
+
+    async fn require_pinned_http_permission(&self, target: String) -> Result<(), PluginError> {
+        let (session, call) = self.callback_scope()?;
+        self.session_manager()?
+            .require_host_pinned_http_permission(session, call, target)
             .await
             .map_err(plugin_error_from_app)
     }

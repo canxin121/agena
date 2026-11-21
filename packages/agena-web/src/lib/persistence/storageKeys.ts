@@ -97,6 +97,9 @@ export const sessionStorageKeys = {
   terminal: {
     handoffKeyPrefix: namespacedKey('terminal.handoff:'),
   },
+  browser: {
+    control: namespacedKey('browser.control'),
+  },
   sessions: {
     bootCollapseAppliedToken: namespacedKey('sessions.boot-collapse.applied-token'),
     autoLoadExpandedAppliedToken: namespacedKey('sessions.auto-load-expanded.applied-token'),

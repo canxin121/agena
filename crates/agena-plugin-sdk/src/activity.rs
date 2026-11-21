@@ -15,6 +15,8 @@ use agena_domain::BackgroundActivityLogRead;
 
 use crate::error::Result;
 
+pub mod browser;
+
 /// Bidirectional control surface a plugin registers for one activity kind.
 ///
 /// Once registered (usually during `init`), the host dispatches
@@ -40,6 +42,20 @@ pub trait ActivitySourceAdapter: Send + Sync + 'static {
     /// terminal record (e.g. via [`HostClient::publish_activity`]) before or
     /// after returning.
     async fn stop(&self, activity_id: &str) -> Result<()>;
+
+    /// Operator-only controls for browser activities. The host authenticates the
+    /// operator and supplies the owning conversation's network policy.
+    async fn browser_control(
+        &self,
+        _session_id: i64,
+        _command: browser::BrowserControlCommand,
+        _network: Option<std::sync::Arc<dyn browser::BrowserNetworkAuthority>>,
+    ) -> Result<browser::BrowserControlResult> {
+        Err(crate::PluginError::from_kind(
+            crate::PluginErrorKind::NotImplemented,
+            "This activity source has no browser controls",
+        ))
+    }
 }
 
 /// Convenience for adapters that have no log stream: build an empty read.

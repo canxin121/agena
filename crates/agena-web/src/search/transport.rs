@@ -11,8 +11,7 @@ pub(super) struct SearchRequest {
 
 /// DDG supplies opaque continuation fields; guessing `s = page * N` can
 /// repeat or skip results. Follow only its actual same-origin Next form.
-pub(super) fn duckduckgo_next(page: &WebSearchPage) -> Option<SearchRequest> {
-    let doc = Html::parse_document(&page.html);
+pub(super) fn duckduckgo_next(doc: &Html, final_url: &url::Url) -> Option<SearchRequest> {
     for form in doc.select(&selector("form")) {
         let next = form
             .select(&selector("input[type=submit], button"))
@@ -27,8 +26,7 @@ pub(super) fn duckduckgo_next(page: &WebSearchPage) -> Option<SearchRequest> {
         if !next {
             continue;
         }
-        let mut url = page
-            .final_url
+        let mut url = final_url
             .join(form.value().attr("action").unwrap_or("/html/"))
             .ok()?;
         if url.origin() != url::Url::parse(DDG_HTML_URL).ok()?.origin()
@@ -83,12 +81,10 @@ pub(super) struct SearchClient {
 }
 
 impl SearchClient {
-    pub(super) fn for_invocation(mut self, route: Option<&crate::WebHttpRoute>) -> Self {
+    pub(super) fn for_invocation(mut self, route: &crate::WebHttpRoute) -> Self {
         // Cookies and client settings may be reused; call cancellation is always
         // taken from the currently authorized route.
-        if let Some(route) = route {
-            self.route = route.clone();
-        }
+        self.route = route.clone();
         self
     }
 }
@@ -96,14 +92,10 @@ impl SearchClient {
 pub(super) fn client(
     engine: WebSearchEngine,
     user_agent: &str,
-    route: Option<&crate::WebHttpRoute>,
+    route: &crate::WebHttpRoute,
 ) -> Result<SearchClient, CrawlError> {
     let url = url::Url::parse(engine.permission_url())?;
     let origin = url.origin();
-    let route = match route {
-        Some(route) => route.clone(),
-        None => crate::WebHttpRoute::for_url(&url, None)?,
-    };
     let cookies = std::sync::Arc::new(reqwest::cookie::Jar::default());
     let mut builder = reqwest::Client::builder()
         .user_agent(user_agent)
@@ -130,7 +122,7 @@ pub(super) fn client(
     let http = route.apply(builder, &url).build()?;
     Ok(SearchClient {
         http,
-        route,
+        route: route.clone().with_cancellation(None),
         cookies,
         user_agent: user_agent.to_owned(),
     })
@@ -295,7 +287,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let route = crate::WebHttpRoute::default().with_addresses(vec![address]);
-        let client = client(WebSearchEngine::Bing, "fixture", Some(&route)).unwrap();
+        let client = client(WebSearchEngine::Bing, "fixture", &route).unwrap();
         let server = async {
             let (mut stream, _) = listener.accept().await.unwrap();
             let mut request = [0u8; 4096];

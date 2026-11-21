@@ -231,7 +231,6 @@ export type SessionExecutionStatus = {
   execution?: AgenaExecutionState['execution']
   usage?: AgenaExecutionState['usage']
   parts: AgenaPart[]
-  /** Server-projected background activity kinds (lowercased, id-free). */
 }
 
 export type CancellationResult = 'cancellation_requested' | 'already_terminal' | 'not_found' | 'execution_mismatch'

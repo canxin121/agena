@@ -31,6 +31,25 @@ const message = (...parts: MessagePart[]): MessageEntry => ({
 })
 
 describe('composer process discovery', () => {
+  test('keeps an open foreground command anchored from invocation through streaming and exit', () => {
+    const initial = part({
+      tool: 'shell.exec',
+      partState: 'in_progress',
+      agenaContent: { input: { command: 'bun test' } },
+      agenaPresentation: {},
+    })
+    const row = (p: MessagePart) => composerProcesses('7', [message(p)], [], [])[0]!
+    expect(row(initial).label).toBe('bun test')
+    const streaming = { ...initial, agenaContent: { resources: [process.output_resource!] } }
+    const finished = {
+      ...streaming,
+      partState: 'completed',
+      agenaPresentation: { blocks: [{ type: 'command', command: 'bun test', exit_code: 0 }] },
+    }
+    expect(row(streaming).key).toBe(row(initial).key)
+    expect(row(finished).key).toBe(row(initial).key)
+    expect(row(finished).exitCode).toBe(0)
+  })
   test('deduplicates a managed command against its persisted stream before and after the launch returns', () => {
     const pending = part({ partState: 'running', agenaPresentation: { blocks: [] } })
     const rows = composerProcesses('7', [message(pending, part())], [process], [])

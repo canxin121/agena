@@ -1,12 +1,18 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { useDocumentVisibility } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { RiCalendarScheduleLine } from '@remixicon/vue'
 import Button from '@/components/ui/Button.vue'
 import SessionChip from './SessionChip.vue'
 import { apiJson, apiResponse } from '@/lib/api'
 import { conditionalJson } from '@/lib/conditionalJson'
-import { captureResourceObservation, checkResourceVersions, subscribeResource } from '@/lib/resourceSync'
+import {
+  captureResourceObservation,
+  checkResourceVersions,
+  invalidateResources,
+  subscribeResource,
+} from '@/lib/resourceSync'
 import { createRevalidator } from '@/lib/revalidation'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 
@@ -31,7 +37,8 @@ const schedules = ref<Schedule[]>()
 const error = ref('')
 const pending = ref('')
 const limit = ref(20)
-const enabled = computed(() => open.value && (pane?.isVisible.value ?? true))
+const visibility = useDocumentVisibility()
+const enabled = computed(() => visibility.value !== 'hidden' && (pane?.isVisible.value ?? true))
 const endpoint = `/api/v1/sessions/${encodeURIComponent(props.sessionId)}/schedules`
 const resource = `session:${props.sessionId}:schedules`
 const lifecycle = new AbortController()
@@ -41,13 +48,31 @@ function date(value: string) {
   return new Date(value).toLocaleString(locale.value)
 }
 
+const label = computed(() => {
+  const jobs = schedules.value
+  return jobs?.length === 1
+    ? jobs[0]!.prompt
+    : t('chat.operations.schedules') + (jobs?.length ? ` (${jobs.length})` : '')
+})
+const caption = computed(() => {
+  if (error.value) return t('common.retry')
+  const jobs = schedules.value ?? []
+  const next = jobs
+    .flatMap((job) => (!job.paused && !job.completed && job.next_fire_at ? [job.next_fire_at] : []))
+    .sort()[0]
+  if (next) return t('chat.operations.nextRun', { time: date(next) })
+  if (jobs.some((job) => job.paused && !job.completed)) return t('chat.operations.paused')
+  if (jobs.length && jobs.every((job) => job.completed)) return t('chat.partStatus.completed')
+  return t('chat.operations.schedules')
+})
+
 const reader = createRevalidator(
   async () => {
     const scope = captureResourceObservation(resource).scope
     const revision = mutation
     try {
       const signal = AbortSignal.any([lifecycle.signal, AbortSignal.timeout(8000)])
-      await checkResourceVersions([resource], signal)
+      if (schedules.value) await checkResourceVersions([resource], signal)
       const rows = await conditionalJson<Schedule[]>(resource, endpoint, { signal })
       if (!signal.aborted && scope === captureResourceObservation(resource).scope && revision === mutation) {
         schedules.value = rows
@@ -69,6 +94,9 @@ watch(
   },
   { immediate: true },
 )
+watch(open, (value) => {
+  if (value) reader.invalidate(0)
+})
 
 async function change(schedule: Schedule, action: 'pause' | 'resume' | 'delete') {
   if (pending.value) return
@@ -83,6 +111,7 @@ async function change(schedule: Schedule, action: 'pause' | 'resume' | 'delete')
       await apiResponse(url, { method: 'DELETE', signal })
       if (!signal.aborted && scope === captureResourceObservation(resource).scope) {
         schedules.value = schedules.value?.filter((item) => item.id !== schedule.id)
+        if (!schedules.value?.length) open.value = false
       }
     } else {
       const updated = await apiJson<Schedule>(url, {
@@ -95,6 +124,7 @@ async function change(schedule: Schedule, action: 'pause' | 'resume' | 'delete')
         schedules.value = schedules.value?.map((item) => (item.id === updated.id ? updated : item))
       }
     }
+    if (scope === captureResourceObservation(resource).scope) invalidateResources([resource], 'mutation')
   } catch (cause) {
     if (!lifecycle.signal.aborted) error.value = cause instanceof Error ? cause.message : String(cause)
   } finally {
@@ -111,12 +141,21 @@ onBeforeUnmount(() => {
 
 <template>
   <SessionChip
+    v-if="open || schedules?.length || error"
+    class="composer-resource"
     :title="t('chat.operations.schedules')"
-    :label="t('chat.operations.schedules')"
+    :hint="[...new Set([t('chat.operations.schedules'), label, caption])].join(' · ')"
     :open="open"
+    data-schedules-chip
     @update:open="open = $event"
   >
-    <template #icon><RiCalendarScheduleLine class="h-3 w-3 shrink-0" /></template>
+    <template #trigger>
+      <RiCalendarScheduleLine class="resource-icon" aria-hidden="true" />
+      <span class="min-w-0 text-start">
+        <span class="resource-name">{{ label }}</span>
+        <span class="resource-caption">{{ caption }}</span>
+      </span>
+    </template>
     <div class="space-y-2 text-xs">
       <p v-if="error" class="text-destructive" role="alert">{{ error }}</p>
       <p v-else-if="!schedules" class="text-muted-foreground">{{ t('common.loading') }}</p>

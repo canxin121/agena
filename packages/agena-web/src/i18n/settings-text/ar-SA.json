@@ -1630,6 +1630,5 @@
   "{total} catalog models": "{total} نماذج في الفهرس",
   "{type} {index}": "{type} {index}",
   "{variant} Code: {suffix}": "{variant} الرمز: {suffix}",
-  "{visible} of {total} providers": "{visible} من {total} مقدّم خدمة",
-  "The marketplace operation is still running.": "لا تزال عملية السوق قيد التنفيذ."
+  "{visible} of {total} providers": "{visible} من {total} مقدّم خدمة"
 }

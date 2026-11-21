@@ -1812,7 +1812,8 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
       await router.push({ path: '/assistant', query: sid ? { source: sid } : {} })
       return
     case 'timeline':
-      await router.push({ path: '/settings/diagnostics', query: { view: 'activities' } })
+      if (sid) openTranscriptSearch(true)
+      else toasts.push('error', t('chat.toasts.sessionRequiredForCommand', { command: 'timeline' }))
       return
     case 'settings':
       await router.push('/settings/interface')

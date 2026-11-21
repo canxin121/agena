@@ -86,7 +86,7 @@ const MAX_UPGRADE_BATCH_SIZE = 200
 const toasts = useToastsStore()
 const loading = ref(false)
 const actionKey = ref('')
-const activeOperation = ref<BackgroundTask>()
+const latestOperation = ref<BackgroundTask>()
 const error = ref('')
 const query = ref('')
 const source = ref('')
@@ -193,14 +193,30 @@ function taskFailure(task: BackgroundTask): string {
   ).trim()
 }
 
-async function waitForTask(start: BackgroundTaskStart): Promise<BackgroundTask> {
+async function observeOperation(operation: BackgroundTask) {
+  latestOperation.value = operation
   try {
-    return await waitForRuntimeTask(start.task, { signal: taskWaitController.signal })
+    const task = await waitForRuntimeTask(operation, { signal: taskWaitController.signal, timeoutMs: null })
+    if (!disposed && latestOperation.value?.id === task.id) latestOperation.value = task
+    return task
   } catch (reason) {
-    if (reason instanceof DOMException && reason.name === 'TimeoutError') {
-      throw new Error(st('The marketplace operation is still running.'))
-    }
+    if (latestOperation.value?.id === operation.id) latestOperation.value = undefined
     throw reason
+  }
+}
+
+async function restoreOperation() {
+  try {
+    const { items } = await apiJson<ItemEnvelope<BackgroundTask>>('/api/v1/runtime/tasks', {
+      signal: AbortSignal.any([taskWaitController.signal, AbortSignal.timeout(15_000)]),
+      cache: 'no-store',
+    })
+    const operation = items?.find((task) => task.kind.startsWith('marketplace_'))
+    if (!operation || disposed || actionKey.value || latestOperation.value) return
+    const result = await observeOperation(operation)
+    if (operation.status === 'running' && !disposed && result.id === latestOperation.value?.id) await refresh(false)
+  } catch (reason) {
+    if (!disposed && !actionKey.value) error.value = reason instanceof Error ? reason.message : String(reason)
   }
 }
 
@@ -211,8 +227,7 @@ async function runTask(key: string, request: () => Promise<BackgroundTaskStart>)
   try {
     const start = await request()
     if (disposed) return false
-    activeOperation.value = start.task
-    const task = await waitForTask(start)
+    const task = await observeOperation(start.task)
     if (disposed) return false
     if (task.status === 'succeeded') {
       toasts.push('success', task.message || st('Marketplace operation completed'))
@@ -229,7 +244,6 @@ async function runTask(key: string, request: () => Promise<BackgroundTaskStart>)
     return false
   } finally {
     actionKey.value = ''
-    activeOperation.value = undefined
   }
 }
 
@@ -402,17 +416,21 @@ defineExpose({
     if (!loading.value && !actionKey.value) await refresh()
   },
 })
-onMounted(() => void refresh(false))
+onMounted(() => {
+  void refresh(false)
+  void restoreOperation()
+})
 </script>
 
 <template>
   <div class="settings-stack">
     <p
-      v-if="activeOperation?.status === 'running'"
+      v-if="latestOperation"
       role="status"
       class="rounded-lg border border-border/50 px-3 py-2 text-sm text-muted-foreground"
     >
-      {{ activeOperation.title }} · {{ $t('chat.partStatus.running') }}
+      {{ latestOperation.title }} · {{ $t(`chat.sessionWork.status.${latestOperation.status}`) }}
+      <span v-if="taskFailure(latestOperation)" class="block break-words">{{ taskFailure(latestOperation) }}</span>
     </p>
     <p
       v-if="error"

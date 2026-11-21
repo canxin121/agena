@@ -342,7 +342,7 @@ export function connectSse(opts: SseClientOptions): SseClient {
 
   /**
    * Normalize an agena Notification envelope into the SseEvent shape
-   * (type + properties) that the chat store and activity store consume.
+   * (type + properties) consumed by the chat store and resource watchers.
    *
    * Wire: `event: notification`, body = Notification (serde tag = "kind"):
    *   { kind: "session_changed",     data: { subscription, change: SessionChangeResource } }

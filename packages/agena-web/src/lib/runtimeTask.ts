@@ -1,4 +1,5 @@
 import { i18n } from '@/i18n'
+import { ApiError } from './api'
 import { isDocumentVisible } from './backgroundReads'
 import { conditionalJson } from './conditionalJson'
 import { createRevalidator } from './revalidation'
@@ -17,7 +18,7 @@ export type RuntimeBackgroundTask = {
  * so the caller receives its exact kind and failure information. */
 export function waitForRuntimeTask<T extends RuntimeBackgroundTask>(
   initial: T,
-  options: { signal?: AbortSignal; timeoutMs?: number } = {},
+  options: { signal?: AbortSignal; timeoutMs?: number | null } = {},
 ): Promise<T> {
   options.signal?.throwIfAborted()
   if (initial.status !== 'running') return Promise.resolve(initial)
@@ -72,6 +73,10 @@ export function waitForRuntimeTask<T extends RuntimeBackgroundTask>(
           }
         } catch (error) {
           if (settled || (controller.signal.aborted && !isDocumentVisible())) return
+          if (error instanceof ApiError && [401, 403, 404].includes(error.status)) {
+            fail(error)
+            return
+          }
           throw error
         } finally {
           if (activeRead === controller) activeRead = undefined
@@ -94,7 +99,7 @@ export function waitForRuntimeTask<T extends RuntimeBackgroundTask>(
     })
     document.addEventListener('visibilitychange', visibility)
     options.signal?.addEventListener('abort', cancel, { once: true })
-    timer = setTimeout(() => {
+    function checkDeadline() {
       const timeout = new DOMException('The runtime operation is still running.', 'TimeoutError')
       if (!isDocumentVisible() || !checkScope()) {
         fail(timeout)
@@ -118,7 +123,8 @@ export function waitForRuntimeTask<T extends RuntimeBackgroundTask>(
         })
         .catch(() => {})
         .finally(() => fail(timeout))
-    }, options.timeoutMs ?? 30_000)
+    }
+    if (options.timeoutMs !== null) timer = setTimeout(checkDeadline, options.timeoutMs ?? 30_000)
     queue.invalidate(0)
   })
 }

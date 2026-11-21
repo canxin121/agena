@@ -1630,6 +1630,5 @@
   "{total} catalog models": "{total} modelos del catálogo",
   "{type} {index}": "{type} {index}",
   "{variant} Code: {suffix}": "{variant} Código: {suffix}",
-  "{visible} of {total} providers": "{visible} de {total} proveedores",
-  "The marketplace operation is still running.": "La operación del mercado sigue en curso."
+  "{visible} of {total} providers": "{visible} de {total} proveedores"
 }

@@ -17,6 +17,7 @@ import { useBrowserCopy } from '@/features/browser/copy'
 import BrowserTabChip from '@/features/browser/BrowserTabChip.vue'
 import SessionAgentChip from './SessionAgentChip.vue'
 import SessionProcessChip from './SessionProcessChip.vue'
+import SessionSchedules from './SessionSchedules.vue'
 
 const props = defineProps<{
   sessionId: string
@@ -27,6 +28,7 @@ const props = defineProps<{
   browserRequested: boolean
 }>()
 const emit = defineEmits<{ browser: [pageId?: string] }>()
+const schedulesOpen = defineModel<boolean>('schedulesOpen', { default: false })
 const { t } = useI18n()
 const browserText = useBrowserCopy()
 const session = computed(() => props.sessionId)
@@ -99,11 +101,7 @@ watch([() => props.browserOpen, () => props.browserRequested], () => void browse
 </script>
 
 <template>
-  <div
-    v-if="tabs.length || processes.length || agents.data.value?.length || browserRequested || errors.length"
-    class="shrink-0"
-    data-composer-resources
-  >
+  <div class="shrink-0" data-composer-resources>
     <div class="chat-column">
       <div
         class="resource-strip flex min-w-0 items-center gap-1.5 overflow-x-auto overscroll-x-contain pb-1 pt-0.5"
@@ -129,6 +127,7 @@ watch([() => props.browserOpen, () => props.browserRequested], () => void browse
           {{ browserText('requested') }}
         </button>
         <SessionAgentChip v-for="agent in agents.data.value" :key="agent.id" :agent="agent" />
+        <SessionSchedules v-model:open="schedulesOpen" :session-id="sessionId" />
         <SessionProcessChip
           v-for="entry in processes"
           :key="entry.key"
@@ -152,6 +151,10 @@ watch([() => props.browserOpen, () => props.browserRequested], () => void browse
 </template>
 
 <style scoped>
+[data-composer-resources]:not(:has(button)) {
+  display: none;
+}
+
 .resource-strip {
   scrollbar-width: thin;
 }

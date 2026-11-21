@@ -53,7 +53,6 @@ import { useBtwStore } from '@/stores/btw'
 import { skillCatalogKey } from './skillReferences'
 
 const SessionOperationFooter = defineAsyncComponent(() => import('@/components/chat/SessionOperationFooter.vue'))
-const SessionSchedules = defineAsyncComponent(() => import('@/components/chat/SessionSchedules.vue'))
 const WorkspaceChangesSection = defineAsyncComponent(() => import('@/components/chat/WorkspaceChangesSection.vue'))
 const BtwSection = defineAsyncComponent(() => import('@/components/chat/BtwSection.vue'))
 const PlanSection = defineAsyncComponent(() => import('@/components/chat/PlanSection.vue'))
@@ -929,12 +928,6 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                     :directory="sessionDirectory || ''"
                     :busy="currentPhase !== 'idle'"
                   />
-                  <SessionSchedules
-                    v-if="chat.selectedSessionId"
-                    :key="chat.selectedSessionId"
-                    v-model:open="ctx.schedulesOpen.value"
-                    :session-id="chat.selectedSessionId"
-                  />
                   <BtwSection
                     v-if="chat.selectedSessionId && btw.sessions.has(chat.selectedSessionId)"
                     :key="chat.selectedSessionId + ':btw'"
@@ -1130,8 +1123,9 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
           </div>
           <div ref="footerEl" class="shrink-0">
             <SessionOperationFooter
-              v-if="chat.selectedSessionId && !composerFullscreenActive && paneVisible"
+              v-if="chat.selectedSessionId && paneVisible"
               :key="`${chat.selectedSessionId}:${authVersion}`"
+              v-model:schedules-open="ctx.schedulesOpen.value"
               :session-id="chat.selectedSessionId"
               :messages="chat.messages"
               :busy="currentPhase !== 'idle'"
@@ -1227,18 +1221,5 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
 .chatlist-leave-to {
   opacity: 0;
   transform: translateY(8px);
-}
-
-.activitylist-enter-active,
-.activitylist-leave-active {
-  transition:
-    opacity 140ms ease,
-    transform 160ms ease;
-}
-
-.activitylist-enter-from,
-.activitylist-leave-to {
-  opacity: 0;
-  transform: translateY(6px);
 }
 </style>

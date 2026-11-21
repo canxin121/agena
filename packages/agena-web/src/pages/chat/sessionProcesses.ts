@@ -1,4 +1,5 @@
 import type { ContentRef } from '@/lib/content'
+import { toolInputRecord } from '@/lib/toolInput'
 import type { MessageEntry, MessagePart } from '@/types/chat'
 import { jsonArray, jsonRecord, stringValue } from './transcriptPartPresentation'
 
@@ -82,9 +83,11 @@ export function composerProcesses(
       // Managed launches become a resource when their process ID or output stream arrives.
       if (name !== 'shell.exec' && !resource && !id) continue
       const resourceId = stringValue(resource?.resource_id)
+      // A foreground call keeps its popover while the first output reference arrives.
       const key =
-        processKeys.get(`${kind}:${id}`) ||
-        (resourceId ? `output:${resourceId}` : id ? `${kind}:${id}` : `part:${part.id}`)
+        name === 'shell.exec'
+          ? `part:${part.id}`
+          : processKeys.get(`${kind}:${id}`) || (resourceId ? `output:${resourceId}` : `${kind}:${id}`)
       const existing = entries.get(key)
       if (existing) {
         if (existing.process && !existing.process.output_resource && !existing.part) existing.part = part
@@ -96,7 +99,11 @@ export function composerProcesses(
         kind,
         part,
         started: part.createdAt ?? message.info.time?.created ?? 0,
-        label: stringValue(command?.command) || stringValue(document.title) || name,
+        label:
+          stringValue(command?.command) ||
+          stringValue(toolInputRecord(source.input).command) ||
+          stringValue(document.title) ||
+          name,
         retained: Boolean(id),
         exitCode: typeof command?.exit_code === 'number' ? command.exit_code : undefined,
       })

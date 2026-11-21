@@ -36,9 +36,6 @@ pub enum Query {
     GetSessionPlatforms(GetSessionParams),
     ListPermissionRules(ListPermissionRulesParams),
     GetPermissionRule(GetPermissionRuleParams),
-    ListActivities(ListActivitiesParams),
-    GetActivity(GetActivityParams),
-    ActivityLogs(ActivityLogsParams),
 }
 
 pub use crate::business::BusinessQuery;
@@ -247,44 +244,6 @@ pub struct GetPermissionRuleParams {
     pub rule_id: i64,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-/// Parameters for listing background activities.
-pub struct ListActivitiesParams {
-    /// Comma-separated kind filters (`shell`, `agent`, `runtime`, `browser`).
-    #[serde(default)]
-    pub kinds: Option<String>,
-    /// Comma-separated status filters (`running`, `succeeded`, `failed`, …).
-    #[serde(default)]
-    pub statuses: Option<String>,
-    /// Only include activities for this session (owns or parent).
-    #[serde(default)]
-    pub session_id: Option<i64>,
-    /// Only include active (pending/running) activities.
-    #[serde(default)]
-    pub active_only: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Parameters for fetching a background activity by id.
-pub struct GetActivityParams {
-    pub activity_id: String,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-/// Parameters for reading activity log lines.
-pub struct ActivityLogsParams {
-    pub activity_id: String,
-    /// Cursor: lines with `seq > since_seq` are returned.
-    #[serde(default)]
-    pub since_seq: u64,
-    /// Max lines to return (clamped server-side).
-    #[serde(default)]
-    pub limit: Option<u32>,
-    /// Block for fresh output up to this many ms when no new lines exist.
-    #[serde(default)]
-    pub wait_ms: u64,
-}
-
 impl Query {
     /// The session this read targets, when it is session-scoped.
     ///
@@ -307,10 +266,7 @@ impl Query {
             | Query::GetWorkspace(_)
             | Query::ListSessions(_)
             | Query::ListPermissionRules(_)
-            | Query::GetPermissionRule(_)
-            | Query::ListActivities(_)
-            | Query::GetActivity(_)
-            | Query::ActivityLogs(_) => None,
+            | Query::GetPermissionRule(_) => None,
             Query::ReadParts(params) => Some(params.session_id),
             Query::ReadRuns(params) => Some(params.session_id),
             Query::ReadContent(params) => Some(params.session_id),

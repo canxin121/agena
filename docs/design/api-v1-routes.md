@@ -327,14 +327,14 @@ git 属于目录，不属于会话，也不要求目录已被登记。
 | GET, PUT, DELETE | `/api/v1/permission-rules/{id}` |
 | DELETE | `/api/v1/permission-rules/{id}/grants` |
 
-## 活动与通知
+## 会话操作与通知
 
 | 方法 | 路径 | 原 |
 |---|---|---|
-| GET | `/api/v1/activities` | |
-| PUT | `/api/v1/activities/{id}/state` | `stop` / `pause` / `resume` / `dismiss` |
-| DELETE | `/api/v1/activities/{id}` | `delete` |
-| GET | `/api/v1/activities/{id}/logs` | |
+| GET, DELETE | `/api/v1/sessions/{session_id}/shell/processes/{process_id}` | 查看或停止 Shell 进程 |
+| GET, DELETE | `/api/v1/sessions/{session_id}/monitor/subscriptions/{subscription_id}` | 查看或断开 WebSocket 订阅 |
+| GET | `/api/v1/sessions/{session_id}/schedules` | 查看会话计划 |
+| PATCH, DELETE | `/api/v1/sessions/{session_id}/schedules/{schedule_id}` | 修改暂停状态或删除计划 |
 | GET | `/api/v1/notifications` | |
 | DELETE | `/api/v1/notifications/{id}` | `dismiss` |
 | POST | `/api/v1/notifications/{id}/actions/{action_id}` | |

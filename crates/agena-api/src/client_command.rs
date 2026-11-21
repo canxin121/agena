@@ -90,7 +90,7 @@ client_command_actions! {
     Diagnostics => "diagnostics", "/diagnostics";
     Status => "status", "/status";
     Usage => "usage", "/usage";
-    Activities => "activities", "/activities";
+    Schedules => "schedules", "/schedules";
     Queue => "queue", "/queue";
     Background => "background", "/background";
     Plan => "plan", "/plan";

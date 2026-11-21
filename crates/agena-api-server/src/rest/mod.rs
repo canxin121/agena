@@ -45,7 +45,6 @@ pub(crate) fn server_error_from_application(error: ApplicationError) -> ServerEr
     ServerError::from(error)
 }
 
-mod activities;
 mod assistant;
 mod bot;
 mod browser;
@@ -68,6 +67,8 @@ mod plugins;
 mod providers;
 mod revisions;
 mod runs;
+mod schedules;
+mod session_processes;
 mod sessions;
 mod settings;
 mod skills;
@@ -78,12 +79,13 @@ pub use file_changes::*;
 pub use mcp_connections::*;
 pub use permissions::*;
 pub use runs::*;
+pub use schedules::*;
+pub use session_processes::*;
 pub use sessions::*;
 pub use settings::*;
 pub use skills::*;
 pub use workspaces::*;
 
-pub use activities::*;
 pub use auth::*;
 pub use content::*;
 pub use conversations::*;
@@ -448,6 +450,28 @@ pub async fn cancel_runtime_background_task(
         .cancel_background_task(task_id.trim())
         .map_err(server_error_from_runtime_background_task)?;
     Ok(Json(runtime_background_task_cancel_response(task)))
+}
+
+pub async fn get_runtime_background_task(
+    State(state): State<AppState>,
+    Path(task_id): Path<String>,
+    headers: HeaderMap,
+) -> Result<impl IntoResponse, ServerError> {
+    let read =
+        crate::revisions::ConditionalRead::new(&state, &format!("runtime-task:{task_id}")).await?;
+    if let Some(response) = read.not_modified(&headers) {
+        return Ok(response);
+    }
+    let task = state
+        .runtime_control()
+        .background_tasks()
+        .into_iter()
+        .find(|task| task.id == task_id)
+        .ok_or_else(|| ServerError::not_found("The runtime operation was not found."))?;
+    read.json(agena_application::dto::runtime_background_task_resource(
+        task,
+    ))
+    .await
 }
 
 pub async fn plugin_rpc(

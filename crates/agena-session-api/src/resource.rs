@@ -170,11 +170,6 @@ pub struct SessionExecutionResource {
     pub latest_event_seq: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub automation: Option<SessionAutomationResource>,
-    /// Non-terminal background members owned by this session. This is the
-    /// single session-scoped projection consumed by both composer footers and
-    /// Web; clients must not maintain a second counter.
-    #[serde(default)]
-    pub background_activities: Vec<super::activity::BackgroundActivityResource>,
     pub execution: SessionExecutionContextResource,
     pub usage: SessionUsageResource,
 }
@@ -722,6 +717,10 @@ pub enum SessionUsageLimitBasis {
 pub struct ScheduledJobResource {
     pub id: String,
     pub kind: String,
+    #[serde(default)]
+    pub paused: bool,
+    #[serde(default)]
+    pub completed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expression: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

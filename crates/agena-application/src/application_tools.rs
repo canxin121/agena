@@ -74,6 +74,46 @@ fn tool_content_for_presentation(
     Some(content)
 }
 
+fn tool_part_control(
+    content: &agena_runtime_contracts::part_content::ToolCallContent,
+) -> Option<agena_domain::ViewBlock> {
+    use agena_domain::ViewBlock;
+
+    let payload = content.output.as_ref()?.payload.as_ref()?;
+    let tool = agena_tool::normalized_tool_identity(&content.name);
+    let field = |key| {
+        payload
+            .get(key)?
+            .as_str()
+            .filter(|value| !value.trim().is_empty())
+            .map(str::to_owned)
+    };
+    match tool.as_str() {
+        "shell.spawn" | "shell.open" | "shell.watch" if !content.resources.is_empty() => {
+            Some(ViewBlock::ShellProcess {
+                id: "shell-process".to_owned(),
+                process_id: field("process_id")?,
+            })
+        }
+        "monitor.start" => Some(ViewBlock::MonitorSubscription {
+            id: "monitor-subscription".to_owned(),
+            subscription_id: field("monitor_id")?,
+        }),
+        "agent.spawn" | "agent.followup" => {
+            let session_id = payload.get("agent_id")?.as_i64().filter(|id| *id > 0)?;
+            Some(ViewBlock::AgentSession {
+                id: "agent-session".to_owned(),
+                session_id,
+            })
+        }
+        "browser.open" => Some(ViewBlock::BrowserPage {
+            id: "browser-page".to_owned(),
+            page_id: field("session_id")?,
+        }),
+        _ => None,
+    }
+}
+
 fn project_tool_content(
     value: &serde_json::Value,
     sections: &[agena_api::live::ToolDetailSection],
@@ -575,10 +615,11 @@ impl Application {
             plugin_name: content.plugin.clone(),
             input,
         };
-        let mut blocks = Vec::new();
+        let mut blocks = tool_part_control(content).into_iter().collect::<Vec<_>>();
+        let tool_name = agena_tool::normalized_tool_identity(&content.name);
         let shell = matches!(
-            agena_domain::ToolPermissionConfig::canonical_shell_tool_name(&content.name),
-            Some("agena.shell.exec" | "agena.shell.spawn" | "agena.shell.open")
+            tool_name.as_str(),
+            "shell.exec" | "shell.spawn" | "shell.open" | "shell.watch"
         );
         if shell && !content.resources.is_empty() {
             let command = match content.input.get("command") {

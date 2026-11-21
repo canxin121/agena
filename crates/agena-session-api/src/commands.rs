@@ -53,11 +53,6 @@ pub enum Command {
     ReplacePermissionRule(ReplacePermissionRuleParams),
     RevokePermissionRule(RevokePermissionRuleParams),
     DeletePermissionRule(DeletePermissionRuleParams),
-
-    // ── background activities ──
-    StopActivity(StopActivityParams),
-    DismissActivity(DismissActivityParams),
-    ClearFinishedActivities,
 }
 
 pub use crate::business::BusinessCommand;
@@ -344,20 +339,6 @@ pub struct DeletePermissionRuleParams {
     pub rule_id: i64,
 }
 
-// ─── background activities ────────────────────────────────────────────────
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Parameters for stopping a background activity.
-pub struct StopActivityParams {
-    pub activity_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-/// Parameters for dismissing a background activity.
-pub struct DismissActivityParams {
-    pub activity_id: String,
-}
-
 impl Command {
     /// The session this write targets, when it is session-scoped.
     pub fn session_id(&self) -> Option<i64> {
@@ -373,10 +354,7 @@ impl Command {
             | Command::UpsertPermissionRule(_)
             | Command::ReplacePermissionRule(_)
             | Command::RevokePermissionRule(_)
-            | Command::DeletePermissionRule(_)
-            | Command::StopActivity(_)
-            | Command::DismissActivity(_)
-            | Command::ClearFinishedActivities => None,
+            | Command::DeletePermissionRule(_) => None,
             // Creating a top-level session has no existing session to scope.
             Command::CreateSession(params) => params.parent_id,
             Command::UpdateSession(params) => Some(params.session_id),

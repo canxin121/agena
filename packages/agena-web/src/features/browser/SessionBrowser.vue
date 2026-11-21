@@ -11,7 +11,7 @@ import BrowserViewport from './BrowserViewport.vue'
 import { browserCommand, readBrowserState, type BrowserFrame, type BrowserInput, type BrowserState } from './api'
 import { useBrowserCopy } from './copy'
 
-const props = defineProps<{ open: boolean; sessionId: string; requestId?: string }>()
+const props = defineProps<{ open: boolean; sessionId: string; requestId?: string; initialPageId?: string }>()
 const emit = defineEmits<{ 'update:open': [open: boolean] }>()
 const chat = useChatStore()
 const t = useBrowserCopy()
@@ -21,6 +21,7 @@ const pageId = ref('')
 const busy = ref(false)
 const error = ref('')
 const previewError = ref('')
+const linkedPageClosed = ref(false)
 const controlBySession = new Map<string, string>()
 const controlId = ref('')
 const authVersion = ref(readServerAuthTokenVersion())
@@ -130,8 +131,10 @@ watch(
   [() => props.open, () => props.sessionId, authVersion],
   ([open, sid], _, cleanup) => {
     frame.value = null
+    linkedPageClosed.value = false
     if (!open || !sid) return
     if (!controlId.value) pageId.value = ''
+    let initialPageId = props.initialPageId
     cleanup(
       poll(1200, async (signal) => {
         const revision = controlRevision
@@ -141,7 +144,12 @@ watch(
           const oldTabs = new Set(state.value?.tabs.map((tab) => tab.page_id) || [])
           const newHelp = result.help && result.help.page_id !== state.value?.help?.page_id
           state.value = result
-          if ((newHelp && !controlId.value) || !result.tabs.some((tab) => tab.page_id === pageId.value)) {
+          const initialPage = result.tabs.find((tab) => tab.page_id === initialPageId)
+          if (initialPageId) linkedPageClosed.value = !initialPage
+          initialPageId = undefined
+          if (initialPage) {
+            pageId.value = initialPage.page_id
+          } else if ((newHelp && !controlId.value) || !result.tabs.some((tab) => tab.page_id === pageId.value)) {
             const requested = result.tabs.find((tab) => tab.page_id === result.help?.page_id)
             pageId.value = requested?.page_id || result.tabs[0]?.page_id || ''
           } else if (controlId.value) {
@@ -255,7 +263,10 @@ async function selectPage(event: Event) {
   const value = (event.target as HTMLSelectElement).value
   const current = generation
   await flushInputs()
-  if (current === generation) pageId.value = value
+  if (current === generation) {
+    linkedPageClosed.value = false
+    pageId.value = value
+  }
 }
 
 async function takeControl() {
@@ -367,6 +378,9 @@ async function retryAnswer() {
         class="rounded-md border border-destructive/40 px-2.5 py-2 text-sm text-destructive"
       >
         {{ error || previewError }}
+      </p>
+      <p v-else-if="linkedPageClosed" role="status" class="text-xs text-muted-foreground">
+        {{ t('linkedPageClosed') }}
       </p>
       <div v-if="state?.tabs.length" class="flex flex-wrap items-center justify-between gap-2">
         <label class="flex min-w-0 max-w-full items-center gap-2 text-sm">

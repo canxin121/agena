@@ -125,7 +125,6 @@ impl App {
                 name if name.starts_with("btw-") => self.handle_btw_action(name),
                 "side" => self.handle_side_command(""),
                 "side-parent" => self.open_parent_session(),
-                "activities" => self.open_activities_panel(),
                 "history" => self.open_prompt_history_search(),
                 "approval" => self.maybe_auto_open_pending_interactive_overlay(),
                 "transcript-search" => self.open_transcript_search_overlay(true),

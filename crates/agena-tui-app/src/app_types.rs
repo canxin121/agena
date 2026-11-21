@@ -683,24 +683,6 @@ impl Drop for App {
 
 pub(super) enum AppMessage {
     AsyncOperationCompleted(UiCompletion),
-    ActivitiesLoaded {
-        request_id: u64,
-        result: UiResult<Vec<agena_tui::activities::ActivitiesRow>>,
-    },
-    ActivitiesLogLoaded {
-        activity_id: String,
-        request_id: u64,
-        result: UiResult<agena_tui::activities::ActivitiesLogTail>,
-    },
-    ActivitiesStopped {
-        activity_id: String,
-        request_id: u64,
-        result: UiResult<bool>,
-    },
-    ActivitiesCleared {
-        request_id: u64,
-        result: UiResult<bool>,
-    },
     BtwUpdated {
         session_id: i64,
         request_id: u64,
@@ -1148,7 +1130,6 @@ pub(super) enum Overlay {
 pub(super) enum Route {
     Main,
     Usage(UsageDashboardState),
-    Activities(ActivitiesState),
     PlanViewer(PlanViewerState),
     Assistant(i64),
     Integrations(i64),
@@ -1248,49 +1229,6 @@ impl UsageDashboardState {
             loading: false,
             request_id: 0,
             error: None,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct ActivitiesState {
-    pub(super) presentation: agena_tui::activities::ActivitiesPresentation,
-    pub(super) rows: Vec<agena_tui::activities::ActivitiesRow>,
-    pub(super) log_tail: Option<agena_tui::activities::ActivitiesLogTail>,
-    pub(super) log_error: Option<String>,
-    /// In-flight list refresh. Mutating actions use a separate gate so a
-    /// late list response cannot make stop/dismiss/clear appear completed.
-    pub(super) loading: bool,
-    pub(super) mutation_loading: bool,
-    pub(super) error: Option<String>,
-    pub(super) request_id: u64,
-    pub(super) mutation_request_id: u64,
-    pub(super) log_request_id: u64,
-    pub(super) log_request_since: u64,
-    pub(super) log_activity_id: Option<String>,
-    pub(super) log_loading: bool,
-    pub(super) last_refresh_at: Instant,
-    pub(super) last_log_refresh_at: Instant,
-}
-
-impl ActivitiesState {
-    pub(super) fn new() -> Self {
-        Self {
-            presentation: agena_tui::activities::ActivitiesPresentation::default(),
-            rows: Vec::new(),
-            log_tail: None,
-            log_error: None,
-            loading: false,
-            mutation_loading: false,
-            error: None,
-            request_id: 0,
-            mutation_request_id: 0,
-            log_request_id: 0,
-            log_request_since: 0,
-            log_activity_id: None,
-            log_loading: false,
-            last_refresh_at: Instant::now(),
-            last_log_refresh_at: Instant::now(),
         }
     }
 }

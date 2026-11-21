@@ -93,7 +93,6 @@ function execution(value: ReturnType<typeof session>): chatApi.AgenaExecutionSta
     execution: { agent_status: 'completed' },
     queued_messages: [],
     queue_paused: false,
-    background_activities: [],
   }
 }
 

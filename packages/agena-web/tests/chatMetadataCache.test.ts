@@ -79,7 +79,6 @@ function permissionResponse(id: string, version = 2): chatApi.AgenaExecutionStat
     execution: { selected_permission: { tools: { default: 'deny' } } },
     queued_messages: [],
     queue_paused: false,
-    background_activities: [],
   }
 }
 

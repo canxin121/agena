@@ -86,6 +86,7 @@ const MAX_UPGRADE_BATCH_SIZE = 200
 const toasts = useToastsStore()
 const loading = ref(false)
 const actionKey = ref('')
+const activeOperation = ref<BackgroundTask>()
 const error = ref('')
 const query = ref('')
 const source = ref('')
@@ -197,7 +198,7 @@ async function waitForTask(start: BackgroundTaskStart): Promise<BackgroundTask> 
     return await waitForRuntimeTask(start.task, { signal: taskWaitController.signal })
   } catch (reason) {
     if (reason instanceof DOMException && reason.name === 'TimeoutError') {
-      throw new Error(st('The marketplace operation is still running. Check Runtime background tasks for progress.'))
+      throw new Error(st('The marketplace operation is still running.'))
     }
     throw reason
   }
@@ -208,7 +209,10 @@ async function runTask(key: string, request: () => Promise<BackgroundTaskStart>)
   actionKey.value = key
   error.value = ''
   try {
-    const task = await waitForTask(await request())
+    const start = await request()
+    if (disposed) return false
+    activeOperation.value = start.task
+    const task = await waitForTask(start)
     if (disposed) return false
     if (task.status === 'succeeded') {
       toasts.push('success', task.message || st('Marketplace operation completed'))
@@ -225,6 +229,7 @@ async function runTask(key: string, request: () => Promise<BackgroundTaskStart>)
     return false
   } finally {
     actionKey.value = ''
+    activeOperation.value = undefined
   }
 }
 
@@ -402,6 +407,13 @@ onMounted(() => void refresh(false))
 
 <template>
   <div class="settings-stack">
+    <p
+      v-if="activeOperation?.status === 'running'"
+      role="status"
+      class="rounded-lg border border-border/50 px-3 py-2 text-sm text-muted-foreground"
+    >
+      {{ activeOperation.title }} · {{ $t('chat.partStatus.running') }}
+    </p>
     <p
       v-if="error"
       role="alert"
@@ -625,11 +637,7 @@ onMounted(() => void refresh(false))
         </article>
       </div>
     </SettingsCard>
-    <SettingsCard
-      :title="$st('Installed marketplace plugins')"
-      :icon="RiCheckboxCircleLine"
-      :count="installed.length"
-    >
+    <SettingsCard :title="$st('Installed marketplace plugins')" :icon="RiCheckboxCircleLine" :count="installed.length">
       <template #actions
         ><Button
           v-if="outdated.length"

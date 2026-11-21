@@ -257,45 +257,15 @@ pub async fn dispatch_command(
             state.service().delete_permission_rule(rule_id).await?;
             Ok(CommandResult::PermissionRuleDeleted { id: rule_id })
         }
-        Command::StopActivity(StopActivityParams { activity_id }) => {
-            let service = state.runtime_activities()?;
-            let activity = service
-                .stop_activity(&activity_id)
-                .await
-                .map_err(activity_command_error)?;
-            Ok(CommandResult::Activity(
-                agena_api::resource::BackgroundActivityResource::from(&activity),
-            ))
-        }
-        Command::DismissActivity(DismissActivityParams { activity_id }) => {
-            let service = state.runtime_activities()?;
-            let activity = service
-                .dismiss_activity(&activity_id)
-                .map_err(activity_command_error)?;
-            Ok(CommandResult::ActivityDeleted { id: activity.id })
-        }
-        Command::ClearFinishedActivities => {
-            let service = state.runtime_activities()?;
-            Ok(CommandResult::ActivitiesCleared {
-                count: service
-                    .clear_finished()
-                    .await
-                    .map_err(activity_command_error)?,
-            })
-        }
     }
 }
 use super::{
     Application, ApplicationError, CancelRunParams, ClearSessionParams, Command, CommandResult,
     CompactSessionParams, ContinueRunParams, CreateSessionParams, CreateWorkspaceParams,
-    DeletePermissionRuleParams, DeleteSessionParams, DeleteWorkspaceParams, DismissActivityParams,
-    ForkSessionParams, ListSessionTreeParams, MarkInteractiveRequestPresentedParams,
-    ReplacePermissionRuleParams, ReplyPermissionParams, ReplyUserInputParams,
-    ResolveWorkspaceParams, RevokePermissionRuleParams, RewindSessionParams, SessionClearMode,
-    StopActivityParams, SubmitRunParams, UpdateSessionParams, UpdateSessionSelectionParams,
-    UpdateWorkspaceParams, WorkspacePathRequest, WorkspaceResolveRequest,
+    DeletePermissionRuleParams, DeleteSessionParams, DeleteWorkspaceParams, ForkSessionParams,
+    ListSessionTreeParams, MarkInteractiveRequestPresentedParams, ReplacePermissionRuleParams,
+    ReplyPermissionParams, ReplyUserInputParams, ResolveWorkspaceParams,
+    RevokePermissionRuleParams, RewindSessionParams, SessionClearMode, SubmitRunParams,
+    UpdateSessionParams, UpdateSessionSelectionParams, UpdateWorkspaceParams, WorkspacePathRequest,
+    WorkspaceResolveRequest,
 };
-
-fn activity_command_error(error: agena_runtime::ActivityControlError) -> ApplicationError {
-    ApplicationError::bad_request_error(&error)
-}

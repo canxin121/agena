@@ -88,7 +88,9 @@ impl App {
             }
             ClientCommandAction::Usage => self.open_usage_dashboard(),
             ClientCommandAction::Queue => self.open_message_queue(),
-            ClientCommandAction::Activities => self.open_activities_panel(),
+            ClientCommandAction::Schedules => {
+                self.open_session_work_panel(crate::app_session_work::Tab::Schedules);
+            }
             ClientCommandAction::Background => {
                 // Return to the session hub and leave the TUI. The server owns
                 // the session independently of this client, so nothing is

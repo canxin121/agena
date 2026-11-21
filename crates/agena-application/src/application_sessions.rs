@@ -320,7 +320,7 @@ impl Application {
                 session_id,
             )
             .await?;
-        self.with_background_activities(resource, session_id).await
+        self.render_execution_parts(resource, session_id).await
     }
 
     /// Observe the exact accepted attempt without following a retry or using
@@ -374,10 +374,10 @@ impl Application {
                 session_id,
             )
             .await?;
-        self.with_background_activities(resource, session_id).await
+        self.render_execution_parts(resource, session_id).await
     }
 
-    async fn with_background_activities(
+    async fn render_execution_parts(
         &self,
         mut resource: SessionExecutionResource,
         session_id: i64,
@@ -414,27 +414,58 @@ impl Application {
                 .parts
                 .sort_unstable_by_key(|part| (part.created_at_ms, part.run_id, part.part_id));
         }
-        if let Ok(activities) = self.runtime_activities() {
-            let filter = agena_domain::BackgroundActivityFilter {
-                session_id: Some(session_id),
-                active_only: true,
-                ..Default::default()
-            };
-            resource.background_activities = activities
-                .list_activities(&filter)
-                .await
-                .map_err(|error| {
-                    ApplicationError::internal(format!(
-                        "failed to project background activities for session {session_id}: {error}"
-                    ))
-                })?
-                .iter()
-                .map(agena_api::resource::BackgroundActivityResource::from)
-                .collect();
-        }
         self.render_transcript_presentations(&mut resource.parts)
             .await;
         Ok(resource)
+    }
+
+    pub async fn list_session_schedules(
+        &self,
+        session_id: i64,
+    ) -> Result<Vec<agena_api::resource::ScheduledJobResource>, ApplicationError> {
+        let mut jobs = self
+            .session_execution_services()?
+            .execution_control
+            .list_session_schedules(session_id)
+            .await
+            .map_err(|error| ApplicationError::from_failure(error.failure))?;
+        crate::service::sort_jobs_for_display(&mut jobs);
+        Ok(jobs
+            .into_iter()
+            .map(crate::service::scheduled_job_resource)
+            .collect())
+    }
+
+    pub async fn set_session_schedule_paused(
+        &self,
+        session_id: i64,
+        schedule_id: uuid::Uuid,
+        paused: bool,
+    ) -> Result<agena_api::resource::ScheduledJobResource, ApplicationError> {
+        self.session_execution_services()?
+            .execution_control
+            .set_session_schedule_paused(session_id, schedule_id, paused)
+            .await
+            .map_err(|error| ApplicationError::from_failure(error.failure))?
+            .map(crate::service::scheduled_job_resource)
+            .ok_or_else(|| ApplicationError::not_found("The schedule was not found."))
+    }
+
+    pub async fn delete_session_schedule(
+        &self,
+        session_id: i64,
+        schedule_id: uuid::Uuid,
+    ) -> Result<(), ApplicationError> {
+        if !self
+            .session_execution_services()?
+            .execution_control
+            .delete_session_schedule(session_id, schedule_id)
+            .await
+            .map_err(|error| ApplicationError::from_failure(error.failure))?
+        {
+            return Err(ApplicationError::not_found("The schedule was not found."));
+        }
+        Ok(())
     }
 
     pub async fn set_session_permission(

@@ -1666,6 +1666,48 @@ impl crate::SessionExecutionControl for SessionManager {
             None => Ok(Vec::new()),
         }
     }
+    async fn list_session_schedules(
+        &self,
+        session_id: i64,
+    ) -> Result<Vec<agena_scheduler::ScheduledJob>, crate::SessionExecutionControlError> {
+        match self.tool_executor().scheduler() {
+            Some(scheduler) => scheduler
+                .list_filtered(Some(session_id), false)
+                .await
+                .map_err(|error| crate::SessionExecutionControlError::internal_error(&error)),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    async fn set_session_schedule_paused(
+        &self,
+        session_id: i64,
+        schedule_id: uuid::Uuid,
+        paused: bool,
+    ) -> Result<Option<agena_scheduler::ScheduledJob>, crate::SessionExecutionControlError> {
+        match self.tool_executor().scheduler() {
+            Some(scheduler) => scheduler
+                .set_session_job_paused(schedule_id, session_id, paused)
+                .await
+                .map_err(|error| crate::SessionExecutionControlError::internal_error(&error)),
+            None => Ok(None),
+        }
+    }
+
+    async fn delete_session_schedule(
+        &self,
+        session_id: i64,
+        schedule_id: uuid::Uuid,
+    ) -> Result<bool, crate::SessionExecutionControlError> {
+        match self.tool_executor().scheduler() {
+            Some(scheduler) => scheduler
+                .remove_session_job(schedule_id, session_id)
+                .await
+                .map_err(|error| crate::SessionExecutionControlError::internal_error(&error)),
+            None => Ok(false),
+        }
+    }
+
     fn scheduler_available(&self) -> bool {
         self.tool_executor().scheduler().is_some()
     }

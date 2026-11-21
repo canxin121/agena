@@ -1,5 +1,4 @@
 import { normalizeMessageIdentity } from '@/lib/messageIdentity'
-import { activityEquals, activityIsActive, type SessionActivity } from '@/types/activity'
 import { defineStore } from 'pinia'
 import { useUiStore } from './ui'
 import { useBtwStore } from './btw'
@@ -206,35 +205,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
   const sessionRunConfigBySession = ref<Record<string, SessionRunConfig>>({})
   const sessionUsageBySession = ref<Record<string, SessionUsage>>({})
   // Keep the server execution projection separate from the compact run
-  // config.  The composer status line needs agent/task/permission/activity
+  // config.  The composer status line needs agent and permission
   // fields that are not part of the model picker configuration.
   const sessionExecutionBySession = ref<Record<string, NonNullable<chatApi.AgenaExecutionState['execution']>>>({})
-  const backgroundActivitiesBySession = ref<Record<string, SessionActivity[]>>({})
-  const backgroundActivityGeneration = new Map<string, number>()
-  const backgroundActivityTimes = new Map<string, number>()
-  const backgroundActivityKindsBySession = ref<Record<string, string[]>>({})
-  function applySessionActivity(
-    sid: string,
-    activity: SessionActivity,
-    dismissed = false,
-    expectedGeneration?: number,
-  ) {
-    if (
-      deletedSessions.has(sid) ||
-      (expectedGeneration !== undefined && expectedGeneration !== (backgroundActivityGeneration.get(sid) ?? 0))
-    )
-      return
-    const rows = backgroundActivitiesBySession.value[sid] || []
-    const previous = rows.find((row) => row.id === activity.id)
-    if ((dismissed && !previous) || (!dismissed && previous && activityEquals(previous, activity))) return
-    backgroundActivityGeneration.set(sid, (backgroundActivityGeneration.get(sid) ?? 0) + 1)
-    const remaining = rows.filter((row) => row.id !== activity.id)
-    backgroundActivitiesBySession.value[sid] = dismissed ? remaining : [activity, ...remaining]
-    backgroundActivityKindsBySession.value[sid] = backgroundActivitiesBySession.value[sid]
-      .filter((row) => activityIsActive(row.status))
-      .map((row) => row.kind.toLowerCase())
-      .filter(Boolean)
-  }
   sessionRunConfigBySession.value = loadSessionRunConfigMap(localStorageKeys.chat.sessionRunConfig)
   const runConfigPersister = createSessionRunConfigPersister(
     localStorageKeys.chat.sessionRunConfig,
@@ -1284,7 +1257,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
       }
     }
     const generation = transcriptCacheGeneration
-    const activityGeneration = backgroundActivityGeneration.get(sid) ?? 0
     const writeEpoch = executionWriteEpoch.get(sid) ?? 0
     const st = await chatApi.getSessionExecutionStatus(sid, forceFresh, forceFresh).catch((error) => {
       if (error instanceof ApiError && error.status === 404) {
@@ -1304,7 +1276,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
       scheduleSessionStatusRefresh(sid, 0)
       return
     }
-    if (!applyExecutionStatus(st, activityGeneration)) return
+    if (!applyExecutionStatus(st)) return
     if (st.observation) executionObservations.set(sid, st.observation)
     await reconcileExecutionParts(sid)
   }
@@ -1420,11 +1392,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     })
   }
 
-  function applyExecutionStatus(
-    st: chatApi.SessionExecutionStatus,
-    activityGeneration?: number,
-    promoteInRecent = true,
-  ) {
+  function applyExecutionStatus(st: chatApi.SessionExecutionStatus, promoteInRecent = true) {
     const sid = st.session.id
     const controlVersion = st.controlVersion
     const previous = executionControlVersions.get(sid)
@@ -1445,15 +1413,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
     }
     upsertSessionCache(st.session, true, promoteInRecent ? 'promote' : 'existing')
     applyAttention(sid, st.state)
-    if (activityGeneration === undefined || activityGeneration === (backgroundActivityGeneration.get(sid) ?? 0)) {
-      backgroundActivityGeneration.set(sid, (backgroundActivityGeneration.get(sid) ?? 0) + 1)
-      backgroundActivityKindsBySession.value = {
-        ...backgroundActivityKindsBySession.value,
-        [sid]: [...st.backgroundActivityKinds],
-      }
-      backgroundActivitiesBySession.value[sid] = st.backgroundActivities
-    }
-
     const execution = {
       ...st.execution,
       queued_messages: st.queuedMessages || [],
@@ -1494,7 +1453,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
   function applyExecutionResource(
     state: chatApi.AgenaExecutionState | null,
     generation: number,
-    activityGeneration?: number,
     promoteInRecent = true,
   ): Session | null {
     if (!state || generation !== transcriptCacheGeneration) return null
@@ -1502,7 +1460,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (!session || deletedSessions.has(session.id)) return null
     executionWriteEpoch.set(session.id, (executionWriteEpoch.get(session.id) ?? 0) + 1)
     executionObservations.delete(session.id)
-    const activities = state.background_activities || []
     applyExecutionStatus(
       {
         controlVersion: state.latest_event_seq ?? undefined,
@@ -1511,12 +1468,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
         parts: state.parts || [],
         execution: state.execution,
         usage: state.usage,
-        backgroundActivities: activities,
         queuedMessages: state.queued_messages || [],
         queuePaused: Boolean(state.queue_paused),
-        backgroundActivityKinds: activities.map((activity) => activity.kind.toLowerCase()),
       },
-      activityGeneration,
       promoteInRecent,
     )
     return getSessionById(session.id)
@@ -1661,9 +1615,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
       if (next.kind === 'question' && requestId && presentedInteractiveRequestBySession.get(owner) !== requestId) {
         presentedInteractiveRequestBySession.set(owner, requestId)
         const generation = transcriptCacheGeneration
-        const activityGeneration = backgroundActivityGeneration.get(owner) ?? 0
         void chatApi.presentInteractiveRequest(owner, requestId).then((resource) => {
-          applyExecutionResource(resource, generation, activityGeneration)
+          applyExecutionResource(resource, generation)
         })
       }
     } else {
@@ -1754,17 +1707,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
   function getSessionUsage(sessionId: string | null | undefined): SessionUsage | null {
     const sid = String(sessionId || '').trim()
     return sid ? sessionUsageBySession.value[sid] || null : null
-  }
-
-  /**
-   * Server-projected background activity kinds for a session, or `null` when
-   * no status snapshot has been fetched yet. This is the single
-   * session-scoped projection shared with the composer footer.
-   */
-  function sessionBackgroundActivityKinds(sessionId: string): string[] | null {
-    const sid = (sessionId || '').trim()
-    if (!sid) return null
-    return backgroundActivityKindsBySession.value[sid] ?? null
   }
 
   function getSessionExecution(
@@ -1860,8 +1802,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
     executionControlVersions.delete(sid)
     delete interactiveBySession.value[sid]
     delete interactionDrafts.value[sid]
-    backgroundActivityGeneration.delete(sid)
-    for (const key of backgroundActivityTimes.keys()) if (key.startsWith(`${sid}:`)) backgroundActivityTimes.delete(key)
     useBtwStore().clear(sid)
     deletedSessions.add(sid)
     messageRevalidators.get(sid)?.dispose()
@@ -1903,7 +1843,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
     {
       const next = { ...sessionExecutionBySession.value }
       delete next[sid]
-      delete backgroundActivitiesBySession.value[sid]
       sessionExecutionBySession.value = next
     }
     clearMessagesHydrated(sid)
@@ -2043,10 +1982,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const document = buildDocument(opts)
     if (document.length === 0) return null
     const generation = transcriptCacheGeneration
-    const activityGeneration = backgroundActivityGeneration.get(sid) ?? 0
     const state = await chatApi.sendMessage(sid, { document, ...buildRunOptions(opts) })
     if (generation !== transcriptCacheGeneration || sessionWasDeleted(sid)) return state
-    applyExecutionResource(state, generation, activityGeneration)
+    applyExecutionResource(state, generation)
     // The acknowledgement is durable even if the SSE patch was lost.
     reconcileExecutionAfterWrite(sid)
     return state
@@ -2060,18 +1998,16 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const sid = (sessionId || '').trim()
     if (!sid) return
     const generation = transcriptCacheGeneration
-    const activityGeneration = backgroundActivityGeneration.get(sid) ?? 0
     const state = await chatApi.continueSession(sid, buildRunOptions({}))
-    if (!applyExecutionResource(state, generation, activityGeneration)) return
+    if (!applyExecutionResource(state, generation)) return
     reconcileExecutionAfterWrite(sid)
   }
 
   async function setSessionSelection(sessionId: string, options: chatApi.RunOptionsPayload) {
     const sid = sessionId.trim()
     const generation = transcriptCacheGeneration
-    const activityGeneration = backgroundActivityGeneration.get(sid) ?? 0
     const state = await chatApi.setSessionSelection(sid, options)
-    if (applyExecutionResource(state, generation, activityGeneration)) reconcileExecutionAfterWrite(sid)
+    if (applyExecutionResource(state, generation)) reconcileExecutionAfterWrite(sid)
     return state
   }
 
@@ -2089,10 +2025,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
   ) {
     const sid = sessionId.trim()
     const generation = transcriptCacheGeneration
-    const activityGeneration = backgroundActivityGeneration.get(sid) ?? 0
     const state = await write(sid)
     // Editing a policy updates an existing row without opening or promoting its conversation.
-    if (applyExecutionResource(state, generation, activityGeneration, false)) reconcileExecutionAfterWrite(sid)
+    if (applyExecutionResource(state, generation, false)) reconcileExecutionAfterWrite(sid)
     return state
   }
 
@@ -2229,7 +2164,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
 
   async function refreshInteractiveState(sid: string, generation: number) {
     const epoch = executionWriteEpoch.get(sid) ?? 0
-    const activityGeneration = backgroundActivityGeneration.get(sid) ?? 0
     const state = await chatApi.getSessionExecutionStatus(sid, true)
     if (generation !== transcriptCacheGeneration || deletedSessions.has(sid)) return false
     if (!state) throw new Error(i18n.global.t('chat.errors.statusRefreshFailed'))
@@ -2238,7 +2172,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
       epoch === (executionWriteEpoch.get(sid) ?? 0) ||
       Number(state.session.version || 0) > Number(getSessionById(sid)?.version || 0)
     )
-      applyExecutionStatus(state, activityGeneration)
+      applyExecutionStatus(state)
     // Reply eligibility comes from this state read. Repairing an old owner's
     // history is independent and must not undo a known lifecycle transition.
     await reconcileExecutionParts(sid).catch(() => messageRevalidator(sid).invalidate(0))
@@ -2267,7 +2201,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
       toasts.push('info', i18n.global.t('chat.attention.ui.requestNoLongerPending'))
       return false
     }
-    const activityGeneration = backgroundActivityGeneration.get(owner) ?? 0
     let updated: chatApi.AgenaExecutionState
     try {
       updated = await send(owner, pending)
@@ -2282,7 +2215,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
       toasts.push('info', i18n.global.t('chat.attention.ui.requestNoLongerPending'))
       return false
     }
-    if (!applyExecutionResource(updated, generation, activityGeneration)) return false
+    if (!applyExecutionResource(updated, generation)) return false
     reconcileExecutionAfterWrite(owner)
     if (owner !== sid) reconcileExecutionAfterWrite(sid)
     // The reply is committed. A failed history refresh must not report that
@@ -2325,9 +2258,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const sid = (sessionId || '').trim()
     if (!sid) return null
     const generation = transcriptCacheGeneration
-    const activityGeneration = backgroundActivityGeneration.get(sid) ?? 0
     const state = await chatApi.compactSession(sid, buildRunOptions({}))
-    if (!applyExecutionResource(state, generation, activityGeneration)) return null
+    if (!applyExecutionResource(state, generation)) return null
     reconcileExecutionAfterWrite(sid)
   }
 
@@ -2631,26 +2563,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (t === 'runtime_signal') {
       const signalSession = sid || (props.session_id != null ? String(props.session_id) : '')
       const signalKind = readString(props.kind as JsonValue)
-      const payload = asRecord(props.payload)
-      const activity = asRecord(payload.activity)
-      if (
-        signalKind === 'activity' &&
-        signalSession &&
-        !deletedSessions.has(signalSession) &&
-        (isSessionVisible(signalSession) || backgroundActivitiesBySession.value[signalSession]) &&
-        typeof activity.id === 'string' &&
-        typeof activity.status === 'string' &&
-        Array.isArray(activity.controls)
-      ) {
-        const key = `${signalSession}:${activity.id}`
-        const time = typeof payload.ts_ms === 'number' ? payload.ts_ms : 0
-        if (time < (backgroundActivityTimes.get(key) ?? 0)) return
-        backgroundActivityTimes.delete(key)
-        backgroundActivityTimes.set(key, time)
-        if (backgroundActivityTimes.size > 1024)
-          backgroundActivityTimes.delete(backgroundActivityTimes.keys().next().value!)
-        applySessionActivity(signalSession, activity as unknown as SessionActivity, payload.reason === 'dismissed')
-      }
       if (!props.resource_revisions && signalSession && signalKind !== 'activity') {
         scheduleSessionStatusRefresh(signalSession)
       }
@@ -2683,10 +2595,6 @@ const useChatStoreDefinition = defineStore('chat', () => {
     selectedSessionUsage,
     selectedSessionExecution,
     getSessionExecution,
-    sessionBackgroundActivityKinds,
-    sessionBackgroundActivities: (sid: string) => backgroundActivitiesBySession.value[sid] || [],
-    sessionActivityGeneration: (sid: string) => backgroundActivityGeneration.get(sid) ?? 0,
-    applySessionActivity,
     refreshExecutionStatus,
     setSessionSelection,
     sessionRunConfigBySession,

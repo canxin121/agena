@@ -309,7 +309,7 @@ async fn plan_requires_review_and_enforces_the_execution_gate() -> TestResult {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cron_persists_edits_and_delivers_a_real_scheduled_wake() -> TestResult {
-    fixture().expect_plugin("agena.cron").run(|case| async move {
+    super::fixture_without_memory().expect_plugin("agena.cron").run(|case| async move {
         let user = case.user().new_session().await?;
         allow_permissions(&user).await?;
         let created = user.call_tool("cron.create", json!({
@@ -344,6 +344,19 @@ async fn cron_persists_edits_and_delivers_a_real_scheduled_wake() -> TestResult 
         let isolated = other.call_tool("cron.list", json!({})).await?;
         isolated.assert_succeeded()?;
         ensure!(isolated.data()?["jobs"].as_array().context("isolated cron jobs")?.is_empty());
+
+        let http = case.http().await;
+        let schedules = format!("/api/v1/sessions/{}/schedules", user.id());
+        let rows: Vec<Value> = http.get(&schedules).await?.require_success()?.json()?;
+        ensure!(rows.len() == 1 && rows[0]["id"] == id && rows[0]["paused"] == true);
+        let wrong_owner = format!("/api/v1/sessions/{}/schedules/{id}", other.id());
+        assert_eq!(
+            http.send_json(reqwest::Method::PATCH, &wrong_owner, &json!({"paused": false})).await?.status,
+            reqwest::StatusCode::NOT_FOUND
+        );
+        let resumed_through_api: Value = http.send_json(reqwest::Method::PATCH, &format!("{schedules}/{id}"), &json!({"paused": false}))
+            .await?.require_success()?.json()?;
+        ensure!(resumed_through_api["paused"] == false);
 
         let resumed = user.call_tool("cron.resume", json!({"id": id})).await?;
         resumed.assert_succeeded()?;
@@ -450,7 +463,7 @@ async fn raw_tool_payload(user: &UserSession, tool: &str) -> Result<Value> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn agent_runs_messages_follows_up_and_cancels_a_real_child() -> TestResult {
-    fixture()
+    super::fixture_without_memory()
         .expect_plugin("agena.agent")
         .run(|case| async move {
             let user = case.user().new_session().await?;
@@ -604,6 +617,22 @@ async fn agent_runs_messages_follows_up_and_cancels_a_real_child() -> TestResult
             ensure!(child_text.contains("runtime-agent-child-result"));
             ensure!(!child_text.contains("cancelled-child-must-not-complete"));
             let parent_parts = user.parts().await?;
+            let linked_parts = parent_parts
+                .iter()
+                .filter(|part| {
+                    part.presentation.as_ref().is_some_and(|view| {
+                        view.blocks.iter().any(|block| {
+                            matches!(block, agena_domain::ViewBlock::AgentSession {
+                        session_id, ..
+                    } if *session_id == child_id)
+                        })
+                    })
+                })
+                .count();
+            ensure!(
+                linked_parts == 2,
+                "spawn and followup should link to the same child conversation"
+            );
             // Operation ids in persisted system notifications are strings,
             // even when the originating session id is numeric. Compare the
             // wire value's actual type instead of comparing JSON String to
@@ -628,12 +657,13 @@ async fn agent_runs_messages_follows_up_and_cancels_a_real_child() -> TestResult
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn monitor_delivers_websocket_events_and_stops_the_owned_connection() -> TestResult {
-    fixture()
+    super::fixture_without_memory()
+        .env("AGENA_SANDBOX", "disabled")
         .expect_plugin("agena.monitor")
         .run(|case| async move {
             // Own the WS transport explicitly: its accepted connection is joined by
             // the case, and cancellation closes it even when an assertion fails.
-            let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+            let listener = TcpListener::bind((super::native_fixture_address()?, 0)).await?;
             let address = listener.local_addr()?;
             let connected = Arc::new(Semaphore::new(0));
             let emit = Arc::new(Semaphore::new(0));
@@ -707,6 +737,25 @@ async fn monitor_delivers_websocket_events_and_stops_the_owned_connection() -> T
             ensure!(
                 payload["status"] == "running",
                 "monitor did not start: {payload}"
+            );
+            let http = case.http().await;
+            let subscription = format!(
+                "/api/v1/sessions/{}/monitor/subscriptions/{monitor_id}",
+                user.id()
+            );
+            let state: Value = http.get(&subscription).await?.require_success()?.json()?;
+            ensure!(state["status"] == "running");
+            ensure!(
+                user.parts()
+                    .await?
+                    .iter()
+                    .any(|part| part.presentation.as_ref().is_some_and(|view| {
+                        view.blocks.iter().any(|block| {
+                            matches!(block, agena_domain::ViewBlock::MonitorSubscription {
+                    subscription_id, ..
+                } if subscription_id == &monitor_id)
+                        })
+                    }))
             );
 
             let stopping = case
@@ -797,9 +846,15 @@ async fn monitor_delivers_websocket_events_and_stops_the_owned_connection() -> T
             let result = run.wait_settled().await?;
             result.assert_succeeded()?;
             result.assert_assistant_text("runtime-monitor-complete")?;
-            ensure!(
-                user.snapshot().await?.background_activities.is_empty(),
-                "stopped monitor remains an active background member"
+            let state: Value = http.get(&subscription).await?.require_success()?.json()?;
+            ensure!(state["status"] == "stopped");
+            let shell_path = format!(
+                "/api/v1/sessions/{}/shell/processes/{monitor_id}",
+                user.id()
+            );
+            assert_eq!(
+                http.get(&shell_path).await?.status,
+                reqwest::StatusCode::NOT_FOUND
             );
             Ok(())
         })

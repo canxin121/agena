@@ -409,7 +409,6 @@ impl ApplicationService {
             // their own read boundaries; they do not form a database backup.
             latest_event_seq: Some(snapshot.control_version),
             automation: session_automation_resource(&scheduler_jobs, session_id),
-            background_activities: Vec::new(),
             execution: SessionExecutionContextResource {
                 profile: context.profile,
                 profile_is_default: context.profile_is_default,
@@ -611,6 +610,8 @@ pub fn scheduled_job_resource(job: agena_scheduler::ScheduledJob) -> ScheduledJo
     ScheduledJobResource {
         id: job.id.to_string(),
         kind,
+        paused: job.paused,
+        completed: job.completed,
         expression,
         timezone,
         at,

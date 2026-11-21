@@ -192,7 +192,7 @@ fn subscribe_with_queue_capacity(
                 signal=signals.recv()=>{
                     let signal=match signal {Some(RuntimeLiveSignalItem::Signal(signal))=>signal,
                         Some(RuntimeLiveSignalItem::Lagged(skipped))=>{if tx.send(LiveItem::Lagged(skipped)).await.is_err(){break;}continue;},None=>break};
-                    let signal=project_signal(signal);
+                    let Some(signal)=project_signal(signal) else {continue};
                     // Attention invalidates a runtime-wide plugin queue. A TUI
                     // viewing one session must also learn about another
                     // session's notification; this signal carries no transcript.
@@ -228,25 +228,22 @@ fn live_signal_payload<T: serde::Serialize>(value: &T, context: &'static str) ->
     }
 }
 
-fn project_signal(signal: RuntimeLiveSignal) -> RuntimeSignalResource {
-    match signal {
-        RuntimeLiveSignal::Activity(activity) => RuntimeSignalResource {
-            kind: "activity".to_owned(),
-            // Delegated work is displayed and controlled by its parent. Its
-            // child transcript has a separate stream of part updates.
-            session_id: activity
-                .activity
-                .parent_session_id
-                .or(activity.activity.session_id),
-            payload: live_signal_payload(
-                &serde_json::json!({
-                    "activity_id": activity.activity_id,
-                    "reason": activity.reason,
-                    "ts_ms": activity.ts_ms,
-                    "activity": agena_api::resource::BackgroundActivityResource::from(&activity.activity),
-                }),
-                "serialize a runtime activity live signal payload",
-            ),
+fn project_signal(signal: RuntimeLiveSignal) -> Option<RuntimeSignalResource> {
+    use agena_domain::BackgroundActivityKind;
+
+    Some(match signal {
+        RuntimeLiveSignal::Activity(activity) => match activity.activity.kind {
+            BackgroundActivityKind::Runtime => RuntimeSignalResource {
+                kind: "runtime_task_changed".to_owned(),
+                session_id: None,
+                payload: serde_json::json!({ "task_id": activity.activity_id }),
+            },
+            BackgroundActivityKind::Cron => RuntimeSignalResource {
+                kind: "schedule_changed".to_owned(),
+                session_id: activity.activity.session_id,
+                payload: serde_json::Value::Null,
+            },
+            _ => return None,
         },
         RuntimeLiveSignal::Plugin {
             session_id,
@@ -270,7 +267,7 @@ fn project_signal(signal: RuntimeLiveSignal) -> RuntimeSignalResource {
                 "serialize a runtime tool-registry live signal payload",
             ),
         },
-    }
+    })
 }
 
 #[cfg(test)]

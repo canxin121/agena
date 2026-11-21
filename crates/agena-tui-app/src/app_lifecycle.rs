@@ -423,7 +423,6 @@ impl App {
         }
         self.refresh_status_line_if_due(now);
         self.poll_provider_studio_auth_if_due(now);
-        self.refresh_activities_panel_if_due(now);
         self.refresh_hub_if_due();
         self.heal_session_work();
         self.retry_session_plan_if_due(now);

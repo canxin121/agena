@@ -13,6 +13,23 @@ pub(super) fn routes() -> Router<AppState> {
                 .layer(DefaultBodyLimit::max(64 * 1024)),
         )
         .route(
+            "/api/v1/sessions/{session_id}/shell/processes/{process_id}",
+            get(rest::get_shell_process).delete(rest::stop_shell_process),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/monitor/subscriptions/{subscription_id}",
+            get(rest::get_monitor_subscription).delete(rest::stop_monitor_subscription),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/schedules",
+            get(rest::list_session_schedules),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/schedules/{schedule_id}",
+            axum::routing::patch(rest::set_session_schedule_paused)
+                .delete(rest::delete_session_schedule),
+        )
+        .route(
             "/api/v1/sessions/{session_id}/assistant",
             get(rest::get_assistant)
                 .put(rest::put_assistant)

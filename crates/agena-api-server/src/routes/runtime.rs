@@ -12,6 +12,10 @@ pub(super) fn routes() -> Router<AppState> {
             get(rest::list_runtime_background_tasks),
         )
         .route(
+            "/api/v1/runtime/tasks/{task_id}",
+            get(rest::get_runtime_background_task),
+        )
+        .route(
             "/api/v1/runtime/tasks/{task_id}/cancel",
             post(rest::cancel_runtime_background_task),
         )

@@ -4,9 +4,7 @@ use agena_api::business::{
     BusinessCommand, BusinessQuery, MemoryWriteRequest, NotificationFilterParams,
 };
 use agena_api::pagination::{PageInfo, PaginatedResponse, normalize_limit};
-use agena_api::resource::{
-    BackgroundActivityResource, NotificationActionTargetResource, NotificationResource,
-};
+use agena_api::resource::{NotificationActionTargetResource, NotificationResource};
 use agena_assistant::{
     AssistantMemory, AssistantMemoryUpdate, AssistantProfile, AssistantSnapshot, AssistantUpdate,
     ChannelParticipantPage, ChannelParticipantsQuery, ChannelPolicyUpdate, CreateIntegration,
@@ -141,15 +139,6 @@ impl Application {
                 self.resolve_notification_action(notification_id, action_id)
                     .await?,
             ),
-            BusinessCommand::PauseActivity { activity_id } => {
-                data(self.pause_activity(&activity_id).await?)
-            }
-            BusinessCommand::ResumeActivity { activity_id } => {
-                data(self.resume_activity(&activity_id).await?)
-            }
-            BusinessCommand::DeleteActivity { activity_id } => {
-                data(self.delete_activity(&activity_id).await?)
-            }
         }
     }
 
@@ -399,42 +388,6 @@ impl Application {
             .await
             .map_err(ApplicationError::from)?;
         Ok(NotificationActionTargetResource::from(&target))
-    }
-
-    pub async fn pause_activity(
-        &self,
-        id: &str,
-    ) -> Result<BackgroundActivityResource, ApplicationError> {
-        let activity = self
-            .runtime_activities()?
-            .pause_activity(id)
-            .await
-            .map_err(|error| ApplicationError::bad_request_error(&error))?;
-        Ok(BackgroundActivityResource::from(&activity))
-    }
-
-    pub async fn resume_activity(
-        &self,
-        id: &str,
-    ) -> Result<BackgroundActivityResource, ApplicationError> {
-        let activity = self
-            .runtime_activities()?
-            .resume_activity(id)
-            .await
-            .map_err(|error| ApplicationError::bad_request_error(&error))?;
-        Ok(BackgroundActivityResource::from(&activity))
-    }
-
-    pub async fn delete_activity(
-        &self,
-        id: &str,
-    ) -> Result<BackgroundActivityResource, ApplicationError> {
-        let activity = self
-            .runtime_activities()?
-            .delete_activity(id)
-            .await
-            .map_err(|error| ApplicationError::bad_request_error(&error))?;
-        Ok(BackgroundActivityResource::from(&activity))
     }
 }
 

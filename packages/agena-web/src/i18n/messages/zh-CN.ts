@@ -1578,11 +1578,32 @@ export default {
       exitCode: '退出码 {code}',
       errorBand: '错误',
     },
+    operations: {
+      openAgentSession: '打开子 Agent 会话',
+      parentSession: '返回父会话',
+      process: 'Shell 进程',
+      subscription: 'WebSocket 订阅',
+      ready: '已就绪',
+      stopProcess: '停止进程',
+      disconnect: '断开订阅',
+      schedules: '定时计划',
+      noSchedules: '此会话还没有定时计划。',
+      nextRun: '下次运行 {time}',
+      pause: '暂停',
+      resume: '恢复',
+      paused: '已暂停',
+      showMoreSchedules: '显示更多计划',
+      status: {
+        running: '运行中',
+        exited: '已退出',
+        timed_out: '已超时',
+        stopped: '已停止',
+        failed: '失败',
+      },
+    },
     sessionWork: {
       backToFiles: '文件列表',
       moreDiff: 'Diff 预览 · 加载更多',
-      tasks: '后台任务',
-      activeTasks: '{count} 项进行中',
       changes: '会话编辑',
       files: '{count} 个文件',
       recordingIncomplete: '记录可能不完整（例如 Shell writes 只是声明，未纳入已修改文件）。',
@@ -3882,7 +3903,7 @@ export default {
   // declaration's `docs.summary_key` so both clients resolve the same
   // text. Keys are flat because that is the key the server publishes.
 
-  'command-activities-summary': '打开后台活动面板',
+  'command-schedules-summary': '查看和管理当前会话的定时计划',
   'command-attach-summary': '通过交互式选择器附加文件',
   'command-background-summary': '返回会话中心;会话继续运行',
   'command-children-summary': '打开子会话选择器',

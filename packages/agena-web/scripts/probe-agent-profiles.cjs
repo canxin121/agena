@@ -224,7 +224,6 @@ function createFixture() {
     latest_event_seq: 1,
     queued_messages: [],
     queue_paused: false,
-    background_activities: [],
   })
   const body = async (req) => {
     let text = ''
@@ -303,7 +302,6 @@ function createFixture() {
       if (p === '/api/v1/workspaces')
         return json({ items: [{ id: 7, path: '/fixture/project' }], page: { has_more: false } })
       if (p === '/api/v1/workbench/fs/home') return json({ home: '/fixture' })
-      if (p === '/api/v1/activities') return json({ items: [], activities: [] })
       if (p.endsWith('/events')) {
         res.setHeader('Content-Type', 'text/event-stream')
         return res.end(': keepalive\n\n')

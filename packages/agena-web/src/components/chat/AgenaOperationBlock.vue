@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { RiGlobalLine } from '@remixicon/vue'
+import { computed, inject, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { RiGitBranchLine, RiGlobalLine } from '@remixicon/vue'
 
 import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
 import CodeBlock from '@/components/ui/CodeBlock.vue'
@@ -8,6 +9,10 @@ import AgenaDiffBlock from '@/components/chat/AgenaDiffBlock.vue'
 import AgenaContentOutput from '@/components/chat/AgenaContentOutput.vue'
 import AgenaAttachmentPreview from '@/components/chat/AgenaAttachmentPreview.vue'
 import AgenaResourceLink from '@/components/chat/AgenaResourceLink.vue'
+import ProcessControls from '@/components/chat/ProcessControls.vue'
+import Button from '@/components/ui/Button.vue'
+import { openBrowserKey } from '@/features/browser/api'
+import { useBrowserCopy } from '@/features/browser/copy'
 import { useChatStore } from '@/stores/chat'
 import { workspaceAttachmentPath } from '@/lib/attachmentLinks'
 import { openResource } from '@/lib/authenticatedResources'
@@ -26,7 +31,10 @@ import {
 } from '@/pages/chat/transcriptPartPresentation'
 import type { JsonValue } from '@/types/json'
 
-const props = defineProps<{ block: JsonRecord; sessionId?: string | null }>()
+const props = defineProps<{ block: JsonRecord; sessionId?: string | null; ownerSessionId?: number }>()
+const { t } = useI18n()
+const browserCopy = useBrowserCopy()
+const openBrowser = inject(openBrowserKey, undefined)
 const chat = useChatStore()
 const directory = useDirectoryStore()
 const ui = useUiStore()
@@ -61,6 +69,14 @@ const contentFormat = computed(
 )
 
 const kind = computed(() => stringValue(props.block.type) || 'unknown')
+const nativePart = computed(() => !props.ownerSessionId || String(props.ownerSessionId) === props.sessionId)
+const processId = computed(() => stringValue(props.block.process_id))
+const subscriptionId = computed(() => stringValue(props.block.subscription_id))
+const agentSessionId = computed(() => {
+  const id = props.block.session_id
+  return typeof id === 'number' && Number.isSafeInteger(id) && id > 0 ? String(id) : ''
+})
+const browserPageId = computed(() => stringValue(props.block.page_id))
 const bodyText = computed(() => stringValue(props.block.text))
 const command = computed(() => stringValue(props.block.command))
 // A command is Markdown code, not prose: render it through the shared Markdown
@@ -129,6 +145,36 @@ const progressCount = computed(() =>
       :session-id="sessionId"
       :format="contentFormat"
     />
+    <ProcessControls
+      v-else-if="kind === 'shell_process' && sessionId && nativePart && processId"
+      :session-id="sessionId"
+      :id="processId"
+      kind="shell"
+    />
+    <ProcessControls
+      v-else-if="kind === 'monitor_subscription' && sessionId && nativePart && subscriptionId"
+      :session-id="sessionId"
+      :id="subscriptionId"
+      kind="monitor"
+    />
+    <Button
+      v-else-if="kind === 'agent_session' && agentSessionId"
+      size="sm"
+      variant="outline"
+      @click="chat.selectSession(agentSessionId)"
+    >
+      <RiGitBranchLine class="h-4 w-4" />
+      {{ t('chat.operations.openAgentSession') }}
+    </Button>
+    <Button
+      v-else-if="kind === 'browser_page' && sessionId && nativePart && browserPageId && openBrowser"
+      size="sm"
+      variant="outline"
+      @click="openBrowser(sessionId, browserPageId)"
+    >
+      <RiGlobalLine class="h-4 w-4" />
+      {{ browserCopy('open') }}
+    </Button>
     <MarkdownRenderer v-else-if="kind === 'markdown'" :content="bodyText" mode="markdown" :stream="false" />
 
     <pre

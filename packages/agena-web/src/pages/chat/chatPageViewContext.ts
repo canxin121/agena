@@ -220,8 +220,9 @@ export type ChatPageViewContext = {
   thinkingModeChipLabel: MaybeRef<string>
   speedModeHint: MaybeRef<string>
   speedModeChipLabel: MaybeRef<string>
-  composerBottomLeftStatus: MaybeRef<string>
   composerBottomRightStatus: MaybeRef<string>
+  schedulesOpen: Ref<boolean>
+  agentParentId: ComputedRef<string | null>
   returnFromSide: () => void
   sideParentId: ComputedRef<string | null>
   planViewer: ReturnType<typeof usePlanViewer>

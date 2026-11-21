@@ -30,7 +30,7 @@ async fn browser_command(
         ));
     }
     let result = state
-        .runtime_activities()?
+        .runtime_control()
         .browser_control(session_id, command)
         .await
         .map_err(|error| ServerError::from_failure(*error.failure))?;

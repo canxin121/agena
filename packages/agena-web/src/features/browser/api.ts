@@ -2,7 +2,7 @@ import type { InjectionKey } from 'vue'
 import { apiJson } from '@/lib/api'
 
 export const browserTakeoverKind = 'browser_takeover'
-export const openBrowserKey: InjectionKey<(sessionId: string) => void> = Symbol('openBrowser')
+export const openBrowserKey: InjectionKey<(sessionId: string, pageId?: string) => void> = Symbol('openBrowser')
 
 export type BrowserState = {
   kind: 'state'

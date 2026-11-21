@@ -12,10 +12,7 @@ pub struct LiveEvent {
     /// Canonical snapshot of one changed part. Forks may already contain the
     /// same ID even when the event names its origin session.
     pub(crate) part_update: Option<(i64, agena_api::part::PartResource)>,
-    /// Complete activity descriptors are applied locally; the timestamp
-    /// orders updates and `bool` denotes dismissal.
-    pub(crate) activity_update:
-        Option<(i64, bool, agena_api::resource::BackgroundActivityResource)>,
+    pub(crate) schedules_changed: bool,
     pub(crate) plan_changed: bool,
     /// Snapshot captured after a live subscription was established. Remote
     /// reconnect uses this to close the subscribe/read race.

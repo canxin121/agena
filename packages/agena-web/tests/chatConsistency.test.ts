@@ -105,17 +105,6 @@ function execution(controlVersion: number, active = false): chatApi.AgenaExecuti
     queued_messages: active ? [{ execution_id: 'old-queued-execution', message_id: 99 }] : [],
     queue_paused: active,
     usage: { current_tokens: controlVersion },
-    background_activities: [
-      {
-        id: 'background-child',
-        kind: 'agent',
-        status: active ? 'running' : 'completed',
-        title: 'Child',
-        description: '',
-        last_seq: controlVersion,
-        controls: [],
-      },
-    ],
   }
 }
 
@@ -129,8 +118,6 @@ function status(resource: chatApi.AgenaExecutionState): chatApi.SessionExecution
     usage: resource.usage,
     queuedMessages: resource.queued_messages,
     queuePaused: resource.queue_paused,
-    backgroundActivities: resource.background_activities ?? [],
-    backgroundActivityKinds: (resource.background_activities ?? []).map((item) => item.kind),
   }
   return result
 }
@@ -233,7 +220,6 @@ describe('chat session consistency', () => {
     expect(chat.getPendingInteraction('1', 'old-permission', 'permission')).toBeNull()
     expect(chat.getSessionAttention('1')).toBeNull()
     expect(chat.getSessionUsage('1')?.current_tokens).toBe(12)
-    expect(chat.sessionBackgroundActivities('1')[0]?.status).toBe('completed')
   })
 
   test('a send acknowledgement cannot insert unloaded history above the loaded page', async () => {
@@ -465,7 +451,14 @@ describe('chat session consistency', () => {
   test('a forced profile refresh updates equal-version model projections and clears retired modes', async () => {
     const chat = useChatStoreUnscoped(pinia)
     const initial = execution(10)
-    initial.execution = { profile: 'review', model_provider_id: 'local', model_adapter_id: 'old', model_id: 'old-model', model_thinking_mode: 'high', model_speed_mode: 'fast' }
+    initial.execution = {
+      profile: 'review',
+      model_provider_id: 'local',
+      model_adapter_id: 'old',
+      model_id: 'old-model',
+      model_thinking_mode: 'high',
+      model_speed_mode: 'fast',
+    }
     const refreshed = execution(10)
     refreshed.execution = { profile: 'review', model_provider_id: 'local', model_id: 'new-model' }
     const getter = spyOn(chatApi, 'getSessionExecutionStatus')
@@ -475,7 +468,12 @@ describe('chat session consistency', () => {
     expect(chat.sessionRunConfigBySession['1']?.modelID).toBe('old-model')
     await chat.refreshExecutionStatus('1', true)
     expect(getter).toHaveBeenLastCalledWith('1', true, true)
-    expect(chat.sessionRunConfigBySession['1']).toMatchObject({ modelID: 'new-model', adapterID: undefined, thinkingMode: undefined, speedMode: undefined })
+    expect(chat.sessionRunConfigBySession['1']).toMatchObject({
+      modelID: 'new-model',
+      adapterID: undefined,
+      thinkingMode: undefined,
+      speedMode: undefined,
+    })
   })
 
   test('fork rewind creates a branch session without rewriting the source', async () => {

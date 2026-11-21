@@ -524,7 +524,7 @@ impl App {
         // Status chips live on the border rows: the main status sits at the
         // top border's left corner, the top-right corner holds
         // history/approval, and the bottom-left corner holds plan progress and
-        // the session surface chips (file edits, background tasks, BTW).
+        // the session surface chips (file edits, BTW).
         // The layout gets no dedicated row.
         let layout = layout_composer_surface(area);
         let texts = self.composer_chip_texts();
@@ -1013,7 +1013,7 @@ impl App {
     }
 
     /// Clickable segments of the composer's bottom-left chip. The web composer
-    /// carries Plan / Changes / SessionWork / BTW chips on its bottom border; the TUI
+    /// carries Plan / Changes / BTW chips on its bottom border; the TUI
     /// mirrors them here instead of reserving rows above the input.
     pub(crate) fn composer_bottom_left_segments(&self) -> Vec<(String, &'static str)> {
         let mut segments = Vec::new();
@@ -1027,16 +1027,6 @@ impl App {
                     &agena_tui::fl_args!("count" => count as i64),
                 ),
                 "work-files",
-            ));
-        }
-        let tasks = self.session_work_task_count();
-        if tasks > 0 {
-            segments.push((
-                self.i18n.text_args(
-                    "composer-status-tasks",
-                    &agena_tui::fl_args!("count" => tasks as i64),
-                ),
-                "work-tasks",
             ));
         }
         if let Some(label) = self.btw_chip_label() {

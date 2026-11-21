@@ -145,22 +145,6 @@ impl NotificationStore {
         });
         items
     }
-
-    /// Activities-panel notifications (background task scope), newest first.
-    #[must_use]
-    pub fn activities(&self, now: i64) -> Vec<&Notification> {
-        let mut items: Vec<&Notification> = self
-            .active(now)
-            .filter(|n| {
-                matches!(
-                    n.surface,
-                    NotificationSurface::ActivitiesPanel | NotificationSurface::BackgroundTask
-                )
-            })
-            .collect();
-        items.sort_by_key(|b| std::cmp::Reverse(b.created_at_ms));
-        items
-    }
 }
 
 /// Build a plain notice notification (replaces `UiNotice::message`).

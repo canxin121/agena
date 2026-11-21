@@ -1,11 +1,8 @@
-//! Unified domain model for long-running background activities.
+//! Runtime observations used by notification delivery and change detection.
 //!
-//! Agena tools create background work of several kinds — background shell
-//! processes, delegated subagent tasks, runtime maintenance tasks, managed
-//! browser sessions, scheduled jobs — and this module is the single wire
-//! contract they all share. A [`BackgroundActivity`] is a stable descriptor
-//! plus a log cursor; transports (REST, WS, SSE) and UIs (TUI, web) can list,
-//! inspect, follow, and control every kind without knowing its source.
+//! Processes, delegated agent runs, maintenance operations, browser pages,
+//! and schedules publish lifecycle observations. Output and control come
+//! from the tool part, session, or owning service.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -17,8 +14,7 @@ use strum::{Display, EnumString};
 )]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
-/// Kind of background activity. Durable tool work keeps the same kind from
-/// its background-operation aggregate all the way through this UI contract.
+/// Identifies the source of a runtime activity observation.
 pub enum BackgroundActivityKind {
     /// A long-lived shell process started by `shell.spawn` or `shell.open`.
     Shell,
@@ -136,8 +132,7 @@ pub struct BackgroundActivity {
     /// operation. Scheduler jobs use their prefixed activity id instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operation_id: Option<String>,
-    /// Tool-call part that launched this member. This is the stable bridge
-    /// from Activities back to the transcript in both TUI and Web.
+    /// Tool-call part that launched the operation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_part_id: Option<i64>,
     pub created_at_ms: i64,
@@ -231,7 +226,7 @@ pub struct BackgroundActivityChangedEvent {
     pub ts_ms: i64,
 }
 
-/// Query filter shared by list endpoints.
+/// Filter for runtime activity observations.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct BackgroundActivityFilter {

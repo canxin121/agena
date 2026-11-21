@@ -23,7 +23,6 @@ import { useBtwStore } from '@/stores/btw'
 import * as chatApi from '@/stores/chat/api'
 import { useDirectoryStore } from '@/stores/directory'
 import { useDirectorySessionStore } from '@/stores/directorySessionStore'
-import { useSessionActivityStore } from '@/stores/sessionActivity'
 import { useSettingsStore } from '@/stores/settings'
 import { useUiStore } from '@/stores/ui'
 import { useToastsStore } from '@/stores/toasts'
@@ -132,7 +131,6 @@ function paneWindowScope(): { windowId?: string } {
 }
 const directoryStore = useDirectoryStore()
 const directorySessions = useDirectorySessionStore()
-const activity = useSessionActivityStore()
 const settings = useSettingsStore()
 const ui = useUiStore()
 const toasts = useToastsStore()
@@ -420,6 +418,18 @@ const pageRef = ref<HTMLElement | null>(null)
 const composerBarRef = ref<HTMLElement | null>(null)
 const transcriptSearchInputRef = ref<HTMLInputElement | null>(null)
 const sideBusy = ref(false)
+const schedulesOpen = ref(false)
+watch(
+  () => chat.selectedSessionId,
+  () => {
+    schedulesOpen.value = false
+  },
+)
+const agentParentId = computed(() => {
+  const session = asRecord(chat.selectedSession)
+  const parent = Number(session.parent_id)
+  return session.is_subagent === true && Number.isSafeInteger(parent) && parent > 0 ? String(parent) : null
+})
 const sideParentId = computed(() => {
   const context = asRecord(chat.getSessionExecution(chat.selectedSessionId)?.conversation)
   const parent = Number(context.parent_session_id)
@@ -1324,7 +1334,6 @@ function formatTime(ms?: number): string {
 
 const runUi = useChatRunUi({
   chat,
-  activity,
   directorySessions,
   toasts,
   modelSelection,
@@ -1489,38 +1498,11 @@ function openPlanViewer() {
   })
 }
 
-function formatBackgroundActivitySummary(kinds: string[]): string {
-  const normalized = Array.isArray(kinds)
-    ? kinds.map((kind) =>
-        String(kind || '')
-          .trim()
-          .toLowerCase(),
-      )
-    : []
-  return ['monitor', 'cron', 'shell', 'task', 'runtime', 'browser']
-    .map((kind) => {
-      const count = normalized.filter((candidate) => candidate === kind).length
-      return count > 0 ? `${kind} ${count}` : ''
-    })
-    .filter(Boolean)
-    .join(' · ')
-}
-
 const composerStatusExtra = computed(() => {
   const parts: string[] = []
   if (chat.messagesLoading) parts.push(String(t('chat.composer.status.loading')))
   if (commandOpen.value) parts.push(`${String(t('chat.composer.status.slash'))} /${commandQuery.value}`)
   return parts.join('  |  ')
-})
-
-const composerBottomLeftStatus = computed(() => {
-  const sid = commandSessionId()
-  if (!sid) return ''
-  // Prefer the server's session-scoped projection. The client-side activity
-  // snapshot is only a fallback until the first status refresh lands.
-  const serverKinds = chat.sessionBackgroundActivityKinds(sid)
-  if (serverKinds) return formatBackgroundActivitySummary(serverKinds)
-  return formatBackgroundActivitySummary(activity.snapshot[sid]?.kinds || [])
 })
 
 const composerBottomRightStatus = computed(() => planViewer.snapshot.value?.progress || '')
@@ -1998,9 +1980,15 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
       await chat.refreshExecutionStatus(sid || '')
       pageRef.value?.querySelector<HTMLElement>('[data-queued-messages] button')?.focus()
       return
-    case 'activities':
+    case 'schedules':
+      if (!sid) {
+        toasts.push('error', t('chat.toasts.sessionRequiredForCommand', { command: 'schedules' }))
+        return
+      }
+      schedulesOpen.value = true
+      return
     case 'background':
-      await router.push({ path: '/settings/diagnostics', query: { view: 'activities' } })
+      await chat.selectSession(null)
       return
     case 'inline-ui': {
       const reference = args.trim()
@@ -2610,8 +2598,9 @@ const viewCtx = {
   handleComposerPickerSelect,
   ...modelSelection,
   composerStatusExtra,
-  composerBottomLeftStatus,
   composerBottomRightStatus,
+  schedulesOpen,
+  agentParentId,
   returnFromSide,
   sideParentId,
   planViewer,

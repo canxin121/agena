@@ -167,7 +167,6 @@ impl App {
             Route::Usage(dialog) => {
                 self.render_usage_dashboard(frame, area, dialog, SurfaceMode::Route)
             }
-            Route::Activities(dialog) => self.render_activities_panel(frame, area, dialog),
             Route::PlanViewer(dialog) => self.render_plan_viewer(frame, area, dialog),
             Route::Integrations(source) => self.render_integrations(frame, area, *source),
             Route::Assistant(source) => self.render_assistant(frame, area, *source),

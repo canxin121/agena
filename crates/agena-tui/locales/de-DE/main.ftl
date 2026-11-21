@@ -2070,7 +2070,7 @@ search-picker-custom-value-label = Eingegebenen Wert verwenden
 search-picker-custom-value-detail = Genau {$value} anwenden
 search-picker-custom-path-label = Eingegebenen Pfad verwenden
 
-command-activities-summary = Hintergrundaktivitäten öffnen
+command-schedules-summary = Zeitpläne dieser Unterhaltung verwalten
 
 
 
@@ -2852,7 +2852,7 @@ session-status-plan = Plan {$slug}
 session-status-plan-with-steps = Plan {$slug} · {$steps} Schritte
 session-status-thinking = {$value}
 session-status-speed = {$value}
-session-work-tasks = Aufgaben
+session-work-schedules = Zeitpläne
 session-work-files = Dateien
 session-work-requests = Anfragen
 session-work-waiting = Wartet auf Werkzeuge

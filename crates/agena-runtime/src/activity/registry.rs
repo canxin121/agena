@@ -1,14 +1,6 @@
-//! Unified background-activity registry.
-//!
-//! Every long-running piece of work Agena tools create (background shell
-//! processes, agents, runtime maintenance tasks) is
-//! projected into one bounded in-memory store. Sources push [`BackgroundActivity`]
-//! records in; every mutation publishes a [`BackgroundActivityChangedEvent`] on
-//! the runtime event bus so TUI/Web can react live. Log-only presentation
-//! signals are coalesced; authoritative snapshots and resource clocks still
-//! change synchronously, and lifecycle transitions are delivered immediately.
+//! Bounded activity observations for notifications and resource revisions.
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::{
     Arc,
     atomic::{AtomicI64, Ordering},
@@ -17,7 +9,6 @@ use std::time::Duration;
 
 use agena_domain::{
     BackgroundActivity, BackgroundActivityChangedEvent, BackgroundActivityEventReason,
-    BackgroundActivityFilter,
 };
 use chrono::Utc;
 use parking_lot::Mutex;
@@ -63,15 +54,6 @@ impl ActivityStore {
         (previous, self.trim_history())
     }
 
-    fn list(&self, filter: &BackgroundActivityFilter) -> Vec<BackgroundActivity> {
-        self.order
-            .iter()
-            .filter_map(|id| self.activities.get(id))
-            .filter(|activity| filter.matches(activity))
-            .cloned()
-            .collect()
-    }
-
     fn remove(&mut self, id: &str) -> Option<BackgroundActivity> {
         let removed = self.activities.remove(id);
         if removed.is_some() {
@@ -80,34 +62,13 @@ impl ActivityStore {
         removed
     }
 
-    fn clear_finished(&mut self) -> Vec<String> {
-        let active = self
-            .order
-            .iter()
-            .filter_map(|id| self.activities.get(id))
-            .filter(|activity| activity.is_active())
-            .map(|activity| activity.id.clone())
-            .collect::<BTreeSet<_>>();
-        let finished = self
-            .order
-            .iter()
-            .filter(|id| !active.contains(*id))
-            .cloned()
-            .collect::<Vec<_>>();
-        for id in &finished {
-            self.activities.remove(id);
-        }
-        self.order.retain(|id| !finished.contains(id));
-        finished
-    }
-
     fn trim_history(&mut self) -> Vec<BackgroundActivity> {
         let mut removed = Vec::new();
         if self.order.len() <= self.history_limit {
             return removed;
         }
         // Keep the newest `history_limit` entries; drop only terminal ones so
-        // running work is never silently evicted from the UI.
+        // running work retains its latest observation.
         let mut index = self.order.len();
         while self.order.len() > self.history_limit && index > 0 {
             index -= 1;
@@ -194,24 +155,8 @@ impl ActivityRegistry {
         }
     }
 
-    /// Dismiss a record from the store (does not stop the underlying work).
-    pub(crate) fn dismiss(&self, id: &str) -> Option<BackgroundActivity> {
-        let mut store = self.store.lock();
-        let removed = store.remove(id);
-        if let Some(activity) = &removed {
-            self.publish(
-                &mut store,
-                activity.clone(),
-                BackgroundActivityEventReason::Dismissed,
-                false,
-            );
-        }
-        removed
-    }
-
-    /// A durable source can delete a row that was only projected by a list
-    /// read (for example after restart), and never entered this live cache.
-    /// Its committed snapshot still supplies the exact owner for the event.
+    /// A deleted durable row may be absent from the live cache after restart.
+    /// Its committed snapshot supplies the session for the invalidation.
     pub(crate) fn dismiss_projected(&self, activity: BackgroundActivity) {
         let mut store = self.store.lock();
         let activity = store.remove(&activity.id).unwrap_or(activity);
@@ -221,31 +166,6 @@ impl ActivityRegistry {
             BackgroundActivityEventReason::Dismissed,
             false,
         );
-    }
-
-    /// Remove every finished record; returns the ids that were removed.
-    pub(crate) fn clear_finished(&self) -> Vec<String> {
-        let mut store = self.store.lock();
-        let finished = store
-            .activities
-            .values()
-            .filter(|activity| !activity.is_active())
-            .cloned()
-            .collect::<Vec<_>>();
-        store.clear_finished();
-        for activity in &finished {
-            self.publish(
-                &mut store,
-                activity.clone(),
-                BackgroundActivityEventReason::Dismissed,
-                false,
-            );
-        }
-        finished.into_iter().map(|activity| activity.id).collect()
-    }
-
-    pub(crate) fn list(&self, filter: &BackgroundActivityFilter) -> Vec<BackgroundActivity> {
-        self.store.lock().list(filter)
     }
 
     /// Observe every mutation immediately, then limit log-only fan-out to one

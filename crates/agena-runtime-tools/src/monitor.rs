@@ -212,6 +212,11 @@ pub trait MonitorService: Send + Sync + std::fmt::Debug {
         ))
     }
     fn list(&self) -> Vec<ProcessSummary>;
+    fn summary(&self, id: &str) -> Option<ProcessSummary> {
+        self.list()
+            .into_iter()
+            .find(|process| process.process_id == id)
+    }
     fn configure_watch(
         &self,
         _id: &str,
@@ -417,6 +422,12 @@ pub fn default_monitor_registry() -> Option<Arc<dyn MonitorService>> {
 }
 
 impl MonitorService for MonitorRegistry {
+    fn summary(&self, id: &str) -> Option<ProcessSummary> {
+        self.terminals
+            .summary(id)
+            .or_else(|| self.lookup(id).map(|state| state.snapshot()))
+    }
+
     fn terminals(&self) -> Option<&crate::TerminalRegistry> {
         Some(&self.terminals)
     }

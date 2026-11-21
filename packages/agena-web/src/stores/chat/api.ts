@@ -1,6 +1,5 @@
 import { i18n } from '@/i18n'
 import { withInterfaceLocale } from '@/i18n/interfaceLocale'
-import type { SessionActivity } from '@/types/activity'
 import type { RequestPerformance } from '@/types/usage'
 // Agena REST API client for the chat subsystem.
 //
@@ -136,10 +135,6 @@ export type AgenaExecutionState = {
   parts: AgenaPart[]
   part_page: { returned: number; has_more: boolean; next_cursor?: string | null } | null
   latest_event_seq?: number | null
-  /// Server-projected background activities for this session. This is the
-  /// single session-scoped projection shared with composer footers; the web
-  /// must not rebuild it from the global activity list.
-  background_activities?: SessionActivity[] | null
   execution?: {
     queued_messages?: QueuedMessage[]
     queue_paused?: boolean
@@ -237,8 +232,6 @@ export type SessionExecutionStatus = {
   usage?: AgenaExecutionState['usage']
   parts: AgenaPart[]
   /** Server-projected background activity kinds (lowercased, id-free). */
-  backgroundActivityKinds: string[]
-  backgroundActivities: SessionActivity[]
 }
 
 export type CancellationResult = 'cancellation_requested' | 'already_terminal' | 'not_found' | 'execution_mismatch'
@@ -1567,9 +1560,6 @@ export async function getSessionExecutionStatus(
     },
   }
   const s = normalizeSessionState(state.session?.state)
-  const backgroundActivityKinds = Array.isArray(raw.background_activities)
-    ? raw.background_activities.map((item) => str(asRecord(item).kind).toLowerCase()).filter((kind) => kind.length > 0)
-    : []
   return {
     controlVersion: state.latest_event_seq ?? undefined,
     session: toSession(state.session, observation.scope)!,
@@ -1577,8 +1567,6 @@ export async function getSessionExecutionStatus(
     execution: state.execution,
     usage: state.usage,
     parts: state.parts || [],
-    backgroundActivityKinds,
-    backgroundActivities: raw.background_activities || [],
     queuedMessages: raw.queued_messages || [],
     queuePaused: Boolean(raw.queue_paused),
     observation,

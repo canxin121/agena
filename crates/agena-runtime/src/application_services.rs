@@ -4,12 +4,11 @@ use agena_provider::ProviderCatalog;
 use agena_storage::{MemoryRepository, PermissionRuleRepository, WorkspaceRepository};
 
 use crate::{
-    ModelCatalogRuntimeService, PluginRuntimeService, RuntimeActivityService,
-    RuntimeAuthenticationService, RuntimeConfigSettingsService, RuntimeConfigurationService,
-    RuntimeControlService, RuntimeDraftAuthenticationService, RuntimeLiveSignalService,
-    RuntimeStatusService, RuntimeToolExecutionService, SessionExecutionCommandService,
-    SessionExecutionControl, SessionPluginCommandService, SessionQueryService,
-    SessionToolExecutionService,
+    ModelCatalogRuntimeService, PluginRuntimeService, RuntimeAuthenticationService,
+    RuntimeConfigSettingsService, RuntimeConfigurationService, RuntimeControlService,
+    RuntimeDraftAuthenticationService, RuntimeLiveSignalService, RuntimeStatusService,
+    RuntimeToolExecutionService, SessionExecutionCommandService, SessionExecutionControl,
+    SessionPluginCommandService, SessionQueryService, SessionToolExecutionService,
 };
 
 /// Runtime-owned result of assembling the capabilities required by the
@@ -41,7 +40,6 @@ pub struct RuntimeApplicationServices {
     pub draft_authentication: Arc<dyn RuntimeDraftAuthenticationService>,
     pub status: Arc<dyn RuntimeStatusService>,
     pub tools: Arc<dyn RuntimeToolExecutionService>,
-    pub activities: Option<Arc<dyn RuntimeActivityService>>,
     /// Ephemeral runtime live signals for background activities, plugins and tools.
     /// Durable session changes use the bounded kernel change feed.
     pub live_signals: Option<Arc<dyn RuntimeLiveSignalService>>,
@@ -85,7 +83,6 @@ pub(crate) struct RuntimeApplicationServiceCompositionInputs {
     pub(crate) draft_authentication: Arc<dyn RuntimeDraftAuthenticationService>,
     pub(crate) status: Arc<dyn RuntimeStatusService>,
     pub(crate) tools: Arc<dyn RuntimeToolExecutionService>,
-    pub(crate) activities: Option<Arc<dyn RuntimeActivityService>>,
     pub(crate) live_signals: Option<Arc<dyn RuntimeLiveSignalService>>,
     pub(crate) session_kernel: Option<agena_storage::kernel::SessionKernel>,
     pub(crate) session_queries: Option<Arc<dyn SessionQueryService>>,
@@ -115,7 +112,6 @@ pub(crate) fn compose_runtime_application_services(
         draft_authentication: inputs.draft_authentication,
         status: inputs.status,
         tools: inputs.tools,
-        activities: inputs.activities,
         live_signals: inputs.live_signals,
         session_kernel: inputs.session_kernel,
         session_queries: inputs.session_queries,

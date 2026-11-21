@@ -279,7 +279,6 @@ impl App {
         let close = match &mut route {
             Route::Main => false,
             Route::Usage(dialog) => self.handle_usage_dashboard_key(key, dialog),
-            Route::Activities(dialog) => self.handle_activities_key(key, dialog),
             Route::PlanViewer(dialog) => self.handle_plan_viewer_key(key, dialog),
             Route::Integrations(source) => self.handle_integrations_key(key, *source),
             Route::Assistant(source) => self.handle_assistant_key(key, *source),

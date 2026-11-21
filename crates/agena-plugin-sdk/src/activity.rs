@@ -19,10 +19,7 @@ pub mod browser;
 
 /// Bidirectional control surface a plugin registers for one activity kind.
 ///
-/// Once registered (usually during `init`), the host dispatches
-/// `RuntimeActivityService::activity_logs` and
-/// `RuntimeActivityService::stop_activity` requests for records of that
-/// kind to this adapter instead of falling back to built-in behavior.
+/// A registered browser adapter handles the session's browser controls.
 #[async_trait]
 pub trait ActivitySourceAdapter: Send + Sync + 'static {
     /// Read incremental activity output with the unified `since_seq` cursor.

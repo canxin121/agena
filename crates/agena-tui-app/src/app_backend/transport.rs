@@ -2930,29 +2930,20 @@ impl TuiBackend {
                     if let Ok(SubscriptionEvent::RuntimeSignal(signal)) = &item
                         && signal.session_id == Some(session_id)
                     {
-                        let incremental = if signal.kind == "activity" {
-                            signal
-                                .payload
-                                .get("activity")
-                                .cloned()
-                                .and_then(|value| serde_json::from_value(value).ok())
-                                .map(|activity| LiveEvent {
-                                    activity_update: Some((
-                                        signal
-                                            .payload
-                                            .get("ts_ms")
-                                            .and_then(serde_json::Value::as_i64)
-                                            .unwrap_or(0),
-                                        signal
-                                            .payload
-                                            .get("reason")
-                                            .and_then(serde_json::Value::as_str)
-                                            == Some("dismissed"),
-                                        activity,
-                                    )),
+                        if signal.kind == "schedule_changed" {
+                            if tx
+                                .send(LiveEvent {
+                                    schedules_changed: true,
                                     ..LiveEvent::default()
                                 })
-                        } else if signal.kind == "plugin"
+                                .await
+                                .is_err()
+                            {
+                                return;
+                            }
+                            continue;
+                        }
+                        let incremental = if signal.kind == "plugin"
                             && signal
                                 .payload
                                 .get("kind")

@@ -293,6 +293,10 @@ impl TerminalRegistry {
         lock(&self.sessions).values().map(|s| s.summary()).collect()
     }
 
+    pub(crate) fn summary(&self, id: &str) -> Option<ProcessSummary> {
+        self.lookup(id, None).ok().map(|session| session.summary())
+    }
+
     pub fn read(
         &self,
         id: &str,

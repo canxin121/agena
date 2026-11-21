@@ -15,6 +15,7 @@ const copy = {
   youControl: ['你正在操作，AI 的浏览器访问已暂停', 'You have control. AI browser access is paused.'],
   otherView: ['浏览器正在另一个视图中被接管', 'Another view has control of the browser.'],
   empty: ['这个会话还没有打开浏览器页面。', 'This session has no open browser pages.'],
+  linkedPageClosed: ['这条消息打开的页面已关闭。', 'The page opened by this message is closed.'],
   loading: ['正在连接浏览器…', 'Connecting to the browser…'],
   keyboard: ['键盘输入', 'Keyboard input'],
   keyboardHint: [

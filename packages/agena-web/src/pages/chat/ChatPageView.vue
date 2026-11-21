@@ -50,7 +50,7 @@ import { resolveComposerToolbarLayout } from './composerToolbarLayout'
 import { useBtwStore } from '@/stores/btw'
 import { skillCatalogKey } from './skillReferences'
 
-const SessionWorkSection = defineAsyncComponent(() => import('@/components/chat/SessionWorkSection.vue'))
+const SessionSchedules = defineAsyncComponent(() => import('@/components/chat/SessionSchedules.vue'))
 const WorkspaceChangesSection = defineAsyncComponent(() => import('@/components/chat/WorkspaceChangesSection.vue'))
 const BtwSection = defineAsyncComponent(() => import('@/components/chat/BtwSection.vue'))
 const PlanSection = defineAsyncComponent(() => import('@/components/chat/PlanSection.vue'))
@@ -64,10 +64,12 @@ const ctx = props.ctx
 const commandListId = `commands-${useId()}`
 const browserOpen = ref(false)
 const browserMounted = ref(false)
+const browserPageId = ref<string>()
 const browserText = useBrowserCopy()
 const browserRequestId = computed(() => ctx.chat.getBrowserTakeoverRequestId(ctx.chat.selectedSessionId || ''))
-provide(openBrowserKey, (sessionId) => {
+provide(openBrowserKey, (sessionId, pageId) => {
   if (sessionId !== ctx.chat.selectedSessionId) return
+  browserPageId.value = pageId
   browserMounted.value = true
   browserOpen.value = true
 })
@@ -75,10 +77,12 @@ watch(
   () => ctx.chat.selectedSessionId,
   () => {
     browserOpen.value = false
+    browserPageId.value = undefined
   },
 )
 
 function showBrowser() {
+  browserPageId.value = undefined
   browserMounted.value = true
   browserOpen.value = true
 }
@@ -242,7 +246,6 @@ const {
   thinkingModeChipLabel,
   speedModeHint,
   speedModeChipLabel,
-  composerBottomLeftStatus,
   composerBottomRightStatus,
   composerStatusExtra,
 
@@ -788,7 +791,18 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
               >
                 <template #status>
                   <span class="flex w-max items-center gap-1 whitespace-nowrap">
-                    <template v-if="ctx.sideParentId.value">
+                    <template v-if="ctx.agentParentId.value">
+                      <button
+                        type="button"
+                        class="pointer-events-auto flex min-h-7 items-center gap-1 rounded px-1 text-primary hover:bg-secondary/50 focus-visible:ring-1 focus-visible:ring-ring"
+                        @click.stop="chat.selectSession(ctx.agentParentId.value)"
+                      >
+                        <RiGitBranchLine class="h-3 w-3" />
+                        <span :class="modeChipTextClass">{{ t('chat.operations.parentSession') }}</span>
+                      </button>
+                      <span class="text-muted-foreground/50">|</span>
+                    </template>
+                    <template v-else-if="ctx.sideParentId.value">
                       <button
                         type="button"
                         data-oc-keyboard-tap="blur"
@@ -890,11 +904,11 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                     :directory="sessionDirectory || ''"
                     :busy="currentPhase !== 'idle'"
                   />
-                  <SessionWorkSection
+                  <SessionSchedules
                     v-if="chat.selectedSessionId"
                     :key="chat.selectedSessionId"
+                    v-model:open="ctx.schedulesOpen.value"
                     :session-id="chat.selectedSessionId"
-                    :label="composerBottomLeftStatus"
                   />
                   <BtwSection
                     v-if="chat.selectedSessionId && btw.sessions.has(chat.selectedSessionId)"
@@ -1128,6 +1142,7 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
     v-model:open="browserOpen"
     :session-id="chat.selectedSessionId"
     :request-id="browserRequestId"
+    :initial-page-id="browserPageId"
   />
   <AttachmentsPanel
     :open="attachmentsPanelOpen"

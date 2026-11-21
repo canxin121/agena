@@ -62,6 +62,10 @@ fn validate_block(block: &ViewBlock) -> Result<(), &'static str> {
         // Resources are attached to their owning Part. A nested content
         // reference would create a second authorization/GC ownership graph.
         ViewBlock::Content { .. } => Err("nested content references are not document blocks"),
+        ViewBlock::ShellProcess { .. }
+        | ViewBlock::MonitorSubscription { .. }
+        | ViewBlock::AgentSession { .. }
+        | ViewBlock::BrowserPage { .. } => Err("session controls belong to the tool part"),
         ViewBlock::Table { columns, rows, .. } => {
             if columns.is_empty()
                 || columns.len() > 64

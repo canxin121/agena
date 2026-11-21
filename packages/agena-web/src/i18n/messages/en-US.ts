@@ -1607,11 +1607,32 @@ export default {
       exitCode: 'exit {code}',
       errorBand: 'Error',
     },
+    operations: {
+      openAgentSession: 'Open agent conversation',
+      parentSession: 'Parent conversation',
+      process: 'Shell process',
+      subscription: 'WebSocket subscription',
+      ready: 'Ready',
+      stopProcess: 'Stop process',
+      disconnect: 'Disconnect',
+      schedules: 'Schedules',
+      noSchedules: 'No schedules in this conversation.',
+      nextRun: 'Next run {time}',
+      pause: 'Pause',
+      resume: 'Resume',
+      paused: 'Paused',
+      showMoreSchedules: 'Show more schedules',
+      status: {
+        running: 'Running',
+        exited: 'Exited',
+        timed_out: 'Timed out',
+        stopped: 'Stopped',
+        failed: 'Failed',
+      },
+    },
     sessionWork: {
       backToFiles: 'Back to files',
       moreDiff: 'Diff preview · load more',
-      tasks: 'Background tasks',
-      activeTasks: '{count} active',
       changes: 'Session edits',
       files: '{count} files',
       recordingIncomplete:
@@ -3926,7 +3947,7 @@ export default {
   // declaration's `docs.summary_key` so both clients resolve the same
   // text. Keys are flat because that is the key the server publishes.
 
-  'command-activities-summary': 'Open the background activities panel',
+  'command-schedules-summary': 'View and manage the conversation’s schedules',
   'command-attach-summary': 'Attach a file through the interactive picker',
   'command-background-summary': 'Return to the session hub; the session keeps running',
   'command-children-summary': 'Open the child-session picker',

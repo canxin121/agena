@@ -242,7 +242,6 @@ async function main() {
     latest_event_seq: 1,
     queued_messages: [],
     queue_paused: false,
-    background_activities: [],
     execution: { agent_status: 'completed' },
   })
   const provider = {
@@ -685,7 +684,6 @@ window.__botProbe = {activeComposerSession: () => {
                 if (/\/sessions\/\d+\/(state|messages)$/.test(p)) return json(execution(Number(p.split('/')[4])))
                 if (p === '/api/v1/workspaces/7') return json({ id: 7, path: '/fixture/project' })
                 if (p === '/api/v1/workbench/fs/home') return json({ home: '/fixture' })
-                if (p === '/api/v1/activities') return json({ items: [], activities: [] })
                 if (p === '/api/v1/workspaces') return json({ items: [], page: { has_more: false } })
                 if (req.method !== 'GET') return json({ error: 'Unexpected fixture mutation' }, 400)
                 return json({ items: [], page: { has_more: false } })

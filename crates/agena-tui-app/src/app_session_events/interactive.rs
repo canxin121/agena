@@ -380,8 +380,8 @@ impl App {
         if live.plan_changed || !changed || live.force_refresh {
             self.request_plan_display_refresh(session_id);
         }
-        if let Some((time, dismissed, activity)) = live.activity_update {
-            self.apply_session_activity(session_id, time, dismissed, activity);
+        if live.schedules_changed {
+            self.mark_session_schedules_changed(session_id);
             return;
         }
         if live.plan_changed {

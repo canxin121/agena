@@ -28,11 +28,6 @@ type ModelSelectionForUsage = {
   selectedModelId: Ref<string>
 }
 
-type ActivitySnapshotEntry = {
-  type?: string
-  kinds?: string[]
-}
-
 type DirectorySessionsRuntimeLike = {
   // Kept optional at the call site while the sidebar owns only canonical
   // SessionState snapshots. Run UI does not derive status from this store.
@@ -110,10 +105,6 @@ type ChatLike = {
   abortSession: (sid: string) => Promise<CancellationOutcome | null>
 }
 
-type ActivityLike = {
-  snapshot?: Record<string, ActivitySnapshotEntry> | null
-}
-
 function numberOrZero(v: number | null | undefined): number {
   return typeof v === 'number' && Number.isFinite(v) ? v : 0
 }
@@ -142,7 +133,6 @@ function textFromMessageParts(parts: MessagePartLike[]): string {
 
 export function useChatRunUi(opts: {
   chat: ChatLike
-  activity: ActivityLike
   directorySessions?: DirectorySessionsRuntimeLike
   toasts: ToastsStore
   modelSelection: ModelSelectionForUsage
@@ -162,7 +152,6 @@ export function useChatRunUi(opts: {
 }) {
   const {
     chat,
-    activity: _activity,
     directorySessions: _directorySessions,
     toasts,
     modelSelection,
@@ -179,7 +168,6 @@ export function useChatRunUi(opts: {
   } = opts
 
   void _directorySessions
-  void _activity
 
   const sessionState = computed<SessionState>(() => chat.selectedSessionState || { kind: 'ready', data: {} })
   const stateKind = computed(() => sessionState.value.kind)

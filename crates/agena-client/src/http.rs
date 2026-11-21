@@ -1552,18 +1552,46 @@ impl AgenaClient {
         self.parse_json(response).await
     }
 
-    /// Control a background activity (`pause`, `resume`, or `delete`) through
-    /// `POST /api/v1/activities/{activity_id}/{action}`.
-    pub async fn control_activity(
+    pub async fn session_schedules(
         &self,
-        activity_id: &str,
-        action: &str,
-    ) -> Result<agena_api::resource::BackgroundActivityResource, ClientError> {
-        self.post_json(
-            &format!("/api/v1/activities/{activity_id}/{action}"),
-            serde_json::json!({}),
-        )
-        .await
+        session_id: i64,
+    ) -> Result<Vec<agena_api::resource::ScheduledJobResource>, ClientError> {
+        let endpoint = self.endpoint(&format!("/api/v1/sessions/{session_id}/schedules"));
+        self.conditional_json(&format!("session:{session_id}:schedules"), endpoint, false)
+            .await
+    }
+
+    pub async fn set_session_schedule_paused(
+        &self,
+        session_id: i64,
+        schedule_id: uuid::Uuid,
+        paused: bool,
+    ) -> Result<agena_api::resource::ScheduledJobResource, ClientError> {
+        let endpoint = self.endpoint(&format!(
+            "/api/v1/sessions/{session_id}/schedules/{schedule_id}"
+        ));
+        let body = serde_json::json!({ "paused": paused });
+        let response = self
+            .send_request(reqwest::Method::PATCH, endpoint, Some(&body), None)
+            .await?;
+        self.parse_json(response).await
+    }
+
+    pub async fn delete_session_schedule(
+        &self,
+        session_id: i64,
+        schedule_id: uuid::Uuid,
+    ) -> Result<(), ClientError> {
+        let endpoint = self.endpoint(&format!(
+            "/api/v1/sessions/{session_id}/schedules/{schedule_id}"
+        ));
+        let response = self
+            .send_request(reqwest::Method::DELETE, endpoint, None, None)
+            .await?;
+        if response.status() == reqwest::StatusCode::NO_CONTENT {
+            return Ok(());
+        }
+        self.parse_json(response).await
     }
 
     pub async fn auth_providers(

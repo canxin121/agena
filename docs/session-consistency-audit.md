@@ -35,7 +35,7 @@ Web `applyEvent` 原先根据共享 part ID，主动把父会话的 `part_update
 
 控制状态可在 metadata version 不变时前进。原 Web 只比较 metadata version：较新的 GET 已显示完成，迟到的旧发送回执仍能恢复旧的等待交互状态、队列和暂停标志。
 
-现在完整状态读取和 mutation envelope 通过同一个 control version 检查，再统一写入 parts、state、queue、interaction、attention、usage 和 background activities。较小版本被拒绝，相等版本允许幂等读取或补齐。删除会话会清理对应高水位。
+现在完整状态读取和 mutation envelope 通过同一个 control version 检查，再统一写入 parts、state、queue、interaction、attention 和 usage。较小版本被拒绝，相等版本允许幂等读取或补齐。删除会话会清理对应高水位。
 
 回归按顺序应用 control 12 的完成快照和 control 10 的旧回执，检查完成状态、空队列、未暂停、无旧交互、无旧提醒、用量 12 和已完成的后台活动全部保持一致。
 

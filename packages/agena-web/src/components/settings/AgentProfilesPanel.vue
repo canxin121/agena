@@ -6,7 +6,6 @@ import SettingsCard from './SettingsCard.vue'
 import SettingsDisclosureRow from './SettingsDisclosureRow.vue'
 import SettingsSaveBar from './SettingsSaveBar.vue'
 import AgentProfileModelFields from './AgentProfileModelFields.vue'
-import PromptLibraryPanel from './PromptLibraryPanel.vue'
 import PromptReferenceList from './PromptReferenceList.vue'
 import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
@@ -81,8 +80,6 @@ const permissionCatalog = ref<RuntimeSettingsReadBundle | null>(null)
 const completePermissions = computed(() =>
   Object.entries(permissionProfilesForLayer(permissionCatalog.value?.global)).filter(([, profile]) => profile.complete),
 )
-const showPromptLibrary = ref(false)
-const promptLibrary = ref<InstanceType<typeof PromptLibraryPanel> | null>(null)
 const builtinCatalog = computed(() => agentProfileCatalog(builtinSources.value?.effective.value))
 const globalCatalog = computed(() => agentProfileCatalog(sources.value?.global.value))
 const workspaceCatalog = computed(() => agentProfileCatalog(sources.value?.workspace.value))
@@ -342,7 +339,6 @@ function discardProfile() {
 }
 
 async function canDiscard() {
-  if (showPromptLibrary.value) return (await promptLibrary.value?.canDiscard()) ?? true
   if (saving.value) return false
   if (!dirty.value) return true
   return confirmAction({
@@ -556,29 +552,12 @@ async function saveSession() {
   }
 }
 async function refresh() {
-  if (showPromptLibrary.value) return promptLibrary.value?.refresh()
   if (await canDiscard()) await load()
 }
-async function openPromptLibrary(open: boolean) {
-  if (open === showPromptLibrary.value || !(await canDiscard())) return
-  if (open && dirty.value) discardProfile()
-  showPromptLibrary.value = open
-  if (!open) await load()
-}
 defineExpose({ refresh })
-watch(contextKey, () => {
-  if (scope.value === 'session') showPromptLibrary.value = false
-  void load('')
-})
+watch(contextKey, () => void load(''))
 function beforeUnload(event: BeforeUnloadEvent) {
-  if (
-    !dirty.value &&
-    !saving.value &&
-    !promptLibrary.value?.dirty &&
-    !promptLibrary.value?.categoryDirty &&
-    !promptLibrary.value?.saving
-  )
-    return
+  if (!dirty.value && !saving.value) return
   event.preventDefault()
   event.returnValue = ''
 }
@@ -611,29 +590,7 @@ onBeforeRouteUpdate((to) => {
 
 <template>
   <section class="settings-stack" :aria-busy="loading || saving" data-agent-profiles>
-    <SegmentedControl v-if="scope !== 'session'" role="group" :aria-label="$st('Agent profiles')">
-      <SegmentedButton
-        :active="!showPromptLibrary"
-        role="button"
-        :aria-selected="undefined"
-        :aria-pressed="!showPromptLibrary"
-        @click="openPromptLibrary(false)"
-        >{{ $st('Agent profiles') }}</SegmentedButton
-      >
-      <SegmentedButton
-        :active="showPromptLibrary"
-        role="button"
-        :aria-selected="undefined"
-        :aria-pressed="showPromptLibrary"
-        @click="openPromptLibrary(true)"
-        >{{ $st('Prompt library') }}</SegmentedButton
-      >
-    </SegmentedControl>
-    <PromptLibraryPanel v-if="showPromptLibrary && scope !== 'session'" ref="promptLibrary" :scope="scope" />
-    <div
-      v-if="!showPromptLibrary && scope !== 'session'"
-      class="settings-toolbar rounded-lg border border-border/70 bg-card/30 p-2.5"
-    >
+    <div v-if="scope !== 'session'" class="settings-toolbar rounded-lg border border-border/70 bg-card/30 p-2.5">
       <SearchInput
         v-model="query"
         class="settings-toolbar-search"
@@ -659,13 +616,13 @@ onBeforeRouteUpdate((to) => {
       </Button>
     </div>
     <p
-      v-if="!showPromptLibrary && error && (scope === 'session' || !dirty)"
+      v-if="error && (scope === 'session' || !dirty)"
       role="alert"
       class="break-words rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
     >
       {{ error }}
     </p>
-    <p v-if="!showPromptLibrary && loading && !sources" role="status" class="px-2 text-sm text-muted-foreground">
+    <p v-if="loading && !sources" role="status" class="px-2 text-sm text-muted-foreground">
       {{ $st('Loading…') }}
     </p>
 
@@ -739,7 +696,7 @@ onBeforeRouteUpdate((to) => {
       </div>
     </SettingsCard>
 
-    <template v-else-if="!showPromptLibrary && sources">
+    <template v-else-if="sources">
       <div class="grid min-w-0 gap-2">
         <SettingsDisclosureRow
           v-for="row in profileRows"

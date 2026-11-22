@@ -47,6 +47,7 @@ describe('task-based settings navigation', () => {
       'storage',
       'provider-studio',
       'agent-profiles',
+      'prompt-library',
       'model-catalog',
     ])
   })
@@ -55,6 +56,7 @@ describe('task-based settings navigation', () => {
     ['models-providers', 'provider-studio', 'ai-session', 'provider-studio'],
     ['models-providers', 'model-catalog', 'ai-session', 'model-catalog'],
     ['runtime-session', 'agent-profiles', 'ai-session', 'agent-profiles'],
+    ['runtime-session', 'prompt-library', 'ai-session', 'prompt-library'],
     ['runtime-session', 'client-versions', 'operations', 'clients'],
     ['runtime-session', 'session-behavior', 'ai-session', 'session-behavior'],
     ['runtime-session', 'storage', 'ai-session', 'storage'],
@@ -85,6 +87,7 @@ describe('task-based settings navigation', () => {
     ['api key', 'provider-studio', 'provider-studio'],
     ['pricing', 'model-catalog', 'model-catalog'],
     ['指令', 'agent-profiles', 'agent-profiles'],
+    ['提示词库', 'prompt-library', 'prompt-library'],
   ])('searching for %s opens its own sidebar page', (query, taskId, view) => {
     const groups = buildSettingsSidebarGroups({
       query,

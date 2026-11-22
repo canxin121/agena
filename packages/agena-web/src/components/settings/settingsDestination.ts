@@ -4,6 +4,7 @@ import { pluginTabForSettingsView } from './pluginSettingsNavigation'
 import { normalizeSettingsSubpageId } from './workbench/settingsSectionNavigation'
 
 export const AGENT_PROFILE_DEFAULTS_HASH = '#settings-default-agent-profiles'
+export const PROMPT_LIBRARY_HASH = '#settings-prompt-library'
 
 export function isAgentProfileDefaultsHash(hash: string): boolean {
   return hash === AGENT_PROFILE_DEFAULTS_HASH || hash === '#default-agent-profiles'
@@ -15,6 +16,9 @@ export function movedSettingsPage(
   hash = '',
 ): SettingsSidebarDestination | undefined {
   const id = normalizeSettingsSubpageId(view)
+  if (section === 'runtime-session' && hash === PROMPT_LIBRARY_HASH) {
+    return { section: 'runtime-session', view: 'prompt-library' }
+  }
   if (
     (section === 'models-providers' && ['model-settings', 'defaults', 'approval-model'].includes(id)) ||
     (section === 'runtime-session' && id === 'agent-profiles' && isAgentProfileDefaultsHash(hash))

@@ -155,7 +155,7 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
     },
     {
       id: 'agent-profiles',
-      aliases: ['prompt-layers', 'prompt-library'],
+      aliases: ['prompt-layers'],
       label: () => st('Agent profiles'),
       description: () => st('Reuse permissions, system instructions, and model preferences across sessions.'),
       keywords: [
@@ -165,7 +165,6 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
         'permissions',
         'system prompt',
         'instructions',
-        '提示词',
         '指令',
         'model',
         'configuration',
@@ -173,6 +172,13 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
         '配置档案',
         '子智能体',
       ],
+    },
+    {
+      id: 'prompt-library',
+      label: () => st('Prompt library'),
+      description: () => st('Manage reusable prompt fragments, compositions, and categories.'),
+      keywords: ['prompts', 'fragments', 'compositions', 'categories', '提示词', '片段', '组合', '分类'],
+      fillsViewport: true,
     },
     {
       id: 'client-versions',

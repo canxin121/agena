@@ -8,6 +8,7 @@ import SettingsCard from './SettingsCard.vue'
 import AgentProfilesPanel from './AgentProfilesPanel.vue'
 import AgentProfileDefaultsPanel from './AgentProfileDefaultsPanel.vue'
 import ModelSettingsPanel from './ModelSettingsPanel.vue'
+import PromptLibraryPanel from './PromptLibraryPanel.vue'
 import { resolveSettingsSessionId } from './settingsSessionScope'
 import ServerSettingField from '@/components/settings/ServerSettingField.vue'
 import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSectionWorkbench.vue'
@@ -38,6 +39,7 @@ const tokensField = ref<InstanceType<typeof ServerSettingField> | null>(null)
 const titleFields = ref<InstanceType<typeof ServerSettingField>[]>([])
 const modelSettingsPanel = ref<InstanceType<typeof ModelSettingsPanel> | null>(null)
 const agentProfilesPanel = ref<InstanceType<typeof AgentProfilesPanel> | null>(null)
+const promptLibraryPanel = ref<InstanceType<typeof PromptLibraryPanel> | null>(null)
 const profileDefaultsPanel = ref<InstanceType<typeof AgentProfileDefaultsPanel> | null>(null)
 const saving = computed(() => modelSettingsPanel.value?.saving || Boolean(profileDefaultsPanel.value?.saving))
 const dirty = computed(() => modelSettingsPanel.value?.dirty || Boolean(profileDefaultsPanel.value?.dirty))
@@ -135,6 +137,7 @@ async function refresh() {
       tokensField.value,
       modelSettingsPanel.value,
       agentProfilesPanel.value,
+      promptLibraryPanel.value,
       profileDefaultsPanel.value,
     ].map((field) => field?.refresh()),
   )
@@ -164,9 +167,7 @@ async function refreshClientVersions() {
     :pages="pages"
     :active-page="activePage"
     :active-scope="scope"
-    :workspace-config-path="
-      activePage === 'session-behavior' || activePage === 'agent-profiles' ? workspaceConfigPath : undefined
-    "
+    :workspace-config-path="configLayer && activePage !== 'client-versions' ? workspaceConfigPath : undefined"
     :default-page="SETTINGS_DEFAULT_SUBPAGE['runtime-session']"
     v-slot="{ activePage }"
   >
@@ -216,6 +217,12 @@ async function refreshClientVersions() {
       ref="agentProfilesPanel"
       :scope="scope"
       :session-id="sessionId"
+      @workspace-config-path="workspaceConfigPath = $event"
+    />
+    <PromptLibraryPanel
+      v-else-if="activePage === 'prompt-library'"
+      ref="promptLibraryPanel"
+      :scope="scope === 'workspace' ? 'workspace' : 'global'"
       @workspace-config-path="workspaceConfigPath = $event"
     />
     <div v-else class="settings-stack">

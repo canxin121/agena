@@ -389,10 +389,18 @@ scopes.
 The TUI preserves model overlays but does not edit fragment conditions or model
 overlays. Its preview is the saved server state and excludes unsaved edits.
 
-In the Web client, open **Settings → AI & sessions → Agent profiles** to edit a
-role’s instructions. The profile editor can attach an existing saved prompt and
-edit the profile’s prompt layer under **Model, limits, and prompt layer**. The
-global and workspace `prompts` settings remain available in **Advanced settings**.
+In the Web client, open **Settings → AI & sessions → Prompt library** to create,
+edit, or categorize reusable prompts. Choose **Global layer** or **Workspace
+layer** in the page toolbar. The category buttons show counts and filter the
+list of saved prompts. The toolbar creates fragments and compositions in the
+selected category, with **Uncategorized** as the destination from **All
+categories**. The selected category's add button creates a fragment in that
+category. A composition lets you order existing prompts and preview the
+combined text before saving.
+
+Open **Settings → AI & sessions → Agent profiles** to edit a role’s instructions
+and attach saved prompts under **Instructions**. The global and workspace
+`prompts` settings are also available in **Advanced settings**.
 
 ## Migrating from `additional_system_prompt`
 

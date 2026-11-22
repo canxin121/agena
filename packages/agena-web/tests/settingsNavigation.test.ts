@@ -68,12 +68,26 @@ test('access is the default editor and old permission pages resolve without losi
   expect(permissionSectionFromHash('#unrelated')).toBeUndefined()
 })
 
-test('retired prompt bookmarks open agent profiles', () => {
+test('prompt library bookmarks open the dedicated editor with two editable scopes', () => {
   const pages = buildSettingsSubpages('runtime-session')
-  expect(pages.map((page) => page.id)).toEqual(['storage', 'agent-profiles', 'client-versions', 'session-behavior'])
-  for (const view of ['prompt-layers', 'prompt-library']) {
-    expect(resolveSettingsSubpage(view, '', pages, 'session-behavior')).toBe('agent-profiles')
-  }
+  expect(pages.map((page) => page.id)).toEqual([
+    'storage',
+    'agent-profiles',
+    'prompt-library',
+    'client-versions',
+    'session-behavior',
+  ])
+  expect(resolveSettingsSubpage('prompt-library', '', pages, 'session-behavior')).toBe('prompt-library')
+  expect(resolveSettingsSubpage('', 'prompt-library', pages, 'session-behavior')).toBe('prompt-library')
+  expect(resolveSettingsSubpage('prompt-layers', '', pages, 'session-behavior')).toBe('agent-profiles')
+  expect(movedSettingsPage('runtime-session', 'agent-profiles', '#settings-prompt-library')).toEqual({
+    section: 'runtime-session',
+    view: 'prompt-library',
+  })
+  expect(buildSettingsScopes('runtime-session', 'prompt-library').map((scope) => scope.id)).toEqual([
+    'global',
+    'workspace',
+  ])
 })
 
 test('Session settings owns the model scopes and legacy model and default profile links', () => {

@@ -1,6 +1,8 @@
 import {
+  MAX_PROMPT_FRAGMENT_BYTES,
   isValidPromptFragmentId,
   normalizePromptFragment,
+  promptFragmentBodyBytes,
   type PromptFragment,
   type PromptLayerScope,
   type PromptScopeConfig,
@@ -77,7 +79,7 @@ export function savedPromptIsValid(fragment: PromptFragment): boolean {
     isValidPromptFragmentId(fragment.id) &&
     fragment.title.trim().length > 0 &&
     (fragment.parts?.length ? !fragment.body.trim() : Boolean(fragment.body.trim())) &&
-    new TextEncoder().encode(fragment.body).length <= 16 * 1024
+    promptFragmentBodyBytes(fragment.body) <= MAX_PROMPT_FRAGMENT_BYTES
   )
 }
 
@@ -100,6 +102,20 @@ export function promptCategories(config: PromptScopeConfig): string[] {
       ].filter(Boolean),
     ),
   ].sort((left, right) => left.localeCompare(right))
+}
+
+export function groupSavedPrompts(config: PromptScopeConfig) {
+  const groups = new Map<string | null, PromptFragment[]>(promptCategories(config).map((category) => [category, []]))
+  const uncategorized: PromptFragment[] = []
+  for (const prompt of [...config.library, ...config.inline]) {
+    const prompts = groups.get(prompt.category ?? null) ?? uncategorized
+    prompts.push(prompt)
+  }
+  if (uncategorized.length) groups.set(null, uncategorized)
+  return Array.from(groups, ([category, prompts]) => ({
+    category,
+    prompts: prompts.sort((left, right) => savedPromptDisplayName(left).localeCompare(savedPromptDisplayName(right))),
+  }))
 }
 
 /** Rename a category in place. Removing a category keeps all of its prompts. */

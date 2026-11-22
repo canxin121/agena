@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import {
   availableSavedPrompts,
+  groupSavedPrompts,
   nextSavedPromptId,
   savedPromptIsValid,
   savedPromptMatches,
@@ -30,6 +31,15 @@ test('saved library entries are separate from active layer order', () => {
   expect(scopeUsesPrompt(workspaceConfig, 'shared')).toBe(true)
 })
 
+test('category choices include empty categories and uncategorized prompts', () => {
+  const groups = groupSavedPrompts({ ...globalConfig, categories: ['templates', 'research'] })
+  expect(groups.map(({ category, prompts }) => [category, prompts.map(({ id }) => id)])).toEqual([
+    ['research', ['shared']],
+    ['templates', []],
+    [null, ['global-only', 'legacy-inline']],
+  ])
+})
+
 test('attachment chooser shows names across scopes with workspace precedence', () => {
   const global = availableSavedPrompts(globalConfig, workspaceConfig, 'global')
   expect(global.find((item) => item.id === 'shared')?.fragment.title).toBe('Global shared')
@@ -48,7 +58,13 @@ test('users do not have to invent or type internal prompt ids', () => {
 })
 
 test('search and validation handle custom categories, empty bodies and UTF-8 size', () => {
-  const prompt = { id: 'valid', title: '中文研究', category: 'research', body: 'Check facts', when: { models: [], requires_tools: null } }
+  const prompt = {
+    id: 'valid',
+    title: '中文研究',
+    category: 'research',
+    body: 'Check facts',
+    when: { models: [], requires_tools: null },
+  }
   expect(savedPromptIsValid(prompt)).toBe(true)
   expect(savedPromptMatches(prompt, '研究')).toBe(true)
   expect(savedPromptMatches(prompt, 'research')).toBe(true)

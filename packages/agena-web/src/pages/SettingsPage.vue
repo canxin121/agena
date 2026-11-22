@@ -30,6 +30,7 @@ import OptionPicker from '@/components/ui/OptionPicker.vue'
 import SettingsSidebar from '@/components/settings/sidebar/SettingsSidebar.vue'
 import {
   AGENT_PROFILE_DEFAULTS_HASH,
+  PROMPT_LIBRARY_HASH,
   isAgentProfileDefaultsHash,
   movedSettingsPage,
   settingsQueryForDestination,
@@ -140,9 +141,13 @@ const activeView = computed(() => {
 // Every scoped page resolves the same configuration layers; its workbench owns
 // the visible selector while the route keeps the choice shareable.
 const activeScopes = computed(() => buildSettingsScopes(activeSection.value, activeView.value))
-// Session settings and profile definitions remember their scopes independently.
+// Runtime settings pages with distinct scope choices remember those choices independently.
 const scopeStorageKey = computed(() =>
-  settingsScopeStorageKey(activeView.value === 'session-behavior' ? 'runtime-session.session-behavior' : activeSection.value),
+  settingsScopeStorageKey(
+    ['session-behavior', 'prompt-library'].includes(activeView.value)
+      ? `${activeSection.value}.${activeView.value}`
+      : activeSection.value,
+  ),
 )
 const activeScope = computed(() => {
   if (activeSection.value === 'permissions') {
@@ -214,7 +219,7 @@ watch(
       if (tab && tab !== 'overview') query.pluginTab = tab
     } else delete query.plugin
     const hash =
-      activeView.value === 'agent-profiles' && route.hash === '#settings-prompt-library'
+      activeView.value === 'prompt-library' && route.hash === PROMPT_LIBRARY_HASH
         ? ''
         : activeView.value === 'session-behavior' && isAgentProfileDefaultsHash(route.hash)
           ? AGENT_PROFILE_DEFAULTS_HASH

@@ -161,6 +161,7 @@ async function main() {
   const botA = '11111111-1111-4111-8111-111111111111'
   const botB = '22222222-2222-4222-8222-222222222222'
   const botC = '33333333-3333-4333-8333-333333333333'
+  const rewindMessageId = 4200
   const persona = () => ({ instructions: '' })
   const profileFor = (id, session_id, name) => ({
     id,
@@ -390,6 +391,15 @@ window.__botProbe = {activeComposerSession: () => {
                 if (permissionFixture && (await permissionFixture.handle(req, url, json))) return
                 if (/^\/api\/v1\/(tasks(?:\/|$)|chatbot\/messages$)/.test(p))
                   return json({ error: 'Retired endpoint' }, 404)
+                if (p === '/api/v1/sessions/42/rewind' && req.method === 'POST') {
+                  let raw = ''
+                  for await (const chunk of req) raw += chunk
+                  const { at_message_id, mode } = JSON.parse(raw)
+                  if (at_message_id !== rewindMessageId || mode !== 'in_place')
+                    return json({ error: 'Expected an in-place rewind of the fixture message' }, 400)
+                  botParts = []
+                  return json(execution(42))
+                }
                 if (/^\/api\/v1\/sessions\/\d+\/messages$/.test(p) && req.method === 'POST') {
                   let raw = ''
                   for await (const chunk of req) raw += chunk
@@ -874,12 +884,46 @@ window.__botProbe = {activeComposerSession: () => {
         cdp.evaluate(
           `document.documentElement.scrollWidth <= innerWidth + 1 && [...document.querySelectorAll('[data-testid="bot-sidebar"]')].filter(n => n.getClientRects().length).every(n => n.scrollWidth <= n.clientWidth + 1)`,
         )
+      const rewindText = 'Revise this Bot message'
+      botParts = [
+        {
+          part_id: rewindMessageId,
+          run_id: rewindMessageId,
+          revision: 1,
+          message_boundary: true,
+          role: 'user',
+          kind: 'text',
+          state: 'completed',
+          sections: [],
+          content: { text: rewindText },
+          created_at_ms: 1,
+          updated_at_ms: 1,
+        },
+      ]
       await cdp.send('Page.navigate', { url: base + '/bot?botId=' + botA })
       await wait(
         () => cdp.evaluate(`window.__botProbe?.activeComposerSession() === '42'`),
         'canonical Bot composer',
         90000,
       )
+      const rewindMessage = `article[data-message-id="${rewindMessageId}"]`
+      const rewindRoute = await cdp.evaluate('location.href')
+      await cdp.click(`${rewindMessage} button[aria-label="从此处回退"]`)
+      await cdp.clickText('button', '直接修改当前会话')
+      await wait(
+        () =>
+          cdp.evaluate(
+            `location.href !== ${JSON.stringify(rewindRoute)} || document.activeElement?.matches(${JSON.stringify(input)})`,
+          ),
+        'Bot rewind settles',
+      )
+      check(
+        (await cdp.evaluate('location.href')) === rewindRoute &&
+          !(await visible(rewindMessage)) &&
+          (await cdp.evaluate('document.activeElement?.textContent')) === rewindText,
+        'in-place rewind stays in the same Bot conversation and restores the retracted message to its draft',
+      )
+      await cdp.evaluate(`window.__botProbe.chat.setComposerDraft('42', '')`)
       await wait(() => visible(conversation(42)), 'canonical local sidebar row')
       await cdp.click(toggle(botB))
       await wait(() => visible(conversation(43)), 'second Bot local row')

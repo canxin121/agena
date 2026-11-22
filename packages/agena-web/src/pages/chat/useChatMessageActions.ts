@@ -43,7 +43,7 @@ type ChatLike = {
     sessionId: string,
     messageId: string,
     mode?: 'fork' | 'in_place',
-  ) => Promise<{ session: Session; message: MessageEntry }>
+  ) => Promise<{ session: Session; message: MessageEntry } | null>
 }
 
 function filePartLabel(part: MessagePartLike): string {
@@ -167,11 +167,15 @@ export function useChatMessageActions(opts: {
     const sid = chat.selectedSessionId
     if (!sid || historyActionBusy.value) return
 
+    const sourceRoute = route.fullPath
     historyActionBusy.value = true
     revertBusyMessageId.value = messageId
     try {
-      const { session, message } = await chat.revertToMessage(sid, messageId, mode)
-      await openBranch(session.id)
+      const rewound = await chat.revertToMessage(sid, messageId, mode)
+      if (!rewound || chat.selectedSessionId !== sid || route.fullPath !== sourceRoute) return
+
+      const { session, message } = rewound
+      if (mode === 'fork') await openBranch(session.id)
       const segments: ComposerSegment[] = []
       const files: AttachedFile[] = []
       for (const part of message.parts) {

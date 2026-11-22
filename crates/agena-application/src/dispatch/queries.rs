@@ -162,17 +162,9 @@ pub async fn dispatch_query(
                 .await
                 .map_err(|error| ApplicationError::internal_error(&error))?,
         )),
-        Query::GetSessionTree(GetSessionParams { session_id }) => {
-            let summaries = state
-                .session_execution_services()?
-                .queries
-                .list_session_tree(session_id)
-                .await
-                .map_err(|error| ApplicationError::from_failure(*error.failure))?;
-            Ok(QueryResult::SessionTree(
-                state.session_resources_from_summaries(summaries).await?,
-            ))
-        }
+        Query::GetSessionTree(GetSessionParams { session_id }) => Ok(QueryResult::SessionTree(
+            state.session_tree(session_id).await?,
+        )),
         Query::GetSessionPlatforms(GetSessionParams { session_id }) => {
             Ok(QueryResult::SessionPlatforms(
                 state

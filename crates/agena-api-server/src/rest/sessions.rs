@@ -56,11 +56,12 @@ pub async fn list_sessions(
             .list_sessions(query)
             .await
             .map_err(server_error_from_application)?;
-        let read = crate::revisions::ConditionalRead::for_value(&state, &page)?;
+        let bytes = crate::json_codec::encode_bytes(page).await?;
+        let read = crate::revisions::ConditionalRead::for_bytes(&state, &bytes);
         if let Some(response) = read.not_modified(&headers) {
             return Ok(response);
         }
-        return read.json(page).await;
+        return Ok(read.headers(crate::json_codec::bytes_response(bytes)));
     }
     let bucket = query.bucket.map(|bucket| {
         serde_json::to_value(bucket)
@@ -623,17 +624,7 @@ pub async fn list_session_tree(
     State(state): State<AppState>,
     Path(root_id): Path<i64>,
 ) -> Result<impl IntoResponse, ServerError> {
-    let services = state.application().session_execution_services()?;
-    let summaries = services
-        .queries
-        .list_session_tree(root_id)
-        .await
-        .map_err(|error| ServerError::from_failure(*error.failure))?;
-    let resources = state
-        .application()
-        .session_resources_from_summaries(summaries)
-        .await?;
-    Ok(Json(resources))
+    Ok(Json(state.application().session_tree(root_id).await?))
 }
 
 pub async fn export_session(

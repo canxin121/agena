@@ -83,6 +83,7 @@ pub(in crate::kernel) fn record(
 
 pub(super) async fn persist(
     connection: &mut SqliteConnection,
+    source_key: i64,
     source: &StagedSource,
     current: &ContentStreamView,
 ) -> Result<()> {
@@ -101,8 +102,8 @@ pub(super) async fn persist(
             .checked_add(window.bytes)
             .ok_or_else(|| storage("capture loss byte overflow"))?;
         packets = window.last_packet;
-        sqlx::query("INSERT INTO agena_content_capture_losses (content_id,first_packet,last_packet,after_position,byte_count,diagnostic) VALUES (?,?,?,?,?,?)")
-            .bind(source.head.id.to_string()).bind(window.first_packet as i64).bind(window.last_packet as i64).bind(window.after_position as i64).bind(window.bytes as i64).bind(&window.diagnostic)
+        sqlx::query("INSERT INTO agena_content_capture_losses (source_key,first_packet,last_packet,after_position,byte_count,diagnostic) VALUES (?,?,?,?,?,?)")
+            .bind(source_key).bind(window.first_packet as i64).bind(window.last_packet as i64).bind(window.after_position as i64).bind(window.bytes as i64).bind(&window.diagnostic)
             .execute(&mut *connection).await.map_err(sql_error)?;
     }
     if bytes != source.head.capture_loss.committed_bytes
@@ -117,13 +118,24 @@ pub(super) async fn persist(
 
 pub(crate) async fn records(
     connection: &mut SqliteConnection,
-    content: ContentId,
+    source_key: i64,
     after: u64,
     through: u64,
     limit: usize,
 ) -> Result<Vec<CaptureLoss>> {
-    let rows = sqlx::query("SELECT first_packet,last_packet,after_position,byte_count,diagnostic FROM agena_content_capture_losses WHERE content_id=? AND first_packet>? AND last_packet<=? ORDER BY first_packet LIMIT ?")
-        .bind(content.to_string()).bind(after as i64).bind(through as i64).bind(limit.min(257) as i64).fetch_all(connection).await.map_err(sql_error)?;
+    let rows = sqlx::query(
+        "SELECT first_packet,last_packet,after_position,byte_count,diagnostic
+         FROM agena_content_capture_losses
+         WHERE source_key=?1 AND first_packet>?2 AND first_packet<=?3 AND last_packet<=?3
+         ORDER BY first_packet LIMIT ?4",
+    )
+    .bind(source_key)
+    .bind(after as i64)
+    .bind(through as i64)
+    .bind(limit.min(257) as i64)
+    .fetch_all(connection)
+    .await
+    .map_err(sql_error)?;
     rows.into_iter()
         .map(|row| {
             Ok(CaptureLoss {
@@ -155,7 +167,7 @@ pub(in crate::kernel) async fn page(
         .begin()
         .await
         .map_err(storage)?;
-    authorize(&mut tx, session, content).await?;
+    let source_key = authorize(&mut tx, session, content).await?;
     let head = match scoped_boundary(&mut tx, session, content, None).await? {
         Some(frozen) => frozen,
         None => stored_head(&mut tx, content).await?,
@@ -167,8 +179,18 @@ pub(in crate::kernel) async fn page(
         return Err(KernelError::ContentReset);
     }
     if packet != 0 {
-        let boundary: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agena_content_capture_losses WHERE content_id=? AND last_packet=?)")
-            .bind(content.to_string()).bind(packet as i64).fetch_one(&mut *tx).await.map_err(sql_error)?;
+        // Windows are contiguous. Only the predecessor of the cursor can end there.
+        let boundary: bool = sqlx::query_scalar(
+            "SELECT COALESCE((
+                 SELECT last_packet=?2 FROM agena_content_capture_losses
+                 WHERE source_key=?1 AND first_packet<=?2 ORDER BY first_packet DESC LIMIT 1
+             ),0)",
+        )
+        .bind(source_key)
+        .bind(packet as i64)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(sql_error)?;
         if !boundary {
             return Err(invalid("capture loss cursor is not a window boundary"));
         }
@@ -176,7 +198,7 @@ pub(in crate::kernel) async fn page(
     let limit = limit.clamp(1, 256);
     let mut losses = records(
         &mut tx,
-        content,
+        source_key,
         packet,
         head.capture_loss.committed_packets,
         limit + 1,

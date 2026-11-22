@@ -86,6 +86,11 @@ pub(crate) async fn append_execution_failures(
         .collect();
     let mut candidates = Vec::new();
     let mut seen_attempts = HashSet::new();
+    let mut seen_runs: HashSet<_> = parts
+        .iter()
+        .filter(|part| error_entries.contains(&part.part_id))
+        .filter_map(|part| part.run_id)
+        .collect();
     for entry in entries {
         if entry.execution_phase != ExecutionPhase::Failed {
             continue;
@@ -113,8 +118,6 @@ pub(crate) async fn append_execution_failures(
         if !seen_attempts.insert(key) {
             continue;
         }
-        // A forked session reads entries owned by its ancestor. The failed
-        // attempt therefore belongs to the entry owner, not the reader.
         candidates.push((
             run_id,
             entry.execution_id,
@@ -129,15 +132,7 @@ pub(crate) async fn append_execution_failures(
     for (run_id, execution, generation, owner, candidate_created_at_ms, message_id, standalone) in
         candidates
     {
-        if parts.iter().any(|existing| {
-            existing.kind == "error"
-                && existing.run_id == Some(run_id)
-                && existing
-                    .content
-                    .get("projection_error")
-                    .and_then(serde_json::Value::as_bool)
-                    != Some(true)
-        }) {
+        if seen_runs.contains(&run_id) {
             continue;
         }
         if reader
@@ -149,7 +144,7 @@ pub(crate) async fn append_execution_failures(
             continue;
         }
         let round = reader
-            .failed_round(owner, execution, generation)
+            .failed_round(session, execution, generation)
             .await
             .map_err(crate::kernel_error)?;
         // A failed attempt does not always leave a failed provider round:
@@ -187,6 +182,7 @@ pub(crate) async fn append_execution_failures(
             },
             None => (manager_failure_content()?, run_id, candidate_created_at_ms),
         };
+        seen_runs.insert(run_id);
         failures.push((
             run_id,
             source_id,
@@ -524,18 +520,6 @@ pub(crate) async fn project_kernel_entry(
                             );
                         }
                     }
-                }
-                agena_runtime_contracts::part_content::DecodedNotice::LegacyHook(hook) => {
-                    // Session history written by the pre-marker runtime stored
-                    // each observed hook run in a human-readable notice. Project
-                    // it as the same first-class activity on read, without
-                    // rewriting durable history.
-                    apply_hook_content(&mut part, hook);
-                }
-                agena_runtime_contracts::part_content::DecodedNotice::LegacyStopHookFollowup(
-                    message,
-                ) => {
-                    apply_hook_content(&mut part, legacy_followup_hook(message));
                 }
                 agena_runtime_contracts::part_content::DecodedNotice::SystemNotification(
                     decoded,
@@ -877,43 +861,6 @@ fn apply_unreadable_notice(part: &mut PartResource, text: &str) {
     apply_notice_text(part, text);
 }
 
-fn legacy_followup_hook(message: &str) -> agena_runtime_contracts::part_content::HookContent {
-    let mut extra = std::collections::BTreeMap::new();
-    extra.insert(
-        "status".to_owned(),
-        serde_json::Value::String("applied".into()),
-    );
-    extra.insert("legacy_notice".to_owned(), serde_json::Value::Bool(true));
-    agena_runtime_contracts::part_content::HookContent {
-        hook: "agent.stop".into(),
-        plugin_id: None,
-        summary: "agent.stop hook blocked stop".into(),
-        detail: None,
-        message: Some(message.to_owned()),
-        extra,
-    }
-}
-
-/// The old stop-hook path wrote the continuation twice: once inside the hook
-/// observation and once as a separate notice immediately after it. The
-/// observation already becomes a hook part with `message`, so the duplicate is
-/// suppressed only when the two entries are adjacent in the same page.
-pub(crate) fn is_paired_legacy_hook_followup(entries: &[EntryView], index: usize) -> bool {
-    let Some(EntryPayload::Notice { text }) = entries.get(index).map(|entry| &entry.payload) else {
-        return false;
-    };
-    if agena_runtime_contracts::part_content::legacy_stop_hook_followup_message(text).is_none() {
-        return false;
-    }
-    let Some(previous) = index.checked_sub(1).and_then(|index| entries.get(index)) else {
-        return false;
-    };
-    let EntryPayload::Notice { text } = &previous.payload else {
-        return false;
-    };
-    agena_runtime_contracts::part_content::decode_legacy_hook_observation(text).is_some()
-}
-
 fn project_interaction(
     session: SessionId,
     interaction: &agena_storage::kernel::InteractionView,
@@ -1069,8 +1016,8 @@ impl Application {
         }
         let session = crate::kernel_session_id(request.session_id)?;
         let reader = &self.session_kernel()?.reader;
-        let (metadata, entries, next, has_more) = if request.ids.is_empty() {
-            let page = reader
+        let page = if request.ids.is_empty() {
+            reader
                 .history_window(
                     session,
                     decode_part_cursor(request.session_id, request.cursor.as_deref())?,
@@ -1078,45 +1025,18 @@ impl Application {
                     request.limit.unwrap_or(64).clamp(1, 256) as usize,
                 )
                 .await
-                .map_err(crate::kernel_error)?;
-            (
-                page.metadata.clone(),
-                page.entries.clone(),
-                page.next,
-                page.has_more,
-            )
         } else {
             if !request.run_ids.is_empty() || request.cursor.is_some() || request.limit.is_some() {
                 return Err(ApplicationError::bad_request(
                     "Explicit entry identities cannot be combined with a history range.",
                 ));
             }
-            let metadata = reader
-                .metadata(session)
-                .await
-                .map_err(crate::kernel_error)?;
-            let mut entries = Vec::with_capacity(request.ids.len());
-            for id in request
-                .ids
-                .into_iter()
-                .collect::<std::collections::BTreeSet<_>>()
-            {
-                let id = id
-                    .try_into()
-                    .map_err(|error| ApplicationError::bad_request_error(&error))?;
-                match reader.entry(session, id).await {
-                    Ok(entry) => entries.push((*entry).clone()),
-                    Err(agena_storage::kernel::KernelError::NotFound(_)) => {}
-                    Err(error) => return Err(crate::kernel_error(error)),
-                }
-            }
-            ((*metadata).clone(), entries, None, false)
-        };
+            reader.history_by_ids(session, &request.ids).await
+        }
+        .map_err(crate::kernel_error)?;
+        let entries = &page.entries;
         let mut parts = Vec::with_capacity(entries.len());
-        for (index, entry) in entries.iter().enumerate() {
-            if is_paired_legacy_hook_followup(&entries, index) {
-                continue;
-            }
+        for entry in entries {
             if !matches!(entry.payload, EntryPayload::Interaction { .. }) {
                 parts.push(
                     self.project_entry(
@@ -1128,15 +1048,15 @@ impl Application {
                 );
             }
         }
-        append_execution_failures(reader, session, &entries, &mut parts).await?;
+        append_execution_failures(reader, session, entries, &mut parts).await?;
         let summary = reader.summary(session).await.map_err(crate::kernel_error)?;
         Ok(SessionPartsResource {
             session_id: request.session_id,
-            version: metadata.metadata_version.get(),
+            version: page.metadata.metadata_version.get(),
             page: agena_api::pagination::PageInfo {
                 returned: parts.len() as u64,
-                has_more,
-                next_cursor: encode_part_cursor(request.session_id, next)?,
+                has_more: page.has_more,
+                next_cursor: encode_part_cursor(request.session_id, page.next)?,
                 ..Default::default()
             },
             parts,
@@ -1161,10 +1081,7 @@ impl Application {
             .await
             .map_err(crate::kernel_error)?;
         let mut parts = Vec::with_capacity(page.entries.len());
-        for (index, entry) in page.entries.iter().enumerate() {
-            if is_paired_legacy_hook_followup(&page.entries, index) {
-                continue;
-            }
+        for entry in &page.entries {
             parts.push(
                 self.project_entry(
                     request.session_id,
@@ -2196,7 +2113,7 @@ mod tool_input_projection_tests {
     }
 
     #[tokio::test]
-    async fn failed_run_with_committed_content_projects_exactly_one_error_part() {
+    async fn failed_run_with_committed_content_keeps_one_error_in_its_fork() {
         use agena_failure::{
             Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility,
             RecoveryDirective, RetryDirective, UserPresentation,
@@ -2274,13 +2191,27 @@ mod tool_input_projection_tests {
             .await
             .unwrap();
 
+        let fork = runtime
+            .ports
+            .sessions
+            .fork(RequestId::new(), session, reply)
+            .await
+            .unwrap()
+            .value
+            .id;
+        runtime
+            .ports
+            .sessions
+            .delete(RequestId::new(), session)
+            .await
+            .unwrap();
         let reader = &runtime.ports.reader;
-        let history = reader.history_window(session, None, &[], 64).await.unwrap();
+        let history = reader.history_window(fork, None, &[], 64).await.unwrap();
         let mut parts = Vec::new();
         for entry in &history.entries {
-            parts.push(project_kernel_entry(reader, session, entry).await.unwrap());
+            parts.push(project_kernel_entry(reader, fork, entry).await.unwrap());
         }
-        append_execution_failures(reader, session, &history.entries, &mut parts)
+        append_execution_failures(reader, fork, &history.entries, &mut parts)
             .await
             .unwrap();
         let errors = parts
@@ -2295,6 +2226,11 @@ mod tool_input_projection_tests {
         // The committed reply keeps its own boundary; the error joins it.
         assert!(!errors[0].message_boundary);
         assert_eq!(errors[0].run_id, Some(reply.get()));
+        assert_eq!(
+            errors[0].content["problem"]["code"],
+            "provider.request_failed"
+        );
+        assert_eq!(errors[0].origin_session_id, session.get());
         assert!(
             parts
                 .iter()
@@ -2755,86 +2691,6 @@ mod tool_input_projection_tests {
         assert!(!part.content.to_string().contains(&marker));
     }
 
-    #[tokio::test]
-    async fn legacy_hook_observation_and_followup_project_without_duplicate_text() {
-        let runtime = agena_storage_sqlite::open_kernel_runtime("sqlite::memory:")
-            .await
-            .unwrap();
-        let workspace = runtime
-            .workspaces
-            .ensure_id("/legacy-hook-notice-projection-tests")
-            .await
-            .unwrap();
-        let session = runtime
-            .ports
-            .sessions
-            .create_configured(RequestId::new(), workspace, "A".into(), Default::default())
-            .await
-            .unwrap()
-            .value
-            .id;
-        let execution = runtime
-            .ports
-            .sessions
-            .send(
-                RequestId::new(),
-                session,
-                ComposerDocument(vec![ComposerNode::Text {
-                    text: "Run the plan".into(),
-                }]),
-            )
-            .await
-            .unwrap()
-            .value
-            .id;
-        let attempt = runtime
-            .ports
-            .executor
-            .claim_next(RequestId::new(), session, execution)
-            .await
-            .unwrap()
-            .value;
-        let continuation = "<plan_context>\nContinue the active approved plan.\n</plan_context>";
-        let observation = format!(
-            "Plugin hook observations:\nagena.plan agent.stop Applied: agent.stop hook blocked stop: workflow plan autorun ({continuation})\n"
-        );
-        let followup = format!("Plugin stop hook follow-up:\n{continuation}");
-        let observation_id = attempt
-            .notice(RequestId::new(), observation)
-            .await
-            .unwrap()
-            .value;
-        let followup_id = attempt
-            .notice(RequestId::new(), followup)
-            .await
-            .unwrap()
-            .value;
-        let reader = &runtime.ports.reader;
-        let entries = vec![
-            (*reader.entry(session, observation_id).await.unwrap()).clone(),
-            (*reader.entry(session, followup_id).await.unwrap()).clone(),
-        ];
-        assert!(!is_paired_legacy_hook_followup(&entries, 0));
-        assert!(is_paired_legacy_hook_followup(&entries, 1));
-        let part = project_kernel_entry(reader, session, &entries[0])
-            .await
-            .unwrap();
-        let hook = HookContent::try_from(&part.content).unwrap();
-        assert_eq!(part.kind, "hook");
-        assert_eq!(hook.plugin_id.as_deref(), Some("agena.plan"));
-        assert_eq!(hook.message.as_deref(), Some(continuation));
-        let standalone = project_kernel_entry(reader, session, &entries[1])
-            .await
-            .unwrap();
-        assert_eq!(standalone.kind, "hook");
-        assert_eq!(
-            HookContent::try_from(&standalone.content)
-                .unwrap()
-                .message
-                .as_deref(),
-            Some(continuation)
-        );
-    }
     #[tokio::test]
     async fn user_identity_survives_storage_and_public_transcript_projection() {
         use agena_domain::{ChannelRole, ConversationKind, MessageAuthor, MessageOrigin, Platform};

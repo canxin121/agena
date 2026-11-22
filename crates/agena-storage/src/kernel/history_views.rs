@@ -66,6 +66,14 @@ impl KernelReader {
             .history_window(session, before, message_ids, limit)
             .await
     }
+    /// Resolve explicit entry IDs against one snapshot of the visible history.
+    pub async fn history_by_ids(
+        &self,
+        session: SessionId,
+        ids: &[i64],
+    ) -> Result<ReadView<HistoryPage>> {
+        self.0.backend.history_by_ids(session, ids).await
+    }
     pub async fn message_history(
         &self,
         session: SessionId,

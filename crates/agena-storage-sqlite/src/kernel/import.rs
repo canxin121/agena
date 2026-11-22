@@ -2,8 +2,12 @@
 //! disk-backed SQLite staging database before the sole writer publishes it.
 //! No import path can obtain an attempt capability or launch external work.
 
-use std::path::Path;
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+};
 
+use futures_util::TryStreamExt;
 use serde_json::{Value, json};
 use sqlx::sqlite::SqliteConnectOptions;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
@@ -12,7 +16,7 @@ use super::*;
 
 const MAX_LINE: usize = 32 * 1024 * 1024;
 const MAX_BLOCK: i64 = 32 * 1024 * 1024;
-const PIECE: usize = 64 * 1024;
+const PIECE: usize = content::BLOCK_PIECE_BYTES;
 const TABLES: &[&str] = &[
     "agena_executions",
     "agena_execution_purposes",
@@ -43,11 +47,23 @@ const TABLES: &[&str] = &[
     "agena_branch_activities",
 ];
 
+// Staging keeps the public UUIDs and permits out-of-order JSONL records.
+const CONTENT_STAGING_TABLES: &[&str] = &[
+    "CREATE TABLE IF NOT EXISTS agena_content_capture_losses (content_id TEXT NOT NULL REFERENCES agena_content_streams(id), first_packet INTEGER NOT NULL CHECK(typeof(first_packet)='integer' AND first_packet>0), last_packet INTEGER NOT NULL CHECK(typeof(last_packet)='integer' AND last_packet>=first_packet), after_position INTEGER NOT NULL CHECK(typeof(after_position)='integer' AND after_position>=0), byte_count INTEGER NOT NULL CHECK(typeof(byte_count)='integer' AND byte_count>=0), diagnostic TEXT NOT NULL CHECK(length(CAST(diagnostic AS BLOB)) BETWEEN 1 AND 256), PRIMARY KEY(content_id,first_packet)) WITHOUT ROWID",
+    "CREATE TABLE IF NOT EXISTS agena_content_blocks (content_id TEXT NOT NULL REFERENCES agena_content_streams(id), logical_start INTEGER NOT NULL CHECK(logical_start>=0), logical_end INTEGER NOT NULL CHECK(logical_end>logical_start), codec TEXT NOT NULL CHECK(codec IN ('utf8','events_v1','checkpoint_v1')), digest BLOB NOT NULL CHECK(length(digest)=32), body_bytes INTEGER NOT NULL CHECK(body_bytes BETWEEN 1 AND 33554432), body BLOB, PRIMARY KEY(content_id,logical_start), CHECK((body_bytes<=65536 AND body IS NOT NULL AND length(body)=body_bytes) OR (body_bytes>65536 AND body IS NULL))) WITHOUT ROWID",
+    "CREATE TABLE IF NOT EXISTS agena_content_checkpoints (content_id TEXT NOT NULL, logical_sequence INTEGER NOT NULL CHECK(logical_sequence>0), block_start INTEGER NOT NULL CHECK(block_start>=0), PRIMARY KEY(content_id,logical_sequence), FOREIGN KEY(content_id,block_start) REFERENCES agena_content_blocks(content_id,logical_start)) WITHOUT ROWID",
+    "CREATE TABLE IF NOT EXISTS agena_content_gaps (content_id TEXT NOT NULL REFERENCES agena_content_streams(id), logical_start INTEGER NOT NULL CHECK(logical_start>=0), logical_end INTEGER NOT NULL CHECK(logical_end>logical_start), reason TEXT NOT NULL, PRIMARY KEY(content_id,logical_start)) WITHOUT ROWID",
+];
+
+type ArchiveColumns = HashMap<String, Vec<String>>;
+
 pub(super) struct Staged {
     root: tempfile::TempDir,
     pub request: RequestId,
     pub workspace: i64,
-    digest: Vec<u8>,
+    digest: [u8; 32],
+    last_user_message_at_ms: Option<i64>,
+    columns: ArchiveColumns,
 }
 
 pub(super) struct Job {
@@ -75,24 +91,53 @@ fn object(value: &Value) -> Result<serde_json::Map<String, Value>> {
         .ok_or_else(|| invalid("archive fact must be an object"))
 }
 
+fn archive_column(table: &str, column: &str) -> bool {
+    !matches!(
+        (table, column),
+        ("agena_content_streams", "source_key")
+            | ("agena_rounds", "input_source_count" | "input_source_bytes")
+    )
+}
+
+async fn read_archive_columns(connection: &mut SqliteConnection) -> Result<ArchiveColumns> {
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT t.name,c.name FROM sqlite_schema t
+         CROSS JOIN pragma_table_xinfo(t.name) c
+         WHERE t.type='table' AND t.name GLOB 'agena_*' AND c.hidden=0
+         ORDER BY t.name,c.cid",
+    )
+    .fetch_all(connection)
+    .await
+    .map_err(sql_error)?;
+    let mut columns = ArchiveColumns::new();
+    for (table, column) in rows {
+        if archive_column(&table, &column) {
+            columns.entry(table).or_default().push(column);
+        }
+    }
+    Ok(columns)
+}
+
+fn table_columns<'a>(columns: &'a ArchiveColumns, table: &str) -> Result<&'a [String]> {
+    columns
+        .get(table)
+        .map(Vec::as_slice)
+        .ok_or_else(|| storage(format!("archive table {table} has no writable columns")))
+}
+
 /// Internal table names and conflict keys are constants, never archive input.
 async fn put(
     connection: &mut SqliteConnection,
+    columns: &ArchiveColumns,
     table: &str,
     value: &Value,
     keys: &[&str],
 ) -> Result<()> {
-    let fields = sqlx::query(&format!("PRAGMA table_xinfo({table})"))
-        .fetch_all(&mut *connection)
-        .await
-        .map_err(storage)?;
-    let mut names = Vec::new();
-    for field in fields {
-        let name: String = field.try_get("name").map_err(storage)?;
-        if field.try_get::<i64, _>("hidden").map_err(storage)? == 0 && value.get(&name).is_some() {
-            names.push(name);
-        }
-    }
+    let names = table_columns(columns, table)?
+        .iter()
+        .map(String::as_str)
+        .filter(|name| value.get(*name).is_some())
+        .collect::<Vec<_>>();
     if names.is_empty() {
         return Err(invalid("archive fact contains no recognized columns"));
     }
@@ -102,7 +147,7 @@ async fn put(
     ));
     let mut separated = query.separated(",");
     for name in &names {
-        match &value[name] {
+        match &value[*name] {
             Value::Null => {
                 separated.push_bind(Option::<String>::None);
             }
@@ -130,7 +175,8 @@ async fn put(
     if !keys.is_empty() {
         let updates = names
             .iter()
-            .filter(|name| !keys.contains(&name.as_str()))
+            .copied()
+            .filter(|name| !keys.contains(name))
             .map(|name| format!("{name}=excluded.{name}"))
             .collect::<Vec<_>>();
         query.push(format!(" ON CONFLICT({}) ", keys.join(",")));
@@ -146,6 +192,7 @@ async fn put(
 
 async fn raw(
     connection: &mut SqliteConnection,
+    columns: &ArchiveColumns,
     table: &str,
     value: &Value,
     keys: &[&str],
@@ -154,25 +201,34 @@ async fn raw(
     if value.contains_key("session_id") {
         value.insert("session_id".into(), json!(1));
     }
-    put(connection, table, &Value::Object(value), keys).await
+    put(connection, columns, table, &Value::Object(value), keys).await
 }
 
 async fn entry(
     connection: &mut SqliteConnection,
+    columns: &ArchiveColumns,
     data: &Value,
     member: bool,
     ordinal: i64,
-) -> Result<()> {
+) -> Result<Option<i64>> {
     let facts = data
         .get("facts")
         .ok_or_else(|| invalid("archive entry has no facts"))?;
     let e: EntryView = serde_json::from_value(facts["entry"].clone()).map_err(invalid)?;
-    raw(connection, "agena_executions", &facts["execution"], &["id"]).await?;
+    raw(
+        connection,
+        columns,
+        "agena_executions",
+        &facts["execution"],
+        &["id"],
+    )
+    .await?;
     if !facts["execution_purpose"].is_null() {
         let purpose: ControlExecutionPurpose =
             serde_json::from_value(facts["execution_purpose"].clone()).map_err(invalid)?;
         raw(
             connection,
+            columns,
             "agena_execution_purposes",
             &json!({"execution_id": e.execution_id.to_string(), "purpose": purpose}),
             &["execution_id"],
@@ -181,17 +237,26 @@ async fn entry(
     }
     raw(
         connection,
+        columns,
         "agena_attempts",
         &facts["attempt"],
         &["execution_id", "generation"],
     )
     .await?;
     if !facts["tool"].is_null() {
-        raw(connection, "agena_tool_calls", &facts["tool"], &["id"]).await?;
+        raw(
+            connection,
+            columns,
+            "agena_tool_calls",
+            &facts["tool"],
+            &["id"],
+        )
+        .await?;
     }
     if !facts["interaction"].is_null() {
         raw(
             connection,
+            columns,
             "agena_interactions",
             &facts["interaction"],
             &["id"],
@@ -203,10 +268,18 @@ async fn entry(
             return Err(invalid("archive activity identity budget exceeded"));
         }
         for activity in activities {
-            raw(connection, "agena_background_activities", activity, &["id"]).await?;
+            raw(
+                connection,
+                columns,
+                "agena_background_activities",
+                activity,
+                &["id"],
+            )
+            .await?;
         }
     }
-    let mut row = json!({"id":e.id.get(),"origin_session_id":1,"execution_id":e.execution_id.to_string(),"generation":e.generation.get(),"message_id":e.message_id.get(),"revision":e.revision.get(),"round_id":facts["round_id"],"created_at_ms":integer(facts,"created_at_ms")?,"body_json":null,"tool_id":null,"interaction_id":null,"content_id":null});
+    let created_at_ms = integer(facts, "created_at_ms")?;
+    let mut row = json!({"id":e.id.get(),"origin_session_id":1,"execution_id":e.execution_id.to_string(),"generation":e.generation.get(),"message_id":e.message_id.get(),"revision":e.revision.get(),"round_id":facts["round_id"],"created_at_ms":created_at_ms,"body_json":null,"tool_id":null,"interaction_id":null,"content_id":null});
     let kind = match &e.payload {
         EntryPayload::User {
             document,
@@ -253,59 +326,67 @@ async fn entry(
         }
     };
     row["kind"] = json!(kind);
-    put(connection, "agena_entries", &row, &[]).await?;
+    put(connection, columns, "agena_entries", &row, &[]).await?;
     if !facts["branch_facts"].is_null() {
-        serde_json::from_value::<super::branches::EntryFacts>(facts["branch_facts"].clone())
-            .map_err(invalid)?;
-        for field in [
-            "execution_started",
-            "compaction_committed",
-            "interaction_decided",
-        ] {
-            if !matches!(facts["branch_facts"][field].as_i64(), Some(0 | 1)) {
-                return Err(invalid(
-                    "archive frozen entry contains an invalid boolean fact",
-                ));
-            }
-        }
-        for (field, limit) in [
-            ("sources", 128),
-            ("interactions", 128),
-            ("activities", 16),
-            ("blobs", 16),
-        ] {
-            if facts["branch_facts"][field]
+        let frozen = &facts["branch_facts"];
+        serde_json::from_value::<super::branches::EntryFacts>(frozen.clone()).map_err(invalid)?;
+        let mut frozen_columns = object(frozen)?;
+        frozen_columns.insert("session_id".into(), json!(1));
+        frozen_columns.insert("entry_id".into(), json!(e.id.get()));
+        for (field, limit) in [("interactions", 128), ("activities", 16), ("blobs", 16)] {
+            let values = frozen[field]
                 .as_array()
-                .is_none_or(|values| values.len() > limit)
-            {
-                return Err(invalid("archive frozen entry identity budget exceeded"));
-            }
+                .filter(|values| values.len() <= limit)
+                .ok_or_else(|| invalid("archive frozen entry identity budget exceeded"))?;
+            let encoded = (!values.is_empty()).then(|| encode(values)).transpose()?;
+            frozen_columns.insert(format!("{field}_json"), json!(encoded));
         }
         put(
             connection,
+            columns,
             "agena_branch_entries",
-            &json!({"session_id":1,"entry_id":e.id.get(),"facts_json":encode(&facts["branch_facts"])?}),
+            &Value::Object(frozen_columns),
             &["session_id", "entry_id"],
         )
         .await?;
-        if let Some(sources) = facts["branch_sources"].as_array() {
-            if sources.len() > 128 {
-                return Err(invalid("archive frozen source identity budget exceeded"));
+        let declared = frozen["sources"]
+            .as_array()
+            .filter(|sources| sources.len() <= 128)
+            .ok_or_else(|| invalid("archive frozen source identity budget exceeded"))?;
+        let sources = facts["branch_sources"]
+            .as_array()
+            .map_or(&[][..], Vec::as_slice);
+        let mut visible = declared
+            .iter()
+            .map(|id| {
+                id.as_str()
+                    .ok_or_else(|| invalid("invalid archive frozen source identity"))
+            })
+            .collect::<Result<HashSet<_>>>()?;
+        if visible.len() != declared.len() || sources.len() != declared.len() {
+            return Err(invalid(
+                "archive frozen source list disagrees with its heads",
+            ));
+        }
+        for source in sources {
+            if !visible.remove(text(source, "content_id")?) {
+                return Err(invalid(
+                    "archive frozen source list disagrees with its heads",
+                ));
             }
-            for source in sources {
-                let mut source = object(source)?;
-                if source.get("entry_id").and_then(Value::as_i64) != Some(e.id.get()) {
-                    return Err(invalid("archive frozen source belongs to another entry"));
-                }
-                source.insert("session_id".into(), json!(1));
-                put(
-                    connection,
-                    "agena_branch_sources",
-                    &Value::Object(source),
-                    &["session_id", "content_id"],
-                )
-                .await?;
+            if integer(source, "entry_id")? != e.id.get() {
+                return Err(invalid("archive frozen source belongs to another entry"));
             }
+            let mut source = object(source)?;
+            source.insert("session_id".into(), json!(1));
+            put(
+                connection,
+                columns,
+                "agena_branch_sources",
+                &Value::Object(source),
+                &["session_id", "content_id"],
+            )
+            .await?;
         }
         if !facts["branch_round"].is_null() {
             let mut round = object(&facts["branch_round"])?;
@@ -315,6 +396,7 @@ async fn entry(
             round.insert("session_id".into(), json!(1));
             put(
                 connection,
+                columns,
                 "agena_branch_rounds",
                 &Value::Object(round),
                 &["session_id", "round_id"],
@@ -330,6 +412,7 @@ async fn entry(
                 activity.insert("session_id".into(), json!(1));
                 put(
                     connection,
+                    columns,
                     "agena_branch_activities",
                     &Value::Object(activity),
                     &["session_id", "activity_id"],
@@ -371,6 +454,7 @@ async fn entry(
                 serde_json::from_value(blob.clone()).map_err(invalid)?;
             put(
                 connection,
+                columns,
                 "agena_blob_references",
                 &json!({"entry_id":e.id.get(),"blob_id":descriptor.id,"field":index.to_string()}),
                 &[],
@@ -378,7 +462,7 @@ async fn entry(
             .await?;
         }
     }
-    Ok(())
+    Ok((member && kind == "user").then_some(created_at_ms))
 }
 
 struct ActiveBlock {
@@ -409,11 +493,16 @@ async fn close_block(
             return Err(invalid("archive content block length/checksum mismatch"));
         }
         let mut body = Vec::with_capacity(block.length as usize);
-        let mut offset = 0i64;
-        while offset < block.length {
-            let piece:Vec<u8>=sqlx::query_scalar("SELECT body FROM import_pieces WHERE content_id=? AND block_start=? AND byte_offset=?").bind(&block.content).bind(block.start).bind(offset).fetch_one(&mut *connection).await.map_err(sql_error)?;
-            offset += piece.len() as i64;
-            body.extend_from_slice(&piece);
+        {
+            let mut pieces = sqlx::query_scalar::<_, Vec<u8>>(
+                "SELECT body FROM import_pieces WHERE content_id=? AND block_start=? ORDER BY byte_offset",
+            )
+            .bind(&block.content)
+            .bind(block.start)
+            .fetch(&mut *connection);
+            while let Some(piece) = pieces.try_next().await.map_err(sql_error)? {
+                body.extend_from_slice(&piece);
+            }
         }
         validate_block(
             connection,
@@ -424,22 +513,26 @@ async fn close_block(
             &body,
         )
         .await?;
-        sqlx::query("INSERT INTO agena_content_blocks VALUES (?,?,?,?,?,?)")
+        let inline = (body.len() <= PIECE).then_some(body.as_slice());
+        sqlx::query("INSERT INTO agena_content_blocks (content_id,logical_start,logical_end,codec,digest,body_bytes,body) VALUES (?,?,?,?,?,?,?)")
             .bind(&block.content)
             .bind(block.start)
             .bind(block.end)
             .bind(&block.codec)
             .bind(&block.digest)
-            .bind(body)
+            .bind(block.length)
+            .bind(inline)
             .execute(&mut *connection)
             .await
             .map_err(sql_error)?;
-        sqlx::query("DELETE FROM import_pieces WHERE content_id=? AND block_start=?")
-            .bind(&block.content)
-            .bind(block.start)
-            .execute(&mut *connection)
-            .await
-            .map_err(sql_error)?;
+        if inline.is_some() {
+            sqlx::query("DELETE FROM import_pieces WHERE content_id=? AND block_start=?")
+                .bind(&block.content)
+                .bind(block.start)
+                .execute(&mut *connection)
+                .await
+                .map_err(sql_error)?;
+        }
     }
     Ok(())
 }
@@ -482,46 +575,73 @@ pub(super) async fn prepare(
         .filename(root.path().join("archive.sqlite"))
         .create_if_missing(true)
         .foreign_keys(false)
+        // A source header can be as large as one archive record.
+        .row_buffer_size(1)
         .pragma("journal_mode", "DELETE")
         .pragma("cache_size", "-4096");
-    let mut db = SqliteConnection::connect_with(&options)
+    let mut connection = SqliteConnection::connect_with(&options)
         .await
         .map_err(storage)?;
+    // This private database is attached only after the complete archive validates.
+    let mut db = connection.begin().await.map_err(storage)?;
     sqlx::query("CREATE TABLE agena_workspaces(id INTEGER PRIMARY KEY)")
-        .execute(&mut db)
+        .execute(&mut *db)
         .await
         .map_err(storage)?;
     sqlx::query("INSERT INTO agena_workspaces VALUES (1)")
-        .execute(&mut db)
+        .execute(&mut *db)
         .await
         .map_err(storage)?;
-    for table in schema::TABLES {
-        sqlx::query(table).execute(&mut db).await.map_err(storage)?;
+    for table in schema::ARCHIVE_TABLES.iter().chain(CONTENT_STAGING_TABLES) {
+        sqlx::query(table)
+            .execute(&mut *db)
+            .await
+            .map_err(storage)?;
     }
-    for index in schema::INDEXES {
-        sqlx::query(index).execute(&mut db).await.map_err(storage)?;
-    }
-    for ddl in schema::SESSION_EXTENSIONS {
-        sqlx::query(ddl).execute(&mut db).await.map_err(storage)?;
+    for index in schema::ARCHIVE_INDEXES {
+        sqlx::query(index)
+            .execute(&mut *db)
+            .await
+            .map_err(storage)?;
     }
     for ddl in [
+        schema::ARCHIVE_ROUND_INPUTS,
+        schema::ARCHIVE_ROUND_REPLAYS,
+        "CREATE TABLE agena_branch_sources(
+            session_id INTEGER NOT NULL REFERENCES agena_sessions(id),
+            entry_id INTEGER NOT NULL REFERENCES agena_entries(id),
+            content_id TEXT NOT NULL REFERENCES agena_content_streams(id),
+            head_json TEXT NOT NULL CHECK(json_valid(head_json)),
+            PRIMARY KEY(session_id,content_id)
+         ) WITHOUT ROWID",
+        "CREATE TABLE agena_round_input_sources(
+            round_id INTEGER NOT NULL,
+            entry_id INTEGER NOT NULL,
+            content_id TEXT NOT NULL REFERENCES agena_content_streams(id),
+            head_json TEXT NOT NULL CHECK(json_valid(head_json)),
+            PRIMARY KEY(round_id,content_id),
+            FOREIGN KEY(round_id,entry_id) REFERENCES agena_round_inputs(round_id,entry_id)
+         ) WITHOUT ROWID",
+        "CREATE TABLE import_json_remaps(field TEXT NOT NULL,row_id INTEGER NOT NULL,old TEXT NOT NULL,reply_json TEXT,PRIMARY KEY(field,row_id)) WITHOUT ROWID",
         "CREATE TABLE import_entries(id INTEGER PRIMARY KEY,member INTEGER NOT NULL,ordinal INTEGER NOT NULL)",
         "CREATE TABLE import_source_owners(id TEXT PRIMARY KEY,entry_id INTEGER NOT NULL)",
         "CREATE TABLE import_source_bounds(id TEXT PRIMARY KEY,physical_start INTEGER NOT NULL)",
         "CREATE TABLE import_maps(kind TEXT NOT NULL,old TEXT NOT NULL,new TEXT NOT NULL,epoch TEXT,PRIMARY KEY(kind,old)) WITHOUT ROWID",
-        "CREATE TABLE import_pieces(content_id TEXT NOT NULL,block_start INTEGER NOT NULL,byte_offset INTEGER NOT NULL,body BLOB NOT NULL,PRIMARY KEY(content_id,block_start,byte_offset)) WITHOUT ROWID",
+        "CREATE TABLE import_pieces(content_id TEXT NOT NULL,block_start INTEGER NOT NULL,byte_offset INTEGER NOT NULL,body BLOB NOT NULL,PRIMARY KEY(content_id,block_start,byte_offset),FOREIGN KEY(content_id,block_start) REFERENCES agena_content_blocks(content_id,logical_start)) WITHOUT ROWID",
         "CREATE TABLE import_events(content_id TEXT NOT NULL,sequence INTEGER NOT NULL,block_start INTEGER NOT NULL,checkpoint INTEGER NOT NULL,PRIMARY KEY(content_id,sequence)) WITHOUT ROWID",
         "CREATE TABLE import_validation_state(content_id TEXT PRIMARY KEY,terminal_json TEXT,document_json TEXT)",
         "CREATE INDEX import_entry_order ON import_entries(member,ordinal)",
     ] {
-        sqlx::query(ddl).execute(&mut db).await.map_err(storage)?;
+        sqlx::query(ddl).execute(&mut *db).await.map_err(storage)?;
     }
+    let columns = read_archive_columns(&mut db).await?;
     let file = tokio::fs::File::open(path).await.map_err(storage)?;
     let mut input = BufReader::with_capacity(PIECE, file);
     let mut hash = Sha256::new();
     let mut records = 0u64;
     let mut bytes = 0u64;
     let mut entries = 0i64;
+    let mut last_user_message_at_ms = None;
     let mut header = false;
     let mut footer = false;
     let mut expected_entries = 0u64;
@@ -594,22 +714,30 @@ pub(super) async fn prepare(
                 configuration.relation_kind = agena_domain::SessionRelationKind::Root;
                 lifecycle::normalize_configuration_permissions(&mut configuration)?;
                 validator(&configuration).map_err(invalid)?;
-                put(&mut db,"agena_sessions",&json!({"id":1,"workspace_id":1,"root_session_id":1,"title":metadata.title,"favorite":metadata.favorite,"pinned":metadata.pinned,"selection_json":metadata.selection.map(|value|encode(&value)).transpose()?,"configuration_json":encode(&configuration)?,"created_at_ms":now_ms(),"updated_at_ms":now_ms()}),&[]).await?;
+                put(&mut db,&columns,"agena_sessions",&json!({"id":1,"workspace_id":1,"root_session_id":1,"title":metadata.title,"favorite":metadata.favorite,"pinned":metadata.pinned,"selection_json":metadata.selection.map(|value|encode(&value)).transpose()?,"configuration_json":encode(&configuration)?,"created_at_ms":now_ms(),"updated_at_ms":now_ms()}),&[]).await?;
                 let mut window = object(&data["prompt_window"])?;
                 window.insert("session_id".into(), json!(1));
-                put(&mut db, "agena_prompt_windows", &Value::Object(window), &[]).await?;
+                put(
+                    &mut db,
+                    &columns,
+                    "agena_prompt_windows",
+                    &Value::Object(window),
+                    &[],
+                )
+                .await?;
                 header = true;
             }
-            "entry" => {
-                entry(&mut db, data, true, entries).await?;
-                entries += 1;
-            }
-            "support_entry" => {
-                entry(&mut db, data, false, -1).await?;
+            "entry" | "support_entry" => {
+                let member = kind == "entry";
+                let ordinal = if member { entries } else { -1 };
+                let timestamp = entry(&mut db, &columns, data, member, ordinal).await?;
+                last_user_message_at_ms = last_user_message_at_ms.max(timestamp);
+                entries += i64::from(member);
             }
             "attempt" => {
                 raw(
                     &mut db,
+                    &columns,
                     "agena_attempts",
                     data,
                     &["execution_id", "generation"],
@@ -617,14 +745,15 @@ pub(super) async fn prepare(
                 .await?
             }
             "round" => {
-                raw(&mut db, "agena_rounds", data, &["id"]).await?;
+                raw(&mut db, &columns, "agena_rounds", data, &["id"]).await?;
                 if data["purpose"] == "compaction" {
-                    put(&mut db,"agena_compaction_rounds",&json!({"round_id":data["id"],"base_checkpoint_entry_id":data["base_checkpoint_entry_id"],"rewrite_epoch":data["input_rewrite_epoch"]}),&["round_id"]).await?;
+                    put(&mut db,&columns,"agena_compaction_rounds",&json!({"round_id":data["id"],"base_checkpoint_entry_id":data["base_checkpoint_entry_id"],"rewrite_epoch":data["input_rewrite_epoch"]}),&["round_id"]).await?;
                 }
             }
             "round_input" => {
                 raw(
                     &mut db,
+                    &columns,
                     "agena_round_inputs",
                     data,
                     &["round_id", "ordinal"],
@@ -634,6 +763,7 @@ pub(super) async fn prepare(
             "round_input_source" => {
                 raw(
                     &mut db,
+                    &columns,
                     "agena_round_input_sources",
                     data,
                     &["round_id", "content_id"],
@@ -643,6 +773,7 @@ pub(super) async fn prepare(
             "round_input_replay" => {
                 raw(
                     &mut db,
+                    &columns,
                     "agena_round_input_replays",
                     data,
                     &["round_id", "source_round_id"],
@@ -655,7 +786,7 @@ pub(super) async fn prepare(
                 let owner: i64 =
                     sqlx::query_scalar("SELECT entry_id FROM import_source_owners WHERE id=?")
                         .bind(head.id.to_string())
-                        .fetch_one(&mut db)
+                        .fetch_one(&mut *db)
                         .await
                         .map_err(sql_error)?;
                 if owner != head.entry.get() {
@@ -663,23 +794,25 @@ pub(super) async fn prepare(
                 }
                 let e = sqlx::query("SELECT execution_id,generation FROM agena_entries WHERE id=?")
                     .bind(owner)
-                    .fetch_one(&mut db)
+                    .fetch_one(&mut *db)
                     .await
                     .map_err(sql_error)?;
-                put(&mut db,"agena_content_streams",&json!({"id":head.id,"entry_id":owner,"session_id":1,"execution_id":e.try_get::<String,_>("execution_id").map_err(storage)?,"generation":e.try_get::<i64,_>("generation").map_err(storage)?,"activity_id":head.activity_id,"kind":commands::enum_text(&head.kind)?,"epoch":head.epoch,"committed_head":head.committed,"ordinal":head.ordinal,"lost_bytes":head.capture_loss.committed_bytes,"lost_packets":head.capture_loss.committed_packets,"capture_state":commands::enum_text(&head.state)?,"retained_start":head.retained_start,"capture_error":head.capture_error}),&[]).await?;
+                put(&mut db,&columns,"agena_content_streams",&json!({"id":head.id,"entry_id":owner,"session_id":1,"execution_id":e.try_get::<String,_>("execution_id").map_err(storage)?,"generation":e.try_get::<i64,_>("generation").map_err(storage)?,"activity_id":head.activity_id,"kind":commands::enum_text(&head.kind)?,"epoch":head.epoch,"committed_head":head.committed,"ordinal":head.ordinal,"lost_bytes":head.capture_loss.committed_bytes,"lost_packets":head.capture_loss.committed_packets,"capture_state":commands::enum_text(&head.state)?,"retained_start":head.retained_start,"capture_error":head.capture_error}),&[]).await?;
                 sqlx::query("INSERT INTO import_source_bounds VALUES (?,?)")
                     .bind(head.id.to_string())
                     .bind(integer(data, "physical_start")?)
-                    .execute(&mut db)
+                    .execute(&mut *db)
                     .await
                     .map_err(sql_error)?;
             }
-            "content_gap" => raw(&mut db, "agena_content_gaps", data, &[]).await?,
-            "content_checkpoint" => raw(&mut db, "agena_content_checkpoints", data, &[]).await?,
+            "content_gap" => raw(&mut db, &columns, "agena_content_gaps", data, &[]).await?,
+            "content_checkpoint" => {
+                raw(&mut db, &columns, "agena_content_checkpoints", data, &[]).await?
+            }
             "capture_loss" => {
                 let loss: CaptureLoss =
                     serde_json::from_value(data["loss"].clone()).map_err(invalid)?;
-                put(&mut db,"agena_content_capture_losses",&json!({"content_id":data["content_id"],"first_packet":loss.first_packet,"last_packet":loss.last_packet,"after_position":loss.after_position,"byte_count":loss.bytes,"diagnostic":loss.diagnostic}),&[]).await?;
+                put(&mut db,&columns,"agena_content_capture_losses",&json!({"content_id":data["content_id"],"first_packet":loss.first_packet,"last_packet":loss.last_packet,"after_position":loss.after_position,"byte_count":loss.bytes,"diagnostic":loss.diagnostic}),&[]).await?;
             }
             "content_block" => {
                 let length = integer(data, "byte_len")?;
@@ -730,7 +863,7 @@ pub(super) async fn prepare(
                     .bind(current.start)
                     .bind(current.received)
                     .bind(&piece)
-                    .execute(&mut db)
+                    .execute(&mut *db)
                     .await
                     .map_err(sql_error)?;
                 current.hash.update(&piece);
@@ -743,7 +876,7 @@ pub(super) async fn prepare(
                 if let Some(old) =
                     sqlx::query("SELECT expected_bytes,digest FROM agena_blobs WHERE id=?")
                         .bind(descriptor.id.to_string())
-                        .fetch_optional(&mut db)
+                        .fetch_optional(&mut *db)
                         .await
                         .map_err(sql_error)?
                     && (old.try_get::<i64, _>("expected_bytes").map_err(storage)? != length
@@ -755,10 +888,10 @@ pub(super) async fn prepare(
                 // A blob may be referenced by several entries and re-exported.
                 sqlx::query("DELETE FROM agena_blob_chunks WHERE blob_id=?")
                     .bind(descriptor.id.to_string())
-                    .execute(&mut db)
+                    .execute(&mut *db)
                     .await
                     .map_err(sql_error)?;
-                sqlx::query("INSERT INTO agena_blobs(id,session_id,state,expected_bytes,received_bytes,digest,created_at_ms) VALUES (?,1,'ready',?,?,?,?) ON CONFLICT(id) DO UPDATE SET expected_bytes=excluded.expected_bytes,received_bytes=excluded.received_bytes,digest=excluded.digest").bind(descriptor.id.to_string()).bind(length).bind(length).bind(descriptor.sha256.to_vec()).bind(now_ms()).execute(&mut db).await.map_err(sql_error)?;
+                sqlx::query("INSERT INTO agena_blobs(id,session_id,state,expected_bytes,received_bytes,digest,created_at_ms) VALUES (?,1,'ready',?,?,?,?) ON CONFLICT(id) DO UPDATE SET expected_bytes=excluded.expected_bytes,received_bytes=excluded.received_bytes,digest=excluded.digest").bind(descriptor.id.to_string()).bind(length).bind(length).bind(descriptor.sha256.to_vec()).bind(now_ms()).execute(&mut *db).await.map_err(sql_error)?;
                 blob = Some(ActiveBlob {
                     id: descriptor.id.to_string(),
                     length,
@@ -795,7 +928,7 @@ pub(super) async fn prepare(
                         .bind(current.received - current.chunk.len() as i64)
                         .bind(Sha256::digest(&current.chunk).to_vec())
                         .bind(std::mem::take(&mut current.chunk))
-                        .execute(&mut db)
+                        .execute(&mut *db)
                         .await
                         .map_err(sql_error)?;
                     current.chunk = Vec::with_capacity(128 * 1024);
@@ -809,16 +942,20 @@ pub(super) async fn prepare(
     }
     validate(&mut db).await?;
     make_maps(&mut db).await?;
+    stage_json(&mut db).await?;
     let mut digest = Sha256::new();
     digest.update(b"agena/kernel/import/v1");
     digest.update(workspace.to_le_bytes());
     digest.update(hash.finalize());
-    db.close().await.map_err(storage)?;
+    db.commit().await.map_err(storage)?;
+    connection.close().await.map_err(storage)?;
     Ok(Staged {
         root,
         request,
         workspace,
-        digest: digest.finalize().to_vec(),
+        digest: digest.finalize().into(),
+        last_user_message_at_ms,
+        columns,
     })
 }
 
@@ -1123,6 +1260,89 @@ fn invalid_archive(message: &str) -> KernelError {
     invalid(message)
 }
 
+const SOURCE_HEAD_COLUMNS: &str = "c.id,c.entry_id,c.kind,c.activity_id,c.ordinal,
+    c.epoch,c.committed_head,c.lost_bytes,c.lost_packets";
+const BRANCH_SOURCE_HEADS: &str = "b.head_json,b.entry_id=c.entry_id AS linked
+    FROM agena_branch_sources b
+    CROSS JOIN agena_content_streams c ON c.id=b.content_id
+    WHERE b.session_id=1 ORDER BY b.content_id";
+const ROUND_SOURCE_HEADS: &str = "s.head_json,
+    (e.id=c.entry_id OR (e.kind='compaction' AND e.content_id IS c.id)) AS linked,
+    json_extract(b.head_json,'$.epoch') AS frozen_epoch,
+    json_extract(b.head_json,'$.committed') AS frozen_head
+    FROM agena_round_input_sources s
+    CROSS JOIN agena_content_streams c ON c.id=s.content_id
+    CROSS JOIN agena_entries e ON e.id=s.entry_id
+    LEFT JOIN agena_branch_sources b ON b.session_id=1 AND b.content_id=c.id
+    ORDER BY s.round_id,s.content_id";
+
+async fn validate_source_boundaries(connection: &mut SqliteConnection) -> Result<()> {
+    // Foreign keys in staging were checked before these joins. Validate the
+    // frozen branch headers first so they can supply the earlier epoch below.
+    for (sources, check_epoch, diagnostic) in [
+        (
+            BRANCH_SOURCE_HEADS,
+            false,
+            "archive frozen branch source boundary is inconsistent",
+        ),
+        (
+            ROUND_SOURCE_HEADS,
+            true,
+            "archive captured input source boundary is inconsistent",
+        ),
+    ] {
+        let sql = format!("SELECT {SOURCE_HEAD_COLUMNS},{sources}");
+        let mut rows = sqlx::query(&sql).fetch(&mut *connection);
+        while let Some(row) = rows.try_next().await.map_err(sql_error)? {
+            let head: ContentStreamView =
+                decode(row.try_get::<&str, _>("head_json").map_err(storage)?)?;
+            let activity = head.activity_id.map(|id| id.to_string());
+            if !row.try_get::<bool, _>("linked").map_err(storage)?
+                || head.id.to_string() != row.try_get::<&str, _>("id").map_err(storage)?
+                || head.entry.get() != row.try_get::<i64, _>("entry_id").map_err(storage)?
+                || commands::enum_text(&head.kind)?
+                    != row.try_get::<&str, _>("kind").map_err(storage)?
+                || activity.as_deref()
+                    != row
+                        .try_get::<Option<&str>, _>("activity_id")
+                        .map_err(storage)?
+                || i64::from(head.ordinal) != row.try_get::<i64, _>("ordinal").map_err(storage)?
+                || head.committed > row.try_get::<i64, _>("committed_head").map_err(storage)? as u64
+                || head.accepted != head.committed
+                || head.retained_start > head.committed
+                || head.capture_loss.bytes > i64::MAX as u64
+                || head.capture_loss.packets > i64::MAX as u64
+                || head.capture_loss.committed_bytes
+                    > row.try_get::<i64, _>("lost_bytes").map_err(storage)? as u64
+                || head.capture_loss.committed_packets
+                    > row.try_get::<i64, _>("lost_packets").map_err(storage)? as u64
+            {
+                return Err(invalid(diagnostic));
+            }
+            if check_epoch
+                && head.epoch.to_string() != row.try_get::<&str, _>("epoch").map_err(storage)?
+            {
+                let frozen_epoch = row
+                    .try_get::<Option<&str>, _>("frozen_epoch")
+                    .map_err(storage)?;
+                let frozen_epoch = frozen_epoch
+                    .map(str::parse::<ContentEpoch>)
+                    .transpose()
+                    .map_err(storage)?;
+                let frozen_head = row
+                    .try_get::<Option<i64>, _>("frozen_head")
+                    .map_err(storage)?;
+                if frozen_epoch != Some(head.epoch)
+                    || frozen_head.is_none_or(|end| head.committed > end as u64)
+                {
+                    return Err(invalid(diagnostic));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn validate(connection: &mut SqliteConnection) -> Result<()> {
     if !sqlx::query("PRAGMA foreign_key_check")
         .fetch_optional(&mut *connection)
@@ -1216,20 +1436,56 @@ async fn validate(connection: &mut SqliteConnection) -> Result<()> {
             "archive execution purpose has an inconsistent input anchor",
         ),
         (
+            "SELECT EXISTS(
+                SELECT 1 FROM agena_attempts a JOIN agena_entries e ON e.id=a.response_entry_id
+                WHERE e.execution_id!=a.execution_id OR e.generation!=a.generation
+                   OR e.kind NOT IN ('text','reasoning','tool')
+             )",
+            "archive response anchor belongs to another attempt or entry kind",
+        ),
+        (
             "SELECT EXISTS(SELECT 1 FROM agena_branch_sources b JOIN agena_content_streams c ON c.id=b.content_id LEFT JOIN agena_branch_entries e ON e.session_id=b.session_id AND e.entry_id=b.entry_id WHERE c.entry_id!=b.entry_id OR e.entry_id IS NULL)",
             "archive frozen source belongs to another entry",
         ),
         (
-            "SELECT EXISTS(SELECT 1 FROM agena_branch_entries b JOIN agena_entries e ON e.id=b.entry_id WHERE json_extract(b.facts_json,'$.revision')>e.revision OR NOT EXISTS(SELECT 1 FROM agena_attempts a WHERE a.execution_id=e.execution_id AND a.generation=json_extract(b.facts_json,'$.execution_generation')) OR EXISTS(SELECT 1 FROM agena_entries response WHERE response.id=json_extract(b.facts_json,'$.response_entry_id') AND response.execution_id!=e.execution_id))",
+            "SELECT EXISTS(
+                SELECT 1 FROM agena_branch_entries b JOIN agena_entries e ON e.id=b.entry_id
+                JOIN agena_attempts a ON a.execution_id=e.execution_id AND a.generation=e.generation
+                WHERE b.revision>e.revision
+                   OR NOT EXISTS(SELECT 1 FROM agena_attempts frozen WHERE frozen.execution_id=e.execution_id
+                                  AND frozen.generation=b.execution_generation)
+                   OR (e.kind!='user' AND b.response_entry_id IS NOT NULL
+                       AND b.response_entry_id IS NOT a.response_entry_id)
+             )",
             "archive frozen entry references inconsistent revision or execution facts",
         ),
         (
-            "SELECT EXISTS(SELECT 1 FROM agena_branch_entries b JOIN json_each(b.facts_json,'$.sources') source WHERE NOT EXISTS(SELECT 1 FROM agena_content_streams c WHERE c.id=source.value AND c.entry_id=b.entry_id)) OR EXISTS(SELECT 1 FROM agena_branch_entries b JOIN agena_entries e ON e.id=b.entry_id JOIN json_each(b.facts_json,'$.interactions') interaction WHERE NOT EXISTS(SELECT 1 FROM agena_interactions i WHERE i.id=interaction.value AND i.tool_id=e.tool_id)) OR EXISTS(SELECT 1 FROM agena_branch_entries b JOIN json_each(b.facts_json,'$.activities') activity WHERE NOT EXISTS(SELECT 1 FROM agena_background_activities a WHERE a.id=activity.value AND a.entry_id=b.entry_id)) OR EXISTS(SELECT 1 FROM agena_branch_entries b JOIN json_each(b.facts_json,'$.blobs') blob WHERE NOT EXISTS(SELECT 1 FROM agena_blob_references r WHERE r.entry_id=b.entry_id AND r.blob_id=blob.value))",
+            "SELECT EXISTS(SELECT 1 FROM agena_branch_entries b JOIN agena_entries e ON e.id=b.entry_id JOIN json_each(b.interactions_json) interaction WHERE NOT EXISTS(SELECT 1 FROM agena_interactions i WHERE i.id=interaction.value AND i.tool_id=e.tool_id)) OR EXISTS(SELECT 1 FROM agena_branch_entries b JOIN json_each(b.activities_json) activity WHERE NOT EXISTS(SELECT 1 FROM agena_background_activities a WHERE a.id=activity.value AND a.entry_id=b.entry_id)) OR EXISTS(SELECT 1 FROM agena_branch_entries b JOIN json_each(b.blobs_json) blob WHERE NOT EXISTS(SELECT 1 FROM agena_blob_references r WHERE r.entry_id=b.entry_id AND r.blob_id=blob.value))",
             "archive frozen entry references another entry's resources",
         ),
         (
-            "SELECT EXISTS(SELECT 1 FROM agena_branch_rounds b JOIN agena_rounds r ON r.id=b.round_id WHERE (b.has_provider_state=1 AND r.provider_state_json IS NULL) OR NOT EXISTS(SELECT 1 FROM agena_branch_entries e JOIN agena_entries source ON source.id=e.entry_id WHERE e.session_id=b.session_id AND source.round_id=b.round_id))",
+            "SELECT EXISTS(
+                 SELECT 1 FROM agena_branch_rounds b JOIN agena_rounds r ON r.id=b.round_id
+                 WHERE (b.has_provider_state=1 AND r.provider_state_json IS NULL)
+                    OR NOT EXISTS(
+                        SELECT 1 FROM agena_entries source INDEXED BY idx_agena_entry_round
+                        CROSS JOIN agena_branch_entries e ON e.entry_id=source.id AND e.session_id=b.session_id
+                        WHERE source.round_id=b.round_id
+                    )
+             )",
             "archive frozen round has no matching branch entry or provider state",
+        ),
+        (
+            "SELECT EXISTS(
+                 SELECT 1 FROM agena_round_input_replays q
+                 CROSS JOIN agena_rounds r ON r.id=q.source_round_id
+                 WHERE q.has_provider_state=1 AND r.provider_state_bytes=0
+             )",
+            "archive replay has no matching provider state",
+        ),
+        (
+            "SELECT EXISTS(SELECT 1 FROM agena_round_input_replays GROUP BY round_id HAVING count(*)>10000)",
+            "archive replay identity budget exceeded",
         ),
         (
             "SELECT EXISTS(SELECT 1 FROM agena_branch_activities b JOIN agena_background_activities a ON a.id=b.activity_id WHERE (b.has_outcome=1 AND a.outcome_json IS NULL) OR NOT EXISTS(SELECT 1 FROM agena_branch_entries e WHERE e.session_id=b.session_id AND e.entry_id=a.entry_id))",
@@ -1238,87 +1494,30 @@ async fn validate(connection: &mut SqliteConnection) -> Result<()> {
     ] {
         reject_query(connection, sql, reason).await?;
     }
-    let mut branch_source = String::new();
-    loop {
-        let row = sqlx::query("SELECT content_id,entry_id,head_json FROM agena_branch_sources WHERE content_id>? ORDER BY content_id LIMIT 1")
-            .bind(&branch_source).fetch_optional(&mut *connection).await.map_err(sql_error)?;
-        let Some(row) = row else { break };
-        branch_source = row.try_get("content_id").map_err(storage)?;
-        let head: ContentStreamView =
-            decode(row.try_get::<&str, _>("head_json").map_err(storage)?)?;
-        let actual = content::stored_head(connection, head.id).await?;
-        if head.id.to_string() != branch_source
-            || head.entry.get() != row.try_get::<i64, _>("entry_id").map_err(storage)?
-            || head.entry != actual.entry
-            || head.kind != actual.kind
-            || head.activity_id != actual.activity_id
-            || head.ordinal != actual.ordinal
-            || head.committed > actual.committed
-            || head.accepted != head.committed
-            || head.retained_start > head.committed
-            || head.capture_loss.committed_bytes > actual.capture_loss.committed_bytes
-            || head.capture_loss.committed_packets > actual.capture_loss.committed_packets
-        {
-            return Err(invalid(
-                "archive frozen branch source boundary is inconsistent",
-            ));
-        }
-    }
-    // Captured boundaries retain their observed phase/head. They authorize
-    // historical inputs without granting authority to an imported live task.
-    let mut after = 0i64;
-    let mut source_after = String::new();
-    loop {
-        let row=sqlx::query("SELECT * FROM agena_round_input_sources WHERE (round_id,content_id)>(?,?) ORDER BY round_id,content_id LIMIT 1").bind(after).bind(&source_after).fetch_optional(&mut *connection).await.map_err(sql_error)?;
-        let Some(row) = row else { break };
-        after = row.try_get("round_id").map_err(storage)?;
-        source_after = row.try_get("content_id").map_err(storage)?;
-        let head: ContentStreamView =
-            decode(&row.try_get::<String, _>("head_json").map_err(storage)?)?;
-        let actual = content::stored_head(connection, head.id).await?;
-        let entry: i64 = row.try_get("entry_id").map_err(storage)?;
-        let linked:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agena_entries WHERE id=? AND (id=? OR (kind='compaction' AND content_id=?)))").bind(entry).bind(head.entry.get()).bind(head.id.to_string()).fetch_one(&mut *connection).await.map_err(sql_error)?;
-        let mut epoch_matches = head.epoch == actual.epoch;
-        if !epoch_matches {
-            let frozen: Option<String> = sqlx::query_scalar(
-                "SELECT head_json FROM agena_branch_sources WHERE session_id=1 AND content_id=?",
-            )
-            .bind(head.id.to_string())
-            .fetch_optional(&mut *connection)
-            .await
-            .map_err(sql_error)?;
-            if let Some(frozen) = frozen {
-                let frozen: ContentStreamView = decode(&frozen)?;
-                epoch_matches = frozen.id == head.id
-                    && frozen.entry == head.entry
-                    && frozen.kind == head.kind
-                    && frozen.epoch == head.epoch
-                    && head.committed <= frozen.committed;
-            }
-        }
-        if !linked
-            || head.id.to_string() != source_after
-            || head.entry != actual.entry
-            || head.kind != actual.kind
-            || !epoch_matches
-            || head.activity_id != actual.activity_id
-            || head.ordinal != actual.ordinal
-            || head.accepted != head.committed
-            || head.committed > actual.committed
-            || head.retained_start > head.committed
-            || head.capture_loss.committed_packets > actual.capture_loss.committed_packets
-            || head.capture_loss.committed_bytes > actual.capture_loss.committed_bytes
-        {
-            return Err(invalid(
-                "archive captured input source boundary is inconsistent",
-            ));
-        }
-    }
+    validate_source_boundaries(connection).await?;
     // Canonical immutable membership contains only visible entries. Closure
     // support facts remain durable dependencies without becoming history rows.
-    sqlx::query("INSERT INTO agena_history_segments(id) SELECT DISTINCT ordinal/128+1 FROM import_entries WHERE member=1 ORDER BY ordinal/128").execute(&mut *connection).await.map_err(sql_error)?;
+    sqlx::query(
+        "INSERT INTO agena_history_segments(id)
+         SELECT ordinal/128+1 FROM import_entries WHERE member=1 AND ordinal%128=0 ORDER BY ordinal",
+    )
+    .execute(&mut *connection)
+    .await
+    .map_err(sql_error)?;
     sqlx::query("INSERT INTO agena_segment_entries SELECT ordinal/128+1,ordinal%128,id FROM import_entries WHERE member=1 ORDER BY ordinal").execute(&mut *connection).await.map_err(sql_error)?;
-    sqlx::query("INSERT INTO agena_session_segments(session_id,sequence,segment_id,first_ordinal,end_ordinal,since_generation) SELECT 1,ordinal/128,ordinal/128+1,0,MAX(ordinal%128)+1,1 FROM import_entries WHERE member=1 GROUP BY ordinal/128").execute(&mut *connection).await.map_err(sql_error)?;
+    sqlx::query(
+        "INSERT INTO agena_session_segments (
+             session_id,sequence,segment_id,first_ordinal,end_ordinal,since_generation,
+             user_message_count,max_entry_created_at_ms
+         )
+         SELECT 1,m.segment_id-1,m.segment_id,0,MAX(m.ordinal)+1,1,
+                COUNT(*) FILTER (WHERE e.kind='user'),MAX(e.created_at_ms)
+         FROM agena_segment_entries m CROSS JOIN agena_entries e ON e.id=m.entry_id
+         GROUP BY m.segment_id",
+    )
+    .execute(&mut *connection)
+    .await
+    .map_err(sql_error)?;
     let window = sqlx::query("SELECT * FROM agena_prompt_windows WHERE session_id=1")
         .fetch_one(&mut *connection)
         .await
@@ -1363,10 +1562,10 @@ async fn make_maps(connection: &mut SqliteConnection) -> Result<()> {
             .fetch_all(&mut *connection)
             .await
             .map_err(sql_error)?;
-            if rows.is_empty() {
-                break;
-            }
-            for old in rows {
+            let Some(last) = rows.last() else { break };
+            let mut insert =
+                sqlx::QueryBuilder::new("INSERT INTO import_maps (kind,old,new,epoch) ");
+            insert.push_values(&rows, |mut row, old| {
                 let new = match kind {
                     "execution" => ExecutionId::new().to_string(),
                     "activity" => agena_domain::ActivityId::new().to_string(),
@@ -1374,70 +1573,54 @@ async fn make_maps(connection: &mut SqliteConnection) -> Result<()> {
                     _ => agena_domain::BlobId::new().to_string(),
                 };
                 let epoch = (kind == "content").then(|| ContentEpoch::new().to_string());
-                sqlx::query("INSERT INTO import_maps VALUES (?,?,?,?)")
-                    .bind(kind)
-                    .bind(&old)
-                    .bind(new)
-                    .bind(epoch)
-                    .execute(&mut *connection)
-                    .await
-                    .map_err(sql_error)?;
-                after = old;
-            }
+                row.push_bind(kind)
+                    .push_bind(old)
+                    .push_bind(new)
+                    .push_bind(epoch);
+            });
+            insert
+                .build()
+                .execute(&mut *connection)
+                .await
+                .map_err(sql_error)?;
+            after.clone_from(last);
         }
     }
     Ok(())
 }
 
-async fn mapped(connection: &mut SqliteConnection, kind: &str, old: &Value) -> Result<Value> {
-    if old.is_null() {
-        return Ok(Value::Null);
+fn reference_text(value: &Value) -> Result<Option<std::borrow::Cow<'_, str>>> {
+    if value.is_null() {
+        return Ok(None);
     }
-    let old = old
+    value
         .as_str()
-        .map(str::to_owned)
-        .or_else(|| old.as_i64().map(|n| n.to_string()))
-        .ok_or_else(|| invalid("archive identity is not a scalar"))?;
-    let value: String =
-        sqlx::query_scalar("SELECT new FROM archive_import.import_maps WHERE kind=? AND old=?")
-            .bind(kind)
-            .bind(old)
-            .fetch_optional(connection)
-            .await
-            .map_err(sql_error)?
-            .ok_or_else(|| invalid(format!("archive is missing a referenced {kind} identity")))?;
-    Ok(
-        if matches!(kind, "entry" | "round" | "tool" | "interaction" | "segment") {
-            json!(value.parse::<i64>().map_err(invalid)?)
-        } else {
-            json!(value)
-        },
-    )
+        .map(std::borrow::Cow::Borrowed)
+        .or_else(|| {
+            value
+                .as_i64()
+                .map(|n| std::borrow::Cow::Owned(n.to_string()))
+        })
+        .map(Some)
+        .ok_or_else(|| invalid("archive identity is not a scalar"))
 }
 
-fn rewrite<'a>(
-    connection: &'a mut SqliteConnection,
-    value: &'a mut Value,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
-    Box::pin(async move {
-        match value {
-            Value::Array(values) => {
-                for value in values {
-                    rewrite(connection, value).await?;
-                }
+fn visit_json_references(
+    value: &mut Value,
+    visit: &mut impl FnMut(&'static str, &mut Value) -> Result<()>,
+) -> Result<()> {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                visit_json_references(value, visit)?;
             }
-            Value::Object(values) => {
-                for (key, value) in values {
-                    let kind = match key.as_str() {
-                        "resource_id" | "content_id" => Some("content"),
-                        "blob_id" => Some("blob"),
-                        _ => None,
-                    };
-                    if let Some(kind) = kind {
-                        if !value.is_null() {
-                            *value = mapped(connection, kind, value).await?;
-                        }
-                    } else if key == "uri" {
+        }
+        Value::Object(values) => {
+            for (key, value) in values {
+                match key.as_str() {
+                    "resource_id" | "content_id" => visit("content", value)?,
+                    "blob_id" => visit("blob", value)?,
+                    "uri" => {
                         if let Some(encoded) = value
                             .as_str()
                             .and_then(|s| s.strip_prefix("agena:media:v1:"))
@@ -1453,181 +1636,434 @@ fn rewrite<'a>(
                             if binding["version"] != 1 {
                                 return Err(invalid("unsupported archive media binding"));
                             }
-                            binding["blob"] = mapped(connection, "blob", &binding["blob"]).await?;
+                            visit("blob", &mut binding["blob"])?;
                             *value = json!(format!(
                                 "agena:media:v1:{}",
                                 hex::encode(serde_json::to_vec(&binding).map_err(invalid)?)
                             ));
                         }
-                    } else {
-                        rewrite(connection, value).await?;
                     }
+                    _ => visit_json_references(value, visit)?,
                 }
             }
-            _ => {}
         }
-        Ok(())
-    })
+        _ => {}
+    }
+    Ok(())
 }
 
-async fn rewrite_json(connection: &mut SqliteConnection, session: i64) -> Result<()> {
-    for (table, key, columns) in [
-        ("agena_entries", "id", &["body_json"][..]),
-        ("agena_tool_calls", "id", &["input_json", "result_json"][..]),
+fn visit_field_references(
+    table: &str,
+    value: &mut Value,
+    mut visit: impl FnMut(&'static str, &mut Value) -> Result<()>,
+) -> Result<()> {
+    visit_json_references(value, &mut visit)?;
+    if table == "agena_entries" && value["kind"] == "compaction" {
+        visit("content", &mut value["summary"])?;
+    }
+    Ok(())
+}
+
+async fn stage_json_remap(
+    connection: &mut SqliteConnection,
+    table: &str,
+    column: &str,
+    row_id: &str,
+    value: &Value,
+) -> Result<()> {
+    let (field, old, reply) = match (table, column) {
+        ("agena_entries", "body_json") if value["kind"] == "compaction" => {
+            ("through", integer(value, "through")?.to_string(), None)
+        }
+        ("agena_interactions", "request_json") if value.get("Input").is_some() => {
+            if !value["Input"]["request"].is_object() {
+                return Err(invalid("archive input request has no request object"));
+            }
+            ("input_request", row_id.to_owned(), None)
+        }
+        ("agena_interactions", "decision_json") if value["kind"] == "permission" => {
+            ("permission_reply", row_id.to_owned(), None)
+        }
+        ("agena_interactions", "decision_json") if value["kind"] == "input" => {
+            // Input is opaque at the port. Rebind only the runtime's typed reply.
+            let Some(reply) = value["value"].as_str().and_then(|encoded| {
+                serde_json::from_str::<agena_domain::UserInputReply>(encoded).ok()
+            }) else {
+                return Ok(());
+            };
+            ("input_reply", row_id.to_owned(), Some(encode(&reply)?))
+        }
+        _ => return Ok(()),
+    };
+    sqlx::query("INSERT INTO import_json_remaps(field,row_id,old,reply_json) VALUES (?,?,?,?)")
+        .bind(field)
+        .bind(row_id)
+        .bind(old)
+        .bind(reply)
+        .execute(connection)
+        .await
+        .map_err(sql_error)?;
+    Ok(())
+}
+
+const JSON_PAGE_ROWS: i64 = 64;
+
+async fn stage_json(connection: &mut SqliteConnection) -> Result<()> {
+    for (table, columns) in [
+        ("agena_entries", &["body_json"][..]),
+        ("agena_tool_calls", &["input_json", "result_json"][..]),
         (
             "agena_interactions",
-            "id",
             &["request_json", "decision_json", "remember_json"][..],
         ),
-        ("agena_background_activities", "id", &["outcome_json"][..]),
+        ("agena_background_activities", &["outcome_json"][..]),
     ] {
-        let mut after = if table == "agena_background_activities" {
-            String::new()
-        } else {
-            "0".into()
-        };
+        let text_key = table == "agena_background_activities";
+        let mut after = if text_key { String::new() } else { "0".into() };
+        let query = format!(
+            "SELECT id,{} FROM {table} WHERE id>? ORDER BY id LIMIT {JSON_PAGE_ROWS}",
+            columns.join(",")
+        );
         loop {
-            let query = format!(
-                "SELECT {key},{} FROM archive_import.{table} WHERE {key}>? ORDER BY {key} LIMIT 1",
-                columns.join(",")
-            );
-            let row = sqlx::query(&query)
-                .bind(&after)
-                .fetch_optional(&mut *connection)
+            let mut page = Vec::new();
+            let mut page_bytes = 0;
+            {
+                let mut rows = sqlx::query(&query).bind(&after).fetch(&mut *connection);
+                // Allow a single oversized row to advance the cursor.
+                while page_bytes < 1024 * 1024 {
+                    let Some(row) = rows.try_next().await.map_err(sql_error)? else {
+                        break;
+                    };
+                    for column in columns {
+                        page_bytes += row
+                            .try_get::<Option<&str>, _>(*column)
+                            .map_err(storage)?
+                            .map_or(0, str::len);
+                    }
+                    page.push(row);
+                }
+            }
+            if page.is_empty() {
+                break;
+            }
+            let mut fields = Vec::new();
+            let mut refs = HashSet::new();
+            for row in &page {
+                after = if text_key {
+                    row.try_get::<String, _>("id").map_err(storage)?
+                } else {
+                    row.try_get::<i64, _>("id").map_err(storage)?.to_string()
+                };
+                for &column in columns {
+                    let Some(original) = row.try_get::<Option<&str>, _>(column).map_err(storage)?
+                    else {
+                        continue;
+                    };
+                    let mut value: Value = decode(original)?;
+                    visit_field_references(table, &mut value, |kind, value| {
+                        if let Some(old) = reference_text(value)? {
+                            refs.insert((kind, old.into_owned()));
+                        }
+                        Ok(())
+                    })?;
+                    stage_json_remap(connection, table, column, &after, &value).await?;
+                    fields.push((after.clone(), column, original, value));
+                }
+            }
+            let mut mappings = HashMap::<String, HashMap<String, String>>::new();
+            if !refs.is_empty() {
+                let rows: Vec<(String, String, String)> = sqlx::query_as(
+                    "SELECT m.kind,m.old,m.new FROM json_each(?) refs
+                     CROSS JOIN import_maps m ON m.kind=refs.value->>0 AND m.old=refs.value->>1",
+                )
+                .bind(encode(&refs)?)
+                .fetch_all(&mut *connection)
                 .await
                 .map_err(sql_error)?;
-            let Some(row) = row else { break };
-            after = if table == "agena_background_activities" {
-                row.try_get::<String, _>(key).map_err(storage)?
-            } else {
-                row.try_get::<i64, _>(key).map_err(storage)?.to_string()
-            };
-            for column in columns {
-                let Some(original) = row.try_get::<Option<String>, _>(*column).map_err(storage)?
-                else {
-                    continue;
-                };
-                let mut value: Value = decode(&original)?;
-                rewrite(connection, &mut value).await?;
-                if table == "agena_interactions" {
-                    let interaction = mapped(connection, "interaction", &json!(after)).await?;
-                    let request_id = interaction
-                        .as_i64()
-                        .ok_or_else(|| invalid("mapped interaction is not numeric"))?
-                        .to_string();
-                    if *column == "decision_json" && value["kind"] == "permission" {
-                        value["value"]["reply"]["request_id"] = json!(request_id);
-                    } else if *column == "request_json" && value.get("Input").is_some() {
-                        value["Input"]["request"]["request_id"] = json!(request_id);
-                        value["Input"]["request"]["session_id"] = json!(session);
-                    } else if *column == "decision_json" && value["kind"] == "input" {
-                        // Input is an opaque string at the kernel port. Rebind
-                        // only the runtime's typed reply envelope, retaining
-                        // plain input strings without guessing at their form.
-                        if let Some(encoded) = value["value"].as_str()
-                            && let Ok(mut reply) =
-                                serde_json::from_str::<agena_domain::UserInputReply>(encoded)
-                        {
-                            reply.request_id = request_id;
-                            value["value"] = json!(encode(&reply)?);
-                        }
+                for (kind, old, new) in rows {
+                    mappings.entry(kind).or_default().insert(old, new);
+                }
+            }
+            for (id, column, original, mut value) in fields {
+                visit_field_references(table, &mut value, |kind, value| {
+                    if let Some(old) = reference_text(value)? {
+                        let new = mappings
+                            .get(kind)
+                            .and_then(|m| m.get(old.as_ref()))
+                            .ok_or_else(|| {
+                                invalid(format!("archive is missing a referenced {kind} identity"))
+                            })?;
+                        *value = json!(new);
                     }
-                }
-                if table == "agena_entries" && value["kind"] == "compaction" {
-                    value["summary"] = mapped(connection, "content", &value["summary"]).await?;
-                    value["through"] = mapped(connection, "entry", &value["through"]).await?;
-                }
+                    Ok(())
+                })?;
                 let rewritten = encode(&value)?;
                 if rewritten != original {
-                    sqlx::query(&format!(
-                        "UPDATE archive_import.{table} SET {column}=? WHERE {key}=?"
-                    ))
-                    .bind(rewritten)
-                    .bind(&after)
-                    .execute(&mut *connection)
-                    .await
-                    .map_err(sql_error)?;
+                    sqlx::query(&format!("UPDATE {table} SET {column}=? WHERE id=?"))
+                        .bind(rewritten)
+                        .bind(id)
+                        .execute(&mut *connection)
+                        .await
+                        .map_err(sql_error)?;
                 }
             }
         }
     }
-    let mut after_entry = 0i64;
-    loop {
-        let row = sqlx::query("SELECT entry_id,facts_json FROM archive_import.agena_branch_entries WHERE entry_id>? ORDER BY entry_id LIMIT 1")
-            .bind(after_entry).fetch_optional(&mut *connection).await.map_err(sql_error)?;
-        let Some(row) = row else { break };
-        after_entry = row.try_get("entry_id").map_err(storage)?;
-        let mut facts: Value = decode(row.try_get::<&str, _>("facts_json").map_err(storage)?)?;
-        facts["response_entry_id"] =
-            mapped(connection, "entry", &facts["response_entry_id"]).await?;
-        for (field, kind) in [
-            ("sources", "content"),
-            ("interactions", "interaction"),
-            ("activities", "activity"),
-            ("blobs", "blob"),
-        ] {
-            if let Some(values) = facts[field].as_array_mut() {
-                for value in values {
-                    *value = mapped(connection, kind, value).await?;
-                }
-            }
-        }
-        sqlx::query("UPDATE archive_import.agena_branch_entries SET facts_json=? WHERE entry_id=?")
-            .bind(encode(&facts)?)
-            .bind(after_entry)
-            .execute(&mut *connection)
-            .await
-            .map_err(sql_error)?;
-    }
-    let mut after_source = String::new();
-    loop {
-        let row = sqlx::query("SELECT content_id,head_json FROM archive_import.agena_branch_sources WHERE content_id>? ORDER BY content_id LIMIT 1")
-            .bind(&after_source).fetch_optional(&mut *connection).await.map_err(sql_error)?;
-        let Some(row) = row else { break };
-        after_source = row.try_get("content_id").map_err(storage)?;
-        let mut head: Value = decode(row.try_get::<&str, _>("head_json").map_err(storage)?)?;
-        head["id"] = mapped(connection, "content", &head["id"]).await?;
-        head["entry"] = mapped(connection, "entry", &head["entry"]).await?;
-        head["activity_id"] = mapped(connection, "activity", &head["activity_id"]).await?;
-        head["epoch"] = json!(
-            sqlx::query_scalar::<_, String>(
-                "SELECT epoch FROM archive_import.import_maps WHERE kind='content' AND old=?"
+    reject_query(
+        connection,
+        "SELECT EXISTS(SELECT 1 FROM import_json_remaps p LEFT JOIN agena_entries e
+         ON e.id=p.old WHERE p.field='through' AND e.id IS NULL)",
+        "archive is missing a referenced entry identity",
+    )
+    .await
+}
+
+async fn publish_json(connection: &mut SqliteConnection, session: i64) -> Result<()> {
+    // Only identities allocated in this writer transaction still need a JSON
+    // update. The staging plan identifies their exact fields and row positions.
+    for (field, table, column, kind, value) in [
+        (
+            "through",
+            "agena_entries",
+            "body_json",
+            "entry",
+            "json_set(t.body_json,'$.through',CAST(m.new AS INTEGER))",
+        ),
+        (
+            "input_request",
+            "agena_interactions",
+            "request_json",
+            "interaction",
+            "json_set(t.request_json,'$.Input.request.request_id',m.new,'$.Input.request.session_id',?4)",
+        ),
+        (
+            "permission_reply",
+            "agena_interactions",
+            "decision_json",
+            "interaction",
+            "json_set(t.decision_json,'$.value.reply.request_id',m.new)",
+        ),
+        (
+            "input_reply",
+            "agena_interactions",
+            "decision_json",
+            "interaction",
+            "json_set(t.decision_json,'$.value',printf('%s',json_set(p.reply_json,'$.request_id',m.new)))",
+        ),
+    ] {
+        let query = format!(
+            "UPDATE archive_import.{table} AS t SET {column}=(
+                SELECT {value} FROM archive_import.import_json_remaps p
+                CROSS JOIN archive_import.import_maps m ON m.kind='{kind}' AND m.old=p.old
+                WHERE p.field=?1 AND p.row_id=t.id)
+             WHERE t.id IN (SELECT row_id FROM archive_import.import_json_remaps
+                WHERE field=?1 AND row_id>?2 AND row_id<=?3)"
+        );
+        let mut after = 0i64;
+        loop {
+            let last: Option<i64> = sqlx::query_scalar(
+                "SELECT MAX(row_id) FROM (SELECT row_id FROM archive_import.import_json_remaps
+                 WHERE field=? AND row_id>? ORDER BY row_id LIMIT ?)",
             )
-            .bind(&after_source)
+            .bind(field)
+            .bind(after)
+            .bind(JSON_PAGE_ROWS)
             .fetch_one(&mut *connection)
             .await
-            .map_err(sql_error)?
-        );
-        sqlx::query(
-            "UPDATE archive_import.agena_branch_sources SET head_json=? WHERE content_id=?",
-        )
-        .bind(encode(&head)?)
-        .bind(&after_source)
+            .map_err(sql_error)?;
+            let Some(last) = last else { break };
+            let update = sqlx::query(&query).bind(field).bind(after).bind(last);
+            let update = if field == "input_request" {
+                update.bind(session)
+            } else {
+                update
+            };
+            update.execute(&mut *connection).await.map_err(sql_error)?;
+            after = last;
+        }
+    }
+    // Staging validation has already checked each array element against the
+    // source table. Each identity in those tables now has a publication map.
+    for (column, kind, mapped_id) in [
+        ("interactions_json", "interaction", "CAST(m.new AS INTEGER)"),
+        ("activities_json", "activity", "m.new"),
+        ("blobs_json", "blob", "m.new"),
+    ] {
+        sqlx::query(&format!(
+            "UPDATE archive_import.agena_branch_entries AS b
+             SET {column}=(SELECT json_group_array({mapped_id} ORDER BY ref.key)
+                 FROM json_each(b.{column}) ref
+                 CROSS JOIN archive_import.import_maps m
+                     ON m.kind=? AND m.old=CAST(ref.value AS TEXT))
+             WHERE b.session_id=1 AND b.{column} IS NOT NULL"
+        ))
+        .bind(kind)
         .execute(&mut *connection)
         .await
         .map_err(sql_error)?;
     }
-    let mut round = 0i64;
-    let mut after = String::new();
+    Ok(())
+}
+
+async fn publish_round_inputs(connection: &mut SqliteConnection) -> Result<()> {
+    const PAGE_SIZE: usize = 1_024;
+    let mut after = (i64::MIN, -1i64);
+    let mut pending = Vec::new();
     loop {
-        let row=sqlx::query("SELECT round_id,content_id,head_json FROM archive_import.agena_round_input_sources WHERE (round_id,content_id)>(?,?) ORDER BY round_id,content_id LIMIT 1").bind(round).bind(&after).fetch_optional(&mut *connection).await.map_err(sql_error)?;
-        let Some(row) = row else { break };
-        round = row.try_get("round_id").map_err(storage)?;
-        after = row.try_get("content_id").map_err(storage)?;
-        let mut head: Value = decode(&row.try_get::<String, _>("head_json").map_err(storage)?)?;
-        head["id"] = mapped(connection, "content", &head["id"]).await?;
-        head["entry"] = mapped(connection, "entry", &head["entry"]).await?;
-        head["activity_id"] = mapped(connection, "activity", &head["activity_id"]).await?;
-        head["epoch"] = json!(
-            sqlx::query_scalar::<_, String>(
-                "SELECT epoch FROM archive_import.import_maps WHERE kind='content' AND old=?"
-            )
-            .bind(&after)
-            .fetch_one(&mut *connection)
-            .await
-            .map_err(sql_error)?
-        );
-        sqlx::query("UPDATE archive_import.agena_round_input_sources SET head_json=? WHERE round_id=? AND content_id=?").bind(encode(&head)?).bind(round).bind(&after).execute(&mut *connection).await.map_err(sql_error)?;
+        let rows = sqlx::query(
+            "SELECT s.round_id AS archive_round,s.ordinal,CAST(r.new AS INTEGER) AS round_id,
+                    CAST(e.new AS INTEGER) AS entry_id,s.entry_revision,CAST(a.new AS INTEGER) AS response_entry_id,
+                    s.execution_phase,s.tool_phase,s.interaction_decided
+             FROM archive_import.agena_round_inputs s
+             CROSS JOIN archive_import.import_maps r ON r.kind='round' AND r.old=CAST(s.round_id AS TEXT)
+             CROSS JOIN archive_import.import_maps e ON e.kind='entry' AND e.old=CAST(s.entry_id AS TEXT)
+             LEFT JOIN archive_import.import_maps a ON a.kind='entry' AND a.old=CAST(s.response_entry_id AS TEXT)
+             WHERE (s.round_id,s.ordinal)>(?,?) ORDER BY s.round_id,s.ordinal LIMIT ?",
+        )
+        .bind(after.0)
+        .bind(after.1)
+        .bind(PAGE_SIZE as i64)
+        .fetch_all(&mut *connection)
+        .await
+        .map_err(sql_error)?;
+        if let Some(last) = rows.last() {
+            after = (
+                last.try_get("archive_round").map_err(storage)?,
+                last.try_get("ordinal").map_err(storage)?,
+            );
+        }
+        let more = rows.len() == PAGE_SIZE;
+        for row in rows {
+            pending.push(prompt_inputs::FrozenInput::from_row(row).map_err(sql_error)?);
+        }
+        // Carry the final block across the storage page boundary so an import
+        // uses the same grouping as the live capture of these identities.
+        let keep = if more {
+            prompt_inputs::blocks(&pending)
+                .next_back()
+                .map_or(0, |block| block.len())
+        } else {
+            0
+        };
+        let ready = pending.len() - keep;
+        prompt_inputs::persist(connection, &pending[..ready]).await?;
+        if !more {
+            return Ok(());
+        }
+        pending.drain(..ready);
+    }
+}
+
+async fn publish_round_replays(connection: &mut SqliteConnection) -> Result<()> {
+    const PAGE_SIZE: usize = 1_024;
+    let mut after = (i64::MIN, i64::MIN);
+    let mut pending = Vec::new();
+    loop {
+        let rows = sqlx::query(
+            "SELECT s.round_id AS archive_round,s.source_round_id AS archive_source_round,
+                    CAST(q.new AS INTEGER) AS round_id,r.id AS source_round_id,
+                    s.phase,s.has_provider_state,
+                    CASE WHEN s.has_provider_state=1 THEN r.provider_state_bytes ELSE 0 END AS state_bytes
+             FROM archive_import.agena_round_input_replays s
+             CROSS JOIN archive_import.import_maps q ON q.kind='round' AND q.old=CAST(s.round_id AS TEXT)
+             CROSS JOIN archive_import.import_maps m ON m.kind='round' AND m.old=CAST(s.source_round_id AS TEXT)
+             CROSS JOIN main.agena_rounds r ON r.id=CAST(m.new AS INTEGER)
+             WHERE (s.round_id,s.source_round_id)>(?,?)
+             ORDER BY s.round_id,s.source_round_id LIMIT ?",
+        )
+        .bind(after.0)
+        .bind(after.1)
+        .bind(PAGE_SIZE as i64)
+        .fetch_all(&mut *connection)
+        .await
+        .map_err(sql_error)?;
+        if let Some(last) = rows.last() {
+            after = (
+                last.try_get("archive_round").map_err(storage)?,
+                last.try_get("archive_source_round").map_err(storage)?,
+            );
+        }
+        let more = rows.len() == PAGE_SIZE;
+        for row in rows {
+            pending.push(prompt_replays::FrozenReplay::from_row(row).map_err(sql_error)?);
+        }
+        // Round maps preserve numeric order. Keep the final bucket together
+        // across staged pages so it can still share its remapped replay block.
+        let keep = if more {
+            prompt_replays::blocks(&pending)
+                .next_back()
+                .map_or(0, |block| block.len())
+        } else {
+            0
+        };
+        let ready = pending.len() - keep;
+        prompt_replays::persist(connection, &pending[..ready]).await?;
+        if !more {
+            return Ok(());
+        }
+        pending.drain(..ready);
+    }
+}
+
+// The staged header already matches its stream. Use the published stream for
+// remapped identities and keep the archived positions, state, and diagnostics.
+const REMAPPED_HEAD_VALUES: &str = "c.epoch,
+    json_extract(s.head_json,'$.committed'),json_extract(s.head_json,'$.retained_start'),
+    json_extract(s.head_json,'$.state'),
+    COALESCE(json_extract(s.head_json,'$.capture_loss.bytes'),0),
+    COALESCE(json_extract(s.head_json,'$.capture_loss.packets'),0),
+    COALESCE(json_extract(s.head_json,'$.capture_loss.committed_bytes'),0),
+    COALESCE(json_extract(s.head_json,'$.capture_loss.committed_packets'),0),
+    json_extract(s.head_json,'$.capture_error'),
+    length(CAST(json_set(s.head_json,'$.id',c.id,'$.entry',c.entry_id,'$.epoch',c.epoch,
+                         '$.activity_id',c.activity_id) AS BLOB))";
+
+async fn publish_branch_sources(connection: &mut SqliteConnection, session: i64) -> Result<()> {
+    let columns = content::heads::COLUMNS;
+    sqlx::query(&format!(
+        "INSERT INTO main.agena_branch_sources(session_id,source_key,{columns})
+         SELECT ?,c.source_key,{REMAPPED_HEAD_VALUES}
+         FROM archive_import.agena_branch_sources s
+         CROSS JOIN archive_import.import_maps m ON m.kind='content' AND m.old=s.content_id
+         CROSS JOIN main.agena_content_streams c ON c.id=m.new
+         WHERE s.session_id=1"
+    ))
+    .bind(session)
+    .execute(connection)
+    .await
+    .map_err(sql_error)?;
+    Ok(())
+}
+
+async fn publish_round_sources(connection: &mut SqliteConnection) -> Result<()> {
+    let columns = content::heads::COLUMNS;
+    let inserted = sqlx::query(&format!(
+        "INSERT INTO main.agena_round_input_sources(round_id,block_id,entry_id,source_key,{columns})
+         SELECT CAST(r.new AS INTEGER),(
+                SELECT block_id FROM main.agena_round_input_blocks
+                WHERE round_id=CAST(r.new AS INTEGER) AND start_ordinal<=i.ordinal
+                ORDER BY start_ordinal DESC LIMIT 1
+             ),CAST(e.new AS INTEGER),c.source_key,{REMAPPED_HEAD_VALUES}
+         FROM archive_import.agena_round_input_sources s
+         CROSS JOIN archive_import.agena_round_inputs i ON i.round_id=s.round_id AND i.entry_id=s.entry_id
+         CROSS JOIN archive_import.import_maps r ON r.kind='round' AND r.old=CAST(s.round_id AS TEXT)
+         CROSS JOIN archive_import.import_maps e ON e.kind='entry' AND e.old=CAST(s.entry_id AS TEXT)
+         CROSS JOIN archive_import.import_maps m ON m.kind='content' AND m.old=s.content_id
+         CROSS JOIN main.agena_content_streams c ON c.id=m.new"
+    ))
+    .execute(&mut *connection)
+    .await
+    .map_err(sql_error)?;
+    if inserted.rows_affected() != 0 {
+        sqlx::query(&format!(
+            "UPDATE main.agena_rounds AS r {}
+             WHERE r.id IN (SELECT CAST(new AS INTEGER) FROM archive_import.import_maps WHERE kind='round')
+                AND EXISTS(SELECT 1 FROM agena_round_input_sources WHERE round_id=r.id)",
+            prompt_sources::SOURCE_BUDGET_ASSIGNMENT,
+        ))
+        .execute(connection)
+        .await
+        .map_err(sql_error)?;
     }
     Ok(())
 }
@@ -1670,7 +2106,7 @@ fn expression(table: &str, column: &str, session: i64, owner_epoch: &str) -> Str
         | "checkpoint_entry_id"
         | "through_entry_id"
         | "base_checkpoint_entry_id" => Some("entry"),
-        "round_id" | "source_round_id" => Some("round"),
+        "round_id" => Some("round"),
         "tool_id" => Some("tool"),
         "interaction_id" => Some("interaction"),
         "content_id" => Some("content"),
@@ -1683,7 +2119,9 @@ fn expression(table: &str, column: &str, session: i64, owner_epoch: &str) -> Str
         let mapped = format!(
             "(SELECT new FROM archive_import.import_maps WHERE kind='{kind}' AND old=CAST(s.{column} AS TEXT))"
         );
-        if matches!(kind, "entry" | "round" | "tool" | "interaction" | "segment") {
+        if content_key_column(table, column) {
+            format!("(SELECT source_key FROM main.agena_content_streams WHERE id={mapped})")
+        } else if matches!(kind, "entry" | "round" | "tool" | "interaction" | "segment") {
             format!("CAST({mapped} AS INTEGER)")
         } else {
             mapped
@@ -1691,6 +2129,17 @@ fn expression(table: &str, column: &str, session: i64, owner_epoch: &str) -> Str
     } else {
         format!("s.{column}")
     }
+}
+
+fn content_key_column(table: &str, column: &str) -> bool {
+    column == "content_id"
+        && matches!(
+            table,
+            "agena_content_blocks"
+                | "agena_content_checkpoints"
+                | "agena_content_gaps"
+                | "agena_content_capture_losses"
+        )
 }
 
 async fn publish_rows(
@@ -1713,11 +2162,16 @@ async fn publish_rows(
         ("interaction", "agena_interactions"),
         ("segment", "agena_history_segments"),
     ] {
-        let maximum: i64 =
-            sqlx::query_scalar(&format!("SELECT COALESCE(MAX(id),0) FROM main.{table}"))
-                .fetch_one(&mut *connection)
-                .await
-                .map_err(sql_error)?;
+        // An archived segment can have been collected since SQLite allocated
+        // its ID. Explicit inserts must honor the same high-water mark.
+        let maximum: i64 = sqlx::query_scalar(&format!(
+            "SELECT MAX(COALESCE((SELECT seq FROM main.sqlite_sequence WHERE name=?),0),
+                        COALESCE((SELECT MAX(id) FROM main.{table}),0))"
+        ))
+        .bind(table)
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(sql_error)?;
         let count: i64 =
             sqlx::query_scalar(&format!("SELECT COUNT(*) FROM archive_import.{table}"))
                 .fetch_one(&mut *connection)
@@ -1734,42 +2188,74 @@ async fn publish_rows(
         .execute(&mut *connection)
         .await
         .map_err(sql_error)?;
-    rewrite_json(connection, id).await?;
+    publish_json(connection, id).await?;
     let epoch = KernelEpoch::new().to_string();
     for table in TABLES.iter().copied().chain(["agena_prompt_windows"]) {
-        let fields = sqlx::query(&format!("PRAGMA main.table_xinfo({table})"))
-            .fetch_all(&mut *connection)
-            .await
-            .map_err(sql_error)?;
-        let mut columns = Vec::new();
-        for field in fields {
-            if field.try_get::<i64, _>("hidden").map_err(storage)? == 0 {
-                columns.push(field.try_get::<String, _>("name").map_err(storage)?);
-            }
+        if table == "agena_round_inputs" {
+            publish_round_inputs(connection).await?;
+            continue;
         }
+        if table == "agena_round_input_sources" {
+            publish_round_sources(connection).await?;
+            continue;
+        }
+        if table == "agena_round_input_replays" {
+            publish_round_replays(connection).await?;
+            continue;
+        }
+        if table == "agena_branch_sources" {
+            publish_branch_sources(connection, id).await?;
+            continue;
+        }
+        let columns = table_columns(&job.columns, table)?;
+        let names = columns
+            .iter()
+            .map(|name| {
+                if content_key_column(table, name) {
+                    "source_key"
+                } else {
+                    name
+                }
+            })
+            .collect::<Vec<_>>();
         let values = columns
             .iter()
             .map(|name| expression(table, name, id, &epoch))
             .collect::<Vec<_>>();
         sqlx::query(&format!(
             "INSERT INTO main.{table} ({}) SELECT {} FROM archive_import.{table} s",
-            columns.join(","),
+            names.join(","),
             values.join(",")
         ))
         .execute(&mut *connection)
         .await
         .map_err(|error| storage(format!("archive import publish {table}: {error}")))?;
+        if table == "agena_content_blocks" {
+            sqlx::query(
+                "INSERT INTO main.agena_content_block_pieces (source_key,block_start,byte_offset,body)
+                 SELECT (SELECT c.source_key FROM archive_import.import_maps m
+                         JOIN main.agena_content_streams c ON c.id=m.new
+                         WHERE m.kind='content' AND m.old=p.content_id),
+                        p.block_start,p.byte_offset,p.body
+                 FROM archive_import.import_pieces p",
+            )
+            .execute(&mut *connection)
+            .await
+            .map_err(|error| storage(format!("archive import publish content pieces: {error}")))?;
+        }
     }
-    sqlx::query("INSERT INTO agena_session_statistics(session_id,entry_count,user_message_count,last_message_at_ms) SELECT ?,COUNT(*),COALESCE(SUM(e.kind='user'),0),MAX(CASE WHEN e.kind='user' THEN e.created_at_ms END) FROM archive_import.import_entries i JOIN archive_import.agena_entries e ON e.id=i.id WHERE i.member=1").bind(id).execute(&mut *connection).await.map_err(|error| storage(format!("archive import statistics: {error}")))?;
-    if !sqlx::query("PRAGMA main.foreign_key_check")
-        .fetch_optional(&mut *connection)
-        .await
-        .map_err(sql_error)?
-        .is_none()
-    {
-        return Err(invalid("archive publication has unresolved references"));
-    }
+    sqlx::query(
+        "INSERT INTO agena_session_statistics (session_id,entry_count,user_message_count,last_message_at_ms)
+         SELECT ?1,COALESCE(SUM(end_ordinal-first_ordinal),0),COALESCE(SUM(user_message_count),0),?2
+         FROM agena_session_segments WHERE session_id=?1",
+    )
+    .bind(id)
+    .bind(job.last_user_message_at_ms)
+    .execute(&mut *connection)
+    .await
+    .map_err(|error| storage(format!("archive import statistics: {error}")))?;
     let session = SessionId::try_from(id).map_err(storage)?;
+    history_runs::rebuild_imported(connection, session).await?;
     super::lifecycle::refresh_paused_summary(connection, session).await?;
     let sequence:i64=sqlx::query_scalar("UPDATE agena_commits SET sequence=sequence+1 WHERE id=1 AND sequence<9223372036854775807 RETURNING sequence").fetch_one(&mut *connection).await.map_err(sql_error)?;
     let receipt = CommitReceipt {
@@ -1783,16 +2269,7 @@ async fn publish_rows(
         position: receipt.position,
         value: Mutation::Session(Box::new(receipt.value.clone())),
     };
-    sqlx::query("INSERT INTO agena_command_results VALUES (?,?,?,?,?,?)")
-        .bind(job.request.to_string())
-        .bind(&job.digest)
-        .bind(encode(&durable)?)
-        .bind(sequence)
-        .bind(0i64)
-        .bind(now_ms())
-        .execute(&mut *connection)
-        .await
-        .map_err(sql_error)?;
+    receipts::write(connection, job.request, &job.digest, &durable).await?;
     Ok(receipt)
 }
 
@@ -1835,26 +2312,9 @@ pub(super) async fn publish(
             .begin_with("BEGIN IMMEDIATE")
             .await
             .map_err(sql_error)?;
-        sqlx::query("PRAGMA defer_foreign_keys=ON")
-            .execute(&mut *tx)
-            .await
-            .map_err(sql_error)?;
-        if let Some(row) = sqlx::query(
-            "SELECT request_digest,receipt_json FROM agena_command_results WHERE request_id=?",
-        )
-        .bind(job.request.to_string())
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(sql_error)?
-        {
-            let digest: Vec<u8> = row.try_get("request_digest").map_err(storage)?;
-            if digest != job.digest {
-                return Err(KernelError::Conflict(
-                    "request id was already used for another command".into(),
-                ));
-            }
-            let receipt: CommitReceipt<Mutation> =
-                decode(&row.try_get::<String, _>("receipt_json").map_err(storage)?)?;
+        // The schema defers the cyclic execution, attempt, entry and content
+        // references. Other constraints stay immediate during publication.
+        if let Some(receipt) = receipts::read(&mut tx, job.request, &job.digest).await? {
             let Mutation::Session(metadata) = receipt.value else {
                 return Err(invalid("import replay has an incompatible receipt"));
             };
@@ -1909,6 +2369,9 @@ pub(super) async fn publish(
                     list_change,
                 );
                 Ok(receipt)
+            }
+            Err(sqlx::Error::Database(error)) if error.is_foreign_key_violation() => {
+                Err(invalid("archive publication has unresolved references"))
             }
             Err(error) if rejected_commit(&error) => Err(storage(error)),
             Err(error) => {

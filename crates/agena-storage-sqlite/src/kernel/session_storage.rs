@@ -79,9 +79,17 @@ async fn find_job(connection: &mut SqliteConnection, session: SessionId) -> Resu
 }
 
 async fn save(connection: &mut SqliteConnection, job: &Job) -> Result<()> {
-    sqlx::query("INSERT INTO agena_server_state (key,value_json,updated_at_ms) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json,updated_at_ms=excluded.updated_at_ms")
-        .bind(key(job.session)).bind(encode(job)?).bind(now_ms())
-        .execute(connection).await.map_err(sql_error)?;
+    sqlx::query(
+        "INSERT INTO agena_server_state (key,value_json)
+         VALUES (?,json_set(?,'$.updated_at_ms',?))
+         ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    )
+    .bind(key(job.session))
+    .bind(encode(job)?)
+    .bind(now_ms())
+    .execute(connection)
+    .await
+    .map_err(sql_error)?;
     Ok(())
 }
 
@@ -632,7 +640,7 @@ async fn next_job(connection: &mut SqliteConnection) -> Result<Option<Job>> {
         SELECT value_json FROM agena_server_state WHERE key GLOB 'session-storage/*'
           AND json_extract(value_json,'$.status.state')='running'
           AND COALESCE(json_extract(value_json,'$.next_attempt_ms'),0)<=?
-        ORDER BY updated_at_ms,key LIMIT 1
+        ORDER BY json_extract(value_json,'$.updated_at_ms'),key LIMIT 1
     "#,
     )
     .bind(now_ms())
@@ -710,16 +718,7 @@ pub(super) async fn step(
             }
         }
     } else if let Some(recording) = job.recordings.first() {
-        let shared: bool = sqlx::query_scalar(
-            r#"
-            SELECT EXISTS(SELECT 1 FROM agena_branch_sources WHERE content_id=?1)
-              OR EXISTS(SELECT 1 FROM agena_round_input_sources WHERE content_id=?1)
-        "#,
-        )
-        .bind(recording.id.to_string())
-        .fetch_one(&mut *transaction)
-        .await
-        .map_err(sql_error)?;
+        let shared = accounting::recording_shared(&mut transaction, recording.id).await?;
         if shared || owner.summary.deleted {
             job.status.state = StorageOperationState::Failed;
             job.status.detail = Some("session_changed".into());

@@ -29,6 +29,53 @@ fn update(revision: i64, key: &str, patch: AssistantPatch) -> AssistantUpdate {
 }
 
 #[tokio::test]
+async fn due_reminders_keep_due_time_and_id_order_across_cooldowns() {
+    let runtime = open_kernel_runtime("sqlite::memory:").await.unwrap();
+    let repo = SqliteCompanionRepository::new(runtime.database.clone());
+    let n = now() + 1000;
+    let mut reminders = Vec::new();
+    for index in (0..145).rev() {
+        let mut value = Reminder::new(
+            index / 32 + 1,
+            index + 1,
+            1,
+            format!("reminder-{index}"),
+            spec("contact"),
+            n - 1000,
+        )
+        .unwrap();
+        value.id = uuid::Uuid::from_u128(index as u128 + 1);
+        value.next_due_ms = n - 100 + index / 2;
+        value.retry_at_ms = match index {
+            0..32 => n + 3000,
+            32..128 => n + 1000,
+            _ => 0,
+        };
+        if index % 11 == 0 {
+            value.state = ReminderState::Paused;
+        }
+        reminders.push(repo.create_reminder(value).await.unwrap());
+    }
+    reminders.sort_unstable_by_key(|r| (r.next_due_ms, r.id));
+    for cutoff in [n, n + 1000, n + 3000] {
+        let expected: Vec<_> = reminders
+            .iter()
+            .filter(|r| r.state == ReminderState::Active && r.retry_at_ms <= cutoff)
+            .take(32)
+            .map(|r| r.id)
+            .collect();
+        let actual: Vec<_> = repo
+            .due_reminders(cutoff)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(actual, expected);
+    }
+}
+
+#[tokio::test]
 async fn profiles_are_workspace_scoped_revision_checked_and_replay_safe() {
     let runtime = open_kernel_runtime("sqlite::memory:").await.unwrap();
     let repo = SqliteCompanionRepository::new(runtime.database.clone());
@@ -324,24 +371,48 @@ async fn recurrence_is_finite_and_missed_intervals_coalesce() {
 }
 
 #[tokio::test]
-async fn assistant_preferences_survive_restart() {
+async fn scoped_preferences_and_receipts_survive_restart() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("source.db");
     let url = format!("sqlite://{}?mode=rwc", file.display());
     let runtime = open_kernel_runtime(&url).await.unwrap();
     let repo = SqliteCompanionRepository::new(runtime.database.clone());
-    let profile = repo
-        .update_profile(
-            1,
+    let project_request = update(
+        0,
+        "saved",
+        AssistantPatch {
+            name: Some("持久人格".into()),
+            ..Default::default()
+        },
+    );
+    let global_request = update(
+        0,
+        "saved",
+        AssistantPatch {
+            instructions: Some("原始偏好。".repeat(2048)),
+            ..Default::default()
+        },
+    );
+    let project = repo
+        .update_profile(1, project_request.clone(), now())
+        .await
+        .unwrap();
+    let global = repo
+        .update_profile_scoped(None, global_request.clone(), now())
+        .await
+        .unwrap();
+    let latest = repo
+        .update_profile_scoped(
+            None,
             update(
-                0,
-                "saved",
+                global.revision,
+                "revised",
                 AssistantPatch {
-                    name: Some("持久人格".into()),
+                    instructions: Some("最新偏好。".into()),
                     ..Default::default()
                 },
             ),
-            now(),
+            now() + 1,
         )
         .await
         .unwrap();
@@ -355,7 +426,26 @@ async fn assistant_preferences_survive_restart() {
         .await
         .unwrap();
     let repo = SqliteCompanionRepository::new(reopened.database.clone());
-    assert_eq!(repo.profile(1).await.unwrap(), profile);
+    assert_eq!(repo.profile(1).await.unwrap(), project);
+    assert_eq!(repo.profile_scoped(None).await.unwrap(), latest);
+    assert!(matches!(
+        repo.update_profile_scoped(None, project_request.clone(), now() + 2)
+            .await,
+        Err(Error::Conflict(_))
+    ));
+    assert_eq!(
+        repo.update_profile(1, project_request, now() + 2)
+            .await
+            .unwrap(),
+        project
+    );
+    assert_eq!(
+        repo.update_profile_scoped(None, global_request, now() + 2)
+            .await
+            .unwrap(),
+        global
+    );
+    assert_eq!(repo.profile_scoped(None).await.unwrap(), latest);
 }
 
 #[tokio::test]
@@ -514,4 +604,69 @@ async fn global_policy_and_reminders_are_independent_and_source_scoped() {
     assert_eq!(only_first[0].id, first.id);
     assert_ne!(only_first[0].id, second.id);
     assert!(repo.reminders(1).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn global_and_project_quotas_reset_on_their_own_local_day() {
+    let runtime = open_kernel_runtime("sqlite::memory:").await.unwrap();
+    let repo = SqliteCompanionRepository::new(runtime.database.clone());
+    let utc = Utc.with_ymd_and_hms(2026, 11, 8, 15, 58, 0).unwrap();
+    let start = utc.timestamp_millis();
+    for (scope, timezone) in [(None, "Europe/Paris"), (Some(1), "Asia/Shanghai")] {
+        repo.update_profile_scoped(
+            scope,
+            update(
+                0,
+                "limits",
+                AssistantPatch {
+                    timezone: Some(timezone.into()),
+                    daily_limit: Some(1),
+                    cooldown_seconds: Some(60),
+                    ..Default::default()
+                },
+            ),
+            start,
+        )
+        .await
+        .unwrap();
+        let key = if scope.is_some() { "project" } else { "global" };
+        let source = scope.unwrap_or(2);
+        let saved = repo
+            .create_reminder(Reminder::new(scope, source, 1, key.into(), spec(key), start).unwrap())
+            .await
+            .unwrap();
+        let reserved = repo
+            .reserve_reminder(saved.id, start + 1000)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(reserved.reserved_day.as_deref(), Some("2026-11-08"));
+        repo.finish_reminder(saved.id, 1, start + 2000)
+            .await
+            .unwrap();
+    }
+    let shanghai_midnight = start + 120_000;
+    let paris_midnight = shanghai_midnight + 7 * 3_600_000;
+    for (scope, source) in [(None, 2), (Some(1), 1)] {
+        let saved = repo
+            .create_reminder(
+                Reminder::new(scope, source, 1, "next".into(), spec("next"), start).unwrap(),
+            )
+            .await
+            .unwrap();
+        let reserved = repo
+            .reserve_reminder(saved.id, shanghai_midnight)
+            .await
+            .unwrap();
+        let reserved = if scope.is_some() {
+            reserved.unwrap()
+        } else {
+            assert!(reserved.is_none());
+            repo.reserve_reminder(saved.id, paris_midnight)
+                .await
+                .unwrap()
+                .unwrap()
+        };
+        assert_eq!(reserved.reserved_day.as_deref(), Some("2026-11-09"));
+    }
 }

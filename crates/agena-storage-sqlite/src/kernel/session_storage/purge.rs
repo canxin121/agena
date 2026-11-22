@@ -44,11 +44,12 @@ async fn reclaim_batch(
     }
     if !shared {
         let mut removed = 0u64;
-        let blocks = sqlx::query_as::<_, (String, i64, i64)>(
+        let blocks = sqlx::query_as::<_, (i64, i64, i64)>(
             r#"
-            SELECT b.content_id,b.logical_start,length(b.body)
-            FROM agena_content_streams c JOIN agena_content_blocks b ON b.content_id=c.id
-            WHERE c.session_id=? ORDER BY c.id,b.logical_start LIMIT ?
+            SELECT b.source_key,b.logical_start,b.body_bytes
+            FROM agena_entries e CROSS JOIN agena_content_streams c ON c.entry_id=e.id
+            CROSS JOIN agena_content_blocks b ON b.source_key=c.source_key
+            WHERE e.origin_session_id=? LIMIT ?
         "#,
         )
         .bind(session.get())
@@ -56,21 +57,21 @@ async fn reclaim_batch(
         .fetch_all(&mut *connection)
         .await
         .map_err(sql_error)?;
-        for (content, start, bytes) in &blocks {
+        for (source_key, start, bytes) in &blocks {
             let bytes = accounting::unsigned(*bytes);
             if removed > 0 && removed + bytes > BYTES_PER_BATCH {
                 break;
             }
             sqlx::query(
-                "DELETE FROM agena_content_checkpoints WHERE content_id=? AND block_start=?",
+                "DELETE FROM agena_content_checkpoints WHERE source_key=? AND block_start=?",
             )
-            .bind(content)
+            .bind(source_key)
             .bind(start)
             .execute(&mut *connection)
             .await
             .map_err(sql_error)?;
-            sqlx::query("DELETE FROM agena_content_blocks WHERE content_id=? AND logical_start=?")
-                .bind(content)
+            sqlx::query("DELETE FROM agena_content_blocks WHERE source_key=? AND logical_start=?")
+                .bind(source_key)
                 .bind(start)
                 .execute(&mut *connection)
                 .await
@@ -84,7 +85,7 @@ async fn reclaim_batch(
             r#"
             DELETE FROM agena_blob_chunks WHERE (blob_id,logical_start) IN (
                 SELECT c.blob_id,c.logical_start FROM agena_blobs b
-                JOIN agena_blob_chunks c ON c.blob_id=b.id WHERE b.session_id=?
+                CROSS JOIN agena_blob_chunks c ON c.blob_id=b.id WHERE b.session_id=?
                 ORDER BY b.id,c.logical_start LIMIT ?
             ) RETURNING length(body)
         "#,
@@ -124,7 +125,6 @@ async fn detach(connection: &mut SqliteConnection, session: SessionId) -> Result
     "#).bind(session.get()).fetch_all(&mut *connection).await.map_err(sql_error)?;
     for sql in [
         "DELETE FROM agena_prompt_windows WHERE session_id=?",
-        "DELETE FROM agena_branch_sources WHERE session_id=?",
         "DELETE FROM agena_branch_entries WHERE session_id=?",
         "DELETE FROM agena_branch_activities WHERE session_id=?",
         "DELETE FROM agena_branch_rounds WHERE session_id=?",
@@ -137,11 +137,49 @@ async fn detach(connection: &mut SqliteConnection, session: SessionId) -> Result
             .await
             .map_err(sql_error)?;
     }
+    history_runs::clear(connection, session).await?;
+    detach_sources(connection, session).await?;
     sqlx::query(r#"
         DELETE FROM agena_history_segments WHERE id IN (SELECT value FROM json_each(?))
           AND NOT EXISTS(SELECT 1 FROM agena_session_segments s WHERE s.segment_id=agena_history_segments.id)
           AND NOT EXISTS(SELECT 1 FROM agena_retired_session_segments s WHERE s.segment_id=agena_history_segments.id)
     "#).bind(encode(&segments)?).execute(connection).await.map_err(sql_error)?;
+    Ok(())
+}
+
+async fn detach_sources(connection: &mut SqliteConnection, session: SessionId) -> Result<()> {
+    // Keep canonical heads while another branch points to them. Removing
+    // the last link can also release the head of an already detached branch.
+    sqlx::query(
+        r#"
+        WITH released(session_id,source_key) AS MATERIALIZED (
+            SELECT h.session_id,h.source_key
+            FROM agena_branch_sources h WHERE h.session_id=?1
+            AND NOT EXISTS(
+                SELECT 1 FROM agena_branch_sources link
+                WHERE link.head_owner_session_id=h.session_id AND link.source_key=h.source_key
+            )
+            UNION ALL
+            SELECT owner.id,h.source_key
+            FROM agena_branch_sources h
+            CROSS JOIN agena_sessions owner ON owner.id=h.head_owner_session_id
+            CROSS JOIN agena_content_streams c ON c.source_key=h.source_key
+            WHERE h.session_id=?1 AND owner.deleted_at_ms IS NOT NULL
+            AND NOT EXISTS(
+                SELECT 1 FROM agena_branch_entries e WHERE e.session_id=owner.id AND e.entry_id=c.entry_id
+            )
+            AND NOT EXISTS(
+                SELECT 1 FROM agena_branch_sources link WHERE link.head_owner_session_id=owner.id
+                AND link.source_key=h.source_key AND link.session_id!=?1
+            )
+        )
+        DELETE FROM agena_branch_sources WHERE (session_id,source_key) IN (SELECT * FROM released)
+        "#,
+    )
+    .bind(session.get())
+    .execute(connection)
+    .await
+    .map_err(sql_error)?;
     Ok(())
 }
 
@@ -154,13 +192,37 @@ async fn delete_owned_rows(connection: &mut SqliteConnection, session: SessionId
         .map_err(sql_error)?;
     for sql in [
         "DELETE FROM agena_round_input_sources WHERE round_id IN (SELECT id FROM agena_rounds WHERE session_id=?)",
-        "DELETE FROM agena_round_input_replays WHERE round_id IN (SELECT id FROM agena_rounds WHERE session_id=?)",
-        "DELETE FROM agena_round_inputs WHERE round_id IN (SELECT id FROM agena_rounds WHERE session_id=?)",
+        // Blocks own the frozen facts. Only remove a block once all its
+        // remaining links belong to the rounds being removed.
+        "DELETE FROM agena_prompt_input_blocks WHERE id IN (
+            SELECT DISTINCT l.block_id FROM agena_rounds r
+            CROSS JOIN agena_round_input_blocks l ON l.round_id=r.id WHERE r.session_id=?1
+         ) AND NOT EXISTS(
+            SELECT 1 FROM agena_round_input_blocks l CROSS JOIN agena_rounds r ON r.id=l.round_id
+            WHERE l.block_id=agena_prompt_input_blocks.id AND r.session_id!=?1
+         )",
+        "DELETE FROM agena_prompt_replay_blocks WHERE id IN (
+            SELECT DISTINCT l.block_id FROM agena_rounds r
+            CROSS JOIN agena_round_replay_blocks l ON l.round_id=r.id WHERE r.session_id=?1
+         ) AND NOT EXISTS(
+            SELECT 1 FROM agena_round_replay_blocks l CROSS JOIN agena_rounds r ON r.id=l.round_id
+            WHERE l.block_id=agena_prompt_replay_blocks.id AND r.session_id!=?1
+         )",
+        "DELETE FROM agena_round_input_blocks WHERE round_id IN (SELECT id FROM agena_rounds WHERE session_id=?)",
+        "DELETE FROM agena_round_replay_blocks WHERE round_id IN (SELECT id FROM agena_rounds WHERE session_id=?)",
         "DELETE FROM agena_compaction_rounds WHERE round_id IN (SELECT id FROM agena_rounds WHERE session_id=?)",
-        "DELETE FROM agena_content_checkpoints WHERE content_id IN (SELECT id FROM agena_content_streams WHERE session_id=?)",
-        "DELETE FROM agena_content_capture_losses WHERE content_id IN (SELECT id FROM agena_content_streams WHERE session_id=?)",
-        "DELETE FROM agena_content_gaps WHERE content_id IN (SELECT id FROM agena_content_streams WHERE session_id=?)",
-        "DELETE FROM agena_content_streams WHERE session_id=?",
+        "DELETE FROM agena_content_capture_losses WHERE source_key IN (
+            SELECT c.source_key FROM agena_entries e CROSS JOIN agena_content_streams c ON c.entry_id=e.id
+            WHERE e.origin_session_id=?
+         )",
+        "DELETE FROM agena_content_gaps WHERE source_key IN (
+            SELECT c.source_key FROM agena_entries e CROSS JOIN agena_content_streams c ON c.entry_id=e.id
+            WHERE e.origin_session_id=?
+         )",
+        "DELETE FROM agena_content_streams WHERE source_key IN (
+            SELECT c.source_key FROM agena_entries e CROSS JOIN agena_content_streams c ON c.entry_id=e.id
+            WHERE e.origin_session_id=?
+         )",
         "DELETE FROM agena_blob_references WHERE entry_id IN (SELECT id FROM agena_entries WHERE origin_session_id=?)",
         "DELETE FROM agena_blob_pins WHERE blob_id IN (SELECT id FROM agena_blobs WHERE session_id=?)",
         "DELETE FROM agena_blobs WHERE session_id=?",
@@ -170,13 +232,13 @@ async fn delete_owned_rows(connection: &mut SqliteConnection, session: SessionId
         "DELETE FROM agena_tool_calls WHERE round_id IN (SELECT id FROM agena_rounds WHERE session_id=?)",
         "DELETE FROM agena_entries WHERE origin_session_id=?",
         "DELETE FROM agena_rounds WHERE session_id=?",
+        "DELETE FROM agena_channel_sessions WHERE session_id=?",
         "DELETE FROM agena_execution_purposes WHERE execution_id IN (SELECT id FROM agena_executions WHERE session_id=?)",
         "DELETE FROM agena_attempts WHERE session_id=?",
         "DELETE FROM agena_executions WHERE session_id=?",
         "DELETE FROM agena_permission_rules WHERE session_id=?",
         "DELETE FROM agena_scheduler_history WHERE owner_session_id=?",
         "DELETE FROM agena_assistant_reminders WHERE source_session_id=? AND state IN ('completed','cancelled')",
-        "DELETE FROM agena_channel_sessions WHERE session_id=?",
         "DELETE FROM agena_session_statistics WHERE session_id=?",
     ] {
         sqlx::query(sql)

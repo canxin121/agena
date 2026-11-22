@@ -4,21 +4,28 @@
 //! `agena_sessions` rows whose configuration carries `owner.bot`; this table
 //! holds only the identity, revision and archived state that every such
 //! conversation is checked against.
-use agena_storage::{BotRecord, BotRepository, BotRepositoryError};
+use crate::receipt_payload::{pack, unpack};
+use agena_storage::{BotRecord, BotRepository, BotRepositoryError, BotWithLocalSession};
 use async_trait::async_trait;
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement, TransactionTrait, Value,
 };
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use uuid::Uuid;
 
 pub struct SqliteBotRepository {
     database: Arc<DatabaseConnection>,
+    reader: Arc<DatabaseConnection>,
 }
 
 impl SqliteBotRepository {
     pub fn new(database: Arc<DatabaseConnection>) -> Self {
-        Self { database }
+        Self::with_reader(database.clone(), database)
+    }
+
+    pub fn with_reader(database: Arc<DatabaseConnection>, reader: Arc<DatabaseConnection>) -> Self {
+        Self { database, reader }
     }
 }
 
@@ -30,7 +37,28 @@ fn statement(sql: &str, values: Vec<Value>) -> Statement {
     Statement::from_sql_and_values(DatabaseBackend::Sqlite, sql, values)
 }
 
-const SELECT: &str = "SELECT b.id,b.name,b.name_folded,b.instructions,b.revision,b.archived,b.created_at_ms,b.updated_at_ms,a.avatar,p.ids_json,p.publish_to_channels FROM agena_bots b LEFT JOIN agena_bot_avatars a ON a.bot_id=b.id LEFT JOIN agena_bot_prompts p ON p.bot_id=b.id";
+const PROFILE_FIELDS: &str = "b.id,b.name,b.name_folded,b.instructions,b.revision,b.archived,b.created_at_ms,b.updated_at_ms,a.avatar,p.ids_json,p.publish_to_channels";
+const PROFILE_TABLES: &str = "FROM agena_bots b LEFT JOIN agena_bot_avatars a ON a.bot_id=b.id
+    LEFT JOIN agena_bot_prompts p ON p.bot_id=b.id";
+
+pub(crate) const LIVE_LOCAL_SESSION: &str = "agena_sessions s ON s.id=m.session_id
+    AND s.deleted_at_ms IS NULL AND s.owner_bot_id=m.bot_id AND s.owner_surface='local'
+    AND s.parent_session_id IS NULL AND s.workspace_id IS NULL";
+
+fn profiles_query(suffix: &str) -> String {
+    format!(
+        "SELECT {PROFILE_FIELDS},s.id AS local_session_id {PROFILE_TABLES}
+         LEFT JOIN agena_bot_local_sessions m ON m.bot_id=b.id
+         LEFT JOIN {LIVE_LOCAL_SESSION} {suffix}"
+    )
+}
+
+fn profile_row(row: sea_orm::QueryResult) -> Result<BotWithLocalSession, BotRepositoryError> {
+    Ok(BotWithLocalSession {
+        local_session_id: row.try_get("", "local_session_id").map_err(backend)?,
+        record: record(row)?,
+    })
+}
 
 fn record(row: sea_orm::QueryResult) -> Result<BotRecord, BotRepositoryError> {
     let prompt_ids = row
@@ -94,7 +122,7 @@ async fn read(
     id: Uuid,
 ) -> Result<Option<BotRecord>, BotRepositoryError> {
     db.query_one(statement(
-        &format!("{SELECT} WHERE b.id=?"),
+        &format!("SELECT {PROFILE_FIELDS} {PROFILE_TABLES} WHERE b.id=?"),
         vec![id.to_string().into()],
     ))
     .await
@@ -222,29 +250,44 @@ impl BotRepository for SqliteBotRepository {
     }
 
     async fn get(&self, id: Uuid) -> Result<BotRecord, BotRepositoryError> {
-        read(self.database.as_ref(), id)
+        read(self.reader.as_ref(), id)
             .await?
             .ok_or(BotRepositoryError::NotFound)
     }
 
-    async fn list(&self, include_archived: bool) -> Result<Vec<BotRecord>, BotRepositoryError> {
-        let sql = if include_archived {
-            format!("{SELECT} ORDER BY b.created_at_ms,b.id")
+    async fn list(
+        &self,
+        include_archived: bool,
+    ) -> Result<Vec<BotWithLocalSession>, BotRepositoryError> {
+        let suffix = if include_archived {
+            "ORDER BY b.created_at_ms,b.id"
         } else {
-            format!("{SELECT} WHERE b.archived=0 ORDER BY b.created_at_ms,b.id")
+            "WHERE b.archived=0 ORDER BY b.created_at_ms,b.id"
         };
-        self.database
-            .query_all(statement(&sql, vec![]))
+        self.reader
+            .query_all(statement(&profiles_query(suffix), vec![]))
             .await
             .map_err(backend)?
             .into_iter()
-            .map(record)
+            .map(profile_row)
             .collect()
+    }
+
+    async fn first_active(&self) -> Result<Option<BotWithLocalSession>, BotRepositoryError> {
+        self.reader
+            .query_one(statement(
+                &profiles_query("WHERE b.id=(SELECT id FROM agena_bots WHERE archived=0 ORDER BY created_at_ms,id LIMIT 1)"),
+                vec![],
+            ))
+            .await
+            .map_err(backend)?
+            .map(profile_row)
+            .transpose()
     }
 
     async fn count(&self) -> Result<u64, BotRepositoryError> {
         let row = self
-            .database
+            .reader
             .query_one(statement("SELECT COUNT(*) AS n FROM agena_bots", vec![]))
             .await
             .map_err(backend)?
@@ -253,11 +296,11 @@ impl BotRepository for SqliteBotRepository {
         u64::try_from(count).map_err(|_| BotRepositoryError::Backend("negative Bot count".into()))
     }
 
-    async fn receipt(&self, key: &str) -> Result<Option<(String, String)>, BotRepositoryError> {
+    async fn receipt(&self, key: &str, input: &str) -> Result<Option<String>, BotRepositoryError> {
         let Some(row) = self
-            .database
+            .reader
             .query_one(statement(
-                "SELECT input,result FROM agena_bot_receipts WHERE request_key=?",
+                "SELECT input_digest,result FROM agena_bot_receipts WHERE request_key=?",
                 vec![key.into()],
             ))
             .await
@@ -265,10 +308,15 @@ impl BotRepository for SqliteBotRepository {
         else {
             return Ok(None);
         };
-        Ok(Some((
-            row.try_get("", "input").map_err(backend)?,
-            row.try_get("", "result").map_err(backend)?,
-        )))
+        let stored: Vec<u8> = row.try_get("", "input_digest").map_err(backend)?;
+        if stored.as_slice() != Sha256::digest(input).as_slice() {
+            return Err(BotRepositoryError::ReplayedInput);
+        }
+        let payload: Vec<u8> = row.try_get("", "result").map_err(backend)?;
+        let result = unpack(&payload).map_err(backend)?;
+        Ok(Some(
+            String::from_utf8(result.into_owned()).map_err(backend)?,
+        ))
     }
 
     async fn save_receipt(
@@ -277,10 +325,12 @@ impl BotRepository for SqliteBotRepository {
         input: &str,
         result: &str,
     ) -> Result<(), BotRepositoryError> {
+        serde_json::from_str::<serde::de::IgnoredAny>(result).map_err(backend)?;
+        let payload = pack(result.as_bytes()).map_err(backend)?;
         self.database
             .execute(statement(
-                "INSERT INTO agena_bot_receipts(request_key,input,result) VALUES(?,?,?) ON CONFLICT(request_key) DO NOTHING",
-                vec![key.into(), input.into(), result.into()],
+                "INSERT INTO agena_bot_receipts(request_key,input_digest,result) VALUES(?,?,?) ON CONFLICT(request_key) DO NOTHING",
+                vec![key.into(), Sha256::digest(input).to_vec().into(), payload.into()],
             ))
             .await
             .map_err(backend)?;

@@ -319,7 +319,7 @@ bun run test:telegram
 bun run test:telegram:browser
 ```
 
-浏览器验收脚本 `scripts/probe-telegram.cjs` 启动独立数据目录、真实 Agena 服务和两个本地 Bot API 模拟账号，覆盖聊天发现、会话与成员的权限绑定、白／黑名单、自动连接、手动添加、旧授权迁移和连接恢复，并检查桌面与移动端布局。脚本使用 Node 和本地 Chrome，通过原生 Chrome DevTools Protocol 驱动页面，可用 `CHROME_BIN` 指定浏览器。
+浏览器验收脚本 `scripts/probe-telegram.cjs` 启动独立数据目录、真实 Agena 服务和两个本地 Bot API 模拟账号，覆盖聊天发现、会话与成员的权限绑定、白／黑名单、自动连接、手动添加、重启后授权保存和连接恢复，并检查桌面与移动端布局。脚本使用 Node 和本地 Chrome，通过原生 Chrome DevTools Protocol 驱动页面，可用 `CHROME_BIN` 指定浏览器。
 
 ## 组合：GitHub 事件的结果回到聊天渠道
 

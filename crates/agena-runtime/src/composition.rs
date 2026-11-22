@@ -1,15 +1,13 @@
 use std::sync::Arc;
 
-use sea_orm::DatabaseConnection;
-
 /// Typed inputs crossing from runtime snapshot resolution into model-catalog
 /// composition. The runtime crate owns the shape; concrete provider, plugin,
 /// and database implementations remain supplied by the composition owner.
-pub(crate) struct ModelCatalogCompositionInputs<Providers, ConfigPath, Plugins, Database> {
+pub(crate) struct ModelCatalogCompositionInputs<Providers, ConfigPath, Plugins, Store> {
     pub(crate) providers: Providers,
     pub(crate) config_path: ConfigPath,
     pub(crate) plugins: Plugins,
-    pub(crate) database: Database,
+    pub(crate) store: Store,
 }
 
 /// Typed inputs for plugin-host composition. The runtime owns the boundary;
@@ -54,9 +52,8 @@ pub(crate) struct SessionCompositionInputs<
     /// Background-process registry installed into every tool executor built
     /// for this session manager.
     pub(crate) monitor_registry: Option<Arc<dyn crate::MonitorService>>,
-    /// Dedicated scheduler database connection; `None` degrades the scheduler
-    /// to its in-memory store.
-    pub(crate) scheduler_database: Option<Arc<DatabaseConnection>>,
+    /// Scheduler writer and reader. `None` uses the in-memory store.
+    pub(crate) scheduler_database: Option<crate::scheduler_composition::SchedulerDatabase>,
 }
 
 /// Default upper bound for concurrently executing tools in one session.
@@ -147,9 +144,8 @@ pub(crate) struct ToolCompositionInputs<Plugins, Lsp, Workspace, Session> {
     /// Background-process registry installed into the tool executor. When
     /// `None` the executor lazily builds its default registry.
     pub(crate) monitor_registry: Option<Arc<dyn crate::MonitorService>>,
-    /// Dedicated scheduler database connection, threaded to the session
-    /// scheduler. `None` uses the scheduler's in-memory store.
-    pub(crate) scheduler_database: Option<Arc<DatabaseConnection>>,
+    /// Scheduler writer and reader. `None` uses the in-memory store.
+    pub(crate) scheduler_database: Option<crate::scheduler_composition::SchedulerDatabase>,
 }
 
 /// Typed inputs for database connection/schema composition. Runtime owns the

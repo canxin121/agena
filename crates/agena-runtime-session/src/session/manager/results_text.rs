@@ -1,6 +1,5 @@
 use super::*;
 use agena_domain::ContentId;
-use agena_provider::CompletionUsage;
 
 impl SessionManager {
     async fn assistant_text(
@@ -35,6 +34,11 @@ impl SessionManager {
         execution: Option<ExecutionId>,
         max: usize,
     ) -> Result<Option<String>, AppError> {
+        if let Some(execution) = execution {
+            return self
+                .final_execution_text(session, execution, None, max)
+                .await;
+        }
         let mut before = None;
         for _ in 0..32 {
             let page = persist(|| self.kernel().reader.history(session, before, 128))
@@ -44,8 +48,7 @@ impl SessionManager {
             // A continued execution can have several completed model rounds;
             // its final response is the newest text, not the first round.
             for entry in page.entries.iter().rev() {
-                if execution.is_none_or(|id| entry.execution_id == id)
-                    && let EntryPayload::Text { content_id } = entry.payload
+                if let EntryPayload::Text { content_id } = entry.payload
                     && let text = self
                         .assistant_text(session, content_id, max.min(1024 * 1024))
                         .await?
@@ -61,29 +64,29 @@ impl SessionManager {
         }
         Ok(None)
     }
-    pub async fn aggregate_usage(&self, id: i64) -> Result<CompletionUsage, AppError> {
-        let session = session_id(id)?;
-        let mut after = None;
-        let mut usage = CompletionUsage::default();
-        loop {
-            let page = persist(|| self.kernel().reader.rounds(session, after, 200))
-                .await
-                .map_err(kernel_error)?;
-            if page.is_empty() {
-                break;
+    pub(super) async fn final_execution_text(
+        &self,
+        session: SessionId,
+        execution: ExecutionId,
+        generation: Option<AttemptGeneration>,
+        max: usize,
+    ) -> Result<Option<String>, AppError> {
+        let sources = persist(|| {
+            self.kernel()
+                .reader
+                .execution_text_sources(session, execution, generation)
+        })
+        .await
+        .map_err(kernel_error)?;
+        for &content in sources.iter() {
+            let text = self
+                .assistant_text(session, content, max.min(1024 * 1024))
+                .await?;
+            if !text.trim().is_empty() {
+                return Ok(Some(text));
             }
-            for round in page.iter() {
-                if let Some(state) = &round.provider_state {
-                    let state: super::super::kernel::KernelProviderState =
-                        serde_json::from_value(state.clone())?;
-                    if let Some(observed) = state.usage {
-                        usage.add_assign(&observed);
-                    }
-                }
-            }
-            after = page.last().map(|r| r.id);
         }
-        Ok(usage)
+        Ok(None)
     }
 }
 pub(super) fn truncate(text: &mut String, max: usize) {

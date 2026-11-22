@@ -59,6 +59,94 @@ fn list_query() -> PermissionRuleListQuery {
 }
 
 #[tokio::test]
+async fn permission_resolution_and_recent_pages_keep_their_subject_boundaries() {
+    let runtime = open_kernel_runtime("sqlite::memory:").await.unwrap();
+    let rules = &runtime.permissions;
+    let global = tool_rule();
+    let workspace = PersistedPermissionRule {
+        scope: PermissionScope::Workspace,
+        workspace_id: Some(7),
+        mode: PermissionMode::Ask,
+        ..global.clone()
+    };
+    let session = PersistedPermissionRule {
+        scope: PermissionScope::Session,
+        session_id: Some(11),
+        mode: PermissionMode::Deny,
+        ..global.clone()
+    };
+    let global_record = rules.upsert(&global).await.unwrap().0;
+    let workspace_record = rules.upsert(&workspace).await.unwrap().0;
+    let session_record = rules.upsert(&session).await.unwrap().0;
+    for other in [
+        PersistedPermissionRule {
+            workspace_id: Some(8),
+            ..workspace.clone()
+        },
+        PersistedPermissionRule {
+            session_id: Some(12),
+            ..session.clone()
+        },
+    ] {
+        rules.upsert(&other).await.unwrap();
+    }
+    let ids = |records: Vec<PersistedPermissionRule>| {
+        records
+            .into_iter()
+            .map(|rule| rule.id.unwrap())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        ids(rules
+            .resolve(&global.action_key, Some(11), Some(7))
+            .await
+            .unwrap()),
+        [global_record.id, workspace_record.id, session_record.id]
+    );
+    assert_eq!(
+        ids(rules.resolve_snapshot(Some(11), Some(7)).await.unwrap()),
+        [global_record.id, session_record.id, workspace_record.id]
+    );
+    rules.revoke(workspace_record.id, None, None).await.unwrap();
+    assert_eq!(
+        ids(rules
+            .resolve(&global.action_key, Some(11), Some(7))
+            .await
+            .unwrap()),
+        [global_record.id, session_record.id]
+    );
+    let newest = rules
+        .upsert(&PersistedPermissionRule {
+            action_key: tool_rule().action_key.replace("fs.read", "fs.write"),
+            ..workspace
+        })
+        .await
+        .unwrap()
+        .0;
+    sea_orm::sqlx::query("UPDATE agena_permission_rules SET updated_at_ms=42")
+        .execute(runtime.database.get_sqlite_connection_pool())
+        .await
+        .unwrap();
+    let query = PermissionRuleListQuery {
+        workspace_id: Some(7),
+        limit: 1,
+        ..Default::default()
+    };
+    let page = rules.list(query.clone()).await.unwrap();
+    assert_eq!(page[0].id, newest.id);
+    let older = rules
+        .list(PermissionRuleListQuery {
+            before_updated_at_ms: Some(page[0].updated_at_ms),
+            before_id: Some(page[0].id),
+            ..query
+        })
+        .await
+        .unwrap();
+    assert_eq!(older[0].id, workspace_record.id);
+    runtime.ports.clone().shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn invalid_network_upserts_replacements_and_transaction_writes_leave_storage_unchanged() {
     let runtime = open_kernel_runtime("sqlite::memory:").await.unwrap();
     let original = runtime.permissions.upsert(&tool_rule()).await.unwrap().0;

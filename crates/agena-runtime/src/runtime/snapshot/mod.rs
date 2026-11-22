@@ -6,8 +6,6 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-use sea_orm::DatabaseConnection;
-
 mod builders;
 
 use builders::*;
@@ -105,7 +103,7 @@ fn resolve_bundled_plugins(
 #[derive(Clone, Default)]
 pub(crate) struct SnapshotDatabases {
     pub(crate) chat: Option<Arc<agena_storage_sqlite::SqliteKernel>>,
-    pub(crate) scheduler: Option<Arc<DatabaseConnection>>,
+    pub(crate) scheduler: Option<crate::scheduler_composition::SchedulerDatabase>,
 }
 
 pub(crate) struct RuntimeSnapshot {
@@ -194,9 +192,6 @@ impl RuntimeSnapshot {
             chat: session_kernel,
             scheduler: scheduler_database,
         } = databases;
-        let database = session_kernel
-            .as_ref()
-            .map(|kernel| kernel.database.clone());
         let global_loader = loader.clone();
         let global_request = load_request.clone();
         let mut global_resolution = crate::blocking::FILE_OPERATIONS
@@ -382,7 +377,9 @@ impl RuntimeSnapshot {
                 providers: &resolution.config.providers,
                 config_path: resolution.meta.config_path.as_path(),
                 plugins: plugins.as_ref(),
-                database: database.clone(),
+                store: session_kernel
+                    .as_ref()
+                    .map(|kernel| kernel.model_catalog.clone()),
             },
             &client_identity,
         )

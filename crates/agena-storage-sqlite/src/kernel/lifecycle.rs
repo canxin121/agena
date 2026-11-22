@@ -1,7 +1,6 @@
 //! Business operations on immutable membership and bounded configuration.
 use super::*;
 use agena_domain::SessionRelationKind;
-use std::collections::BTreeMap;
 
 /// Keep the storage boundary safe for programmatic callers and archive imports,
 /// which do not necessarily pass through a transport's configuration decoder.
@@ -405,19 +404,70 @@ async fn recover_channel_authority(
     Ok(Mutation::Configuration(Box::new(configuration)))
 }
 
-async fn boundary(
+pub(super) async fn boundary(
     connection: &mut SqliteConnection,
     session: SessionId,
     entry: EntryId,
 ) -> Result<(i64, i64)> {
-    let row=sqlx::query("SELECT s.sequence,m.ordinal FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id WHERE s.session_id=? AND m.entry_id=? AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal").bind(session.get()).bind(entry.get()).fetch_optional(connection).await.map_err(sql_error)?.ok_or(KernelError::Ownership)?;
+    let row = sqlx::query(
+        "SELECT s.sequence,m.ordinal
+         FROM agena_segment_entries m INDEXED BY idx_agena_segment_entry_reverse
+         CROSS JOIN agena_session_segments s INDEXED BY idx_agena_session_segment_reverse ON s.segment_id=m.segment_id
+         WHERE s.session_id=? AND m.entry_id=? AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal
+         LIMIT 1",
+    )
+    .bind(session.get())
+    .bind(entry.get())
+    .fetch_optional(connection)
+    .await
+    .map_err(sql_error)?
+    .ok_or(KernelError::Ownership)?;
     Ok((
         row.try_get("sequence").map_err(storage)?,
         row.try_get("ordinal").map_err(storage)?,
     ))
 }
 async fn recount(connection: &mut SqliteConnection, session: SessionId) -> Result<()> {
-    sqlx::query("UPDATE agena_session_statistics SET entry_count=(SELECT COALESCE(sum(end_ordinal-first_ordinal),0) FROM agena_session_segments WHERE session_id=?),user_message_count=(SELECT count(*) FROM agena_session_segments s JOIN agena_segment_entries m ON m.segment_id=s.segment_id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal JOIN agena_entries e ON e.id=m.entry_id WHERE s.session_id=? AND e.kind='user'),last_message_at_ms=(SELECT MAX(e.created_at_ms) FROM agena_session_segments s JOIN agena_segment_entries m ON m.segment_id=s.segment_id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal JOIN agena_entries e ON e.id=m.entry_id WHERE s.session_id=?) WHERE session_id=?").bind(session.get()).bind(session.get()).bind(session.get()).bind(session.get()).execute(connection).await.map_err(sql_error)?;
+    sqlx::query(
+        "UPDATE agena_session_statistics SET
+           (entry_count,user_message_count,last_message_at_ms)=(
+               SELECT COALESCE(SUM(end_ordinal-first_ordinal),0),
+                      COALESCE(SUM(user_message_count),0),MAX(max_entry_created_at_ms)
+               FROM agena_session_segments WHERE session_id=?1
+           )
+         WHERE session_id=?1",
+    )
+    .bind(session.get())
+    .execute(connection)
+    .await
+    .map_err(sql_error)?;
+    Ok(())
+}
+
+/// Recompute only the boundary edge when a prefix keeps part of its segment.
+/// The caller handles empty edges and any snapshots of the old range first.
+async fn clip_history_edge(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+    sequence: i64,
+    end: i64,
+    generation: MembershipGeneration,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE agena_session_segments AS s
+         SET end_ordinal=?3,since_generation=?4,(user_message_count,max_entry_created_at_ms)=(
+             SELECT COUNT(*) FILTER (WHERE e.kind='user'),MAX(e.created_at_ms)
+             FROM agena_segment_entries m CROSS JOIN agena_entries e ON e.id=m.entry_id
+             WHERE m.segment_id=s.segment_id AND m.ordinal>=s.first_ordinal AND m.ordinal<?3
+         ) WHERE session_id=?1 AND sequence=?2 AND end_ordinal>?3",
+    )
+    .bind(session.get())
+    .bind(sequence)
+    .bind(end)
+    .bind(generation.get())
+    .execute(connection)
+    .await
+    .map_err(sql_error)?;
     Ok(())
 }
 
@@ -436,13 +486,9 @@ async fn start_control_execution_with_system_origin(
     system_origin: bool,
 ) -> Result<ExecutionView> {
     reads::metadata(connection, session).await?;
-    let source: Option<i64> = sqlx::query_scalar(
-        "SELECT e.id FROM agena_session_segments s JOIN agena_segment_entries m ON m.segment_id=s.segment_id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal JOIN agena_entries e ON e.id=m.entry_id WHERE s.session_id=? AND e.kind='user' ORDER BY s.sequence DESC,m.ordinal DESC LIMIT 1",
-    )
-    .bind(session.get())
-    .fetch_optional(&mut *connection)
-    .await
-    .map_err(sql_error)?;
+    let source = reads::latest_user_entry(connection, session)
+        .await?
+        .map(|(id, _)| id);
     if source.is_none() && !system_origin {
         return Err(invalid("the session has no user context to continue"));
     }
@@ -495,7 +541,7 @@ async fn start_control_execution_with_system_origin(
     sqlx::query("INSERT INTO agena_attempts (execution_id,generation,session_id,phase) VALUES (?,1,?,'queued')")
         .bind(execution.to_string()).bind(session.get())
         .execute(&mut *connection).await.map_err(sql_error)?;
-    commands::append_history(connection, session, &[anchor]).await?;
+    commands::append_history(connection, session, anchor).await?;
     sqlx::query("UPDATE agena_session_statistics SET queued_executions=queued_executions+1 WHERE session_id=?")
         .bind(session.get()).execute(&mut *connection).await.map_err(sql_error)?;
     sqlx::query("UPDATE agena_sessions SET updated_at_ms=MAX(?,updated_at_ms+1) WHERE id=?")
@@ -614,8 +660,33 @@ async fn fork(
         .execute(&mut *connection)
         .await
         .map_err(sql_error)?;
-    sqlx::query("INSERT INTO agena_session_segments (session_id,sequence,segment_id,first_ordinal,end_ordinal,since_generation) SELECT ?,sequence,segment_id,first_ordinal,CASE WHEN sequence=? THEN MIN(end_ordinal,?) ELSE end_ordinal END,1 FROM agena_session_segments WHERE session_id=? AND (sequence<? OR (sequence=? AND first_ordinal<?))").bind(id).bind(sequence).bind(end).bind(session.get()).bind(sequence).bind(sequence).bind(end).execute(&mut *connection).await.map_err(sql_error)?;
+    sqlx::query(
+        "INSERT INTO agena_session_segments (
+             session_id,sequence,segment_id,first_ordinal,end_ordinal,since_generation,
+             user_message_count,max_entry_created_at_ms
+         )
+         SELECT ?1,sequence,segment_id,first_ordinal,end_ordinal,1,
+                user_message_count,max_entry_created_at_ms
+         FROM agena_session_segments
+         WHERE session_id=?2 AND sequence<=?3 AND (sequence<?3 OR first_ordinal<?4)",
+    )
+    .bind(id)
+    .bind(session.get())
+    .bind(sequence)
+    .bind(end)
+    .execute(&mut *connection)
+    .await
+    .map_err(sql_error)?;
+    clip_history_edge(
+        connection,
+        target,
+        sequence,
+        end,
+        MembershipGeneration::INITIAL,
+    )
+    .await?;
     branches::capture(connection, session, target).await?;
+    history_runs::copy_visible(connection, session, target, sequence).await?;
     recount(connection, target).await?;
     sqlx::query("INSERT INTO agena_prompt_windows (session_id) VALUES (?)")
         .bind(id)
@@ -687,29 +758,48 @@ async fn truncate(
             commands::finish(connection, view, ExecutionPhase::Cancelled).await?;
         }
     }
-    let next = metadata.membership_generation.next().map_err(storage)?;
-    sqlx::query("INSERT INTO agena_retired_session_segments (session_id,sequence,segment_id,first_ordinal,end_ordinal,since_generation,until_generation) SELECT session_id,sequence,segment_id,first_ordinal,end_ordinal,since_generation,? FROM agena_session_segments edge WHERE session_id=? AND sequence>=? AND EXISTS(SELECT 1 FROM agena_history_snapshots root WHERE root.session_id=edge.session_id AND root.generation>=edge.since_generation AND root.generation<?)").bind(next.get()).bind(session.get()).bind(sequence).bind(next.get()).execute(&mut *connection).await.map_err(sql_error)?;
-    let cut=sqlx::query("SELECT segment_id,first_ordinal FROM agena_session_segments WHERE session_id=? AND sequence=?").bind(session.get()).bind(sequence).fetch_one(&mut *connection).await.map_err(sql_error)?;
-    sqlx::query("DELETE FROM agena_session_segments WHERE session_id=? AND sequence>=?")
-        .bind(session.get())
-        .bind(sequence)
-        .execute(&mut *connection)
-        .await
-        .map_err(sql_error)?;
-    let first: i64 = cut.try_get("first_ordinal").map_err(storage)?;
-    if ordinal > first {
-        sqlx::query("INSERT INTO agena_session_segments (session_id,sequence,segment_id,first_ordinal,end_ordinal,since_generation) VALUES (?,?,?,?,?,?)").bind(session.get()).bind(sequence).bind(cut.try_get::<i64,_>("segment_id").map_err(storage)?).bind(first).bind(ordinal).bind(next.get()).execute(&mut *connection).await.map_err(sql_error)?;
-    }
-    sqlx::query("UPDATE agena_sessions SET membership_generation=?,updated_at_ms=MAX(?,updated_at_ms+1) WHERE id=?").bind(next.get()).bind(now_ms()).bind(session.get()).execute(&mut *connection).await.map_err(sql_error)?;
-    sqlx::query("UPDATE agena_prompt_windows SET checkpoint_entry_id=NULL,through_entry_id=NULL,through_sequence=NULL,through_ordinal=NULL,rewrite_epoch=rewrite_epoch+1 WHERE session_id=?").bind(session.get()).execute(&mut *connection).await.map_err(sql_error)?;
-    recount(connection, session).await?;
+    truncate_history(
+        connection,
+        session,
+        metadata.membership_generation,
+        sequence,
+        ordinal,
+    )
+    .await?;
     Ok(Mutation::Rewind(Box::new(RewindResult {
         session: reads::metadata(connection, session).await?,
         document,
     })))
 }
 
-/// Start this conversation over without deleting any stored fact.
+async fn truncate_history(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+    generation: MembershipGeneration,
+    sequence: i64,
+    ordinal: i64,
+) -> Result<()> {
+    let next = generation.next().map_err(storage)?;
+    snapshots::retire_removed_edges(connection, session, next, sequence, ordinal).await?;
+    history_runs::remove_suffix(connection, session, sequence, ordinal).await?;
+    sqlx::query(
+        "DELETE FROM agena_session_segments
+         WHERE session_id=?1 AND sequence>=?2 AND (sequence>?2 OR first_ordinal>=?3)",
+    )
+    .bind(session.get())
+    .bind(sequence)
+    .bind(ordinal)
+    .execute(&mut *connection)
+    .await
+    .map_err(sql_error)?;
+    clip_history_edge(connection, session, sequence, ordinal, next).await?;
+    history_runs::rebuild_response_segment(connection, session, sequence).await?;
+    sqlx::query("UPDATE agena_sessions SET membership_generation=?,updated_at_ms=MAX(?,updated_at_ms+1) WHERE id=?").bind(next.get()).bind(now_ms()).bind(session.get()).execute(&mut *connection).await.map_err(sql_error)?;
+    reset_prompt_window(connection, session).await?;
+    recount(connection, session).await
+}
+
+/// Start this conversation over and preserve its stored facts.
 ///
 /// `History` retires every segment, exactly as `truncate` retires a suffix, so
 /// neither the transcript nor the model sees the old turns and the rows stay
@@ -726,10 +816,7 @@ async fn clear(
     match mode {
         ClearMode::History => {
             let next = metadata.membership_generation.next().map_err(storage)?;
-            // Retire every live edge that earlier snapshots can still address;
-            // edges no snapshot pins are simply dropped with the membership
-            // rows below, which is the same rule truncate uses.
-            sqlx::query("INSERT INTO agena_retired_session_segments (session_id,sequence,segment_id,first_ordinal,end_ordinal,since_generation,until_generation) SELECT session_id,sequence,segment_id,first_ordinal,end_ordinal,since_generation,? FROM agena_session_segments edge WHERE session_id=? AND EXISTS(SELECT 1 FROM agena_history_snapshots root WHERE root.session_id=edge.session_id AND root.generation>=edge.since_generation AND root.generation<?)").bind(next.get()).bind(session.get()).bind(next.get()).execute(&mut *connection).await.map_err(sql_error)?;
+            snapshots::retire_removed_edges(connection, session, next, 0, 0).await?;
             sqlx::query("DELETE FROM agena_session_segments WHERE session_id=?")
                 .bind(session.get())
                 .execute(&mut *connection)
@@ -737,6 +824,7 @@ async fn clear(
                 .map_err(sql_error)?;
             sqlx::query("UPDATE agena_sessions SET membership_generation=?,updated_at_ms=MAX(?,updated_at_ms+1) WHERE id=?").bind(next.get()).bind(now_ms()).bind(session.get()).execute(&mut *connection).await.map_err(sql_error)?;
             reset_prompt_window(connection, session).await?;
+            history_runs::clear(connection, session).await?;
             recount(connection, session).await?;
         }
         ClearMode::Context => {
@@ -848,7 +936,7 @@ async fn install_empty_checkpoint(
         .execute(&mut *connection)
         .await
         .map_err(sql_error)?;
-    commands::append_history(connection, session, &[entry]).await?;
+    commands::append_history(connection, session, entry).await?;
     Ok(())
 }
 async fn withdraw(
@@ -872,29 +960,23 @@ async fn withdraw(
     {
         return Err(KernelError::Ownership);
     }
-    let later:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agena_session_segments s JOIN agena_segment_entries m ON m.segment_id=s.segment_id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal JOIN agena_entries e ON e.id=m.entry_id WHERE s.session_id=? AND (s.sequence>? OR (s.sequence=? AND m.ordinal>?)) AND e.kind='user')").bind(session.get()).bind(sequence).bind(sequence).bind(ordinal).fetch_one(&mut *connection).await.map_err(sql_error)?;
+    let latest = reads::latest_user_entry(connection, session)
+        .await?
+        .map(|(id, _)| id);
     let active:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agena_attempts WHERE session_id=? AND phase IN ('queued','running'))").bind(session.get()).fetch_one(&mut *connection).await.map_err(sql_error)?;
-    if later || active {
+    if latest != Some(message.get()) || active {
         return Err(KernelError::Conflict(
             "withdraw requires the final completed user message".into(),
         ));
     }
-    let next = metadata.membership_generation.next().map_err(storage)?;
-    sqlx::query("INSERT INTO agena_retired_session_segments (session_id,sequence,segment_id,first_ordinal,end_ordinal,since_generation,until_generation) SELECT session_id,sequence,segment_id,first_ordinal,end_ordinal,since_generation,? FROM agena_session_segments edge WHERE session_id=? AND sequence>=? AND EXISTS(SELECT 1 FROM agena_history_snapshots root WHERE root.session_id=edge.session_id AND root.generation>=edge.since_generation AND root.generation<?)").bind(next.get()).bind(session.get()).bind(sequence).bind(next.get()).execute(&mut *connection).await.map_err(sql_error)?;
-    let cut=sqlx::query("SELECT segment_id,first_ordinal FROM agena_session_segments WHERE session_id=? AND sequence=?").bind(session.get()).bind(sequence).fetch_one(&mut *connection).await.map_err(sql_error)?;
-    sqlx::query("DELETE FROM agena_session_segments WHERE session_id=? AND sequence>=?")
-        .bind(session.get())
-        .bind(sequence)
-        .execute(&mut *connection)
-        .await
-        .map_err(sql_error)?;
-    let first: i64 = cut.try_get("first_ordinal").map_err(storage)?;
-    if ordinal > first {
-        sqlx::query("INSERT INTO agena_session_segments (session_id,sequence,segment_id,first_ordinal,end_ordinal,since_generation) VALUES (?,?,?,?,?,?)").bind(session.get()).bind(sequence).bind(cut.try_get::<i64,_>("segment_id").map_err(storage)?).bind(first).bind(ordinal).bind(next.get()).execute(&mut *connection).await.map_err(sql_error)?;
-    }
-    sqlx::query("UPDATE agena_sessions SET membership_generation=?,updated_at_ms=MAX(?,updated_at_ms+1) WHERE id=?").bind(next.get()).bind(now_ms()).bind(session.get()).execute(&mut *connection).await.map_err(sql_error)?;
-    sqlx::query("UPDATE agena_prompt_windows SET checkpoint_entry_id=NULL,through_entry_id=NULL,through_sequence=NULL,through_ordinal=NULL,rewrite_epoch=rewrite_epoch+1 WHERE session_id=?").bind(session.get()).execute(&mut *connection).await.map_err(sql_error)?;
-    recount(connection, session).await?;
+    truncate_history(
+        connection,
+        session,
+        metadata.membership_generation,
+        sequence,
+        ordinal,
+    )
+    .await?;
     Ok(Mutation::Session(Box::new(
         reads::metadata(connection, session).await?,
     )))
@@ -999,12 +1081,8 @@ async fn check_delete(
         ));
     }
     reads::metadata(connection, guard.source_session).await?;
-    let latest = sqlx::query("SELECT e.id,e.revision FROM agena_session_segments s JOIN agena_segment_entries m ON m.segment_id=s.segment_id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal JOIN agena_entries e ON e.id=m.entry_id WHERE s.session_id=? AND e.kind='user' ORDER BY s.sequence DESC,m.ordinal DESC LIMIT 1")
-        .bind(guard.source_session.get()).fetch_optional(&mut *connection).await.map_err(sql_error)?;
-    if latest.as_ref().is_none_or(|row| {
-        row.try_get::<i64, _>("id").ok() != Some(guard.source_message.get())
-            || row.try_get::<i64, _>("revision").ok() != Some(guard.source_revision.get())
-    }) {
+    let latest = reads::latest_user_entry(connection, guard.source_session).await?;
+    if latest != Some((guard.source_message.get(), guard.source_revision.get())) {
         return Err(KernelError::Conflict(
             "delete confirmation is stale: the human turn changed; request fresh confirmation"
                 .into(),
@@ -1032,6 +1110,7 @@ pub(super) async fn delete(
     }
     sqlx::query("UPDATE agena_background_activities SET phase='interrupted',outcome_json=?,finished_at_ms=MAX(?,created_at_ms) WHERE session_id=? AND phase='running'").bind(encode(&BackgroundActivityOutcome::Interrupted{diagnostic:"origin session deleted".into()})?).bind(now_ms()).bind(session.get()).execute(&mut *connection).await.map_err(sql_error)?;
     sqlx::query("UPDATE agena_sessions SET deleted_at_ms=?,membership_generation=membership_generation+1,metadata_version=metadata_version+1 WHERE id=?").bind(now_ms()).bind(session.get()).execute(&mut *connection).await.map_err(sql_error)?;
+    history_runs::clear(connection, session).await?;
     Ok(Mutation::Session(Box::new(SessionMetadata {
         metadata_version: metadata.metadata_version.next().map_err(storage)?,
         membership_generation: metadata.membership_generation.next().map_err(storage)?,
@@ -1143,32 +1222,25 @@ async fn notice(
         return Err(KernelError::Ownership);
     }
     let id:i64=sqlx::query_scalar("INSERT INTO agena_entries (origin_session_id,execution_id,generation,message_id,kind,body_json,created_at_ms) VALUES (?,?,?,?,'notice',?,?) RETURNING id").bind(session.get()).bind(row.try_get::<&str,_>("execution_id").map_err(storage)?).bind(row.try_get::<i64,_>("generation").map_err(storage)?).bind(message.get()).bind(encode(text)?).bind(now_ms()).fetch_one(&mut *connection).await.map_err(sql_error)?;
-    commands::append_history(connection, session, &[id]).await?;
+    commands::append_history(connection, session, id).await?;
     EntryId::try_from(id).map_err(storage)
 }
-/// The mapping is authoritative even after its target is deleted. Falling back
-/// to another legacy root in that case would turn read-only history into a new
-/// local entrance. Before the first mapping, the latest legacy root is adopted.
+/// Read the live root selected by the canonical mapping.
 pub(super) async fn local_bot_session(
     connection: &mut SqliteConnection,
     bot: uuid::Uuid,
-) -> Result<LocalBotSession> {
-    let row = sqlx::query(
-        "SELECT EXISTS(SELECT 1 FROM agena_bot_local_sessions WHERE bot_id=?1) AS established, CASE WHEN EXISTS(SELECT 1 FROM agena_bot_local_sessions WHERE bot_id=?1) THEN (SELECT s.id FROM agena_bot_local_sessions m JOIN agena_sessions s ON s.id=m.session_id WHERE m.bot_id=?1 AND s.deleted_at_ms IS NULL AND s.owner_bot_id=?1 AND s.owner_surface='local' AND s.parent_session_id IS NULL AND s.workspace_id IS NULL) ELSE (SELECT s.id FROM agena_sessions s WHERE s.owner_bot_id=?1 AND s.owner_surface='local' AND s.parent_session_id IS NULL AND s.workspace_id IS NULL AND s.deleted_at_ms IS NULL ORDER BY s.updated_at_ms DESC,s.id DESC LIMIT 1) END AS session_id",
-    )
+) -> Result<Option<SessionId>> {
+    sqlx::query_scalar::<_, i64>(&format!(
+        "SELECT s.id FROM agena_bot_local_sessions m JOIN {} WHERE m.bot_id=?",
+        crate::bot_repository::LIVE_LOCAL_SESSION,
+    ))
     .bind(bot.to_string())
-    .fetch_one(connection)
+    .fetch_optional(connection)
     .await
-    .map_err(sql_error)?;
-    Ok(LocalBotSession {
-        session: row
-            .try_get::<Option<i64>, _>("session_id")
-            .map_err(storage)?
-            .map(SessionId::try_from)
-            .transpose()
-            .map_err(storage)?,
-        established: row.try_get("established").map_err(storage)?,
-    })
+    .map_err(sql_error)?
+    .map(SessionId::try_from)
+    .transpose()
+    .map_err(storage)
 }
 
 async fn ensure_local_bot_session(
@@ -1190,31 +1262,31 @@ async fn ensure_local_bot_session(
         }
         Some(false) => {}
     }
-    let session = match local_bot_session(connection, bot).await?.session {
-        Some(session) => session,
-        None => {
-            let Mutation::Session(created) =
-                commands::create_session(connection, None, title, now_ms()).await?
-            else {
-                return Err(storage("invalid local Bot session result"));
-            };
-            configure(
-                connection,
-                created.id,
-                &SessionConfigurationChange {
-                    owner: Some(Some(agena_domain::SessionOwner {
-                        bot,
-                        surface: agena_domain::SessionSurface::Local,
-                        scope_key: None,
-                    })),
-                    ..Default::default()
-                },
-            )
-            .await?;
-            created.id
-        }
+    if let Some(session) = local_bot_session(connection, bot).await? {
+        return Ok(Mutation::Session(Box::new(
+            reads::metadata(connection, session).await?,
+        )));
+    }
+    let Mutation::Session(created) =
+        commands::create_session(connection, None, title, now_ms()).await?
+    else {
+        return Err(storage("invalid local Bot session result"));
     };
-    sqlx::query("INSERT INTO agena_bot_local_sessions (bot_id,session_id) VALUES (?,?) ON CONFLICT(bot_id) DO UPDATE SET session_id=excluded.session_id WHERE session_id IS NOT excluded.session_id")
+    let session = created.id;
+    configure(
+        connection,
+        session,
+        &SessionConfigurationChange {
+            owner: Some(Some(agena_domain::SessionOwner {
+                bot,
+                surface: agena_domain::SessionSurface::Local,
+                scope_key: None,
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    sqlx::query("INSERT INTO agena_bot_local_sessions (bot_id,session_id) VALUES (?,?) ON CONFLICT(bot_id) DO UPDATE SET session_id=excluded.session_id")
         .bind(bot.to_string())
         .bind(session.get())
         .execute(&mut *connection)
@@ -1348,7 +1420,7 @@ pub(super) async fn apply(
                     return Err(storage("invalid delivery continuation result"));
                 };
                 let entry = notice(connection, *session, execution.message_id, text).await?;
-                sqlx::query("UPDATE agena_deliveries SET state='consumed',result_entry_id=?,resume_execution_id=?,resume_generation=?,owner_epoch=NULL,lease_until_ms=NULL WHERE id=? AND session_id=? AND state='pending'")
+                sqlx::query("UPDATE agena_deliveries SET state='consumed',result_entry_id=?,resume_execution_id=?,resume_generation=? WHERE id=? AND session_id=? AND state='pending'")
                     .bind(entry.get()).bind(execution.id.to_string()).bind(execution.generation.get()).bind(id.to_string()).bind(session.get()).execute(&mut *connection).await.map_err(sql_error)?;
                 Mutation::Execution(execution)
             }
@@ -1686,7 +1758,7 @@ pub(super) async fn apply(
                     ));
                 }
                 let entry = notice(connection, *session, *message, text).await?;
-                sqlx::query("UPDATE agena_deliveries SET state='consumed',result_entry_id=?,owner_epoch=NULL,lease_until_ms=NULL WHERE id=? AND session_id=? AND state='pending'").bind(entry.get()).bind(id.to_string()).bind(session.get()).execute(&mut *connection).await.map_err(sql_error)?;
+                sqlx::query("UPDATE agena_deliveries SET state='consumed',result_entry_id=? WHERE id=? AND session_id=? AND state='pending'").bind(entry.get()).bind(id.to_string()).bind(session.get()).execute(&mut *connection).await.map_err(sql_error)?;
                 Mutation::Checkpoint(entry)
             }
         }
@@ -1706,283 +1778,6 @@ pub(super) async fn refresh_paused_summary(
     Ok(())
 }
 
-pub(super) const STATE_SQL: &str = "t.processing_state";
-pub(super) fn summary_fields() -> String {
-    "s.parent_session_id,COALESCE(s.root_session_id,s.id) AS root_session_id,s.depth,s.relation_kind,s.agent_name,s.agent_status AS agent_status,s.owner_bot_id,s.owner_surface,t.child_session_count,t.processing_state,".to_owned()
-}
-fn filter<'a>(
-    builder: &mut sqlx::QueryBuilder<'a, sqlx::Sqlite>,
-    query: &'a SummaryQuery,
-    cursor: bool,
-) {
-    builder.push("s.deleted_at_ms IS NULL");
-    if query.exclude_bot_owned {
-        builder.push(" AND s.owner_bot_id IS NULL");
-    }
-    if let Some(bot) = &query.owner_bot_id {
-        builder.push(" AND s.owner_bot_id=").push_bind(bot.clone());
-    }
-    if let Some(surface) = &query.owner_surface {
-        builder
-            .push(" AND s.owner_surface=")
-            .push_bind(surface.clone());
-    }
-    if let Some(workspace) = query.workspace_id {
-        builder.push(" AND s.workspace_id=").push_bind(workspace);
-    } else if !query.include_global {
-        builder.push(" AND s.workspace_id IS NOT NULL");
-    }
-    if let Some(parent) = query.parent_id {
-        builder
-            .push(" AND s.parent_session_id=")
-            .push_bind(parent.get());
-    }
-    if query.agents_only {
-        builder.push(" AND s.agent_name IS NOT NULL");
-    }
-    if query.roots_only {
-        builder.push(" AND s.parent_session_id IS NULL");
-    }
-    if query.exclude_subagents {
-        builder.push(" AND s.relation_kind!='subagent'");
-    }
-    builder.push(if query.temporary_only {
-        " AND s.temporary=1"
-    } else {
-        " AND s.temporary=0"
-    });
-    if let Some(search) = &query.search {
-        builder
-            .push(" AND s.title LIKE ")
-            .push_bind(format!(
-                "%{}%",
-                search
-                    .replace('\\', "\\\\")
-                    .replace('%', "\\%")
-                    .replace('_', "\\_")
-            ))
-            .push(" ESCAPE '\\'");
-    }
-    if let Some(favorite) = query.favorite {
-        builder.push(" AND s.favorite=").push_bind(favorite);
-    }
-    if let Some(pinned) = query.pinned {
-        builder.push(" AND s.pinned=").push_bind(pinned);
-    }
-    if !query.states.is_empty() {
-        builder.push(" AND (").push(STATE_SQL).push(") IN (");
-        let mut separated = builder.separated(",");
-        for state in &query.states {
-            separated.push_bind(state.as_str());
-        }
-        separated.push_unseparated(")");
-    }
-    if cursor && let Some(before) = query.before {
-        builder
-            .push(" AND (s.updated_at_ms,s.id)<(")
-            .push_bind(before.updated_at_ms)
-            .push(",")
-            .push_bind(before.id.get())
-            .push(")");
-    }
-}
-pub(super) async fn query_summaries(
-    backend: &Backend,
-    query: SummaryQuery,
-) -> Result<ReadView<SessionSummaryPage>> {
-    backend.cache.ensure_open()?;
-    if query.workspace_id.is_some_and(|id| id <= 0) {
-        return Err(invalid("invalid workspace"));
-    }
-    let workspace = query.workspace_id;
-    if query
-        .before
-        .is_some_and(|cursor| cursor.workspace_id != workspace)
-    {
-        return Err(KernelError::Ownership);
-    }
-    let _read = backend
-        .control_reads
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| KernelError::Busy)?;
-    let mut tx = backend
-        .reader
-        .get_sqlite_connection_pool()
-        .begin()
-        .await
-        .map_err(storage)?;
-    let limit = if query.limit == 0 {
-        200
-    } else {
-        query.limit.clamp(1, 200)
-    };
-    let fields = reads::SUMMARY_SQL
-        .rsplit_once(" FROM agena_sessions s ")
-        .map(|(fields, _)| fields)
-        .ok_or_else(|| storage("invalid summary fields"))?;
-    let mut builder = sqlx::QueryBuilder::new(format!(
-        "{fields} FROM agena_sessions s JOIN agena_session_statistics t ON t.session_id=s.id WHERE "
-    ));
-    filter(&mut builder, &query, true);
-    builder
-        .push(" ORDER BY s.updated_at_ms DESC,s.id DESC LIMIT ")
-        .push_bind((limit + 1) as i64)
-        .push(" OFFSET ")
-        .push_bind(i64::try_from(query.offset).map_err(invalid)?);
-    let mut rows = builder
-        .build()
-        .fetch_all(&mut *tx)
-        .await
-        .map_err(sql_error)?;
-    let has_more = rows.len() > limit;
-    rows.truncate(limit);
-    let sessions = rows
-        .iter()
-        .map(reads::summary_row)
-        .collect::<Result<Vec<_>>>()?;
-    let next = if has_more {
-        sessions.last().map(|value| SessionSummaryCursor {
-            workspace_id: workspace,
-            updated_at_ms: value.updated_at_ms,
-            id: value.id,
-        })
-    } else {
-        None
-    };
-    let mut count = sqlx::QueryBuilder::new(
-        "SELECT count(*) FROM agena_sessions s JOIN agena_session_statistics t ON t.session_id=s.id WHERE ",
-    );
-    filter(&mut count, &query, false);
-    let total: i64 = count
-        .build_query_scalar()
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(sql_error)?;
-    tx.rollback().await.map_err(storage)?;
-    let value = SessionSummaryPage {
-        workspace_id: workspace,
-        sessions,
-        next,
-        has_more,
-        total: Some(total as u64),
-    };
-    let bytes = modeled_read_bytes(&value)?;
-    Ok(ReadView::from_lease(
-        value,
-        backend.views.reserve_owned(
-            workspace.map_or(ReadOwner::Shared, ReadOwner::Workspace),
-            bytes,
-        )?,
-    ))
-}
-pub(super) async fn activity_summary(
-    backend: &Backend,
-) -> Result<ReadView<SessionActivitySummary>> {
-    backend.cache.ensure_open()?;
-    let _read = backend
-        .control_reads
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| KernelError::Busy)?;
-    let mut tx = backend
-        .reader
-        .get_sqlite_connection_pool()
-        .begin()
-        .await
-        .map_err(storage)?;
-    // Match the default session-list visibility with exclude_subagents=true.
-    // Ordinary child/fork sessions remain user-visible and participate.
-    let counts = sqlx::query(
-        "SELECT COALESCE(sum(t.processing_state='running'),0) AS running,          COALESCE(sum(t.processing_state='awaiting_interaction'),0) AS awaiting          FROM agena_sessions s JOIN agena_session_statistics t ON t.session_id=s.id          WHERE s.deleted_at_ms IS NULL AND s.temporary=0 AND s.relation_kind!='subagent'",
-    )
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(sql_error)?;
-    // The time belongs to the attempt, not mutable session metadata. At equal
-    // millisecond precision a failure wins the tie; no arbitrary identity is
-    // interpreted as a later completion.
-    let terminal = sqlx::query(
-        "SELECT a.finished_at_ms,(a.phase='failed') AS failed          FROM agena_attempts a JOIN agena_executions e          ON e.id=a.execution_id AND e.current_generation=a.generation          JOIN agena_sessions s ON s.id=e.session_id          WHERE a.finished_at_ms IS NOT NULL AND s.deleted_at_ms IS NULL          AND s.temporary=0 AND s.relation_kind!='subagent'          ORDER BY a.finished_at_ms DESC,(a.phase='failed') DESC LIMIT 1",
-    )
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(sql_error)?;
-    let value = SessionActivitySummary {
-        running_sessions: u64::try_from(counts.try_get::<i64, _>("running").map_err(storage)?)
-            .map_err(storage)?,
-        awaiting_interaction_sessions: u64::try_from(
-            counts.try_get::<i64, _>("awaiting").map_err(storage)?,
-        )
-        .map_err(storage)?,
-        latest_terminal_at_ms: terminal
-            .as_ref()
-            .map(|row| row.try_get::<i64, _>("finished_at_ms").map_err(storage))
-            .transpose()?,
-        latest_terminal_failed: terminal
-            .as_ref()
-            .map(|row| row.try_get::<bool, _>("failed").map_err(storage))
-            .transpose()?
-            .unwrap_or(false),
-    };
-    tx.rollback().await.map_err(storage)?;
-    let bytes = modeled_read_bytes(&value)?;
-    Ok(ReadView::from_lease(
-        value,
-        backend.views.reserve_owned(ReadOwner::Shared, bytes)?,
-    ))
-}
-
-pub(super) async fn workspace_statistics(
-    backend: &Backend,
-    ids: &[i64],
-) -> Result<ReadView<BTreeMap<i64, WorkspaceStatistics>>> {
-    backend.cache.ensure_open()?;
-    if ids.len() > 256 || ids.iter().any(|id| *id <= 0) {
-        return Err(invalid(
-            "workspace statistics admits at most 256 valid workspace ids",
-        ));
-    }
-    let _read = backend
-        .control_reads
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| KernelError::Busy)?;
-    let sql = format!(
-        "SELECT s.workspace_id,count(*) AS total,sum(s.parent_session_id IS NULL) AS roots,sum(s.pinned) AS pinned,sum(({STATE_SQL}) IN ('running','awaiting_interaction')) AS running,sum(({STATE_SQL}) IN ('awaiting_interaction','failed')) AS attention FROM agena_sessions s JOIN agena_session_statistics t ON t.session_id=s.id WHERE s.deleted_at_ms IS NULL AND s.owner_bot_id IS NULL AND s.workspace_id IN (SELECT value FROM json_each(?)) AND s.temporary=0 GROUP BY s.workspace_id"
-    );
-    let rows = sqlx::query(&sql)
-        .bind(encode(ids)?)
-        .fetch_all(backend.reader.get_sqlite_connection_pool())
-        .await
-        .map_err(sql_error)?;
-    let mut value = ids
-        .iter()
-        .map(|id| (*id, WorkspaceStatistics::default()))
-        .collect::<BTreeMap<_, _>>();
-    for row in rows {
-        let count = |name| {
-            row.try_get::<i64, _>(name)
-                .map(|v| v as u64)
-                .map_err(storage)
-        };
-        value.insert(
-            row.try_get("workspace_id").map_err(storage)?,
-            WorkspaceStatistics {
-                total: count("total")?,
-                roots: count("roots")?,
-                pinned: count("pinned")?,
-                running: count("running")?,
-                attention: count("attention")?,
-            },
-        );
-    }
-    let bytes = modeled_read_bytes(&value)?;
-    Ok(ReadView::from_lease(
-        value,
-        backend.views.reserve_owned(ReadOwner::Shared, bytes)?,
-    ))
-}
 pub(super) async fn rounds(
     backend: &Backend,
     session: SessionId,
@@ -2021,7 +1816,7 @@ pub(super) async fn rounds(
             .try_get::<Option<&str>, _>("provider_state_json")
             .map_err(storage)?;
         let input: Vec<i64> = sqlx::query_scalar(
-            "SELECT entry_id FROM agena_round_inputs WHERE round_id=? ORDER BY ordinal LIMIT 10001",
+            "SELECT entry_id FROM agena_round_inputs WHERE round_id=? ORDER BY start_ordinal,block_ordinal LIMIT 10001",
         )
         .bind(id.get())
         .fetch_all(&mut *tx)
@@ -2053,75 +1848,6 @@ pub(super) async fn rounds(
     let bytes = modeled_read_bytes(&values)?;
     backend.wrap_read(session, values, bytes)
 }
-/// Project only canonical result metadata, without loading tool bodies or
-/// inherited/live transcript entries. Accounting must survive compaction and
-/// rewind while charging an original tool invocation at most once.
-pub(super) async fn owned_tool_metadata(
-    backend: &Backend,
-    session: SessionId,
-    after: Option<ToolId>,
-    limit: usize,
-) -> Result<ReadView<Vec<OwnedToolMetadata>>> {
-    backend.cache.ensure_open()?;
-    let _read = backend
-        .content_reads
-        .clone()
-        .try_acquire_owned()
-        .map_err(|_| KernelError::Busy)?;
-    let mut tx = backend
-        .reader
-        .get_sqlite_connection_pool()
-        .begin()
-        .await
-        .map_err(storage)?;
-    reads::metadata(&mut tx, session).await?;
-    let rows = sqlx::query(
-        "SELECT t.id,
-                length(CAST(json_extract(t.result_json, '$.metadata') AS BLOB)) AS metadata_bytes
-         FROM agena_tool_calls t
-         JOIN agena_rounds r ON r.id = t.round_id
-         WHERE r.session_id = ? AND t.id > ?
-           AND t.result_json IS NOT NULL
-           AND json_type(t.result_json, '$.metadata') = 'object'
-         ORDER BY t.id LIMIT ?",
-    )
-    .bind(session.get())
-    .bind(after.map_or(0, |id| id.get()))
-    .bind(limit.clamp(1, 128) as i64)
-    .fetch_all(&mut *tx)
-    .await
-    .map_err(sql_error)?;
-    let mut values = Vec::with_capacity(rows.len());
-    let mut bytes = 0usize;
-    for row in rows {
-        let id =
-            ToolId::try_from(row.try_get::<i64, _>("id").map_err(storage)?).map_err(storage)?;
-        let cost = row.try_get::<i64, _>("metadata_bytes").map_err(storage)? as usize + 512;
-        if !values.is_empty() && bytes.saturating_add(cost) > 4 * 1024 * 1024 {
-            break;
-        }
-        let row = sqlx::query(
-            "SELECT created_at_ms, finished_at_ms,
-                    json_extract(result_json, '$.metadata') AS metadata_json
-             FROM agena_tool_calls WHERE id = ?",
-        )
-        .bind(id.get())
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(sql_error)?;
-        values.push(OwnedToolMetadata {
-            id,
-            created_at_ms: row.try_get("created_at_ms").map_err(storage)?,
-            finished_at_ms: row.try_get("finished_at_ms").map_err(storage)?,
-            metadata: decode(row.try_get("metadata_json").map_err(storage)?)?,
-        });
-        bytes = bytes.saturating_add(cost);
-    }
-    tx.rollback().await.map_err(storage)?;
-    let bytes = modeled_read_bytes(&values)?;
-    backend.wrap_read(session, values, bytes)
-}
-
 pub(super) async fn read_delivery(
     backend: &Backend,
     session: SessionId,

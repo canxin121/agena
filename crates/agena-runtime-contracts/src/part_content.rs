@@ -425,15 +425,13 @@ pub fn decode_notice_part(text: &str) -> Option<NoticePart> {
 
 /// One durable kernel notice classified by its canonical read-time shape.
 ///
-/// Markers are recognized before legacy and ordinary text so every consumer
+/// Markers are recognized before ordinary text so every consumer
 /// makes the same safe decision about malformed structured payloads. The
 /// `Err` variants still identify the marker: a malformed hook, failure, or
 /// system-notification marker must never be downgraded to user-visible text.
 #[derive(Debug)]
 pub enum DecodedNotice<'a> {
     Hook(serde_json::Result<HookContent>),
-    LegacyHook(HookContent),
-    LegacyStopHookFollowup(&'a str),
     SystemNotification(serde_json::Result<SystemNotificationContent>),
     Failure(serde_json::Result<agena_failure::Failure>),
     StructuredNotice(NoticePart),
@@ -446,12 +444,6 @@ pub enum DecodedNotice<'a> {
 pub fn decode_notice(text: &str) -> DecodedNotice<'_> {
     if let Some(decoded) = decode_hook_notice(text) {
         return DecodedNotice::Hook(decoded);
-    }
-    if let Some(hook) = decode_legacy_hook_observation(text) {
-        return DecodedNotice::LegacyHook(hook);
-    }
-    if let Some(message) = legacy_stop_hook_followup_message(text) {
-        return DecodedNotice::LegacyStopHookFollowup(message);
     }
     if let Some(decoded) = decode_system_notification_notice(text) {
         return DecodedNotice::SystemNotification(decoded);
@@ -503,13 +495,6 @@ impl DecodedNotice<'_> {
                 .message
                 .as_deref()
                 .filter(|message| !message.trim().is_empty()),
-            Self::LegacyHook(hook) => hook
-                .message
-                .as_deref()
-                .filter(|message| !message.trim().is_empty()),
-            Self::LegacyStopHookFollowup(message) => {
-                (!message.trim().is_empty()).then_some(*message)
-            }
             Self::SystemNotification(Ok(notification)) => {
                 if !notification.body.trim().is_empty() {
                     Some(notification.body.as_str())
@@ -574,71 +559,6 @@ pub fn hook_notice_text(hook: &HookContent) -> serde_json::Result<String> {
 pub fn decode_hook_notice(text: &str) -> Option<serde_json::Result<HookContent>> {
     let payload = text.strip_prefix(HOOK_NOTICE_PREFIX)?;
     Some(serde_json::from_str(payload))
-}
-
-/// Prefix used by the pre-kernel hook recorder. These notices predate the
-/// structured hook marker, so they are decoded only while reading history;
-/// no new write may use this format.
-pub const LEGACY_HOOK_OBSERVATIONS_PREFIX: &str = "Plugin hook observations:\n";
-
-/// Prefix of the duplicate continuation notice written by the pre-kernel stop
-/// hook path immediately after [`LEGACY_HOOK_OBSERVATIONS_PREFIX`]. The same
-/// continuation is already present in the observation detail.
-pub const LEGACY_STOP_HOOK_FOLLOWUP_PREFIX: &str = "Plugin stop hook follow-up:\n";
-
-/// Decode one hook observation written before hook runs became structured
-/// parts. The old payload is a human-readable line rather than JSON:
-///
-/// `agena.plan agent.stop Applied: <summary> (<continuation>)`
-///
-/// The old writer could batch several runs into one notice. The first header
-/// identifies the activity; any following text stays in `detail`, so the
-/// original record is not lost. The stop-hook path emitted one run per notice.
-pub fn decode_legacy_hook_observation(text: &str) -> Option<HookContent> {
-    let payload = text.strip_prefix(LEGACY_HOOK_OBSERVATIONS_PREFIX)?;
-    let payload = payload.strip_suffix('\n').unwrap_or(payload);
-    let (plugin_id, rest) = payload.split_once(' ')?;
-    let (hook, rest) = rest.split_once(' ')?;
-    let (status, body) = rest.split_once(": ")?;
-    if !matches!(status, "Applied" | "Skipped" | "Failed" | "TimedOut") {
-        return None;
-    }
-    let (summary, detail) = match body.rsplit_once(" (") {
-        Some((summary, detail)) if detail.ends_with(')') => (
-            summary.trim_end().to_owned(),
-            Some(detail[..detail.len() - 1].to_owned()),
-        ),
-        _ => (body.trim_end().to_owned(), None),
-    };
-    if summary.is_empty() {
-        return None;
-    }
-    let message = detail
-        .as_ref()
-        .filter(|_| hook == "agent.stop" && summary.contains("blocked stop"))
-        .cloned();
-    Some(HookContent {
-        hook: hook.to_owned(),
-        plugin_id: Some(plugin_id.to_owned()),
-        summary,
-        detail,
-        message,
-        extra: [(
-            "status".to_owned(),
-            Value::String(status.to_ascii_lowercase()),
-        )]
-        .into_iter()
-        .collect(),
-    })
-}
-
-/// The pre-kernel stop-hook path also wrote the continuation as a separate
-/// plain-text notice. Pair-aware readers suppress it when it directly follows
-/// an observation; standalone readers can still render it as hook activity.
-pub fn legacy_stop_hook_followup_message(text: &str) -> Option<&str> {
-    let message = text.strip_prefix(LEGACY_STOP_HOOK_FOLLOWUP_PREFIX)?;
-    let message = message.strip_suffix('\n').unwrap_or(message);
-    (!message.trim().is_empty()).then_some(message)
 }
 
 impl TryFrom<&Value> for ErrorContent {
@@ -770,37 +690,5 @@ mod notice_marker_tests {
             )
             .is_none()
         );
-    }
-
-    #[test]
-    fn legacy_hook_observation_decodes_as_hook_activity() {
-        let text = concat!(
-            "Plugin hook observations:\n",
-            "agena.plan agent.stop Applied: agent.stop hook blocked stop: workflow plan autorun ",
-            "(<plan_context>\nContinue the active approved plan.\n</plan_context>)\n",
-        );
-        let hook = decode_legacy_hook_observation(text).unwrap();
-        assert_eq!(hook.hook, "agent.stop");
-        assert_eq!(hook.plugin_id.as_deref(), Some("agena.plan"));
-        assert_eq!(
-            hook.summary,
-            "agent.stop hook blocked stop: workflow plan autorun"
-        );
-        assert_eq!(
-            hook.detail.as_deref(),
-            Some("<plan_context>\nContinue the active approved plan.\n</plan_context>")
-        );
-        assert_eq!(hook.message, hook.detail);
-        assert_eq!(hook.extra["status"], "applied");
-    }
-
-    #[test]
-    fn legacy_followup_is_recognized_separately() {
-        let text = "Plugin stop hook follow-up:\n<plan_context>\nContinue\n</plan_context>";
-        assert_eq!(
-            legacy_stop_hook_followup_message(text),
-            Some("<plan_context>\nContinue\n</plan_context>")
-        );
-        assert!(decode_legacy_hook_observation(text).is_none());
     }
 }

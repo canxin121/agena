@@ -5,6 +5,7 @@ use super::{
 };
 use agena_storage::kernel::{
     MetadataChange, RequestId, SessionSummaryCursor, SessionSummaryView, SummaryQuery,
+    SummarySelection,
 };
 
 impl ApplicationService {
@@ -63,27 +64,23 @@ impl ApplicationService {
                     Some(SessionListBucket::Recent) => vec![agena_domain::SessionStateKind::Ready],
                     _ => Vec::new(),
                 },
+                selection: if query.count_only {
+                    SummarySelection::Total
+                } else if query.include_total {
+                    SummarySelection::PageWithTotal
+                } else {
+                    SummarySelection::Page
+                },
             })
             .await
             .map_err(crate::kernel_error)?;
-        let items = if query.count_only {
-            Vec::new()
-        } else {
-            page.sessions
-                .iter()
-                .map(session_resource_from_kernel_summary)
-                .collect::<ApplicationResult<Vec<_>>>()?
-        };
-        let mut result = build_page(
-            items,
-            !query.count_only && page.has_more,
-            if query.count_only { None } else { page.next },
-            PageOrder::Desc,
-            limit,
-        )?;
-        if query.include_total || query.count_only {
-            result.total = page.total;
-        }
+        let items = page
+            .sessions
+            .iter()
+            .map(session_resource_from_kernel_summary)
+            .collect::<ApplicationResult<Vec<_>>>()?;
+        let mut result = build_page(items, page.has_more, page.next, PageOrder::Desc, limit)?;
+        result.total = page.total;
         Ok(result)
     }
 

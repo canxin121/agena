@@ -1,28 +1,99 @@
 //! A branch shares immutable payloads, but owns the control facts and content
 //! heads observed at its creation cut. Nested branches reuse that same cut.
 use super::*;
+use content::heads;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::LazyLock};
 
-pub(super) async fn backfill(pool: &sqlx::SqlitePool) -> Result<()> {
-    let mut transaction = pool.begin().await.map_err(storage)?;
-    let sessions = sqlx::query("SELECT id,parent_session_id FROM agena_sessions s WHERE s.relation_kind IN ('fork','rewind') AND s.parent_session_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM agena_branch_entries captured WHERE captured.session_id=s.id) AND EXISTS(SELECT 1 FROM agena_session_segments segments JOIN agena_segment_entries m ON m.segment_id=segments.segment_id AND m.ordinal>=segments.first_ordinal AND m.ordinal<segments.end_ordinal WHERE segments.session_id=s.id AND NOT EXISTS(SELECT 1 FROM agena_branch_entries b WHERE b.session_id=s.id AND b.entry_id=m.entry_id) AND EXISTS(SELECT 1 FROM agena_entries e WHERE e.id=m.entry_id AND e.origin_session_id!=s.id)) ORDER BY s.depth,s.id")
-        .fetch_all(&mut *transaction).await.map_err(sql_error)?;
-    for row in sessions {
-        let session =
-            SessionId::try_from(row.try_get::<i64, _>("id").map_err(storage)?).map_err(storage)?;
-        let parent = SessionId::try_from(
-            row.try_get::<i64, _>("parent_session_id")
-                .map_err(storage)?,
-        )
-        .map_err(storage)?;
-        // Older databases did not record the historical content cut. Freeze
-        // their currently visible inherited facts once, before recovery can
-        // mutate open attempts/streams. Previously lost cuts are unrecoverable.
-        capture(&mut transaction, parent, session).await?;
-    }
-    transaction.commit().await.map_err(storage)
-}
+const ENTRY_FIELDS: &str = "revision,execution_phase,execution_started,execution_generation,
+    response_entry_id,content_state,compaction_phase,compaction_committed,tool_phase,
+    tool_finished_at_ms,interaction_decided,interaction_presented_at,
+    interactions_json,activities_json,blobs_json";
+const ENTRY_FACTS_JSON: &str = "json_object(
+    'revision',revision,'execution_phase',execution_phase,'execution_started',execution_started,
+    'execution_generation',execution_generation,'response_entry_id',response_entry_id,
+    'content_state',content_state,'compaction_phase',compaction_phase,'compaction_committed',compaction_committed,
+    'tool_phase',tool_phase,'tool_finished_at_ms',tool_finished_at_ms,
+    'interaction_decided',interaction_decided,'interaction_presented_at',interaction_presented_at,
+    'interactions',json(COALESCE(interactions_json,'[]')),
+    'activities',json(COALESCE(activities_json,'[]')),'blobs',json(COALESCE(blobs_json,'[]'))
+)";
+static ENTRY_FACT_SQL: LazyLock<String> = LazyLock::new(|| {
+    format!("SELECT {ENTRY_FACTS_JSON} FROM agena_branch_entries WHERE session_id=? AND entry_id=?")
+});
+static ENTRY_FACTS_SQL: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "SELECT entry_id,{ENTRY_FACTS_JSON} AS facts_json FROM agena_branch_entries
+         WHERE session_id=? AND entry_id IN (SELECT value FROM json_each(?))"
+    )
+});
+const BRANCH_MEMBERS: &str = "FROM agena_session_segments s
+    CROSS JOIN agena_segment_entries m ON m.segment_id=s.segment_id
+        AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal";
+static CAPTURE_ENTRIES_SQL: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "INSERT INTO agena_branch_entries (session_id,entry_id,{ENTRY_FIELDS})
+         SELECT s.session_id,e.id,e.revision,a.phase,
+             EXISTS(SELECT 1 FROM agena_attempts started
+                    WHERE started.execution_id=e.execution_id AND started.started_at_ms IS NOT NULL),
+             a.generation,original.response_entry_id,c.capture_state,
+             CASE WHEN cr.round_id IS NOT NULL THEN r.phase END,
+             EXISTS(SELECT 1 FROM agena_entries checkpoint
+                    WHERE checkpoint.round_id=e.round_id AND checkpoint.kind='compaction'),
+             CASE WHEN e.kind='tool' THEN t.phase END,t.finished_at_ms,i.decision_json IS NOT NULL,
+             json_extract(i.request_json,'$.Input.request.presented_at'),
+             (SELECT NULLIF(json_group_array(id),'[]') FROM agena_interactions WHERE tool_id=e.tool_id),
+             (SELECT NULLIF(json_group_array(id),'[]') FROM agena_background_activities WHERE entry_id=e.id),
+             (SELECT NULLIF(json_group_array(blob_id),'[]') FROM agena_blob_references WHERE entry_id=e.id)
+         {BRANCH_MEMBERS}
+         LEFT JOIN agena_branch_entries f ON f.session_id=?1 AND f.entry_id=m.entry_id
+         CROSS JOIN agena_entries e ON e.id=m.entry_id
+         CROSS JOIN agena_attempts original ON original.execution_id=e.execution_id AND original.generation=e.generation
+         CROSS JOIN agena_attempts a ON a.execution_id=e.execution_id AND a.generation=CASE
+             WHEN e.kind='user' THEN (SELECT current_generation FROM agena_executions WHERE id=e.execution_id)
+             ELSE e.generation END
+         LEFT JOIN agena_content_streams c ON c.id=e.content_id
+         LEFT JOIN agena_tool_calls t ON t.id=e.tool_id
+         LEFT JOIN agena_interactions i ON i.id=e.interaction_id
+         LEFT JOIN agena_rounds r ON r.id=e.round_id
+         LEFT JOIN agena_compaction_rounds cr ON cr.round_id=r.id
+         WHERE s.session_id=?2 AND e.origin_session_id!=s.session_id AND f.entry_id IS NULL
+         UNION ALL
+         SELECT s.session_id,m.entry_id,{ENTRY_FIELDS}
+         {BRANCH_MEMBERS}
+         CROSS JOIN agena_branch_entries f ON f.session_id=?1 AND f.entry_id=m.entry_id
+         WHERE s.session_id=?2 AND EXISTS(SELECT 1 FROM agena_branch_entries WHERE session_id=?1)"
+    )
+});
+static CAPTURE_SOURCES_SQL: LazyLock<String> = LazyLock::new(|| {
+    let columns = heads::COLUMNS;
+    let head_bytes = &*heads::LIVE_HEAD_BYTES;
+    format!(
+        "INSERT INTO agena_branch_sources(session_id,source_key,{columns})
+         SELECT ?2,c.source_key,c.epoch,c.committed_head,c.retained_start,c.capture_state,
+                c.lost_bytes,c.lost_packets,c.lost_bytes,c.lost_packets,c.capture_error,{head_bytes}
+         FROM agena_branch_entries own
+         LEFT JOIN agena_branch_entries parent ON parent.session_id=?1 AND parent.entry_id=own.entry_id
+         CROSS JOIN agena_content_streams c ON c.entry_id=own.entry_id
+         WHERE own.session_id=?2 AND parent.entry_id IS NULL"
+    )
+});
+const SHARE_SOURCES_SQL: &str =
+    "INSERT INTO agena_branch_sources(session_id,source_key,head_owner_session_id)
+     SELECT ?2,h.source_key,COALESCE(h.head_owner_session_id,h.session_id)
+     FROM agena_branch_entries own
+     CROSS JOIN agena_branch_entries parent ON parent.session_id=?1 AND parent.entry_id=own.entry_id
+     CROSS JOIN agena_content_streams c ON c.entry_id=parent.entry_id
+     CROSS JOIN agena_branch_sources h ON h.session_id=?1 AND h.source_key=c.source_key
+     WHERE own.session_id=?2 AND EXISTS(SELECT 1 FROM agena_branch_sources WHERE session_id=?1)";
+static SOURCE_SQL: LazyLock<String> = LazyLock::new(|| {
+    let columns = heads::READ_COLUMNS;
+    format!(
+        "SELECT {columns} FROM agena_content_streams c
+         CROSS JOIN agena_branch_source_heads h ON h.session_id=? AND h.source_key=c.source_key
+         WHERE c.id=?"
+    )
+});
 
 #[derive(Debug, Deserialize)]
 pub(super) struct EntryFacts {
@@ -38,7 +109,6 @@ pub(super) struct EntryFacts {
     tool_finished_at_ms: Option<i64>,
     interaction_decided: i64,
     interaction_presented_at: Option<chrono::DateTime<chrono::Utc>>,
-    sources: Vec<String>,
     interactions: Vec<i64>,
     activities: Vec<String>,
     blobs: Vec<String>,
@@ -73,8 +143,6 @@ impl EntryFacts {
                 tool.result = None;
             }
         }
-        tool.outputs
-            .retain(|output| self.sources.contains(&output.id.to_string()));
         tool.interactions
             .retain(|id| self.interactions.contains(&id.get()));
         tool.activities
@@ -106,10 +174,20 @@ pub(super) async fn capture(
 ) -> Result<()> {
     // Copy small mutable facts only. User documents, tool payloads, replay and
     // content blocks retain their existing immutable identities and storage.
-    sqlx::query("INSERT OR IGNORE INTO agena_branch_entries (session_id,entry_id,facts_json) SELECT ?,e.id,COALESCE(f.facts_json,json_object('revision',e.revision,'execution_phase',a.phase,'execution_started',EXISTS(SELECT 1 FROM agena_attempts started WHERE started.execution_id=e.execution_id AND started.started_at_ms IS NOT NULL),'execution_generation',a.generation,'response_entry_id',original.response_entry_id,'content_state',c.capture_state,'compaction_phase',CASE WHEN cr.round_id IS NOT NULL THEN r.phase END,'compaction_committed',EXISTS(SELECT 1 FROM agena_entries checkpoint WHERE checkpoint.round_id=e.round_id AND checkpoint.kind='compaction'),'tool_phase',CASE WHEN e.kind='tool' THEN t.phase END,'tool_finished_at_ms',t.finished_at_ms,'interaction_decided',i.decision_json IS NOT NULL,'interaction_presented_at',json_extract(i.request_json,'$.Input.request.presented_at'),'sources',(SELECT json_group_array(id) FROM agena_content_streams WHERE entry_id=e.id),'interactions',(SELECT json_group_array(id) FROM agena_interactions WHERE tool_id=e.tool_id),'activities',(SELECT json_group_array(id) FROM agena_background_activities WHERE entry_id=e.id),'blobs',(SELECT json_group_array(blob_id) FROM agena_blob_references WHERE entry_id=e.id))) FROM agena_session_segments s JOIN agena_segment_entries m ON m.segment_id=s.segment_id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal JOIN agena_entries e ON e.id=m.entry_id JOIN agena_attempts original ON original.execution_id=e.execution_id AND original.generation=e.generation JOIN agena_attempts a ON a.execution_id=e.execution_id AND a.generation=CASE WHEN e.kind='user' THEN (SELECT current_generation FROM agena_executions WHERE id=e.execution_id) ELSE e.generation END LEFT JOIN agena_content_streams c ON c.id=e.content_id LEFT JOIN agena_tool_calls t ON t.id=e.tool_id LEFT JOIN agena_interactions i ON i.id=e.interaction_id LEFT JOIN agena_rounds r ON r.id=e.round_id LEFT JOIN agena_compaction_rounds cr ON cr.round_id=e.round_id LEFT JOIN agena_branch_entries f ON f.session_id=? AND f.entry_id=e.id WHERE s.session_id=? AND e.origin_session_id!=s.session_id")
-        .bind(target.get()).bind(source.get()).bind(target.get()).execute(&mut *connection).await.map_err(sql_error)?;
-    sqlx::query("INSERT OR IGNORE INTO agena_branch_sources (session_id,content_id,entry_id,head_json) SELECT ?,c.id,c.entry_id,CASE WHEN parent.entry_id IS NOT NULL THEN inherited.head_json ELSE json_object('id',c.id,'entry',c.entry_id,'epoch',c.epoch,'kind',c.kind,'activity_id',c.activity_id,'ordinal',c.ordinal,'capture_loss',json_object('bytes',c.lost_bytes,'packets',c.lost_packets,'committed_bytes',c.lost_bytes,'committed_packets',c.lost_packets),'accepted',c.committed_head,'committed',c.committed_head,'retained_start',c.retained_start,'state',c.capture_state,'capture_error',c.capture_error) END FROM agena_branch_entries own JOIN agena_content_streams c ON c.entry_id=own.entry_id LEFT JOIN agena_branch_entries parent ON parent.session_id=? AND parent.entry_id=c.entry_id LEFT JOIN agena_branch_sources inherited ON inherited.session_id=? AND inherited.content_id=c.id WHERE own.session_id=? AND (parent.entry_id IS NULL OR inherited.content_id IS NOT NULL)")
-        .bind(target.get()).bind(source.get()).bind(source.get()).bind(target.get()).execute(&mut *connection).await.map_err(sql_error)?;
+    sqlx::query(&CAPTURE_ENTRIES_SQL)
+        .bind(source.get())
+        .bind(target.get())
+        .execute(&mut *connection)
+        .await
+        .map_err(sql_error)?;
+    for sql in [&*CAPTURE_SOURCES_SQL, SHARE_SOURCES_SQL] {
+        sqlx::query(sql)
+            .bind(source.get())
+            .bind(target.get())
+            .execute(&mut *connection)
+            .await
+            .map_err(sql_error)?;
+    }
     sqlx::query("INSERT OR IGNORE INTO agena_branch_rounds (session_id,round_id,phase,has_provider_state,finished_at_ms) SELECT DISTINCT ?,r.id,CASE WHEN f.round_id IS NOT NULL THEN f.phase ELSE r.phase END,CASE WHEN f.round_id IS NOT NULL THEN f.has_provider_state ELSE r.provider_state_json IS NOT NULL END,CASE WHEN f.round_id IS NOT NULL THEN f.finished_at_ms ELSE r.finished_at_ms END FROM agena_branch_entries own JOIN agena_entries e ON e.id=own.entry_id JOIN agena_rounds r ON r.id=e.round_id LEFT JOIN agena_branch_entries parent ON parent.session_id=? AND parent.entry_id=e.id LEFT JOIN agena_branch_rounds f ON f.session_id=? AND f.round_id=r.id WHERE own.session_id=? AND (parent.entry_id IS NULL OR f.round_id IS NOT NULL)")
         .bind(target.get()).bind(source.get()).bind(source.get()).bind(target.get()).execute(&mut *connection).await.map_err(sql_error)?;
     sqlx::query("INSERT OR IGNORE INTO agena_branch_activities (session_id,activity_id,has_outcome,finished_at_ms) SELECT ?,a.id,CASE WHEN f.activity_id IS NOT NULL THEN f.has_outcome ELSE a.outcome_json IS NOT NULL END,CASE WHEN f.activity_id IS NOT NULL THEN f.finished_at_ms ELSE a.finished_at_ms END FROM agena_branch_entries own JOIN agena_background_activities a ON a.entry_id=own.entry_id LEFT JOIN agena_branch_entries parent ON parent.session_id=? AND parent.entry_id=a.entry_id LEFT JOIN agena_branch_activities f ON f.session_id=? AND f.activity_id=a.id WHERE own.session_id=? AND (parent.entry_id IS NULL OR f.activity_id IS NOT NULL)")
@@ -137,15 +215,28 @@ pub(super) async fn source(
     session: SessionId,
     content: ContentId,
 ) -> Result<Option<ContentStreamView>> {
-    let head: Option<String> = sqlx::query_scalar(
-        "SELECT head_json FROM agena_branch_sources WHERE session_id=? AND content_id=?",
-    )
-    .bind(session.get())
-    .bind(content.to_string())
-    .fetch_optional(connection)
-    .await
-    .map_err(sql_error)?;
-    head.as_deref().map(decode).transpose()
+    let row = sqlx::query(&SOURCE_SQL)
+        .bind(session.get())
+        .bind(content.to_string())
+        .fetch_optional(connection)
+        .await
+        .map_err(sql_error)?;
+    row.as_ref()
+        .map(|row| heads::read(content, row))
+        .transpose()
+}
+
+pub(super) async fn encoded_entry_facts(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+    entry: EntryId,
+) -> Result<Option<String>> {
+    sqlx::query_scalar(&ENTRY_FACT_SQL)
+        .bind(session.get())
+        .bind(entry.get())
+        .fetch_optional(connection)
+        .await
+        .map_err(sql_error)
 }
 
 pub(super) async fn entry_facts(
@@ -153,14 +244,7 @@ pub(super) async fn entry_facts(
     session: SessionId,
     entry: EntryId,
 ) -> Result<Option<EntryFacts>> {
-    let facts: Option<String> = sqlx::query_scalar(
-        "SELECT facts_json FROM agena_branch_entries WHERE session_id=? AND entry_id=?",
-    )
-    .bind(session.get())
-    .bind(entry.get())
-    .fetch_optional(connection)
-    .await
-    .map_err(sql_error)?;
+    let facts = encoded_entry_facts(connection, session, entry).await?;
     facts.as_deref().map(decode).transpose()
 }
 
@@ -180,8 +264,12 @@ async fn captured_facts(
     if ids.is_empty() {
         return Ok(HashMap::new());
     }
-    let rows = sqlx::query("SELECT entry_id,facts_json FROM agena_branch_entries WHERE session_id=? AND entry_id IN (SELECT value FROM json_each(?))")
-        .bind(session.get()).bind(encode(&ids)?).fetch_all(connection).await.map_err(sql_error)?;
+    let rows = sqlx::query(&ENTRY_FACTS_SQL)
+        .bind(session.get())
+        .bind(encode(ids)?)
+        .fetch_all(connection)
+        .await
+        .map_err(sql_error)?;
     let mut facts = HashMap::with_capacity(rows.len());
     for row in rows {
         facts.insert(
@@ -204,18 +292,6 @@ async fn apply_entry_refs(
             facts.apply_entry(entry);
         }
     }
-    Ok(())
-}
-
-pub(super) async fn freeze_round(
-    connection: &mut SqliteConnection,
-    session: SessionId,
-    round: i64,
-) -> Result<()> {
-    sqlx::query("UPDATE agena_round_inputs AS input SET (entry_revision,response_entry_id,execution_phase,tool_phase,interaction_decided)=(SELECT json_extract(facts_json,'$.revision'),json_extract(facts_json,'$.response_entry_id'),json_extract(facts_json,'$.execution_phase'),json_extract(facts_json,'$.tool_phase'),json_extract(facts_json,'$.interaction_decided') FROM agena_branch_entries WHERE session_id=? AND entry_id=input.entry_id) WHERE input.round_id=? AND EXISTS(SELECT 1 FROM agena_branch_entries WHERE session_id=? AND entry_id=input.entry_id)")
-        .bind(session.get()).bind(round).bind(session.get()).execute(&mut *connection).await.map_err(sql_error)?;
-    sqlx::query("UPDATE agena_round_input_replays AS input SET (phase,has_provider_state)=(SELECT phase,has_provider_state FROM agena_branch_rounds WHERE session_id=? AND round_id=input.source_round_id) WHERE input.round_id=? AND EXISTS(SELECT 1 FROM agena_branch_rounds WHERE session_id=? AND round_id=input.source_round_id)")
-        .bind(session.get()).bind(round).bind(session.get()).execute(connection).await.map_err(sql_error)?;
     Ok(())
 }
 

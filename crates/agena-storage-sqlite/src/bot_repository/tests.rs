@@ -30,7 +30,13 @@ async fn avatar_and_revision_commit_atomically_and_survive_reopen() {
     let database = KernelDatabase::open(&url).await.unwrap();
     let repository = SqliteBotRepository::new(database.writer.clone());
     let original = repository.create(&bot("Avatar", Some(RED))).await.unwrap();
-    assert_eq!(repository.list(false).await.unwrap(), [original.clone()]);
+    assert_eq!(
+        repository.list(false).await.unwrap(),
+        [BotWithLocalSession {
+            record: original.clone(),
+            local_session_id: None
+        }]
+    );
 
     let invalid = bot("Invalid", Some("not-a-thumbnail"));
     assert!(repository.create(&invalid).await.is_err());
@@ -97,7 +103,13 @@ async fn avatar_and_revision_commit_atomically_and_survive_reopen() {
         .await
         .unwrap();
     assert_eq!(cleared.avatar, None);
-    assert_eq!(repository.list(false).await.unwrap(), [cleared.clone()]);
+    assert_eq!(
+        repository.list(false).await.unwrap(),
+        [BotWithLocalSession {
+            record: cleared.clone(),
+            local_session_id: None
+        }]
+    );
 
     let restored = repository
         .update(
@@ -117,7 +129,13 @@ async fn avatar_and_revision_commit_atomically_and_survive_reopen() {
     assert_eq!(archived.avatar.as_deref(), Some(RED));
     assert!(archived.archived);
     assert!(repository.list(false).await.unwrap().is_empty());
-    assert_eq!(repository.list(true).await.unwrap(), [archived]);
+    assert_eq!(
+        repository.list(true).await.unwrap(),
+        [BotWithLocalSession {
+            record: archived,
+            local_session_id: None
+        }]
+    );
     drop(repository);
     database.close().await.unwrap();
 }

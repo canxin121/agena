@@ -10,6 +10,7 @@ use agena_domain::{
     AgentStatus, PendingInteractiveRequestContext, PermissionConfig, SessionCostSummary,
     SessionSummary, SessionUsage, UsageStats, UsageStatsQuery, WorkflowState,
 };
+use agena_storage::kernel::SessionSummaryView;
 use chrono::{DateTime, Utc};
 
 /// Stable session-level presentation fields for consumers that do not need a
@@ -111,7 +112,7 @@ pub trait SessionQueryService: Send + Sync {
     async fn list_session_tree(
         &self,
         root_id: i64,
-    ) -> Result<Vec<SessionSummary>, SessionQueryError>;
+    ) -> Result<Vec<SessionSummaryView>, SessionQueryError>;
 
     /// Stream a complete session archive with bounded memory. The sink owns
     /// any partial output if export fails or the caller cancels it.

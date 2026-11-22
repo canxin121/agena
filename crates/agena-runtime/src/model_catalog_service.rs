@@ -10,7 +10,6 @@ use agena_provider::{
 use agena_storage::ModelCatalogRepository;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sea_orm::DatabaseConnection;
 
 use crate::{
     ModelCatalogCompositionError, ModelCatalogPublicSourceResult, SnapshotStore,
@@ -90,16 +89,15 @@ impl ModelCatalogService {
         })
     }
 
-    /// Compose the default persisted catalog service used by a Runtime process.
-    /// The concrete provider registry remains a caller-supplied source at
-    /// refresh time; Runtime owns cache storage, policy, and public catalog
-    /// source initialization.
-    pub async fn compose_default(
-        database: Arc<DatabaseConnection>,
+    /// Combine the process's catalog repository and the default public source.
+    pub(crate) async fn compose_repository(
+        store: Option<Arc<dyn ModelCatalogRepository>>,
     ) -> Result<Arc<Self>, ModelCatalogServiceError> {
-        let store = Arc::new(agena_storage_sqlite::SeaModelCatalogRepository::new(
-            database,
-        ));
+        let store = store.ok_or_else(|| {
+            ModelCatalogServiceError::Initialization(
+                "runtime database connection missing".to_owned(),
+            )
+        })?;
         let public_source = crate::build_default_public_model_catalog_source(
             crate::runtime_codex_user_agent(env!("CARGO_PKG_VERSION")),
         )
@@ -112,25 +110,6 @@ impl ModelCatalogService {
             )
             .await?,
         ))
-    }
-
-    /// Compose the default persisted catalog when the process has a database.
-    ///
-    /// Snapshot composition is allowed to run without persistence (for
-    /// example, lightweight configuration inspection), so the optional
-    /// database decision belongs to Runtime rather than every concrete
-    /// composition adapter.  Keeping the missing-database diagnostic here
-    /// also prevents callers from manufacturing a concrete configuration
-    /// error for a Runtime-owned service.
-    pub async fn compose_default_optional(
-        database: Option<Arc<DatabaseConnection>>,
-    ) -> Result<Arc<Self>, ModelCatalogServiceError> {
-        let database = database.ok_or_else(|| {
-            ModelCatalogServiceError::Initialization(
-                "runtime database connection missing".to_owned(),
-            )
-        })?;
-        Self::compose_default(database).await
     }
 
     pub fn snapshot(&self) -> ModelCatalogSnapshot {

@@ -34,18 +34,22 @@ mod input_window;
 mod lifecycle;
 
 mod metrics;
-mod network_migration;
 
 mod owned_tools;
 mod prompt;
+mod prompt_inputs;
+mod prompt_manifest;
+mod prompt_replays;
+mod prompt_sources;
 
 pub use metrics::{KernelDiagnostics, KernelMetricsSnapshot};
-pub use network_migration::NetworkMigrationResolver;
 
+mod history_runs;
 mod history_views;
 mod read_cache;
 
 mod reads;
+mod receipts;
 pub(crate) mod test_fault;
 pub use read_cache::ReadCacheSnapshot;
 
@@ -55,6 +59,7 @@ mod session_storage;
 mod snapshots;
 
 mod stop;
+mod summaries;
 mod usage;
 
 const MAX_PENDING_BYTES: usize = 2 * 1024 * 1024;
@@ -68,7 +73,7 @@ type Reply = Result<CommitReceipt<Mutation>>;
 struct Pending {
     request: RequestId,
     command: Command,
-    digest: Vec<u8>,
+    digest: [u8; 32],
     bytes: usize,
     response: oneshot::Sender<Reply>,
     _permit: OwnedSemaphorePermit,
@@ -128,6 +133,7 @@ enum Work {
 /// is handed to a session, provider, tool, or application caller.
 pub struct SqliteKernel {
     pub database: Arc<sea_orm::DatabaseConnection>,
+    pub reader_database: Arc<sea_orm::DatabaseConnection>,
     pub ports: KernelPorts,
     pub workspaces: Arc<dyn agena_storage::WorkspaceRepository>,
     pub permissions: Arc<dyn agena_storage::PermissionRuleRepository>,
@@ -147,39 +153,36 @@ pub async fn open_kernel_runtime(url: &str) -> Result<SqliteKernel> {
     compose_kernel_runtime(database).await
 }
 
-/// Resolve old session permission overrides and ceilings before typed recovery.
-/// Original settings and all rewritten rows are committed in one transaction.
-pub async fn open_kernel_runtime_with_network_migration(
-    url: &str,
-    resolver: Arc<NetworkMigrationResolver>,
-) -> Result<SqliteKernel> {
-    let database = KernelDatabase::open(url).await.map_err(storage)?;
-    network_migration::migrate(&database, resolver).await?;
-    compose_kernel_runtime(database).await
-}
-
 async fn compose_kernel_runtime(database: KernelDatabase) -> Result<SqliteKernel> {
-    let workspaces = Arc::new(crate::SeaWorkspaceRepository::new(database.writer.clone()));
-    let permissions = Arc::new(crate::SeaPermissionRuleRepository::new(
-        database.writer.clone(),
+    let writer = database.writer.clone();
+    let reader = database.reader.clone();
+    let workspaces = Arc::new(crate::SeaWorkspaceRepository::with_reader(
+        writer.clone(),
+        reader.clone(),
     ));
-    let model_catalog = Arc::new(crate::SeaModelCatalogRepository::new(
-        database.writer.clone(),
+    let permissions = Arc::new(crate::SeaPermissionRuleRepository::with_reader(
+        writer.clone(),
+        reader.clone(),
     ));
-    let instance_id = schema::instance_id(&database.writer)
-        .await
-        .map_err(storage)?;
+    let model_catalog = Arc::new(crate::SeaModelCatalogRepository::with_reader(
+        writer.clone(),
+        reader.clone(),
+    ));
+    let instance_id = schema::instance_id(&reader).await.map_err(storage)?;
     let instance_state = Arc::new(
-        crate::ServerStateRepository::new(database.writer.clone())
+        crate::ServerStateRepository::with_reader(writer.clone(), reader.clone())
             .await
             .map_err(storage)?,
     );
-    let bots = Arc::new(crate::SqliteBotRepository::new(database.writer.clone()));
+    let bots = Arc::new(crate::SqliteBotRepository::with_reader(
+        writer.clone(),
+        reader.clone(),
+    ));
     let diagnostics = KernelDiagnostics::default();
-    let repository_database = database.writer.clone();
     let (ports, maintenance) = compose_database(database, diagnostics.clone()).await?;
     Ok(SqliteKernel {
-        database: repository_database,
+        database: writer,
+        reader_database: reader,
         ports,
         workspaces,
         permissions,
@@ -196,7 +199,6 @@ async fn compose_database(
     database: KernelDatabase,
     diagnostics: KernelDiagnostics,
 ) -> Result<(KernelPorts, port::KernelMaintenance)> {
-    branches::backfill(database.writer.get_sqlite_connection_pool()).await?;
     commands::recover(&database.writer).await?;
     let (sender, receiver) = mpsc::channel(1024);
     let epoch = KernelEpoch::new();
@@ -256,17 +258,11 @@ fn encode<T: serde::Serialize + ?Sized>(value: &T) -> Result<String> {
     serde_json::to_string(value).map_err(storage)
 }
 
-/// Wire shape stored for `kind='user'` entries.
-///
-/// Rows written before identity existed stored the bare `ComposerDocument`.
-/// Decoding accepts both: a JSON object carrying `document` is the envelope,
-/// anything else is the legacy bare document with no recorded identity.
-#[derive(serde::Serialize, serde::Deserialize)]
+/// Stored document and optional sender identity of a user entry.
+#[derive(serde::Deserialize)]
 pub(crate) struct UserEntryBody {
     pub(crate) document: agena_domain::ComposerDocument,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) author: Option<agena_domain::MessageAuthor>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) origin: Option<agena_domain::MessageOrigin>,
 }
 
@@ -275,23 +271,23 @@ pub(crate) fn encode_user_body(
     author: Option<&agena_domain::MessageAuthor>,
     origin: Option<&agena_domain::MessageOrigin>,
 ) -> Result<String> {
-    encode(&UserEntryBody {
-        document: document.clone(),
-        author: author.cloned(),
-        origin: origin.cloned(),
+    #[derive(serde::Serialize)]
+    struct Body<'a> {
+        document: &'a agena_domain::ComposerDocument,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        author: Option<&'a agena_domain::MessageAuthor>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        origin: Option<&'a agena_domain::MessageOrigin>,
+    }
+    encode(&Body {
+        document,
+        author,
+        origin,
     })
 }
 
 pub(crate) fn decode_user_body(text: &str) -> Result<UserEntryBody> {
-    let value: serde_json::Value = serde_json::from_str(text).map_err(storage)?;
-    if value.get("document").is_some() {
-        return serde_json::from_value(value).map_err(storage);
-    }
-    Ok(UserEntryBody {
-        document: serde_json::from_value(value).map_err(storage)?,
-        author: None,
-        origin: None,
-    })
+    decode(text)
 }
 fn decode<T: serde::de::DeserializeOwned>(text: &str) -> Result<T> {
     serde_json::from_str(text).map_err(storage)
@@ -627,7 +623,7 @@ impl KernelBackend for Backend {
     ) -> Result<ReadView<Vec<ManagementAncestor>>> {
         lifecycle::management_ancestry(self, session).await
     }
-    async fn local_bot_session(&self, bot: uuid::Uuid) -> Result<ReadView<LocalBotSession>> {
+    async fn local_bot_session(&self, bot: uuid::Uuid) -> Result<ReadView<Option<SessionId>>> {
         self.cache.ensure_open()?;
         let _read = self
             .control_reads
@@ -644,20 +640,27 @@ impl KernelBackend for Backend {
         Ok(ReadView::from_lease(
             value,
             self.views
-                .reserve_owned(ReadOwner::Shared, std::mem::size_of::<LocalBotSession>())?,
+                .reserve_owned(ReadOwner::Shared, std::mem::size_of::<Option<SessionId>>())?,
         ))
     }
     async fn query_summaries(&self, query: SummaryQuery) -> Result<ReadView<SessionSummaryPage>> {
-        lifecycle::query_summaries(self, query).await
+        summaries::query_summaries(self, query).await
+    }
+    async fn overview_summaries(
+        &self,
+        workspace: i64,
+        recent_limit: usize,
+    ) -> Result<ReadView<Vec<SessionSummaryView>>> {
+        summaries::overview_summaries(self, workspace, recent_limit).await
     }
     async fn activity_summary(&self) -> Result<ReadView<SessionActivitySummary>> {
-        lifecycle::activity_summary(self).await
+        summaries::activity_summary(self).await
     }
     async fn workspace_statistics(
         &self,
         ids: &[i64],
     ) -> Result<ReadView<std::collections::BTreeMap<i64, WorkspaceStatistics>>> {
-        lifecycle::workspace_statistics(self, ids).await
+        summaries::workspace_statistics(self, ids).await
     }
     async fn rounds(
         &self,
@@ -667,20 +670,12 @@ impl KernelBackend for Backend {
     ) -> Result<ReadView<Vec<ProviderRoundView>>> {
         lifecycle::rounds(self, session, after, limit).await
     }
-    async fn owned_tool_metadata(
-        &self,
-        session: SessionId,
-        after: Option<ToolId>,
-        limit: usize,
-    ) -> Result<ReadView<Vec<OwnedToolMetadata>>> {
-        lifecycle::owned_tool_metadata(self, session, after, limit).await
-    }
     async fn visit_usage_observations(
         &self,
-        query: &agena_domain::UsageStatsQuery,
+        scope: UsageScope<'_>,
         visit: &mut (dyn FnMut(StoredUsageObservation) + Send),
     ) -> Result<()> {
-        usage::visit_observations(self, query, visit).await
+        usage::visit_observations(self, scope, visit).await
     }
 
     async fn delivery(
@@ -1366,7 +1361,7 @@ impl KernelBackend for Backend {
         let pending = Pending {
             request,
             command,
-            digest: Sha256::digest(&encoded).to_vec(),
+            digest: Sha256::digest(&encoded).into(),
             bytes,
             response,
             _permit: permit,
@@ -1462,6 +1457,28 @@ impl KernelBackend for Backend {
             reads::execution_attempt(&mut connection, session, execution, generation).await?;
         self.views.wrap(session, attempt)
     }
+    async fn execution_text_sources(
+        &self,
+        session: SessionId,
+        execution: ExecutionId,
+        generation: Option<AttemptGeneration>,
+    ) -> Result<ReadView<Vec<ContentId>>> {
+        self.cache.ensure_open()?;
+        let _permit = self
+            .content_reads
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| KernelError::Busy)?;
+        let sources = history_views::execution_text_sources(
+            self.reader.get_sqlite_connection_pool(),
+            session,
+            execution,
+            generation,
+            self.live.diagnostics(),
+        )
+        .await?;
+        self.views.wrap(session, sources)
+    }
     async fn history_window(
         &self,
         session: SessionId,
@@ -1480,6 +1497,26 @@ impl KernelBackend for Backend {
             before,
             message_ids,
             limit,
+            self.live.diagnostics(),
+        )
+        .await?;
+        let bytes = modeled_read_bytes(&value)?;
+        self.wrap_read(session, value, bytes)
+    }
+    async fn history_by_ids(
+        &self,
+        session: SessionId,
+        ids: &[i64],
+    ) -> Result<ReadView<HistoryPage>> {
+        let _permit = self
+            .content_reads
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| KernelError::Busy)?;
+        let value = history_views::history_by_ids(
+            self.reader.get_sqlite_connection_pool(),
+            session,
+            ids,
             self.live.diagnostics(),
         )
         .await?;
@@ -1547,6 +1584,10 @@ async fn writer(
     let mut fatal = None;
     let mut retry_after = tokio::time::Instant::now();
     let mut storage_due = tokio::time::Instant::now();
+    let mut history_gc = snapshots::Collector::default();
+    let mut history_collection =
+        tokio::time::interval_at(retry_after + snapshots::GC_INTERVAL, snapshots::GC_INTERVAL);
+    history_collection.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         let work = if let Some(work) = carry.take() {
             work
@@ -1583,13 +1624,16 @@ async fn writer(
                                 }
                             }
                         }
-                        if fatal.is_none() && history_pins.needs_collection()
-                            && let Err(error) = snapshots::collect(&database, &history_pins).await {
-                            tracing::warn!(%error, "history snapshot collection failed");
-                            if matches!(error, KernelError::CommitUnknown {..} | KernelError::Closed) {
-                                fatal = Some(storage(&error));
-                                receiver.close(); cache.close(); live.fail_closed(&error.to_string());
-                            }
+                    }
+                    continue;
+                }
+                _ = history_collection.tick(), if fatal.is_none() => {
+                    if history_pins.needs_collection()
+                        && let Err(error) = history_gc.collect(&database, &history_pins).await {
+                        tracing::warn!(%error, "history snapshot collection failed");
+                        if matches!(error, KernelError::CommitUnknown {..} | KernelError::Closed) {
+                            fatal = Some(storage(&error));
+                            receiver.close(); cache.close(); live.fail_closed(&error.to_string());
                         }
                     }
                     continue;
@@ -1678,7 +1722,7 @@ async fn writer(
                 response,
             } => {
                 let result = async {
-                    snapshots::collect(&database, &history_pins).await?;
+                    history_gc.collect(&database, &history_pins).await?;
                     snapshots::open(
                         &database,
                         session,
@@ -1703,7 +1747,7 @@ async fn writer(
                 continue;
             }
             Work::CollectHistorySnapshots(response) => {
-                let result = snapshots::collect(&database, &history_pins).await;
+                let result = history_gc.collect(&database, &history_pins).await;
                 if matches!(
                     result,
                     Err(KernelError::CommitUnknown { .. } | KernelError::Closed)
@@ -1838,6 +1882,19 @@ async fn writer(
             live.fail_closed("command commit outcome is unknown");
         }
         for (pending, result) in batch.into_iter().zip(results) {
+            if result.is_ok()
+                && matches!(
+                    &pending.command,
+                    Command::Truncate { .. }
+                        | Command::Withdraw { .. }
+                        | Command::Clear {
+                            mode: ClearMode::History,
+                            ..
+                        }
+                )
+            {
+                history_pins.schedule_collection();
+            }
             let _ = pending.response.send(result);
         }
     }
@@ -2311,15 +2368,19 @@ pub(super) async fn list_state(
     connection: &mut SqliteConnection,
     session: SessionId,
 ) -> Result<Option<SessionListState>> {
-    let statement = format!(
-        "SELECT s.workspace_id,s.owner_bot_id IS NOT NULL AS bot_owned,s.parent_session_id,s.favorite,s.pinned,s.temporary=0 AS include_in_lists,s.relation_kind='subagent' AS is_subagent,s.metadata_version,s.updated_at_ms,t.queued_executions,t.running_executions,t.user_message_count,t.last_message_at_ms,({}) AS processing_state FROM agena_sessions s JOIN agena_session_statistics t ON t.session_id=s.id WHERE s.id=? AND s.deleted_at_ms IS NULL",
-        lifecycle::STATE_SQL
-    );
-    let Some(row) = sqlx::query(&statement)
-        .bind(session.get())
-        .fetch_optional(connection)
-        .await
-        .map_err(sql_error)?
+    let Some(row) = sqlx::query(
+        "SELECT s.workspace_id,s.owner_bot_id IS NOT NULL AS bot_owned,s.parent_session_id,
+                s.favorite,s.pinned,s.temporary=0 AS include_in_lists,
+                s.relation_kind='subagent' AS is_subagent,s.metadata_version,s.updated_at_ms,
+                t.queued_executions,t.running_executions,t.user_message_count,t.last_message_at_ms,
+                t.processing_state
+         FROM agena_sessions s JOIN agena_session_statistics t ON t.session_id=s.id
+         WHERE s.id=? AND s.deleted_at_ms IS NULL",
+    )
+    .bind(session.get())
+    .fetch_optional(connection)
+    .await
+    .map_err(sql_error)?
     else {
         return Ok(None);
     };
@@ -2458,24 +2519,8 @@ async fn execute(
     CommitReceipt<Mutation>,
     (Vec<content::StagedSource>, EntryChanges),
 )> {
-    let existing = sqlx::query(
-        "SELECT request_digest,receipt_json FROM agena_command_results WHERE request_id=?",
-    )
-    .bind(pending.request.to_string())
-    .fetch_optional(&mut *connection)
-    .await
-    .map_err(sql_error)?;
-    if let Some(row) = existing {
-        let digest: Vec<u8> = row.try_get("request_digest").map_err(storage)?;
-        if digest != pending.digest {
-            return Err(KernelError::Conflict(
-                "request id was already used for another command".into(),
-            ));
-        }
-        return Ok((
-            decode(&row.try_get::<String, _>("receipt_json").map_err(storage)?)?,
-            (Vec::new(), EntryChanges::default()),
-        ));
+    if let Some(receipt) = receipts::read(connection, pending.request, &pending.digest).await? {
+        return Ok((receipt, (Vec::new(), EntryChanges::default())));
     }
     // A changed compaction must validate its sealed summary while atomically
     // installing the checkpoint. Rollback preserves accepted live tails for a
@@ -2543,10 +2588,7 @@ async fn execute(
         parents,
     });
     let receipt = CommitReceipt { position, value };
-    sqlx::query("INSERT INTO agena_command_results (request_id,request_digest,receipt_json,commit_sequence,command_ordinal,created_at_ms) VALUES (?,?,?,?,?,?)")
-        .bind(pending.request.to_string()).bind(&pending.digest).bind(encode(&receipt)?)
-        .bind(position.sequence.get()).bind(i64::from(position.ordinal)).bind(now_ms())
-        .execute(&mut *connection).await.map_err(sql_error)?;
+    receipts::write(connection, pending.request, &pending.digest, &receipt).await?;
     Ok((receipt, (updates, entry_changes)))
 }
 

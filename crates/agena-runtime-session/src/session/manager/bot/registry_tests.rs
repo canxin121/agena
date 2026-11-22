@@ -274,7 +274,7 @@ async fn invalid_avatars_leave_identity_revision_and_receipts_unchanged() {
     assert!(
         manager
             .bots()
-            .receipt("create:invalid-avatar-create")
+            .receipt("create:invalid-avatar-create", "")
             .await
             .unwrap()
             .is_none()
@@ -305,53 +305,12 @@ async fn invalid_avatars_leave_identity_revision_and_receipts_unchanged() {
         assert!(
             manager
                 .bots()
-                .receipt(&format!("update:{}:{key}", profile.id))
+                .receipt(&format!("update:{}:{key}", profile.id), "")
                 .await
                 .unwrap()
                 .is_none()
         );
     }
-}
-
-#[tokio::test]
-async fn receipts_written_before_avatar_support_still_replay_exactly() {
-    let (manager, _ordinary) = fixture().await;
-    let profile = manager
-        .create_bot_profile(create("seed", "Legacy"))
-        .await
-        .unwrap();
-    let mut legacy_result = serde_json::to_value(record(&profile)).unwrap();
-    legacy_result.as_object_mut().unwrap().remove("avatar");
-    let result = serde_json::to_string(&legacy_result).unwrap();
-    let create_input = r#"{"request_key":"legacy-create","name":"Legacy","persona":null}"#;
-    manager
-        .bots()
-        .save_receipt("create:legacy-create", create_input, &result)
-        .await
-        .unwrap();
-    let create: BotCreate = serde_json::from_str(create_input).unwrap();
-    assert_eq!(serde_json::to_string(&create).unwrap(), create_input);
-    assert_eq!(manager.create_bot_profile(create).await.unwrap(), profile);
-
-    let update_input = r#"{"request_key":"legacy-update","expected_revision":1,"name":"Legacy","persona":{"instructions":""}}"#;
-    manager
-        .bots()
-        .save_receipt(
-            &format!("update:{}:legacy-update", profile.id),
-            update_input,
-            &result,
-        )
-        .await
-        .unwrap();
-    let update: BotUpdate = serde_json::from_str(update_input).unwrap();
-    assert_eq!(serde_json::to_string(&update).unwrap(), update_input);
-    assert_eq!(
-        manager
-            .update_bot_profile(profile.id, update)
-            .await
-            .unwrap(),
-        profile
-    );
 }
 
 #[tokio::test]
@@ -731,7 +690,7 @@ async fn workspace_owned_bots_stay_out_of_runtime_project_lists() {
     let tree = manager.list_session_tree(root.get()).await.unwrap();
     assert_eq!(
         tree.iter().map(|session| session.id).collect::<Vec<_>>(),
-        vec![root.get(), child.get()]
+        vec![root, child]
     );
     let local = manager.ensure_named_bot_session(bot.id).await.unwrap();
     let discovered = manager

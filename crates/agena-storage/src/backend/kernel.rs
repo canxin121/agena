@@ -581,9 +581,8 @@ pub trait KernelBackend: Send + Sync {
         &self,
         session: SessionId,
     ) -> Result<ReadView<Option<ProviderRoundView>>>;
-    /// Most recent failed round that retained a provider-state failure for an
-    /// execution generation. Used to reconstruct a user-visible error for a
-    /// transcript after the failure has become durable.
+    /// Most recent visible failed round with provider state for an execution
+    /// generation. Branches see the round state frozen in their history.
     async fn failed_round(
         &self,
         session: SessionId,
@@ -599,12 +598,17 @@ pub trait KernelBackend: Send + Sync {
         generation: AttemptGeneration,
     ) -> Result<bool>;
     async fn configuration(&self, session: SessionId) -> Result<ReadView<SessionConfiguration>>;
-    async fn local_bot_session(&self, bot: uuid::Uuid) -> Result<ReadView<LocalBotSession>>;
+    async fn local_bot_session(&self, bot: uuid::Uuid) -> Result<ReadView<Option<SessionId>>>;
     async fn management_ancestry(
         &self,
         session: SessionId,
     ) -> Result<ReadView<Vec<ManagementAncestor>>>;
     async fn query_summaries(&self, query: SummaryQuery) -> Result<ReadView<SessionSummaryPage>>;
+    async fn overview_summaries(
+        &self,
+        workspace: i64,
+        recent_limit: usize,
+    ) -> Result<ReadView<Vec<SessionSummaryView>>>;
     async fn activity_summary(&self) -> Result<ReadView<SessionActivitySummary>>;
     async fn workspace_statistics(
         &self,
@@ -616,15 +620,9 @@ pub trait KernelBackend: Send + Sync {
         after: Option<RoundId>,
         limit: usize,
     ) -> Result<ReadView<Vec<ProviderRoundView>>>;
-    async fn owned_tool_metadata(
-        &self,
-        session: SessionId,
-        after: Option<ToolId>,
-        limit: usize,
-    ) -> Result<ReadView<Vec<OwnedToolMetadata>>>;
     async fn visit_usage_observations(
         &self,
-        query: &agena_domain::UsageStatsQuery,
+        scope: UsageScope<'_>,
         visit: &mut (dyn FnMut(StoredUsageObservation) + Send),
     ) -> Result<()>;
     fn watch_all(&self, after: Option<WatchCursor>) -> Result<KernelWatch>;
@@ -843,12 +841,23 @@ pub trait KernelBackend: Send + Sync {
         execution: ExecutionId,
         generation: AttemptGeneration,
     ) -> Result<ReadView<ExecutionAttemptView>>;
+    async fn execution_text_sources(
+        &self,
+        session: SessionId,
+        execution: ExecutionId,
+        generation: Option<AttemptGeneration>,
+    ) -> Result<ReadView<Vec<ContentId>>>;
     async fn history_window(
         &self,
         session: SessionId,
         before: Option<HistoryCursor>,
         message_ids: &[i64],
         limit: usize,
+    ) -> Result<ReadView<HistoryPage>>;
+    async fn history_by_ids(
+        &self,
+        session: SessionId,
+        ids: &[i64],
     ) -> Result<ReadView<HistoryPage>>;
     async fn message_history(
         &self,

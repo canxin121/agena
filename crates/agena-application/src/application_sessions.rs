@@ -19,6 +19,7 @@ use crate::dto::{
     CursorPaginationQuery, SearchPaginationQuery, SessionCreateRequest, SessionHierarchyRequest,
     SessionListQuery, WorkspacePathRequest, WorkspaceResolveRequest,
 };
+use crate::service::sessions::session_resource_from_kernel_summary;
 use crate::{Application, ApplicationError};
 
 impl Application {
@@ -132,23 +133,19 @@ impl Application {
             Some(workspace_id) => workspace_id,
             None => self.current_workspace_id().await?,
         };
-        let sessions = self
-            .list_sessions_query(ListSessionsParams {
-                cursor: None,
-                limit: Some(200),
-                workspace_id: Some(workspace_id),
-                parent_id: None,
-                roots: false,
-                exclude_subagents: true,
-                search: None,
-                ..Default::default()
-            })
-            .await?;
+        let recent_limit = recent_limit.clamp(1, 200) as usize;
+        let summaries = self
+            .session_kernel()?
+            .reader
+            .overview_summaries(workspace_id, recent_limit)
+            .await
+            .map_err(crate::kernel_error)?;
         let mut attention = Vec::new();
         let mut running = Vec::new();
         let mut recent = Vec::new();
         let mut favorites = Vec::new();
-        for session in sessions {
+        for summary in summaries.iter() {
+            let session = session_resource_from_kernel_summary(summary)?;
             if session.favorite {
                 favorites.push(session.clone());
             }
@@ -158,25 +155,12 @@ impl Application {
                 || matches!(session.state, agena_api::resource::SessionState::Creating)
             {
                 running.push(session);
-            } else {
+            } else if recent.len() < recent_limit {
                 recent.push(session);
             }
         }
-        let sort_recent = |left: &SessionResource, right: &SessionResource| {
-            right
-                .updated_at
-                .cmp(&left.updated_at)
-                .then_with(|| right.id.cmp(&left.id))
-        };
-        attention.sort_by(|left, right| {
-            session_attention_priority(&right.state)
-                .cmp(&session_attention_priority(&left.state))
-                .then_with(|| sort_recent(left, right))
-        });
-        running.sort_by(sort_recent);
-        recent.sort_by(sort_recent);
-        favorites.sort_by(sort_recent);
-        recent.truncate(usize::try_from(recent_limit.clamp(1, 200)).unwrap_or(200));
+        attention
+            .sort_by_key(|session| std::cmp::Reverse(session_attention_priority(&session.state)));
         Ok(SessionOverviewResource {
             favorites,
             attention,
@@ -186,34 +170,18 @@ impl Application {
         })
     }
 
-    /// Project runtime summaries into public resources and enrich every row
-    /// with the authoritative store-derived processing state.
-    pub async fn session_resources_from_summaries(
+    pub async fn session_tree(
         &self,
-        summaries: Vec<agena_domain::SessionSummary>,
+        root_id: i64,
     ) -> Result<Vec<SessionResource>, ApplicationError> {
-        let mut resources = Vec::with_capacity(summaries.len());
-        for summary in summaries {
-            if let Some(resource) = self.service().get_session(summary.id).await? {
-                resources.push(resource);
-            }
-        }
-        Ok(resources)
-    }
-
-    /// Return the store-derived processing state without materializing a full
-    /// transcript. Session lists in non-HTTP transports use this same source
-    /// of truth as `SessionResource.state`.
-    pub async fn session_processing_state(
-        &self,
-        session_id: i64,
-    ) -> Result<agena_api::resource::SessionState, ApplicationError> {
-        Ok(self
-            .service()
-            .get_session(session_id)
-            .await?
-            .ok_or_else(|| ApplicationError::not_found("The session was not found."))?
-            .state)
+        self.session_execution_services()?
+            .queries
+            .list_session_tree(root_id)
+            .await
+            .map_err(|error| ApplicationError::from_failure(*error.failure))?
+            .iter()
+            .map(session_resource_from_kernel_summary)
+            .collect()
     }
 
     pub async fn list_child_sessions(

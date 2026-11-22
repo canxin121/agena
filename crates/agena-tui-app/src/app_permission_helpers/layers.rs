@@ -1,7 +1,7 @@
 use crate::{
-    I18n, PermissionConfig, PermissionMode, PermissionStudioModeTarget as Target,
-    PermissionStudioOverlay, PermissionStudioProjection, PermissionStudioValueSource,
-    ToolPermissionRules, normalize_permission_config,
+    I18n, PermissionConfig, PermissionStudioModeTarget as Target, PermissionStudioOverlay,
+    PermissionStudioProjection, PermissionStudioValueSource, ToolPermissionRules,
+    normalize_permission_config,
 };
 
 /// Source changes use exactly the same replacement boundary as the domain:
@@ -159,6 +159,7 @@ pub(crate) fn permission_studio_source_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PermissionMode;
     use serde_json::json;
 
     fn dialog(local: serde_json::Value, inherited: serde_json::Value) -> PermissionStudioOverlay {

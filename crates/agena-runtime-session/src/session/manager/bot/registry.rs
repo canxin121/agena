@@ -96,6 +96,12 @@ fn profile(record: BotRecord) -> BotProfile {
     }
 }
 
+fn listed_profile(value: agena_storage::BotWithLocalSession) -> BotProfile {
+    let mut value_profile = profile(value.record);
+    value_profile.local_session_id = value.local_session_id;
+    value_profile
+}
+
 fn record(profile: &BotProfile) -> BotRecord {
     let prompts = profile.persona.prompts.clone().unwrap_or_default();
     BotRecord {
@@ -203,9 +209,7 @@ impl SessionManager {
             .local_bot_session(bot)
             .await
             .map_err(kernel_error)?;
-        if current.established
-            && let Some(session) = current.session
-        {
+        if let Some(session) = *current {
             return Ok(session.get());
         }
         // Retrying an uncertain commit uses this key; a later open gets a
@@ -221,7 +225,7 @@ impl SessionManager {
         .map_err(kernel_error)
     }
 
-    /// Read the pinned root (or the same legacy candidate first-open adopts).
+    /// Read the pinned local root.
     pub(super) async fn default_bot_conversation(
         &self,
         bot: Uuid,
@@ -232,7 +236,7 @@ impl SessionManager {
             .local_bot_session(bot)
             .await
             .map_err(kernel_error)?;
-        Ok(local.session.map(|session| session.get()))
+        Ok(local.map(SessionId::get))
     }
 
     async fn profile_with_local_session(
@@ -250,11 +254,13 @@ impl SessionManager {
         input: &impl Serialize,
     ) -> Result<Option<BotProfile>, AppError> {
         let input = serde_json::to_string(input)?;
-        match self.bots().receipt(key).await.map_err(repository_error)? {
-            Some((stored, _)) if stored != input => {
-                Err(repository_error(BotRepositoryError::ReplayedInput))
-            }
-            Some((_, result)) => Ok(Some(
+        match self
+            .bots()
+            .receipt(key, &input)
+            .await
+            .map_err(repository_error)?
+        {
+            Some(result) => Ok(Some(
                 self.profile_with_local_session(profile(
                     serde_json::from_str(&result).map_err(AppError::from)?,
                 ))
@@ -280,18 +286,12 @@ impl SessionManager {
 
     /// The first active Bot, or `None` when every Bot is archived.
     async fn default_bot(&self) -> Result<Option<BotProfile>, AppError> {
-        let bot = self
+        Ok(self
             .bots()
-            .list(false)
+            .first_active()
             .await
             .map_err(repository_error)?
-            .into_iter()
-            .next()
-            .map(profile);
-        match bot {
-            Some(bot) => self.profile_with_local_session(bot).await.map(Some),
-            None => Ok(None),
-        }
+            .map(listed_profile))
     }
 
     async fn bot_or_not_found(&self, id: Uuid) -> Result<BotProfile, AppError> {
@@ -318,16 +318,15 @@ impl SessionManager {
     }
 
     pub async fn list_bot_profiles(&self, include_archived: bool) -> Result<BotList, AppError> {
-        let records = self
+        let items: Vec<_> = self
             .bots()
             .list(include_archived)
             .await
-            .map_err(repository_error)?;
-        let mut items = Vec::with_capacity(records.len());
-        for record in records {
-            items.push(self.profile_with_local_session(profile(record)).await?);
-        }
-        let default_bot_id = self.default_bot().await?.map(|bot| bot.id);
+            .map_err(repository_error)?
+            .into_iter()
+            .map(listed_profile)
+            .collect();
+        let default_bot_id = items.iter().find(|item| !item.archived).map(|item| item.id);
         Ok(BotList {
             items,
             default_bot_id,
@@ -532,8 +531,7 @@ impl SessionManager {
 
     /// Resolve the conversation a client should open for this Bot.
     ///
-    /// The first legacy root is adopted once. A deleted canonical root is
-    /// replaced with a fresh conversation; older local histories stay retired.
+    /// A deleted canonical root is replaced with a fresh conversation.
     pub async fn ensure_named_bot_session(&self, id: Uuid) -> Result<BotSession, AppError> {
         let _gate = self.bot_creation_gate().lock_owned().await;
         let bot = self.bot_or_not_found(id).await?;

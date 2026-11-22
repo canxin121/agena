@@ -255,10 +255,7 @@ class SessionRestartTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(prefix='agena-session-restart-')
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        binary_variable = ('AGENA_TEST_PREVIOUS_BINARY'
-                           if self._testMethodName == 'test_previous_schema_upgrades_with_existing_forks'
-                           else 'AGENA_TEST_BINARY')
-        self.binary = Path(os.environ[binary_variable]).resolve(strict=True)
+        self.binary = Path(os.environ['AGENA_TEST_BINARY']).resolve(strict=True)
         self.trace_path = self.root / 'http.jsonl'
         self.trace = http_fixture.JsonLines(self.trace_path)
         self.addCleanup(self.trace.close)
@@ -325,48 +322,6 @@ class SessionRestartTests(unittest.TestCase):
                 'WHERE e.session_id=? ORDER BY e.message_id,a.generation',
                 (session_id,),
             ).fetchall()
-
-    @unittest.skipUnless(os.environ.get('AGENA_TEST_PREVIOUS_BINARY'),
-                         'requires the previous executable to create a genuine predecessor database')
-    def test_previous_schema_upgrades_with_existing_forks(self):
-        root = http_fixture.create_session(self.api, self.workspace_id, 'schema predecessor')
-        seed = self.provider.plan('upgrade_seed', 'text', payloads=['Original completed response'])
-        http_fixture.submit(self.api, root, 'UPGRADE_ORIGINAL_CONTEXT ' + 'history detail ' * 300)
-        http_fixture.wait_idle(self.api, root)
-        self.provider.assert_step(seed)
-        branch = self.api.call('POST', f'/api/v1/sessions/{root}/fork', {})[0]['session']['id']
-        before = http_fixture.read_assistant_text(self.api, branch)
-        user_ids = [part['part_id'] for part in self.api.parts(branch) if part['role'] == 'user']
-        database = (self.root / 'data/agena.db').as_uri() + '?mode=ro'
-        with sqlite3.connect(database, uri=True) as connection:
-            self.assertEqual(connection.execute(
-                "SELECT count(*) FROM sqlite_schema WHERE name='agena_execution_purposes'",
-            ).fetchone()[0], 0, 'the predecessor executable must create the actual old schema')
-        self.stop()
-        self.binary = Path(os.environ['AGENA_TEST_BINARY']).resolve(strict=True)
-        upgraded = self.start()
-        self.assertEqual(upgraded['instance_id'], self.identity['instance_id'])
-        self.assertEqual(http_fixture.read_assistant_text(self.api, branch), before)
-        self.assertEqual([part['part_id'] for part in self.api.parts(branch) if part['role'] == 'user'], user_ids)
-        nested = self.api.call('POST', f'/api/v1/sessions/{branch}/fork', {})[0]['session']['id']
-        summary = self.provider.plan('upgrade_compact', 'text', payloads=[
-            'UPGRADED_BRANCH_SUMMARY: preserve the original branch context.',
-        ])
-        self.api.call('POST', f'/api/v1/sessions/{nested}/compact', {})
-        http_fixture.wait_idle(self.api, nested)
-        self.provider.assert_step(summary)
-        response = self.provider.plan('upgrade_continue', 'text', payloads=['Upgrade continuation succeeded'])
-        self.api.call('POST', f'/api/v1/sessions/{nested}/continue', {})
-        http_fixture.wait_idle(self.api, nested)
-        self.provider.assert_step(response)
-        self.assertIn('Upgrade continuation succeeded', http_fixture.read_assistant_text(self.api, nested))
-        requests = {record['step']: json.dumps(record['request'])
-                    for line in self.trace_path.read_text().splitlines()
-                    if (record := json.loads(line))['kind'] == 'provider_request'}
-        self.assertIn('UPGRADE_ORIGINAL_CONTEXT', requests['upgrade_compact'])
-        self.assertIn('UPGRADED_BRANCH_SUMMARY', requests['upgrade_continue'])
-        self.assertNotIn('UPGRADE_ORIGINAL_CONTEXT', requests['upgrade_continue'])
-        self.assertEqual(self.provider.errors, [])
 
     def test_crash_reconciles_abandoned_attempt_before_first_session_read(self):
         session = http_fixture.create_session(self.api, self.workspace_id, 'crash recovery')

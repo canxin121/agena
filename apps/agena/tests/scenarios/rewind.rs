@@ -201,6 +201,53 @@ async fn fork_rewind_creates_a_branch_and_leaves_the_source_intact() -> TestResu
                     .any(|part| part.part_id == second_id || part.message_id == Some(second_id)),
                 "branch kept the retracted turn"
             );
+            let runs = branch
+                .client()
+                .session_run_window(branch_id, 8, 1, None)
+                .await?;
+            let response = branch_parts
+                .iter()
+                .find(|part| part.role == "assistant" && part.message_boundary)
+                .and_then(|part| part.run_id)
+                .context("inherited response identity")?;
+            ensure!(runs.runs.iter().any(|run| run.run_id == response));
+            let filtered = branch
+                .client()
+                .session_run_parts_window(
+                    branch_id,
+                    &[first_id, response, response, second_id],
+                    32,
+                    None,
+                )
+                .await?;
+            ensure!(filtered.parts.iter().any(|part| part.part_id == first_id));
+            ensure!(
+                filtered
+                    .parts
+                    .iter()
+                    .filter(|part| part.part_id == response)
+                    .count()
+                    == 1
+            );
+            ensure!(
+                !filtered
+                    .parts
+                    .iter()
+                    .any(|part| part.part_id == second_id || part.message_id == Some(second_id))
+            );
+            let explicit = branch
+                .client()
+                .session_parts_by_ids(branch_id, &[response, second_id, first_id, response])
+                .await?;
+            ensure!(
+                explicit
+                    .parts
+                    .iter()
+                    .map(|part| part.part_id)
+                    .collect::<Vec<_>>()
+                    == [first_id, response]
+            );
+            ensure!(!explicit.page.has_more && explicit.page.next_cursor.is_none());
             // Both sessions remain independently usable.
             case.model()
                 .expect(RequestMatch::user_text("rewind-branch-followup"))

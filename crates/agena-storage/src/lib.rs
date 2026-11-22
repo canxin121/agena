@@ -261,6 +261,12 @@ pub struct BotRecord {
     pub updated_at_ms: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BotWithLocalSession {
+    pub record: BotRecord,
+    pub local_session_id: Option<i64>,
+}
+
 #[derive(Debug, thiserror::Error)]
 /// Backend error from the Bot repository.
 pub enum BotRepositoryError {
@@ -312,12 +318,17 @@ pub trait BotRepository: Send + Sync {
     async fn get(&self, id: uuid::Uuid) -> Result<BotRecord, BotRepositoryError>;
 
     /// Active Bots in creation order, or every Bot when `include_archived`.
-    async fn list(&self, include_archived: bool) -> Result<Vec<BotRecord>, BotRepositoryError>;
+    async fn list(
+        &self,
+        include_archived: bool,
+    ) -> Result<Vec<BotWithLocalSession>, BotRepositoryError>;
+
+    async fn first_active(&self) -> Result<Option<BotWithLocalSession>, BotRepositoryError>;
 
     async fn count(&self) -> Result<u64, BotRepositoryError>;
 
     /// Idempotence receipts for Bot operations, keyed by `request_key`.
-    async fn receipt(&self, key: &str) -> Result<Option<(String, String)>, BotRepositoryError>;
+    async fn receipt(&self, key: &str, input: &str) -> Result<Option<String>, BotRepositoryError>;
     async fn save_receipt(
         &self,
         key: &str,

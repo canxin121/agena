@@ -10,7 +10,6 @@ use std::{collections::BTreeSet, sync::Arc, time::Duration};
 use uuid::Uuid;
 
 mod provider_fingerprint;
-pub(super) use provider_fingerprint::{ProviderFingerprintMatch, ProviderIdentityCheck};
 
 pub(super) struct IntegrationSourcePolicy {
     pub(super) fingerprint: String,
@@ -214,27 +213,17 @@ impl AssistantRuntime {
             owner_bot_id: Some(owner.id),
         })
     }
-    pub(super) fn provider_identity_check(
-        &self,
-        provider: &str,
-        stored: &str,
-    ) -> Result<ProviderIdentityCheck> {
-        let host = self.integration_host()?;
-        self.provider_identity_check_on_host(&host, provider, stored)
-    }
-
-    fn provider_identity_check_on_host(
+    fn provider_identity_on_host(
         &self,
         host: &agena_plugin_host::PluginHost,
         provider: &str,
-        stored: &str,
-    ) -> Result<ProviderIdentityCheck> {
+    ) -> Result<String> {
         let plugin = host
             .plugins()
             .iter()
             .find(|plugin| plugin.key().to_string() == provider)
             .ok_or(Error::Unavailable("integration provider is not active"))?;
-        provider_fingerprint::check(plugin, stored)
+        provider_fingerprint::identity(plugin)
     }
     pub(super) async fn source_permission_policy(
         &self,
@@ -289,11 +278,12 @@ impl AssistantRuntime {
         binding: &IntegrationBinding,
     ) -> Result<IntegrationSourcePolicy> {
         let provider = self
-            .provider_identity_check(&binding.spec.provider, &binding.provider_fingerprint)
+            .integration_host()
+            .and_then(|host| self.provider_identity_on_host(&host, &binding.spec.provider))
             .map_err(|error| {
                 Error::Policy(format!("channel provider identity unavailable: {error}"))
             })?;
-        if provider.kind == ProviderFingerprintMatch::Mismatch {
+        if provider != binding.provider_fingerprint {
             return Err(Error::Conflict(
                 "channel provider transport or configuration changed; explicit review is required",
             ));
@@ -621,10 +611,7 @@ impl AssistantRuntime {
                     .fingerprint;
                 if b.spec.mode == IntegrationMode::Channel
                     && b.activated_at_ms.is_some()
-                    && (!self
-                        .provider_identity_check(&b.spec.provider, &b.provider_fingerprint)?
-                        .kind
-                        .is_compatible()
+                    && (b.provider_fingerprint != provider.fingerprint
                         || b.permission_fingerprint != permission_fingerprint)
                 {
                     return Err(Error::Conflict(
@@ -781,9 +768,7 @@ impl AssistantRuntime {
         // generation. A reload must not substitute a new transport/config
         // between checking the grant fingerprint and sending user content.
         let host = self.integration_host()?;
-        let identity =
-            self.provider_identity_check_on_host(&host, &b.spec.provider, &b.provider_fingerprint)?;
-        if !identity.kind.is_compatible() {
+        if self.provider_identity_on_host(&host, &b.spec.provider)? != b.provider_fingerprint {
             self.integration_fault(
                 b.id,
                 b.revision,
@@ -1006,7 +991,7 @@ impl AssistantRuntime {
         Ok(())
     }
     async fn export_channel(&self, b: &IntegrationBinding) -> Result<()> {
-        for scope in self.integrations.channel_sessions(b.id).await? {
+        for scope in self.integrations.channel_sessions_with_output(b.id).await? {
             let session = scope.session_id;
             for (execution, generation, phase) in self
                 .integrations
@@ -1027,7 +1012,12 @@ impl AssistantRuntime {
                 let output_route = ChannelOutputRoute::from_authority(&authority, session);
                 let text = self
                     .manager()?
-                    .integration_execution_result(session, &execution)
+                    .integration_execution_result(
+                        session,
+                        execution_id,
+                        agena_storage::kernel::AttemptGeneration::try_from(generation)
+                            .map_err(runtime_error)?,
+                    )
                     .await
                     .map_err(runtime_error)?;
                 let text = match text {
@@ -1044,7 +1034,7 @@ impl AssistantRuntime {
                 };
                 let state = if text.is_empty() { "sent" } else { "queued" }.into();
                 self.integrations
-                    .enqueue_delivery(IntegrationDelivery {
+                    .enqueue_execution_delivery(IntegrationDelivery {
                         id: format!("{}:{execution}:{generation}", b.id),
                         binding_id: b.id,
                         text,
@@ -1071,12 +1061,11 @@ impl AssistantRuntime {
             }
             let route = ChannelOutputRoute::from_authority(&scope.authority, session);
             for question in self
-                .manager()?
-                .integration_execution_questions(session)
-                .await
-                .map_err(runtime_error)?
+                .integrations
+                .unnotified_channel_interactions(b.id, session)
+                .await?
             {
-                self.integrations.enqueue_delivery(IntegrationDelivery{id:format!("{}:attention:{}",b.id,question.id.get()),binding_id:b.id,
+                self.integrations.enqueue_delivery(IntegrationDelivery{id:format!("{}:attention:{}",b.id,question),binding_id:b.id,
                 text:format!("This conversation needs your input or permission approval. Open Agena conversation #{session} to inspect the exact request. Permissions are not approved from external message text."),
                 state:"queued".into(),attempts:0,next_attempt_ms:0,remote_id:None,created_at_ms:Utc::now().timestamp_millis(),error:None,route:Some(route.clone())}).await?;
             }
@@ -1088,24 +1077,14 @@ impl AssistantRuntime {
         // generation. A reload must not substitute a new transport/config
         // between checking the grant fingerprint and sending user content.
         let host = self.integration_host()?;
-        let identity =
-            self.provider_identity_check_on_host(&host, &b.spec.provider, &b.provider_fingerprint)?;
-        if !identity.kind.is_compatible() {
+        if self.provider_identity_on_host(&host, &b.spec.provider)? != b.provider_fingerprint {
             return self.integration_fault(b.id,b.revision,"channel adapter transport/configuration changed; outbound delivery stopped until explicit reauthorization",true).await;
         }
         let provider = self.adapter_on_host(host.clone(), &b.spec.provider).await?;
         if provider.adapter.idempotent_send {
-            for mut d in self
-                .integrations
-                .deliveries(b.id)
-                .await?
-                .into_iter()
-                .filter(|d| d.state == "uncertain" && d.attempts < 5)
-            {
-                d.state = "queued".into();
-                d.next_attempt_ms = Utc::now().timestamp_millis() + 30000;
-                self.integrations.finish_delivery(d).await?;
-            }
+            self.integrations
+                .retry_uncertain_deliveries(b.id, Utc::now().timestamp_millis() + 30000)
+                .await?;
         }
         let delivery = {
             let _lock = self.integration_gate.lock().await;

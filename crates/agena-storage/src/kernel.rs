@@ -64,6 +64,12 @@ pub use watch::{
 
 /// Origin-owned usage projected from a provider round or a completed tool.
 /// The payload excludes replay, tool output and other session content.
+#[derive(Clone, Copy)]
+pub enum UsageScope<'a> {
+    Instance(&'a agena_domain::UsageStatsQuery),
+    Session(SessionId),
+}
+
 #[derive(Debug)]
 pub struct StoredUsageObservation {
     pub session_id: SessionId,
@@ -550,14 +556,6 @@ pub struct ToolView {
 /// Canonical result metadata for a terminal tool originally executed by this
 /// session. Unlike transcript projections, these records remain readable after
 /// membership changes and never include a fork's inherited tool references.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct OwnedToolMetadata {
-    pub id: ToolId,
-    pub created_at_ms: i64,
-    pub finished_at_ms: i64,
-    pub metadata: serde_json::Value,
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InteractionView {
     pub created_at_ms: i64,
@@ -1494,6 +1492,18 @@ impl KernelReader {
         self.0
             .backend
             .execution_attempt(session, execution, generation)
+            .await
+    }
+    /// Visible text sources for one execution in newest-first transcript order.
+    pub async fn execution_text_sources(
+        &self,
+        session: SessionId,
+        execution: ExecutionId,
+        generation: Option<AttemptGeneration>,
+    ) -> Result<ReadView<Vec<ContentId>>> {
+        self.0
+            .backend
+            .execution_text_sources(session, execution, generation)
             .await
     }
     pub async fn history(

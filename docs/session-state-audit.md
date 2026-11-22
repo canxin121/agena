@@ -151,7 +151,6 @@ cargo test --locked --offline --no-fail-fast \
   -p agena-runtime-tools -p agena-application -p agena-api --lib --tests
 cargo build --locked --offline -p agena --bin agena
 AGENA_TEST_BINARY=/absolute/path/to/current/agena \
-AGENA_TEST_PREVIOUS_BINARY=/absolute/path/to/previous/agena \
 PYTHONDONTWRITEBYTECODE=1 \
 python3 scripts/agena/tests/test_server_lifecycle.py SessionRestartTests -v
 cargo fmt --all -- --check
@@ -159,7 +158,7 @@ cargo clippy --workspace --all-targets --locked --offline -- -D warnings
 python3 scripts/ci/verify-runtime-capabilities.py
 ```
 
-旧库升级 HTTP 回归使用旧可执行文件真正创建数据库与 fork，再由新程序打开，核对 instance identity 和历史不变，并执行二级 fork 的 compact/Continue。未提供 `AGENA_TEST_PREVIOUS_BINARY` 时，仅该升级用例跳过。
+本次历史审计曾验证旧库升级和二级 fork 的 compact / Continue。当前数据库基线使用独立数据目录。
 
 最终验证结果：
 

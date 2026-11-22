@@ -554,6 +554,104 @@ async fn an_existing_family_cannot_be_reparented_into_a_cycle_or_stale_ancestry(
 }
 
 #[tokio::test]
+async fn archive_publication_releases_failed_commit_and_respects_allocated_segment_ids() {
+    let runtime = open_kernel_runtime("sqlite::memory:").await.unwrap();
+    let workspace = runtime
+        .workspaces
+        .ensure_id("/archive-publication")
+        .await
+        .unwrap();
+    let source = runtime
+        .ports
+        .sessions
+        .create(RequestId::new(), workspace, "Source".into())
+        .await
+        .unwrap()
+        .value
+        .id;
+    send(&runtime, source, "Keep this entry").await;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("publication.jsonl");
+    let mut file = tokio::fs::File::create(&path).await.unwrap();
+    runtime
+        .ports
+        .reader
+        .export_jsonl(source, &mut file)
+        .await
+        .unwrap();
+    drop(file);
+
+    let db = runtime.database.get_sqlite_connection_pool();
+    let collected: i64 = sea_orm::sqlx::query_scalar(
+        "INSERT INTO agena_history_segments DEFAULT VALUES RETURNING id",
+    )
+    .fetch_one(db)
+    .await
+    .unwrap();
+    sea_orm::sqlx::query("DELETE FROM agena_history_segments WHERE id=?")
+        .bind(collected)
+        .execute(db)
+        .await
+        .unwrap();
+
+    // The staging graph is valid. Reject only the final publication commit.
+    sea_orm::sqlx::query(
+        "CREATE TRIGGER reject_publication AFTER INSERT ON agena_sessions
+         BEGIN
+             INSERT INTO agena_executions(id,session_id,message_id,current_generation,created_at_ms)
+             VALUES('failed-publication',NEW.id,-1,1,0);
+         END",
+    )
+    .execute(db)
+    .await
+    .unwrap();
+    let request = RequestId::new();
+    let error = runtime
+        .ports
+        .sessions
+        .import_archive(request, workspace, &path)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error,
+        KernelError::Invalid("archive publication has unresolved references".into())
+    );
+    let published: i64 = sea_orm::sqlx::query_scalar("SELECT count(*) FROM agena_sessions")
+        .fetch_one(db)
+        .await
+        .unwrap();
+    assert_eq!(published, 1);
+    sea_orm::sqlx::query("DROP TRIGGER reject_publication")
+        .execute(db)
+        .await
+        .unwrap();
+    let receipt = runtime
+        .ports
+        .sessions
+        .import_archive(request, workspace, &path)
+        .await
+        .unwrap();
+    let segment: i64 = sea_orm::sqlx::query_scalar(
+        "SELECT segment_id FROM agena_session_segments WHERE session_id=?",
+    )
+    .bind(receipt.value.id.get())
+    .fetch_one(db)
+    .await
+    .unwrap();
+    assert!(segment > collected);
+    assert_eq!(
+        runtime
+            .ports
+            .sessions
+            .import_archive(request, workspace, &path)
+            .await
+            .unwrap(),
+        receipt
+    );
+    runtime.ports.clone().shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn archives_restore_control_purpose_and_the_original_inherited_content_cut() {
     let directory = tempfile::tempdir().unwrap();
     let database = directory.path().join("source.db");
@@ -749,6 +847,41 @@ async fn archives_restore_control_purpose_and_the_original_inherited_content_cut
         .unwrap();
     assert_eq!(restored_control.purpose, ExecutionPurpose::Compaction);
     assert_ne!(restored_control.id, compact.id);
+    let restored_rounds = runtime
+        .ports
+        .reader
+        .rounds(restored, None, 32)
+        .await
+        .unwrap();
+    let archived_round = restored_rounds
+        .iter()
+        .find(|round| round.execution_id == restored_control.id)
+        .unwrap();
+    let archived_prompt = runtime
+        .ports
+        .reader
+        .prompt(restored, archived_round.id)
+        .await
+        .unwrap();
+    let counted: bool = sea_orm::sqlx::query_scalar(
+        "SELECT (input_source_count,input_source_bytes)=(
+             SELECT count(*),sum(head_bytes+256) FROM agena_round_input_sources WHERE round_id=r.id
+         ) FROM agena_rounds r WHERE r.id=?",
+    )
+    .bind(archived_round.id.get())
+    .fetch_one(runtime.database.get_sqlite_connection_pool())
+    .await
+    .unwrap();
+    assert!(counted);
+    let archived_source = archived_prompt
+        .sources
+        .iter()
+        .find(|head| head.id == content)
+        .unwrap();
+    assert_eq!(archived_source.committed, b"before-fork".len() as u64);
+    assert_ne!(archived_source.epoch, frozen_epoch);
+    assert_eq!(archived_source.state, CaptureState::Open);
+    drop((archived_prompt, restored_rounds));
     let restored_anchor = anchor.id;
     drop(restored_control);
     drop(history);
@@ -863,6 +996,177 @@ async fn in_place_truncation_keeps_one_session_and_drops_the_retracted_tail() {
     // The same session can still accept a new turn after the cut.
     let replacement = completed_input(&runtime, session).await;
     assert_ne!(replacement.message_id, second.message_id);
+    let fork = runtime
+        .ports
+        .sessions
+        .fork(RequestId::new(), session, replacement.message_id)
+        .await
+        .unwrap()
+        .value
+        .id;
+    let summary = runtime.ports.reader.summary(fork).await.unwrap();
+    assert_eq!((summary.entry_count, summary.user_message_count), (2, 2));
+    runtime.ports.clone().shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn archive_and_history_cuts_keep_exact_counts_and_timestamp_maxima() {
+    use serde_json::{Value, json};
+    use sha2::{Digest, Sha256};
+
+    let runtime = open_kernel_runtime("sqlite::memory:").await.unwrap();
+    let workspace = runtime
+        .workspaces
+        .ensure_id("/history-summary")
+        .await
+        .unwrap();
+    let source = runtime
+        .ports
+        .sessions
+        .create(RequestId::new(), workspace, "Summary source".into())
+        .await
+        .unwrap()
+        .value
+        .id;
+    let first = send(&runtime, source, "First").await;
+    let attempt = runtime
+        .ports
+        .executor
+        .claim_next(RequestId::new(), source, first.id)
+        .await
+        .unwrap()
+        .value;
+    let round = attempt
+        .begin_current_round(RequestId::new())
+        .await
+        .unwrap()
+        .value;
+    let response = round
+        .begin_text(RequestId::new(), false)
+        .await
+        .unwrap()
+        .value;
+    response.append("An answer").await.unwrap();
+    round.finish(RequestId::new(), None, true).await.unwrap();
+    attempt
+        .finish(RequestId::new(), ExecutionPhase::Succeeded)
+        .await
+        .unwrap();
+    completed_input(&runtime, source).await;
+    completed_input(&runtime, source).await;
+
+    // Restore valid facts whose clocks do not follow membership order. Import
+    // uses the newest user timestamp; cuts use the newest retained entry.
+    let mut original = Vec::new();
+    let mut report = runtime
+        .ports
+        .reader
+        .export_jsonl(source, &mut original)
+        .await
+        .unwrap();
+    let latest_entry = 8_000_000_000_000i64;
+    let mut times = [20, latest_entry, -100, 10].into_iter();
+    let mut archive = Vec::new();
+    for line in original
+        .split_inclusive(|byte| *byte == b'\n')
+        .take(report.records as usize)
+    {
+        let mut record: Value = serde_json::from_slice(line).unwrap();
+        if record["kind"] == "entry" {
+            let timestamp = times.next().unwrap();
+            record["data"]["facts"]["created_at_ms"] = json!(timestamp);
+            record["data"]["facts"]["entry"]["created_at_ms"] = json!(timestamp);
+        }
+        serde_json::to_writer(&mut archive, &record).unwrap();
+        archive.push(b'\n');
+    }
+    assert!(times.next().is_none());
+    report.bytes = archive.len() as u64;
+    report.sha256 = Sha256::digest(&archive).into();
+    serde_json::to_writer(&mut archive, &json!({"kind":"footer","data":report})).unwrap();
+    archive.push(b'\n');
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("summary.jsonl");
+    tokio::fs::write(&path, archive).await.unwrap();
+    let restored = runtime
+        .ports
+        .sessions
+        .import_archive(RequestId::new(), workspace, &path)
+        .await
+        .unwrap()
+        .value
+        .id;
+    let summary = runtime.ports.reader.summary(restored).await.unwrap();
+    assert_eq!(
+        (
+            summary.entry_count,
+            summary.user_message_count,
+            summary.last_message_at_ms
+        ),
+        (4, 3, Some(20))
+    );
+
+    let history = runtime
+        .ports
+        .reader
+        .history(restored, None, 8)
+        .await
+        .unwrap();
+    let at_time = |timestamp| {
+        history
+            .entries
+            .iter()
+            .find(|entry| entry.created_at_ms == timestamp)
+            .unwrap()
+            .id
+    };
+    let branch = runtime
+        .ports
+        .sessions
+        .fork(RequestId::new(), restored, at_time(-100))
+        .await
+        .unwrap()
+        .value
+        .id;
+    runtime
+        .ports
+        .sessions
+        .truncate(RequestId::new(), restored, at_time(10))
+        .await
+        .unwrap();
+    drop(history);
+    for session in [restored, branch] {
+        let summary = runtime.ports.reader.summary(session).await.unwrap();
+        assert_eq!(
+            (
+                summary.entry_count,
+                summary.user_message_count,
+                summary.last_message_at_ms
+            ),
+            (3, 2, Some(latest_entry))
+        );
+    }
+
+    // The branch still owns the old segment. Appending to the truncated
+    // session copies its visible prefix and extends that prefix's summary.
+    let next = completed_input(&runtime, restored).await;
+    let extended = runtime
+        .ports
+        .sessions
+        .fork(RequestId::new(), restored, next.message_id)
+        .await
+        .unwrap()
+        .value
+        .id;
+    let summary = runtime.ports.reader.summary(extended).await.unwrap();
+    assert_eq!(
+        (
+            summary.entry_count,
+            summary.user_message_count,
+            summary.last_message_at_ms
+        ),
+        (4, 3, Some(latest_entry))
+    );
     runtime.ports.clone().shutdown().await.unwrap();
 }
 

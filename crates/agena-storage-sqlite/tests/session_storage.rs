@@ -50,7 +50,7 @@ impl Fixture {
         std::fs::write(parent.join(name), body).unwrap();
     }
 
-    async fn start_tool(&self, session: SessionId) -> (AttemptHandle, RoundHandle, ToolHandle) {
+    async fn claim(&self, session: SessionId) -> AttemptHandle {
         let execution = self
             .runtime
             .ports
@@ -65,14 +65,17 @@ impl Fixture {
             .await
             .unwrap()
             .value;
-        let attempt = self
-            .runtime
+        self.runtime
             .ports
             .executor
             .claim_next(RequestId::new(), session, execution.id)
             .await
             .unwrap()
-            .value;
+            .value
+    }
+
+    async fn start_tool(&self, session: SessionId) -> (AttemptHandle, RoundHandle, ToolHandle) {
+        let attempt = self.claim(session).await;
         let round = attempt
             .begin_current_round(RequestId::new())
             .await
@@ -315,7 +318,8 @@ async fn purge_keeps_shared_history_then_reclaims_payloads_and_database_file_byt
         .unwrap()
         .entry_id;
     let log = tool.begin_log(RequestId::new()).await.unwrap().value;
-    log.append(CommandOutputStream::Stdout, "frozen output")
+    let frozen_output = "frozen output".repeat(6_000);
+    log.append(CommandOutputStream::Stdout, &frozen_output)
         .await
         .unwrap();
     log.finish(RequestId::new()).await.unwrap();
@@ -358,12 +362,30 @@ async fn purge_keeps_shared_history_then_reclaims_payloads_and_database_file_byt
         .unwrap()
         .value
         .id;
+    let nested = fixture
+        .runtime
+        .ports
+        .sessions
+        .fork(RequestId::new(), child, entry)
+        .await
+        .unwrap()
+        .value
+        .id;
     let storage = fixture.runtime.ports.storage();
     assert_eq!(
         detail(&storage, parent).await.summary.bytes.media,
         bytes.len() as u64
     );
     assert_eq!(detail(&storage, child).await.summary.bytes.media, 0);
+    let pool = fixture.runtime.database.get_sqlite_connection_pool();
+    let shared_head: (i64, Option<i64>) = sqlx::query_as(
+        "SELECT head_owner_session_id,head_bytes FROM agena_branch_sources WHERE session_id=?",
+    )
+    .bind(nested.get())
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(shared_head, (child.get(), None));
     let purge = StorageSelection {
         purge: true,
         ..Default::default()
@@ -407,16 +429,41 @@ async fn purge_keeps_shared_history_then_reclaims_payloads_and_database_file_byt
         .await
         .unwrap();
     assert_eq!(inherited_log.records.len(), 1);
+    assert!(matches!(
+        &inherited_log.records[0].payload,
+        EventPayload::Log { text, .. } if text == &frozen_output
+    ));
     drop((inherited, inherited_log));
 
-    let (_, confirm) = confirmation(&storage, child, purge.clone()).await;
+    let (preview, confirm) = confirmation(&storage, child, purge.clone()).await;
+    assert!(preview.keeps_shared_history);
     storage.confirm(child, confirm).await.unwrap();
     settled(&storage, child).await;
+    let page = fixture
+        .runtime
+        .ports
+        .reader
+        .event_page(nested, log.id(), None, 16)
+        .await
+        .unwrap();
+    assert_eq!(page.records.len(), 1);
+    drop(page);
+
+    let (_, confirm) = confirmation(&storage, nested, purge.clone()).await;
+    storage.confirm(nested, confirm).await.unwrap();
+    settled(&storage, nested).await;
+    let remaining_heads: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM agena_branch_sources WHERE session_id IN (?,?)")
+            .bind(child.get())
+            .bind(nested.get())
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(remaining_heads, 0);
 
     // An independent delivery can still reference the origin's entry even
     // when no branch remains. This must guard the log and blob before any batch.
     let live = fixture.create("Delivery owner").await;
-    let pool = fixture.runtime.database.get_sqlite_connection_pool();
     sqlx::query("INSERT INTO agena_deliveries (id,session_id,business_key,payload_json,state,result_entry_id) VALUES (?,?,?,'{}','consumed',?)")
         .bind(agena_domain::CommandId::new().to_string()).bind(live.get()).bind("cross-owner-result")
         .bind(entry.get()).execute(pool).await.unwrap();
@@ -447,6 +494,12 @@ async fn purge_keeps_shared_history_then_reclaims_payloads_and_database_file_byt
             .is_empty()
     );
     assert_eq!(detail(&storage, parent).await.summary.bytes.media, 0);
+    let remaining_pieces: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM agena_content_block_pieces")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(remaining_pieces, 0);
     let current = storage
         .list(SessionStorageQuery {
             refresh: Some(true),
@@ -458,7 +511,7 @@ async fn purge_keeps_shared_history_then_reclaims_payloads_and_database_file_byt
         current
             .items
             .iter()
-            .all(|row| row.session_id != parent && row.session_id != child)
+            .all(|row| ![parent, child, nested].contains(&row.session_id))
     );
     assert!(current.database.reusable_bytes >= 2 * 1024 * 1024);
     let compacted = storage.reclaim_database().await.unwrap();
@@ -466,6 +519,130 @@ async fn purge_keeps_shared_history_then_reclaims_payloads_and_database_file_byt
     assert_eq!(compacted.database.reusable_bytes, 0);
     assert!(
         compacted.database.file_bytes < current.database.file_bytes + current.database.wal_bytes
+    );
+    fixture.runtime.ports.clone().shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn purge_reclaims_frozen_prompt_blocks_after_their_last_round() {
+    let fixture = Fixture::new().await;
+    let origin = fixture.create("Prompt source").await;
+    let (attempt, source, tool) = fixture.start_tool(origin).await;
+    let tool_entry = fixture
+        .runtime
+        .ports
+        .reader
+        .tool(origin, tool.id())
+        .await
+        .unwrap()
+        .entry_id;
+    tool.complete(
+        RequestId::new(),
+        ToolResult {
+            phase: ToolPhase::Succeeded,
+            value: json!({"result": "retained"}),
+        },
+    )
+    .await
+    .unwrap();
+    let provider_state = json!({"replay": "retained"});
+    source
+        .finish(RequestId::new(), Some(provider_state.clone()), true)
+        .await
+        .unwrap();
+    attempt
+        .finish(RequestId::new(), ExecutionPhase::Succeeded)
+        .await
+        .unwrap();
+
+    let mut consumers = Vec::new();
+    for _ in 0..2 {
+        let session = fixture
+            .runtime
+            .ports
+            .sessions
+            .fork(RequestId::new(), origin, tool_entry)
+            .await
+            .unwrap()
+            .value
+            .id;
+        let attempt = fixture.claim(session).await;
+        let round = attempt
+            .begin_round(RequestId::new(), vec![tool_entry])
+            .await
+            .unwrap()
+            .value;
+        round.finish(RequestId::new(), None, true).await.unwrap();
+        attempt
+            .finish(RequestId::new(), ExecutionPhase::Succeeded)
+            .await
+            .unwrap();
+        consumers.push((session, round.id()));
+    }
+    let [(first, first_round), (last, last_round)] = consumers.try_into().unwrap();
+    let pool = fixture.runtime.database.get_sqlite_connection_pool();
+    let (input_block, replay_block): (i64, i64) = sqlx::query_as(
+        "SELECT l.block_id,p.block_id FROM agena_round_input_blocks l
+         JOIN agena_round_replay_blocks p ON p.round_id=l.round_id
+         WHERE l.round_id=?",
+    )
+    .bind(first_round.get())
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    let other: (i64, i64) = sqlx::query_as(
+        "SELECT l.block_id,p.block_id FROM agena_round_input_blocks l
+         JOIN agena_round_replay_blocks p ON p.round_id=l.round_id
+         WHERE l.round_id=?",
+    )
+    .bind(last_round.get())
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(other, (input_block, replay_block));
+
+    let storage = fixture.runtime.ports.storage();
+    let purge = StorageSelection {
+        purge: true,
+        ..Default::default()
+    };
+    let (preview, confirm) = confirmation(&storage, first, purge.clone()).await;
+    assert!(!preview.keeps_shared_history);
+    storage.confirm(first, confirm).await.unwrap();
+    settled(&storage, first).await;
+    let prompt = fixture
+        .runtime
+        .ports
+        .reader
+        .prompt_of(last_round)
+        .await
+        .unwrap();
+    assert_eq!(prompt.entries[0].entry.id, tool_entry);
+    assert_eq!(
+        prompt.replays[0].provider_state.as_ref(),
+        Some(&provider_state)
+    );
+    drop(prompt);
+
+    let (_, confirm) = confirmation(&storage, last, purge).await;
+    storage.confirm(last, confirm).await.unwrap();
+    settled(&storage, last).await;
+    let blocks_remain: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM agena_prompt_input_blocks WHERE id=?)
+          OR EXISTS(SELECT 1 FROM agena_prompt_replay_blocks WHERE id=?)",
+    )
+    .bind(input_block)
+    .bind(replay_block)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert!(!blocks_remain);
+    assert!(
+        sqlx::query("PRAGMA foreign_key_check")
+            .fetch_all(pool)
+            .await
+            .unwrap()
+            .is_empty()
     );
     fixture.runtime.ports.clone().shutdown().await.unwrap();
 }
@@ -489,8 +666,11 @@ async fn recording_cleanup_keeps_the_tail_and_tool_results() {
         Some(StorageProtection::Running)
     );
     let log = tool.begin_log(RequestId::new()).await.unwrap().value;
+    log.append(CommandOutputStream::Stdout, &"a".repeat(72 * 1024))
+        .await
+        .unwrap();
     let early = "a".repeat(4096);
-    for _ in 0..180 {
+    for _ in 0..179 {
         log.append(CommandOutputStream::Stdout, &early)
             .await
             .unwrap();
@@ -512,6 +692,15 @@ async fn recording_cleanup_keeps_the_tail_and_tool_results() {
     })
     .await
     .unwrap();
+    let split_bytes: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(b.body_bytes),0) FROM agena_content_streams c
+         JOIN agena_content_blocks b ON b.source_key=c.source_key WHERE c.id=? AND b.body IS NULL",
+    )
+    .bind(log.id().to_string())
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert!(split_bytes > 0);
     for _ in 0..150 {
         log.append(CommandOutputStream::Stdout, "recent output")
             .await
@@ -540,6 +729,15 @@ async fn recording_cleanup_keeps_the_tail_and_tool_results() {
         settled(&storage, session).await.database_bytes_removed,
         preview.database_bytes
     );
+    let retained_pieces: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM agena_content_streams c
+         JOIN agena_content_block_pieces p ON p.source_key=c.source_key WHERE c.id=?",
+    )
+    .bind(log.id().to_string())
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert_eq!(retained_pieces, 0);
     let reader = &fixture.runtime.ports.reader;
     let boundary = 330 - 128;
     assert!(matches!(
@@ -609,9 +807,57 @@ async fn bot_totals_include_owned_sessions_and_binding_storage_once() {
         b"another owner",
     );
     let binding = uuid::Uuid::new_v4().to_string();
+    let pool = fixture.runtime.database.get_sqlite_connection_pool();
     sqlx::query("INSERT INTO agena_integration_bindings (id,owner_bot_id,source_session_id,request_key,revision,state,next_poll_ms,binding_json) VALUES (?,?,?,'binding',1,'enabled',0,'{}')")
         .bind(&binding).bind(id.to_string()).bind(session.get())
-        .execute(fixture.runtime.database.get_sqlite_connection_pool()).await.unwrap();
+        .execute(pool).await.unwrap();
+    let event = json!({"text": "频道输入"}).to_string();
+    let note = "已处理";
+    let inbox_id: i64 = sqlx::query_scalar(
+        "INSERT INTO agena_integration_inbox
+         (binding_id,event_id,epoch,state,received_at_ms,is_access,note)
+         VALUES (?,'input',1,'handled',1,0,?) RETURNING id",
+    )
+    .bind(&binding)
+    .bind(note)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO agena_integration_event_payloads VALUES (?,?)")
+        .bind(inbox_id)
+        .bind(&event)
+        .execute(pool)
+        .await
+        .unwrap();
+    let route = json!({"destination": "频道"}).to_string();
+    let text = "频道输出";
+    let sent: i64 = sqlx::query_scalar(
+        "INSERT INTO agena_integration_outbox
+         (id,binding_id,state,attempts,next_attempt_ms,created_at_ms,route_json)
+         VALUES ('output',?,'sent',1,0,2,?) RETURNING delivery_key",
+    )
+    .bind(&binding)
+    .bind(&route)
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    sqlx::query("INSERT INTO agena_integration_delivery_text VALUES (?,?)")
+        .bind(sent)
+        .bind(text)
+        .execute(pool)
+        .await
+        .unwrap();
+    let error = "失去授权";
+    sqlx::query(
+        "INSERT INTO agena_integration_outbox
+         (id,binding_id,state,attempts,next_attempt_ms,created_at_ms,error)
+         VALUES ('empty',?,'skipped',0,0,3,?)",
+    )
+    .bind(&binding)
+    .bind(error)
+    .execute(pool)
+    .await
+    .unwrap();
     let data = fixture.layout.root().join("channel-scopes").join(&binding);
     fixture.write(&data, "context.txt", b"channel context");
 
@@ -631,7 +877,10 @@ async fn bot_totals_include_owned_sessions_and_binding_storage_once() {
         inventory.bots[0].profile_bytes,
         profile.instructions.len() as u64
     );
-    assert_eq!(inventory.bots[0].channel_bytes, 2);
+    assert_eq!(
+        inventory.bots[0].channel_bytes,
+        (2 + event.len() + note.len() + route.len() + text.len() + error.len()) as u64,
+    );
     assert_eq!(inventory.bots[0].channel_files, 15);
     fixture.runtime.ports.clone().shutdown().await.unwrap();
 }

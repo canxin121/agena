@@ -68,7 +68,7 @@ impl DueJobQuery {
             values.extend(self.excluded_job_ids.iter().map(|id| id.to_string().into()));
         }
         if !self.excluded_session_ids.is_empty() {
-            sql.push_str(" AND (json_extract(job_json, '$.owner_session_id') IS NULL OR json_extract(job_json, '$.owner_session_id') NOT IN (");
+            sql.push_str(" AND (owner_session_id IS NULL OR owner_session_id NOT IN (");
             sql.push_str(&vec!["?"; self.excluded_session_ids.len()].join(","));
             sql.push_str("))");
             values.extend(self.excluded_session_ids.iter().map(|id| (*id).into()));
@@ -130,15 +130,6 @@ impl InMemoryJobStore {
 }
 
 impl SqliteJobStore {
-    pub(super) async fn check_invalid_json(&self) -> SchedulerResult<()> {
-        // This partial index is empty on healthy databases.
-        if let Some(row) = self.db.query_one(Statement::from_string(DatabaseBackend::Sqlite,
-            "SELECT job_json, delivery_key, claimed_at_ms FROM agena_scheduler_jobs WHERE NOT json_valid(job_json) LIMIT 1")).await? {
-            Self::decode_rows(vec![row]).await?;
-        }
-        Ok(())
-    }
-
     pub(super) async fn due_batch(
         &self,
         now_ms: i64,
@@ -180,7 +171,7 @@ impl SqliteJobStore {
              ) AS due ON jobs.id = due.id ORDER BY due.wake_at_ms, due.id"
         );
         let rows = self
-            .db
+            .reader
             .query_all(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
                 sql,
@@ -215,7 +206,7 @@ impl SqliteJobStore {
              )"
         );
         let row = self
-            .db
+            .reader
             .query_one(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
                 sql,

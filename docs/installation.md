@@ -202,17 +202,12 @@ Network settings now use the flat `permission.network` fields `default`,
 `allow`, `deny`, `inbound`, and `hostLoopback`. On startup, recognized directional
 `egress` / `ingress` settings are resolved using their former inheritance rules
 and migrated to complete flat policies. Original configuration files are backed
-up beside the file as `*.network-v2-*.bak`. Stored session policies are backed up
-and migrated in a database transaction. New saves accept only the flat format.
+up beside the file as `*.network-v2-*.bak`. New saves use the flat format.
 An omitted network block inherits its parent. An unversioned `network: {}` means
 offline.
 
-Stored sessions with older `internet`, `private`, `loopback`, or domain rules
-are migrated to offline network policies. Legacy workspace and external
-filesystem defaults keep their unconditional access. The original session
-settings are kept in the database under `migration.permission.legacy.session.<id>`.
-Older network fields in configuration files still need an explicit IP/CIDR
-policy. See [native network configuration](sandbox.md#网络设置与执行) for
+Replace `internet`, `private`, `loopback`, and domain rules in legacy
+configuration files with an explicit IP/CIDR policy. See [native network configuration](sandbox.md#网络设置与执行) for
 configuration examples and migration details.
 
 To repair the dependencies/host permissions and rerun the installed binary's
@@ -395,35 +390,25 @@ instance does not address another instance's service.
 
 ### Database baseline
 
-The current database baseline is `agena-2026-11-12`. A new database creates
+The current database baseline is `agena-2026-11-22.10`. A new database creates
 the complete session, Scheduler, and server schema together with that baseline
-identity in one transaction. The baseline is a fixed identity, not an upgrade
-counter. Each initialized database also receives its own instance identity.
+identity in one transaction. The baseline identifies that exact schema. Each
+initialized database also receives its own instance identity.
 
 Before opening an existing database for writes, Agena checks its main file
 through an immutable read-only connection. If recovery logs remain, it also
 validates the recovered state in a private temporary copy before opening the
 original for writes. This preserves the original database and SQLite log
-contents when a baseline, identity, or schema check rejects them. Recovery
-admission needs temporary space beside the database for that copy; clean
-shutdowns without recovery logs avoid the copy.
+contents when a baseline, identity, or schema check rejects them. On Linux,
+Agena attempts a copy-on-write clone in a temporary directory beside the
+database and uses a full file copy when cloning is unavailable. Recovery on
+other platforms uses a full file copy. Clean shutdowns without recovery logs
+avoid the copy.
 
-A database from another baseline, one with missing identity, or one with
-incompatible schema is rejected by the server. Agena never rewrites or deletes
-that database in place. Two recovery paths are supported:
-
-- `agena migrate` copies an older database into a complete new one under the
-  current baseline. It reads the source read-only, builds the destination at
-  `<source>.migrated` (or `--to`), moves Bot identities out of the legacy JSON
-  registry into `agena_bots`, records conversation ownership, and collapses the
-  retired room-kind values onto `group`. The destination must not already
-  exist, so a failed run never destroys a good database.
-- Start with a new empty `--data-dir` (`-DataDir` in PowerShell) and keep the
-  previous data root separately. Changing the selected root does not import its
-  contents.
-
-This baseline changes the conversation ownership model: Bot conversations are
-now ordinary sessions with an `owner`, and a Bot may own many of them.
+The server accepts databases with the complete current schema and a valid
+instance identity. To start this version alongside an earlier database, choose
+a new empty `--data-dir` (`-DataDir` in PowerShell). Agena preserves the earlier
+database and its SQLite recovery logs at their original paths.
 
 Recovery of an interrupted execution and rollback of a failed installer
 replacement remain part of the current contract; neither upgrades a database

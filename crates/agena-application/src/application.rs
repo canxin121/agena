@@ -680,12 +680,6 @@ impl Application {
                                     // user-facing notification.
                                     continue;
                                 }
-                                DecodedNotice::LegacyHook(_)
-                                | DecodedNotice::LegacyStopHookFollowup(_) => {
-                                    // Pre-marker hook observations are also
-                                    // transcript activity.
-                                    continue;
-                                }
                                 DecodedNotice::SystemNotification(decoded) => {
                                     if let Err(error) = decoded {
                                         tracing::warn!(

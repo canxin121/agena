@@ -172,6 +172,233 @@ fn extended_session(method: &str, params: Value) -> Value {
 }
 
 #[tokio::test]
+async fn session_storage_cleanup_removes_owned_history_through_http() {
+    use agena_domain::{ComposerDocument, ComposerNode};
+    use agena_storage::kernel::{ExecutionPhase, RequestId};
+    use std::time::Duration;
+
+    let fixture = Fixture::new().await;
+    let workspace = fixture
+        .command(json!({"method":"create_workspace","params":{
+            "path":fixture._directory.path().join("workspace")
+        }}))
+        .await;
+    let kernel = fixture.application.session_kernel().unwrap();
+    let session = kernel
+        .sessions
+        .create(
+            RequestId::new(),
+            workspace["data"]["id"].as_i64().unwrap(),
+            "Storage test".into(),
+        )
+        .await
+        .unwrap()
+        .value
+        .id;
+    let execution = kernel
+        .sessions
+        .send(
+            RequestId::new(),
+            session,
+            ComposerDocument(vec![ComposerNode::Text {
+                text: "Owned history".into(),
+            }]),
+        )
+        .await
+        .unwrap()
+        .value;
+    let attempt = kernel
+        .executor
+        .claim_next(RequestId::new(), session, execution.id)
+        .await
+        .unwrap()
+        .value;
+    attempt
+        .finish(RequestId::new(), ExecutionPhase::Succeeded)
+        .await
+        .unwrap();
+
+    let path = format!("/api/v1/sessions/{}/storage", session.get());
+    let selection = json!({"purge": true});
+    let (status, preview) = fixture
+        .http(
+            Method::POST,
+            &format!("{path}/preview"),
+            Some(selection.clone()),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{preview}");
+    assert_eq!(preview["keeps_shared_history"], false);
+    assert!(preview["database_bytes"].as_u64().unwrap() > 0);
+    let (status, accepted) = fixture
+        .http(
+            Method::POST,
+            &format!("{path}/cleanup"),
+            Some(json!({"token": preview["token"], "selection": selection})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{accepted}");
+    assert_eq!(accepted["id"], preview["token"]);
+    let completed = tokio::time::timeout(Duration::from_secs(10), async {
+        let operation_path = format!("{path}/operation");
+        loop {
+            let (status, operation) = fixture.http(Method::GET, &operation_path, None).await;
+            assert_eq!(status, StatusCode::OK, "{operation}");
+            if operation["state"] != "running" {
+                break operation;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(completed["state"], "completed", "{completed}");
+    assert_eq!(
+        completed["database_bytes_removed"],
+        preview["database_bytes"]
+    );
+    let (status, detail) = fixture.http(Method::GET, &path, None).await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(detail["deleted"], true);
+    let (status, inventory) = fixture
+        .http(Method::GET, "/api/v1/session-storage?refresh=true", None)
+        .await;
+    assert_eq!(status, StatusCode::OK, "{inventory}");
+    assert_eq!(inventory["total"], 0);
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn session_overview_and_tree_use_the_durable_summary_states() {
+    use agena_domain::{ComposerDocument, ComposerNode, SessionRelationKind};
+    use agena_storage::kernel::{ExecutionPhase, MetadataChange, RequestId, SessionConfiguration};
+
+    let fixture = Fixture::new().await;
+    let workspace = fixture
+        .command(json!({"method":"create_workspace","params":{
+            "path":fixture._directory.path().join("workspace")
+        }}))
+        .await;
+    let workspace = workspace["data"]["id"].as_i64().unwrap();
+    let kernel = fixture.application.session_kernel().unwrap();
+    let create = |title: &str, config| {
+        kernel
+            .sessions
+            .create_configured(RequestId::new(), workspace, title.to_owned(), config)
+    };
+    let favorite = create("Older favorite", Default::default())
+        .await
+        .unwrap()
+        .value
+        .id;
+    kernel
+        .sessions
+        .update_metadata(
+            RequestId::new(),
+            favorite,
+            MetadataChange {
+                favorite: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let running = create("Queued tree root", Default::default())
+        .await
+        .unwrap()
+        .value
+        .id;
+    let failed = create("Failed and favorite", Default::default())
+        .await
+        .unwrap()
+        .value
+        .id;
+    kernel
+        .sessions
+        .update_metadata(
+            RequestId::new(),
+            failed,
+            MetadataChange {
+                favorite: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let send = |session| {
+        kernel.sessions.send(
+            RequestId::new(),
+            session,
+            ComposerDocument(vec![ComposerNode::Text {
+                text: "test".into(),
+            }]),
+        )
+    };
+    send(running).await.unwrap();
+    let execution = send(failed).await.unwrap().value;
+    let attempt = kernel
+        .executor
+        .claim_next(RequestId::new(), failed, execution.id)
+        .await
+        .unwrap();
+    attempt
+        .value
+        .finish(RequestId::new(), ExecutionPhase::Failed)
+        .await
+        .unwrap();
+    let recent = create(
+        "Recent child",
+        SessionConfiguration {
+            parent_session_id: Some(running),
+            relation_kind: SessionRelationKind::Child,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap()
+    .value
+    .id;
+
+    let (status, overview) = fixture
+        .http(
+            Method::GET,
+            &format!("/api/v1/sessions/overview?workspace_id={workspace}&recent_limit=1"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{overview}");
+    let ids = |items: &Value| {
+        items
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["id"].as_i64().unwrap())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ids(&overview["recent"]), [recent.get()]);
+    assert_eq!(ids(&overview["running"]), [running.get()]);
+    assert_eq!(ids(&overview["attention"]), [failed.get()]);
+    assert_eq!(ids(&overview["favorites"]), [failed.get(), favorite.get()]);
+
+    let (status, tree) = fixture
+        .http(
+            Method::GET,
+            &format!("/api/v1/sessions/tree/{}", running.get()),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{tree}");
+    assert_eq!(ids(&tree), [running.get(), recent.get()]);
+    let query_tree = fixture
+        .query(json!({"method":"get_session_tree","params":{
+            "session_id":running.get()
+        }}))
+        .await;
+    assert_eq!(query_tree["data"], tree);
+    fixture.close().await;
+}
+
+#[tokio::test]
 async fn host_workspace_writes_invalidate_http_etags_without_spurious_resolve_changes() {
     let fixture = Fixture::new().await;
     let first_path = fixture._directory.path().join("catalog-first");

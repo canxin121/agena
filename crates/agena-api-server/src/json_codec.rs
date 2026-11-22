@@ -70,16 +70,27 @@ pub(crate) async fn decode_line<T: DeserializeOwned + Send + 'static>(
 pub(crate) async fn response<T: Serialize + Send + 'static>(
     value: T,
 ) -> Result<axum::response::Response, crate::error::ServerError> {
-    use axum::response::IntoResponse as _;
+    Ok(bytes_response(encode_bytes(value).await?))
+}
 
-    let bytes = ENCODERS
+#[cfg(feature = "http")]
+pub(crate) async fn encode_bytes<T: Serialize + Send + 'static>(
+    value: T,
+) -> Result<Vec<u8>, crate::error::ServerError> {
+    ENCODERS
         .run(move || serde_json::to_vec(&value))
         .await
         .map_err(|error| crate::error::ServerError::internal_error(&error))?
-        .map_err(|error| crate::error::ServerError::internal_error(&error))?;
-    Ok((
+        .map_err(|error| crate::error::ServerError::internal_error(&error))
+}
+
+#[cfg(feature = "http")]
+pub(crate) fn bytes_response(bytes: Vec<u8>) -> axum::response::Response {
+    use axum::response::IntoResponse as _;
+
+    (
         [(axum::http::header::CONTENT_TYPE, "application/json")],
         bytes,
     )
-        .into_response())
+        .into_response()
 }

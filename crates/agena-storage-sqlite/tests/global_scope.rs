@@ -180,6 +180,7 @@ async fn project_queries_exclude_bot_ownership_before_pagination_and_statistics(
         workspace_id: Some(workspace),
         exclude_bot_owned: true,
         limit: 1,
+        selection: SummarySelection::PageWithTotal,
         ..Default::default()
     };
     let first = rt
@@ -192,6 +193,18 @@ async fn project_queries_exclude_bot_ownership_before_pagination_and_statistics(
     assert_eq!(first.sessions[0].id, ordinary[1]);
     assert_eq!(first.total, Some(2));
     assert!(first.has_more);
+    let counted = rt
+        .ports
+        .reader
+        .query_summaries(SummaryQuery {
+            selection: SummarySelection::Total,
+            before: first.next,
+            ..query.clone()
+        })
+        .await
+        .unwrap();
+    assert_eq!(counted.total, Some(2));
+    assert!(counted.sessions.is_empty() && counted.next.is_none() && !counted.has_more);
     for next in [
         SummaryQuery {
             before: first.next,
@@ -232,7 +245,7 @@ async fn project_queries_exclude_bot_ownership_before_pagination_and_statistics(
         })
         .await
         .unwrap();
-    assert_eq!(owned.total, Some(2));
+    assert_eq!(owned.total, None);
     assert!(owned.sessions.iter().any(|session| session.id == root));
     assert!(owned.sessions.iter().any(|session| session.id == child));
 

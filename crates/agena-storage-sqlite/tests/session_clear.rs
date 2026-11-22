@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use agena_domain::{ComposerDocument, ComposerNode};
 use agena_storage::kernel::*;
 use agena_storage_sqlite::{SqliteKernel, open_kernel_runtime};
@@ -74,9 +76,14 @@ async fn prompt_entry_ids(runtime: &SqliteKernel, session: SessionId) -> Vec<Ent
 #[tokio::test]
 async fn clearing_history_hides_the_transcript_but_keeps_the_stored_rows() {
     let (runtime, session) = fixture().await;
-    send(&runtime, session, "first turn").await;
+    let original = send(&runtime, session, "first turn").await.message_id;
     let before = entry_count(&runtime, session).await;
     assert!(before > 0, "the fixture must have history");
+    runtime
+        .maintenance
+        .collect_history_snapshots()
+        .await
+        .unwrap();
 
     let cleared = runtime
         .ports
@@ -92,12 +99,28 @@ async fn clearing_history_hides_the_transcript_but_keeps_the_stored_rows() {
         0,
         "clearing history must empty the transcript membership"
     );
-    // Nothing was deleted: the old turn is still readable by id.
-    let old_turn = send(&runtime, session, "another turn").await.message_id;
-    assert!(
-        runtime.ports.reader.entry(session, old_turn).await.is_ok(),
-        "a cleared entry must remain stored"
-    );
+    let pool = runtime.database.get_sqlite_connection_pool();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while sea_orm::sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS(SELECT 1 FROM agena_history_segments)",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap()
+        {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("detached segments should be collected automatically");
+    let stored = sea_orm::sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM agena_entries WHERE id=?)",
+    )
+    .bind(original.get())
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    assert!(stored, "a cleared entry must remain stored");
 }
 
 #[tokio::test]

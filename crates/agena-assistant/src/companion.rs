@@ -113,6 +113,10 @@ impl AssistantPreferences {
         }
     }
     pub fn local_day(&self, now_ms: i64) -> Result<String> {
+        self.local_day_and_number(now_ms).map(|(day, _)| day)
+    }
+    /// Return the local date label and its day number from the Common Era.
+    pub fn local_day_and_number(&self, now_ms: i64) -> Result<(String, i32)> {
         let tz = self
             .timezone
             .parse::<Tz>()
@@ -122,11 +126,9 @@ impl AssistantPreferences {
             .single()
             .ok_or(Error::Invalid("invalid time"))?
             .with_timezone(&tz);
-        Ok(format!(
-            "{:04}-{:02}-{:02}",
-            date.year(),
-            date.month(),
-            date.day()
+        Ok((
+            format!("{:04}-{:02}-{:02}", date.year(), date.month(), date.day()),
+            date.num_days_from_ce(),
         ))
     }
     /// UTC iteration handles nonexistent/repeated DST local minutes without

@@ -13,15 +13,20 @@ const TABLE: &str = "agena_workspaces";
 /// SQLite-backed workspace repository.
 pub struct SeaWorkspaceRepository {
     db: Arc<DatabaseConnection>,
+    reader: Arc<DatabaseConnection>,
 }
 
 impl SeaWorkspaceRepository {
     pub fn new(db: Arc<DatabaseConnection>) -> Self {
-        Self { db }
+        Self::with_reader(db.clone(), db)
+    }
+
+    pub fn with_reader(db: Arc<DatabaseConnection>, reader: Arc<DatabaseConnection>) -> Self {
+        Self { db, reader }
     }
 
     async fn record(&self, id: i64) -> Result<Option<WorkspaceRecord>, WorkspaceRepositoryError> {
-        self.db
+        self.reader
             .query_one(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
                 format!("SELECT id, path, created_at_ms, updated_at_ms FROM {TABLE} WHERE id = ?"),
@@ -99,22 +104,23 @@ impl WorkspaceRepository for SeaWorkspaceRepository {
         // internal directory. Empty projects and directories with project
         // history remain visible. Apply this before pagination for every client.
         let mut clauses = vec![
-            "id NOT IN (SELECT workspace_id FROM agena_sessions WHERE workspace_id IS NOT NULL GROUP BY workspace_id HAVING COUNT(owner_bot_id) = COUNT(*))",
+            "(EXISTS(SELECT 1 FROM agena_sessions s WHERE s.workspace_id=w.id AND s.owner_bot_id IS NULL)
+              OR NOT EXISTS(SELECT 1 FROM agena_sessions s WHERE s.workspace_id=w.id))",
         ];
         let mut values = Vec::<Value>::new();
         if let Some(search) = query.search.filter(|value| !value.is_empty()) {
-            clauses.push("path LIKE ?");
+            clauses.push("w.path LIKE ?");
             values.push(format!("%{search}%").into());
         }
         if let (Some(updated), Some(id)) = (query.before_updated_at_ms, query.before_id) {
-            clauses.push("(updated_at_ms < ? OR (updated_at_ms = ? AND id < ?))");
-            values.extend([updated.into(), updated.into(), id.into()]);
+            clauses.push("(w.updated_at_ms,w.id) < (?,?)");
+            values.extend([updated.into(), id.into()]);
         }
         values.push(query.limit.into());
         values.push(query.offset.min(i64::MAX as u64).into());
         let where_clause = format!(" WHERE {}", clauses.join(" AND "));
-        let rows = self.db.query_all(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
-            format!("SELECT id, path, created_at_ms, updated_at_ms FROM {TABLE}{where_clause} ORDER BY updated_at_ms DESC, id DESC LIMIT ? OFFSET ?"), values)).await.map_err(map_error)?;
+        let rows = self.reader.query_all(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
+            format!("SELECT w.id,w.path,w.created_at_ms,w.updated_at_ms FROM {TABLE} w{where_clause} ORDER BY w.updated_at_ms DESC,w.id DESC LIMIT ? OFFSET ?"), values)).await.map_err(map_error)?;
         rows.into_iter().map(record_from_row).collect()
     }
     async fn path_by_id(&self, id: i64) -> Result<Option<String>, WorkspaceRepositoryError> {
@@ -122,7 +128,7 @@ impl WorkspaceRepository for SeaWorkspaceRepository {
     }
     async fn lookup_id(&self, path: &str) -> Result<Option<i64>, WorkspaceRepositoryError> {
         let path = normalized_workspace_path(path)?;
-        self.db
+        self.reader
             .query_one(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
                 format!("SELECT id FROM {TABLE} WHERE path = ?"),

@@ -510,7 +510,7 @@ impl SessionManager {
                         compactions+=1;if self.perform_compaction(&attempt,&control,&options,&state,None,true).await?{continue;}return Err(AppError::Config(message));
                     },Err(error)=>return Err(kernel_error(error)),
                 };
-                let facts=round.prompt().await.map_err(kernel_error)?;
+                let facts=read_with_busy_retry(control.session,"round_prompt",||round.prompt()).await?;
                 let context=self.execution_context_for_execution(control.session,&state,Some(control.execution)).await?;
                 let executor=state.executor.for_session_context_async(&context).await.with_cancellation_token(Some(control.cancel.clone()));
                 let native=state.providers.native_compaction_enabled(&options.model)?;
@@ -542,7 +542,7 @@ impl SessionManager {
                 }
                 let budget=crate::estimate_auto_compaction_limit_tokens(metadata.limits.context_window_tokens,metadata.limits.max_input_tokens,options.max_output_tokens,state.config.auto_compaction.reserved_tokens).unwrap_or_else(||crate::estimate_prompt_tokens_from_chars(state.governor.max_prompt_chars()));
                 let policy=compaction_policy_key(&options,&state)?;
-                let status=self.kernel().reader.prompt_window_status(control.session).await.map_err(kernel_error)?;
+                let status=read_with_busy_retry(control.session,"prompt_window_status",||self.kernel().reader.prompt_window_status(control.session)).await?;
                 let disabled=status.policy_key.as_deref()==Some(policy.as_str())&&status.auto_compaction_disabled;
                 let hard_exceeded=hard_limit.is_some_and(|limit|token_estimate>limit);
                 let proactive=state.config.auto_compaction.enabled&&!disabled&&!proactive_suppressed&&compactions<4&&token_estimate>budget;
@@ -1389,12 +1389,10 @@ impl SessionManager {
         selection: &ExecutionSelection,
     ) -> Result<SessionRunOptions, AppError> {
         let state = self.state_for_session(session).await?;
-        let configuration = self
-            .kernel()
-            .reader
-            .configuration(session)
-            .await
-            .map_err(kernel_error)?;
+        let configuration = read_with_busy_retry(session, "configuration", || {
+            self.kernel().reader.configuration(session)
+        })
+        .await?;
         let selection = state
             .config
             .session_selection(&configuration, selection)

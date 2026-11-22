@@ -20,7 +20,7 @@ pub enum AppError {
     Provider(String),
     #[error("database error: {0}")]
     Database(#[from] sea_orm::DbErr),
-    #[error("database write capacity is temporarily unavailable")]
+    #[error("database capacity is temporarily unavailable")]
     PersistenceBusy,
     #[error("database mutation conflict: {0}")]
     PersistenceConflict(String),

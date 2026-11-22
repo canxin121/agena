@@ -590,6 +590,14 @@ pub trait KernelBackend: Send + Sync {
         execution: ExecutionId,
         generation: AttemptGeneration,
     ) -> Result<ReadView<Option<ProviderRoundView>>>;
+    /// Whether this attempt has a valid failure notice in the requested
+    /// session's visible history, even when that notice is on another page.
+    async fn has_failure_notice(
+        &self,
+        session: SessionId,
+        execution: ExecutionId,
+        generation: AttemptGeneration,
+    ) -> Result<bool>;
     async fn configuration(&self, session: SessionId) -> Result<ReadView<SessionConfiguration>>;
     async fn local_bot_session(&self, bot: uuid::Uuid) -> Result<ReadView<LocalBotSession>>;
     async fn management_ancestry(

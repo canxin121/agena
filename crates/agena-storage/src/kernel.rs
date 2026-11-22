@@ -1449,6 +1449,17 @@ impl KernelReader {
             .failed_round(session, execution, generation)
             .await
     }
+    pub async fn has_failure_notice(
+        &self,
+        session: SessionId,
+        execution: ExecutionId,
+        generation: AttemptGeneration,
+    ) -> Result<bool> {
+        self.0
+            .backend
+            .has_failure_notice(session, execution, generation)
+            .await
+    }
     /// Subscribe before reading a snapshot. The returned head/replay and live
     /// receiver are installed under one feed lock, closing the read/watch gap.
     pub fn watch(&self, session: SessionId, after: Option<WatchCursor>) -> Result<KernelWatch> {

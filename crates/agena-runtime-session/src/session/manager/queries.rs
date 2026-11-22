@@ -128,12 +128,11 @@ impl SessionManager {
         &self,
         id: i64,
     ) -> Result<Option<std::path::PathBuf>, AppError> {
-        let metadata = self
-            .kernel()
-            .reader
-            .metadata(session_id(id)?)
-            .await
-            .map_err(kernel_error)?;
+        let session = session_id(id)?;
+        let metadata = read_with_busy_retry(session, "metadata", || {
+            self.kernel().reader.metadata(session)
+        })
+        .await?;
         match metadata.workspace_id {
             Some(workspace) => self.workspace_root_by_id(workspace).await.map(Some),
             None => Ok(None),
@@ -373,12 +372,10 @@ impl SessionManager {
         let mut after = None;
         let mut running = None;
         loop {
-            let page = self
-                .kernel()
-                .reader
-                .active_executions(session, after, 128)
-                .await
-                .map_err(kernel_error)?;
+            let page = read_with_busy_retry(session, "active_executions", || {
+                self.kernel().reader.active_executions(session, after, 128)
+            })
+            .await?;
             for execution in &page.executions {
                 if execution.phase == ExecutionPhase::Running {
                     if running.replace(execution.id).is_some() {
@@ -733,11 +730,11 @@ impl SessionManager {
         execution: Option<ExecutionId>,
         submitted_authority: Option<&agena_domain::ChannelAuthority>,
     ) -> Result<ToolContext, AppError> {
+        let reader = &self.kernel().reader;
         let (metadata, configuration) = tokio::try_join!(
-            self.kernel().reader.metadata(id),
-            self.kernel().reader.configuration(id)
-        )
-        .map_err(kernel_error)?;
+            read_with_busy_retry(id, "metadata", || reader.metadata(id)),
+            read_with_busy_retry(id, "configuration", || reader.configuration(id)),
+        )?;
         let delegated = configuration.relation_kind.is_subagent();
         let baseline = configuration.channel_authority.as_ref();
         let authority = if let Some(submitted) = submitted_authority {

@@ -842,6 +842,44 @@ pub(super) fn interaction_row(
     })
 }
 
+pub(super) async fn has_failure_notice(
+    pool: &SqlitePool,
+    session: SessionId,
+    execution: ExecutionId,
+    generation: AttemptGeneration,
+    diagnostics: &KernelDiagnostics,
+) -> Result<bool> {
+    use agena_failure::notice::{FAILURE_NOTICE_PREFIX, decode_failure_notice};
+    use futures_util::TryStreamExt;
+
+    metrics::add(&diagnostics.0.detail_queries, 1);
+    let mut notices = sqlx::query_scalar::<_, String>(
+        "SELECT e.body_json FROM agena_entries e
+         WHERE e.execution_id=?1 AND e.generation=?2 AND e.kind='notice'
+           AND substr(CASE WHEN json_valid(e.body_json) THEN json_extract(e.body_json,'$') END,1,length(?3))=?3
+           AND EXISTS(
+               SELECT 1 FROM agena_segment_entries m
+               JOIN agena_session_segments s ON s.segment_id=m.segment_id
+               JOIN agena_sessions owner ON owner.id=s.session_id
+               WHERE m.entry_id=e.id AND s.session_id=?4 AND owner.deleted_at_ms IS NULL
+                 AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal
+           )",
+    )
+    .bind(execution.to_string())
+    .bind(generation.get())
+    .bind(FAILURE_NOTICE_PREFIX)
+    .bind(session.get())
+    .fetch(pool);
+    while let Some(body) = notices.try_next().await.map_err(sql_error)? {
+        if let Ok(text) = decode::<String>(&body)
+            && let Some(Ok(_)) = decode_failure_notice(&text)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 pub(super) async fn failed_round(
     pool: &SqlitePool,
     session: SessionId,

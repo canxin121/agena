@@ -125,6 +125,75 @@ async fn send(manager: &SessionManager, session: SessionId) -> ExecutionId {
 }
 
 #[tokio::test]
+async fn preparing_model_options_waits_for_control_read_capacity() {
+    let mut providers = ProviderRegistry::new();
+    providers.register(ResumeProvider {
+        model: ModelId::new("test"),
+        calls: Default::default(),
+    });
+    let (manager, session) = fixture_with_providers(Default::default(), providers).await;
+    let state = manager.state.load_full();
+    let mut options = manager
+        .options_for_selection_with_state(
+            &ExecutionSelection {
+                provider: Some("queue-resume-test".into()),
+                model: Some("test".into()),
+                ..Default::default()
+            },
+            &state,
+        )
+        .unwrap();
+
+    // In-memory SQLite shares one connection. Keep it borrowed while eight
+    // real kernel reads queue behind it and occupy all control read slots.
+    let connection = manager
+        .kernel_runtime
+        .database
+        .get_sqlite_connection_pool()
+        .acquire()
+        .await
+        .unwrap();
+    let reader = &manager.kernel().reader;
+    let mut readers = Box::pin(futures_util::future::join_all(
+        (0..8).map(|_| reader.control_version(session)),
+    ));
+    assert!(futures_util::poll!(&mut readers).is_pending());
+    assert!(matches!(
+        reader.active_executions(session, None, 128).await,
+        Err(KernelError::Busy)
+    ));
+    let mut preparation =
+        Box::pin(manager.prepare_options_with_state(session, &mut options, &state));
+    assert!(futures_util::poll!(&mut preparation).is_pending());
+    drop(connection);
+
+    let (reads, prepared) = tokio::time::timeout(Duration::from_secs(3), async {
+        tokio::join!(readers, preparation)
+    })
+    .await
+    .expect("model preparation must resume after readers release their slots");
+    assert!(reads.into_iter().all(|result| result.is_ok()));
+    prepared.unwrap();
+}
+
+#[tokio::test]
+async fn persistent_read_capacity_exhaustion_reports_retryable_database_busy() {
+    let session = SessionId::try_from(1).unwrap();
+    let busy = tokio::time::timeout(
+        Duration::from_secs(4),
+        read_with_busy_retry(session, "test", || {
+            std::future::ready(Err::<(), _>(KernelError::Busy))
+        }),
+    )
+    .await
+    .expect("the admission retry must be bounded")
+    .unwrap_err();
+    let failure = busy.failure();
+    assert_eq!(failure.code.as_str(), "database.busy");
+    assert_eq!(failure.retry, agena_failure::RetryDirective::Backoff);
+}
+
+#[tokio::test]
 async fn resuming_during_paused_supervisor_retirement_does_not_strand_the_same_attempt() {
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let mut providers = ProviderRegistry::new();

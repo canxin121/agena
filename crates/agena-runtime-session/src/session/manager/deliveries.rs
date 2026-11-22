@@ -368,12 +368,10 @@ impl SessionManager {
         // Only an explicitly typed control execution may use a notice as its
         // local input boundary. Ordinary notices and inherited history never
         // acquire permission to receive execution guidance this way.
-        let execution = self
-            .kernel()
-            .reader
-            .execution(session, entry.execution_id)
-            .await
-            .map_err(kernel_error)?;
+        let execution = read_with_busy_retry(session, "execution", || {
+            self.kernel().reader.execution(session, entry.execution_id)
+        })
+        .await?;
         Ok(execution.session_id == session
             && execution.message_id == entry.id
             && execution.purpose != ExecutionPurpose::Message)
@@ -390,12 +388,10 @@ impl SessionManager {
             .map(entry_id)
             .transpose()?
             .unwrap_or(fallback);
-        let entry = self
-            .kernel()
-            .reader
-            .entry(session, message)
-            .await
-            .map_err(kernel_error)?;
+        let entry = read_with_busy_retry(session, "entry", || {
+            self.kernel().reader.entry(session, message)
+        })
+        .await?;
         if !self.owns_message_boundary(session, &entry).await? {
             return Err(AppError::Config(
                 "background delivery does not own its input boundary".into(),

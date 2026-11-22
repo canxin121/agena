@@ -8,6 +8,7 @@
 //! [`FailureId`].
 
 pub mod diagnostic;
+pub mod notice;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

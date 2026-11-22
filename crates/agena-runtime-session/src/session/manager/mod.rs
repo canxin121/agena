@@ -301,12 +301,10 @@ impl SessionManager {
     }
 
     async fn state_for_session(&self, session: SessionId) -> Result<Arc<ExecutionState>, AppError> {
-        let metadata = self
-            .kernel()
-            .reader
-            .metadata(session)
-            .await
-            .map_err(kernel_error)?;
+        let metadata = read_with_busy_retry(session, "metadata", || {
+            self.kernel().reader.metadata(session)
+        })
+        .await?;
         let _guard = self.configuration_lock.lock();
         Ok(if metadata.workspace_id.is_none() {
             self.global_state.load_full()
@@ -534,6 +532,7 @@ fn entry_id(value: i64) -> Result<EntryId, AppError> {
 }
 fn kernel_error(error: KernelError) -> AppError {
     match error {
+        KernelError::Busy => AppError::PersistenceBusy,
         KernelError::Conflict(message) => AppError::Config(message),
         KernelError::NotFound(message) => AppError::Internal(format!("{message} not found")),
         other => AppError::Internal(other.to_string()),
@@ -643,6 +642,50 @@ fn transient(error: &KernelError) -> bool {
         KernelError::Storage(_) | KernelError::CommitUnknown { .. } | KernelError::Busy
     )
 }
+
+/// Give required reads time to acquire capacity during a burst of concurrent
+/// observers. A read view can also be too large to admit, so bound the wait.
+async fn read_with_busy_retry<T, F, Fut>(
+    session: SessionId,
+    operation: &'static str,
+    mut read: F,
+) -> Result<T, AppError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = agena_storage::kernel::Result<T>>,
+{
+    use tokio::time::{Instant, sleep_until};
+
+    let mut delay = Duration::from_millis(10);
+    let mut deadline = None;
+    loop {
+        match read().await {
+            Err(KernelError::Busy) => {
+                let now = Instant::now();
+                let until = *deadline.get_or_insert_with(|| {
+                    tracing::debug!(
+                        session_id = session.get(),
+                        operation,
+                        "waiting for kernel read capacity"
+                    );
+                    now + Duration::from_secs(2)
+                });
+                if now >= until {
+                    tracing::warn!(
+                        session_id = session.get(),
+                        operation,
+                        "kernel read capacity remained exhausted"
+                    );
+                    return Err(AppError::PersistenceBusy);
+                }
+                sleep_until((now + delay).min(until)).await;
+                delay = (delay * 2).min(Duration::from_millis(100));
+            }
+            result => return result.map_err(kernel_error),
+        }
+    }
+}
+
 /// The closure replays one storage command with its retained request ID. It
 /// must never contain a provider request, plugin hook, or external tool effect.
 async fn persist<T, F, Fut>(mut command: F) -> agena_storage::kernel::Result<T>

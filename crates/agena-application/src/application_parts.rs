@@ -12,6 +12,7 @@ use agena_storage::kernel::{
     CaptureState, EntryPayload, EntryView, HistoryCursor, KernelReader, OwnedToolCursor, SessionId,
     ToolPhase,
 };
+use std::collections::HashSet;
 
 /// One bounded, ascending page of owned tool facts. Its opaque continuation
 /// binds the session, live membership, and control version for the whole read.
@@ -46,50 +47,70 @@ pub(crate) fn encode_part_cursor(
 /// current public error contract. The durable execution facts remain unchanged.
 pub(crate) async fn append_execution_failures(
     reader: &KernelReader,
+    session: SessionId,
     entries: &[EntryView],
     parts: &mut Vec<PartResource>,
 ) -> Result<(), ApplicationError> {
     use agena_storage::kernel::ExecutionPhase;
 
-    // A bounded history window often contains only the newest entries of a
-    // long run. The boundary entry is then absent from `parts`, so recover the
-    // failed run identity from every loaded entry of the window.
-    //
-    // `response_entry_id` is the run's first committed assistant entry. A run
-    // that failed before committing anything (for example a provider that
-    // rejects the very first request) has no reply anchor at all: its user
-    // input's anchor is deliberately cleared. Nothing else belongs to that
-    // attempt, so only such a run needs the synthetic standalone error below.
-    // A user entry reports the execution's *current* generation while content
-    // entries report their own, so the generation is not part of this identity.
-    let mut failed_without_reply = std::collections::HashSet::new();
-    let mut executions_with_reply = std::collections::HashSet::new();
-    for entry in entries {
-        if entry.response_entry_id.is_some() {
-            executions_with_reply.insert(entry.execution_id);
-        }
-        if entry.execution_phase != ExecutionPhase::Failed || entry.response_entry_id.is_some() {
-            continue;
-        }
-        failed_without_reply.insert(entry.execution_id);
-    }
+    // A paged transcript gives independent notices their own run anchors when
+    // an attempt has no assistant reply. Those anchors still share one failure.
+    // User entries describe the current attempt; other entries describe the
+    // generation that owns them, including inherited entries from a fork.
+    let attempt = |entry: &EntryView| {
+        (
+            entry.origin_session_id,
+            entry.execution_id,
+            entry.execution_generation,
+        )
+    };
+    let error_entries: HashSet<_> = parts
+        .iter()
+        .filter(|part| part.kind == "error" && part.content["projection_error"] != true)
+        .map(|part| part.part_id)
+        .collect();
+    let displayed_failures: HashSet<_> = entries
+        .iter()
+        .filter(|entry| {
+            matches!(entry.payload, EntryPayload::Notice { .. })
+                && error_entries.contains(&entry.id.get())
+        })
+        .map(attempt)
+        .collect();
+    let attempts_with_reply: HashSet<_> = entries
+        .iter()
+        .filter(|entry| {
+            entry.response_entry_id.is_some() && !matches!(entry.payload, EntryPayload::User { .. })
+        })
+        .map(attempt)
+        .collect();
     let mut candidates = Vec::new();
-    let mut seen_runs = std::collections::HashSet::new();
+    let mut seen_attempts = HashSet::new();
     for entry in entries {
         if entry.execution_phase != ExecutionPhase::Failed {
             continue;
         }
-        let (run_id, standalone) = match entry.response_entry_id {
-            Some(reply) => (reply.get(), false),
-            None if matches!(entry.payload, EntryPayload::User { .. })
-                && failed_without_reply.contains(&entry.execution_id)
-                && !executions_with_reply.contains(&entry.execution_id) =>
-            {
-                (entry.id.get(), true)
+        let key = attempt(entry);
+        if displayed_failures.contains(&key) {
+            continue;
+        }
+        let (run_id, standalone) = if matches!(entry.payload, EntryPayload::User { .. }) {
+            if attempts_with_reply.contains(&key) {
+                continue;
             }
-            None => continue,
+            match entry
+                .response_entry_id
+                .filter(|_| entry.generation == entry.execution_generation)
+            {
+                Some(reply) => (reply.get(), false),
+                None => (entry.id.get(), true),
+            }
+        } else if let Some(reply) = entry.response_entry_id {
+            (reply.get(), false)
+        } else {
+            continue;
         };
-        if !seen_runs.insert(run_id) {
+        if !seen_attempts.insert(key) {
             continue;
         }
         // A forked session reads entries owned by its ancestor. The failed
@@ -97,7 +118,7 @@ pub(crate) async fn append_execution_failures(
         candidates.push((
             run_id,
             entry.execution_id,
-            entry.generation,
+            entry.execution_generation,
             entry.origin_session_id,
             entry.created_at_ms,
             entry.message_id.get(),
@@ -117,6 +138,14 @@ pub(crate) async fn append_execution_failures(
                     .and_then(serde_json::Value::as_bool)
                     != Some(true)
         }) {
+            continue;
+        }
+        if reader
+            .has_failure_notice(session, execution, generation)
+            .await
+            .map_err(crate::kernel_error)?
+        {
+            // The durable error will be projected when its own page is read.
             continue;
         }
         let round = reader
@@ -1094,7 +1123,7 @@ impl Application {
                 );
             }
         }
-        append_execution_failures(reader, &entries, &mut parts).await?;
+        append_execution_failures(reader, session, &entries, &mut parts).await?;
         let summary = reader.summary(session).await.map_err(crate::kernel_error)?;
         Ok(SessionPartsResource {
             session_id: request.session_id,
@@ -1140,7 +1169,7 @@ impl Application {
                 .await?,
             );
         }
-        append_execution_failures(reader, &page.entries, &mut parts).await?;
+        append_execution_failures(reader, session, &page.entries, &mut parts).await?;
         let runs = page
             .messages
             .iter()
@@ -2021,7 +2050,7 @@ mod tool_input_projection_tests {
         for entry in &history.entries {
             parts.push(project_kernel_entry(reader, session, entry).await.unwrap());
         }
-        append_execution_failures(reader, &history.entries, &mut parts)
+        append_execution_failures(reader, session, &history.entries, &mut parts)
             .await
             .unwrap();
         let errors = parts
@@ -2130,7 +2159,7 @@ mod tool_input_projection_tests {
         for entry in &history.entries {
             parts.push(project_kernel_entry(reader, session, entry).await.unwrap());
         }
-        append_execution_failures(reader, &history.entries, &mut parts)
+        append_execution_failures(reader, session, &history.entries, &mut parts)
             .await
             .unwrap();
 
@@ -2246,7 +2275,7 @@ mod tool_input_projection_tests {
         for entry in &history.entries {
             parts.push(project_kernel_entry(reader, session, entry).await.unwrap());
         }
-        append_execution_failures(reader, &history.entries, &mut parts)
+        append_execution_failures(reader, session, &history.entries, &mut parts)
             .await
             .unwrap();
         let errors = parts
@@ -2266,6 +2295,174 @@ mod tool_input_projection_tests {
                 .iter()
                 .any(|part| part.message_boundary && part.run_state.as_deref() == Some("failed"))
         );
+    }
+
+    #[tokio::test]
+    async fn failed_resume_projects_only_its_durable_failure_even_across_pages() {
+        use agena_failure::{
+            Failure, FailureCategory, FailureCode, FailureImpact, FailureResponsibility,
+            RecoveryDirective, RetryDirective, UserPresentation, notice::failure_notice_text,
+        };
+        use agena_storage::kernel::ExecutionPhase;
+
+        let runtime = agena_storage_sqlite::open_kernel_runtime("sqlite::memory:")
+            .await
+            .unwrap();
+        let ports = &runtime.ports;
+        let workspace = runtime
+            .workspaces
+            .ensure_id("/failed-resume-tests")
+            .await
+            .unwrap();
+        let session = ports
+            .sessions
+            .create_configured(RequestId::new(), workspace, "A".into(), Default::default())
+            .await
+            .unwrap()
+            .value
+            .id;
+        let execution = ports
+            .sessions
+            .send(
+                RequestId::new(),
+                session,
+                ComposerDocument(vec![ComposerNode::Text {
+                    text: "Run the tests".into(),
+                }]),
+            )
+            .await
+            .unwrap()
+            .value;
+        let attempt = ports
+            .executor
+            .claim_next(RequestId::new(), session, execution.id)
+            .await
+            .unwrap()
+            .value;
+        let failure = |code: &'static str, message| {
+            Failure::new(
+                FailureCode::new(code),
+                FailureCategory::DependencyUnavailable,
+                FailureResponsibility::System,
+                RetryDirective::Backoff,
+                RecoveryDirective::Retry,
+                FailureImpact::RequestRejected,
+                UserPresentation::new(code, message),
+            )
+        };
+        let round = attempt
+            .begin_current_round(RequestId::new())
+            .await
+            .unwrap()
+            .value;
+        let reply = round
+            .begin_text(RequestId::new(), false)
+            .await
+            .unwrap()
+            .value;
+        reply.append("Checking the tests").await.unwrap();
+        reply.finish(RequestId::new()).await.unwrap();
+        round
+            .finish(
+                RequestId::new(),
+                Some(
+                    json!({"failure": failure("provider.request_failed", "Provider unavailable.")}),
+                ),
+                false,
+            )
+            .await
+            .unwrap();
+        attempt
+            .finish(RequestId::new(), ExecutionPhase::Failed)
+            .await
+            .unwrap();
+
+        let delivery = ports
+            .executor
+            .deliver(
+                RequestId::new(),
+                session,
+                "process:completion".into(),
+                json!({"wake": true}),
+            )
+            .await
+            .unwrap()
+            .value;
+        let resumed = ports
+            .executor
+            .resume_delivery(
+                RequestId::new(),
+                session,
+                delivery.id,
+                execution.message_id,
+                "Command completed".into(),
+            )
+            .await
+            .unwrap()
+            .value;
+        assert_eq!(resumed.id, execution.id);
+        let attempt = ports
+            .executor
+            .claim_next(RequestId::new(), session, execution.id)
+            .await
+            .unwrap()
+            .value;
+        let notice = attempt
+            .notice(RequestId::new(), "A second delivery arrived".into())
+            .await
+            .unwrap()
+            .value;
+        let actual_failure = failure("database.busy", "Database busy. Try again shortly.");
+        let failure_entry = attempt
+            .notice(
+                RequestId::new(),
+                failure_notice_text(&actual_failure).unwrap(),
+            )
+            .await
+            .unwrap()
+            .value;
+        attempt
+            .finish(RequestId::new(), ExecutionPhase::Failed)
+            .await
+            .unwrap();
+
+        let reader = &ports.reader;
+        let page = reader.message_history(session, None, 8, 16).await.unwrap();
+        let mut parts = Vec::new();
+        for entry in &page.entries {
+            parts.push(project_kernel_entry(reader, session, entry).await.unwrap());
+        }
+        append_execution_failures(reader, session, &page.entries, &mut parts)
+            .await
+            .unwrap();
+        let errors: Vec<_> = parts.iter().filter(|part| part.kind == "error").collect();
+        assert_eq!(errors.len(), 2);
+        assert!(
+            errors
+                .iter()
+                .any(|part| part.content["problem"]["code"] == "provider.request_failed")
+        );
+        let stored = errors
+            .iter()
+            .find(|part| part.part_id == failure_entry.get())
+            .unwrap();
+        assert_eq!(stored.content["problem"]["id"], json!(actual_failure.id));
+
+        let page = reader
+            .history_window(session, None, &[notice.get()], 16)
+            .await
+            .unwrap();
+        assert_eq!(page.entries.len(), 1);
+        let mut parts = vec![
+            project_kernel_entry(reader, session, &page.entries[0])
+                .await
+                .unwrap(),
+        ];
+        append_execution_failures(reader, session, &page.entries, &mut parts)
+            .await
+            .unwrap();
+        assert_eq!(parts.len(), 1);
+        assert_ne!(parts[0].kind, "error");
     }
 
     #[tokio::test]

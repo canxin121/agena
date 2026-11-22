@@ -373,10 +373,10 @@ impl Backend {
             read_cache::Lookup::Hit(view) => return Ok(view),
             read_cache::Lookup::Miss(fill) => fill,
         };
-        let _read = admission
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| KernelError::Busy)?;
+        let _read = admission.clone().try_acquire_owned().map_err(|_| {
+            tracing::debug!(read = ?key, "kernel read concurrency slots exhausted");
+            KernelError::Busy
+        })?;
         let value = query.await?;
         let bytes = modeled_read_bytes(&value)?;
         let reserve = || self.views.reserve_owned(key.owner(), bytes);
@@ -385,7 +385,11 @@ impl Backend {
                 return Err(error);
             }
             self.cache.evict();
-            reserve()
+            reserve().inspect_err(|error| {
+                if *error == KernelError::Busy {
+                    tracing::debug!(read = ?key, bytes, "kernel read view budget exhausted");
+                }
+            })
         })?;
         let view = ReadView::from_lease(value, lease);
         self.cache.install(key, fill, &view);
@@ -1306,6 +1310,21 @@ impl KernelBackend for Backend {
         .await?;
         let bytes = modeled_read_bytes(&value)?;
         self.wrap_read(session, value, bytes)
+    }
+    async fn has_failure_notice(
+        &self,
+        session: SessionId,
+        execution: ExecutionId,
+        generation: AttemptGeneration,
+    ) -> Result<bool> {
+        reads::has_failure_notice(
+            self.reader.get_sqlite_connection_pool(),
+            session,
+            execution,
+            generation,
+            self.live.diagnostics(),
+        )
+        .await
     }
     fn watch(&self, session: SessionId, after: Option<WatchCursor>) -> Result<KernelWatch> {
         self.cache.ensure_open()?;

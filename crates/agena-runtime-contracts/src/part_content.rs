@@ -370,26 +370,9 @@ impl ErrorContent {
     }
 }
 
-/// Marker prefix for a synthetic notice that carries an execution-level
-/// failure which has no failed provider round (for example a manager-level
-/// configuration stop). Notices are plain strings in the kernel, so the
-/// structured failure rides inside the text and is projected back into a
-/// canonical `error` part at read time.
-pub const FAILURE_NOTICE_PREFIX: &str = "\u{1f}agena.failure:";
-
-pub fn failure_notice_text(failure: &agena_failure::Failure) -> serde_json::Result<String> {
-    Ok(format!(
-        "{FAILURE_NOTICE_PREFIX}{}",
-        serde_json::to_string(failure)?
-    ))
-}
-
-/// Decode a marker notice body. `None` means this is an ordinary notice that
-/// must keep rendering as user-visible text.
-pub fn decode_failure_notice(text: &str) -> Option<serde_json::Result<agena_failure::Failure>> {
-    let payload = text.strip_prefix(FAILURE_NOTICE_PREFIX)?;
-    Some(serde_json::from_str(payload))
-}
+pub use agena_failure::notice::{
+    FAILURE_NOTICE_PREFIX, decode_failure_notice, failure_notice_text,
+};
 
 /// Decode the canonical human-facing notice shape from a kernel notice body.
 ///

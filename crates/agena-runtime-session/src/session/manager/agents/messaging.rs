@@ -7,12 +7,10 @@ use agena_plugin_host::sdk::host_api::{
 
 impl SessionManager {
     async fn agent_group(&self, caller: SessionId) -> Result<SessionId, AppError> {
-        let configuration = self
-            .kernel()
-            .reader
-            .configuration(caller)
-            .await
-            .map_err(kernel_error)?;
+        let configuration = read_with_busy_retry(caller, "configuration", || {
+            self.kernel().reader.configuration(caller)
+        })
+        .await?;
         if configuration.relation_kind == agena_domain::SessionRelationKind::Subagent {
             if configuration.agent.is_none() {
                 return Err(AppError::Config("session has no agent identity".into()));
@@ -390,17 +388,15 @@ impl SessionManager {
         caller: SessionId,
     ) -> Result<String, AppError> {
         let owner = self.agent_group(caller).await?;
-        let page = self
-            .kernel()
-            .reader
-            .query_summaries(SummaryQuery {
+        let page = read_with_busy_retry(caller, "agent_roster", || {
+            self.kernel().reader.query_summaries(SummaryQuery {
                 parent_id: Some(owner),
                 agents_only: true,
                 limit: MAX_AGENTS_PER_PARENT,
                 ..Default::default()
             })
-            .await
-            .map_err(kernel_error)?;
+        })
+        .await?;
         if caller == owner && page.sessions.is_empty() {
             return Ok(String::new());
         }

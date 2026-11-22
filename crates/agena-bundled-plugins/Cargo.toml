@@ -36,6 +36,7 @@ chrono = { workspace = true }
 futures-util = { workspace = true }
 hex = { workspace = true }
 ignore = { workspace = true }
+image = { workspace = true }
 ipnet = { workspace = true }
 jsonschema = { workspace = true }
 moka = { workspace = true }

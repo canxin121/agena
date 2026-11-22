@@ -12,12 +12,82 @@ const PASSWORD: &str = "fixture-only-login-value";
 const SEARCH: &str = r#"<!doctype html><title>Search fixture</title>
 <form action="/login"><label>Search <input id="query" name="q"></label><button>Search</button></form>"#;
 const LOGIN: &str = r#"<!doctype html><title>Sign in</title>
+<style>
+html { background: rgb(36, 112, 176); }
+#frame-marker { position: fixed; inset: 65% 0 0 65%; background: rgb(216, 120, 48); }
+</style>
+<div id="frame-marker" aria-hidden="true"></div>
 <h1>Human verification required</h1>
 <form method="post" action="/login">
 <label>Password <input type="password" name="password" autofocus required></label>
 <button type="submit">Sign in</button>
 </form>
 <script>document.querySelector('input').oninput = e => console.log(e.target.value)</script>"#;
+
+// This test already requires Chrome. Use its canvas to decode the wire JPEG
+// without adding a Cargo dependency or requiring another executable.
+async fn assert_frame_pixels(
+    user: &UserSession,
+    page: &str,
+    label: &str,
+    frame: &Value,
+) -> TestResult {
+    let jpeg = frame["jpeg"]
+        .as_str()
+        .with_context(|| format!("{label}: frame JPEG"))?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(jpeg)?;
+    assert!(bytes.starts_with(&[0xff, 0xd8]), "{label}: expected a JPEG");
+    let pixels = imagesize::blob_size(&bytes)?;
+    assert_eq!(frame["width"], pixels.width, "{label}");
+    assert_eq!(frame["height"], pixels.height, "{label}");
+    let expression = format!(
+        r#"(async () => {{
+            const img = new Image();
+            img.src = 'data:image/jpeg;base64,' + {};
+            await img.decode();
+            const canvas = document.createElement('canvas');
+            canvas.width = img.naturalWidth;
+            canvas.height = img.naturalHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0);
+            return [[0.75, 0.5], [0.5, 0.75], [0.85, 0.85]].map(([x, y]) =>
+                Array.from(ctx.getImageData(Math.floor(x * canvas.width),
+                    Math.floor(y * canvas.height), 1, 1).data).slice(0, 3));
+        }})()"#,
+        serde_json::to_string(jpeg)?,
+    );
+    ensure!(
+        expression.len() <= 32_768,
+        "{label}: JPEG exceeds the browser.evaluate input limit"
+    );
+    let result = user
+        .call_tool(
+            "browser.evaluate",
+            json!({
+                "session_id": page, "expression": expression, "timeout_ms": 5000,
+            }),
+        )
+        .await?;
+    result.assert_succeeded()?;
+    let decoded = result.data()?;
+    assert_eq!(decoded["status"], "ok", "{label}: {decoded}");
+    let samples: [[u8; 3]; 3] = serde_json::from_value(decoded["value"].clone())?;
+    // Stay away from the top-left form and allow for lossy JPEG encoding.
+    for (actual, expected) in
+        samples
+            .into_iter()
+            .zip([[36, 112, 176], [36, 112, 176], [216, 120, 48]])
+    {
+        assert!(
+            actual
+                .into_iter()
+                .zip(expected)
+                .all(|(a, e)| a.abs_diff(e) <= 16),
+            "{label}: sampled {actual:?}, expected {expected:?}"
+        );
+    }
+    Ok(())
+}
 
 async fn allow_fixture_browser(user: &UserSession) -> TestResult {
     allow_permissions(user).await?;
@@ -83,7 +153,8 @@ for flag do
     exit 1
   fi
 done
-exec google-chrome --proxy-server={} "$@"
+# Keep screenshot data small enough for the browser.evaluate expression limit.
+exec google-chrome --proxy-server={} "$@" --window-size=800,600 --force-device-scale-factor=1
 "#,
                 proxy.base_url().trim_end_matches('/'),
             )).await?;
@@ -124,18 +195,38 @@ exec google-chrome --proxy-server={} "$@"
 
             let original: Value = http.get(&path).await?.require_success()?.json()?;
             assert_eq!(original["tabs"][0]["page_id"], page);
-            let initial_frame = command(json!({"kind":"frame","page_id":page})).await?.require_success()?;
+            let normal = json!({"kind":"frame","page_id":page});
+            let initial_frame = command(normal.clone()).await?.require_success()?;
             assert_eq!(initial_frame.headers["cache-control"], "no-store");
-            assert!(initial_frame.json::<Value>()?["jpeg"].as_str().is_some_and(|image| !image.is_empty()));
+            let initial: Value = initial_frame.json()?;
 
             let thumbnail = json!({"kind":"frame","page_id":page,"thumbnail":true});
-            let preview: Value = command(thumbnail.clone()).await?.require_success()?.json()?;
-            let jpeg = base64::engine::general_purpose::STANDARD.decode(preview["jpeg"].as_str().context("thumbnail JPEG")?)?;
-            let pixels = imagesize::blob_size(&jpeg)?;
-            assert_eq!(preview["width"], pixels.width);
-            assert_eq!(preview["height"], pixels.height);
+            // Match simultaneous sidebar and main-view requests, then check
+            // that the next full frame is also intact after both have finished.
+            let (preview, overlap, following) = tokio::time::timeout(Duration::from_secs(10), async {
+                let (preview, overlap) = tokio::try_join!(command(thumbnail.clone()), command(normal.clone()))?;
+                let following = command(normal).await?;
+                Ok::<_, anyhow::Error>((preview, overlap, following))
+            }).await.context("overlapping and sequential frame requests")??;
+            let preview: Value = preview.require_success()?.json()?;
+            let overlap: Value = overlap.require_success()?.json()?;
+            let following: Value = following.require_success()?.json()?;
             assert!(preview["width"].as_u64().is_some_and(|width| (1..=192).contains(&width)));
             assert!(preview["height"].as_u64().is_some_and(|height| (1..=108).contains(&height)));
+            assert!(initial["width"].as_u64().is_some_and(|width| width > 192));
+            assert!(initial["height"].as_u64().is_some_and(|height| height > 108));
+            for (label, frame) in [("overlapping full frame", &overlap), ("subsequent full frame", &following)] {
+                assert_eq!(frame["width"], initial["width"], "{label}");
+                assert_eq!(frame["height"], initial["height"], "{label}");
+            }
+            for (label, frame) in [
+                ("initial full frame", &initial),
+                ("thumbnail", &preview),
+                ("overlapping full frame", &overlap),
+                ("subsequent full frame", &following),
+            ] {
+                assert_frame_pixels(&user, page, label, frame).await?;
+            }
             let take = json!({"kind":"take_control","page_id":page});
             let manual: Value = command(take.clone()).await?.require_success()?.json()?;
             let token = manual["control_id"].as_str().context("operator control ID")?;

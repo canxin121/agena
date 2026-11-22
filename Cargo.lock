@@ -440,6 +440,7 @@ dependencies = [
  "futures-util",
  "hex",
  "ignore",
+ "image",
  "ipnet",
  "jsonschema",
  "libc",

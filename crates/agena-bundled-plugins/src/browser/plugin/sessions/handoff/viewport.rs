@@ -1,25 +1,22 @@
-use std::time::Duration;
+use std::{io::Cursor, time::Duration};
 
 use agena_plugin_host::{
     PluginError,
     sdk::{PluginErrorKind, Result as SdkResult},
 };
 use agena_plugin_sdk::browser::{BrowserControlResult, BrowserInput, PointerAction};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use image::{ImageFormat, ImageReader, Limits, codecs::jpeg::JpegEncoder};
 use serde_json::{Value, json};
 use tokio::sync::Semaphore;
 
 use super::super::BrowserPage;
 
 static CAPTURES: Semaphore = Semaphore::const_new(6);
+// Reserve capture capacity for the open viewer, even during background JPEG processing.
+static THUMBNAILS: Semaphore = Semaphore::const_new(2);
 
-struct Viewport {
-    x: f64,
-    y: f64,
-    width: u32,
-    height: u32,
-}
-
-async fn visual_viewport(page: &BrowserPage) -> SdkResult<Viewport> {
+async fn dimensions(page: &BrowserPage) -> SdkResult<(u32, u32)> {
     let metrics = page
         .driver
         .viewport_command("Page.getLayoutMetrics", json!({}))
@@ -32,26 +29,21 @@ async fn visual_viewport(page: &BrowserPage) -> SdkResult<Viewport> {
             .map(|value| value.round() as u32)
             .ok_or_else(|| PluginError::internal("Chrome returned an invalid viewport"))
     };
-    Ok(Viewport {
-        x: viewport["pageX"].as_f64().unwrap_or_default(),
-        y: viewport["pageY"].as_f64().unwrap_or_default(),
-        width: pixels("clientWidth")?,
-        height: pixels("clientHeight")?,
-    })
-}
-
-async fn dimensions(page: &BrowserPage) -> SdkResult<(u32, u32)> {
-    let viewport = visual_viewport(page).await?;
-    Ok((viewport.width, viewport.height))
+    Ok((pixels("clientWidth")?, pixels("clientHeight")?))
 }
 
 pub(super) async fn frame(page: &BrowserPage, thumbnail: bool) -> SdkResult<BrowserControlResult> {
-    let _capture = CAPTURES.try_acquire().map_err(|_| {
+    let busy = || {
         PluginError::from_kind(
             PluginErrorKind::HostUnavailable,
             "The browser preview is busy",
         )
-    })?;
+    };
+    let thumbnail_slot = thumbnail
+        .then(|| THUMBNAILS.try_acquire())
+        .transpose()
+        .map_err(|_| busy())?;
+    let capture = CAPTURES.try_acquire().map_err(|_| busy())?;
     if let Some(dialog) = page.driver.dialog()? {
         return Ok(BrowserControlResult::Frame {
             jpeg: String::new(),
@@ -61,39 +53,25 @@ pub(super) async fn frame(page: &BrowserPage, thumbnail: bool) -> SdkResult<Brow
             dialog: (!thumbnail).then_some(dialog),
         });
     }
+    let screenshot = page.driver.viewport_command(
+        "Page.captureScreenshot",
+        json!({"format":"jpeg", "quality":65, "captureBeyondViewport":false}),
+    );
     if thumbnail {
-        let Viewport {
-            x,
-            y,
-            width,
-            height,
-        } = visual_viewport(page).await?;
-        let scale = (192.0 / f64::from(width))
-            .min(108.0 / f64::from(height))
-            .min(1.0);
-        let image = page
-            .driver
-            .viewport_command(
-                "Page.captureScreenshot",
-                json!({
-                    "format": "jpeg", "quality": 55, "captureBeyondViewport": false,
-                    "clip": {"x": x, "y": y, "width": width, "height": height, "scale": scale}
-                }),
-            )
-            .await?;
-        return Ok(BrowserControlResult::Frame {
-            jpeg: jpeg_data(&image)?.to_owned(),
-            origin: String::new(),
-            width: (f64::from(width) * scale).round().max(1.0) as u32,
-            height: (f64::from(height) * scale).round().max(1.0) as u32,
-            dialog: None,
-        });
+        // A CDP clip with a fractional scale temporarily changes Chrome's capture
+        // viewport. Downsample the pixels instead, so a thumbnail never changes
+        // what a simultaneous full capture or the operator sees.
+        let frame = screenshot.await?;
+        let jpeg = jpeg_data(&frame)?.to_owned();
+        return tokio::task::spawn_blocking(move || {
+            let _slots = (capture, thumbnail_slot);
+            thumbnail_frame(&jpeg)
+        })
+        .await
+        .map_err(|error| PluginError::internal_error(&error))?;
     }
     let (frame, location, (width, height)) = tokio::try_join!(
-        page.driver.viewport_command(
-            "Page.captureScreenshot",
-            json!({"format":"jpeg", "quality":65, "captureBeyondViewport":false})
-        ),
+        screenshot,
         page.driver.viewport_command("Page.getFrameTree", json!({})),
         dimensions(page),
     )?;
@@ -108,6 +86,37 @@ pub(super) async fn frame(page: &BrowserPage, thumbnail: bool) -> SdkResult<Brow
     Ok(BrowserControlResult::Frame {
         jpeg: jpeg.to_owned(),
         origin,
+        width,
+        height,
+        dialog: None,
+    })
+}
+
+fn thumbnail_frame(jpeg: &str) -> SdkResult<BrowserControlResult> {
+    const WIDTH: u32 = 192;
+    const HEIGHT: u32 = 108;
+    let unavailable = || PluginError::internal("Chrome returned an unavailable preview frame");
+    let bytes = STANDARD.decode(jpeg).map_err(|_| unavailable())?;
+    let mut reader = ImageReader::with_format(Cursor::new(bytes), ImageFormat::Jpeg);
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(8192);
+    limits.max_image_height = Some(8192);
+    limits.max_alloc = Some(64 * 1024 * 1024);
+    reader.limits(limits);
+    let image = reader.decode().map_err(|_| unavailable())?;
+    let (jpeg, width, height) = if image.width() <= WIDTH && image.height() <= HEIGHT {
+        (jpeg.to_owned(), image.width(), image.height())
+    } else {
+        let image = image.thumbnail(WIDTH, HEIGHT);
+        let mut bytes = Vec::new();
+        JpegEncoder::new_with_quality(&mut bytes, 55)
+            .encode_image(&image)
+            .map_err(|_| PluginError::internal("Could not encode the browser thumbnail"))?;
+        (STANDARD.encode(bytes), image.width(), image.height())
+    };
+    Ok(BrowserControlResult::Frame {
+        jpeg,
+        origin: String::new(),
         width,
         height,
         dialog: None,
@@ -305,4 +314,48 @@ pub(super) async fn check_for_credentials(page: &BrowserPage) -> SdkResult<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::{Rgb, RgbImage, load_from_memory_with_format};
+
+    #[test]
+    fn thumbnail_keeps_the_whole_frame_within_bounds() {
+        for ((width, height), expected) in [
+            ((800, 400), (192, 96)),
+            ((120, 240), (54, 108)),
+            ((64, 32), (64, 32)),
+        ] {
+            let mut source = RgbImage::from_pixel(width, height, Rgb([20, 140, 30]));
+            for (_, _, pixel) in source
+                .enumerate_pixels_mut()
+                .filter(|(x, y, _)| *x < width / 2 && *y < height / 2)
+            {
+                *pixel = Rgb([220, 20, 10]);
+            }
+            let mut bytes = Vec::new();
+            JpegEncoder::new(&mut bytes).encode_image(&source).unwrap();
+            let BrowserControlResult::Frame {
+                jpeg,
+                width,
+                height,
+                ..
+            } = thumbnail_frame(&STANDARD.encode(bytes)).unwrap()
+            else {
+                panic!("expected a thumbnail frame");
+            };
+            assert_eq!((width, height), expected);
+            let jpeg = STANDARD.decode(jpeg).unwrap();
+            let pixels = load_from_memory_with_format(&jpeg, ImageFormat::Jpeg)
+                .unwrap()
+                .into_rgb8();
+            assert_eq!(pixels.dimensions(), expected);
+            let [r, g, _] = pixels.get_pixel(width / 4, height / 4).0;
+            assert!(r > 180 && g < 60);
+            let [r, g, _] = pixels.get_pixel(width * 3 / 4, height * 3 / 4).0;
+            assert!(r < 60 && g > 100);
+        }
+    }
 }

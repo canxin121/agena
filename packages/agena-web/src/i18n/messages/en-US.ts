@@ -1575,6 +1575,7 @@ export default {
       hours: '{hours}h {minutes}m',
     },
     partTitles: {
+      agentMessage: 'Agent message',
       answer: 'Answer',
       reasoning: 'thinking',
       textSegment: 'Text',

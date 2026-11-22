@@ -631,6 +631,22 @@ pub(super) fn delivery_text(payload: &Value) -> Result<String, AppError> {
             "text",
             "completed",
         )?),
+        "agent_message" => {
+            let sender = delivery_operation_id(payload.get("sender_agent_id")).unwrap_or_default();
+            let name = payload
+                .get("sender_name")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let body = payload
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            Some(encode_delivery_notification(
+                agena_runtime_contracts::part_content::SystemNotificationContent::agent_message(
+                    sender, name, body,
+                ),
+            )?)
+        }
         _ => None,
     };
     if let Some(text) = structured {
@@ -877,17 +893,31 @@ mod delivery_text_tests {
     }
 
     #[test]
-    fn ordinary_messages_stay_plain_and_existing_markers_pass_through() {
-        let plain = delivery_text(&serde_json::json!({
+    fn agent_messages_keep_the_sender_and_provider_body() {
+        let body = "Message from worker (91):\nFound the relevant files.\nSee the diff below.";
+        let text = delivery_text(&serde_json::json!({
             "kind": "agent_message",
-            "text": "Message from parent (1):\nhello",
+            "sender_agent_id": 91,
+            "sender_name": "worker",
+            "text": body,
+            "wake": false,
         }))
         .unwrap();
-        assert_eq!(plain, "Message from parent (1):\nhello");
-        assert!(!matches!(
-            agena_runtime_contracts::part_content::decode_notice(&plain),
-            DecodedNotice::SystemNotification(_)
-        ));
+        let notification = decode(&text);
+        assert_eq!(notification.operation_kind, "agent_message");
+        assert_eq!(notification.operation_id, "91");
+        assert_eq!(notification.extra["sender_name"], "worker");
+        assert_eq!(notification.summary, "Found the relevant files.");
+        assert_eq!(
+            DecodedNotice::SystemNotification(Ok(notification)).model_text(),
+            Some(body)
+        );
+    }
+
+    #[test]
+    fn ordinary_messages_stay_plain_and_existing_markers_pass_through() {
+        let plain = delivery_text(&serde_json::json!({"kind": "other", "text": "hello"})).unwrap();
+        assert_eq!(plain, "hello");
 
         let marker = agena_runtime_contracts::part_content::system_notification_notice_text(
             &agena_runtime_contracts::part_content::SystemNotificationContent {

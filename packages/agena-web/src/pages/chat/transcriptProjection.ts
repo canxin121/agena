@@ -39,6 +39,7 @@ export type TranscriptProjectionLabels = {
   skill?: string
   error?: string
   notice?: string
+  agentMessage?: string
   compaction?: string
   compactionUnchanged?: string
   compactionTokens?: (before: number, after: number) => string
@@ -64,6 +65,7 @@ export function transcriptProjectionLabels(
     skill: String(t('chat.skills.title')),
     error: String(t('chat.partTitles.error')),
     notice: String(t('chat.partTitles.notice')),
+    agentMessage: String(t('chat.partTitles.agentMessage')),
     compaction: String(t('chat.partTitles.compaction')),
     compactionUnchanged: String(t('chat.partTitles.compactionUnchanged')),
     compactionTokens: (before: number, after: number) =>
@@ -250,6 +252,11 @@ function noticeTitle(part: MessagePartLike, labels?: TranscriptProjectionLabels)
   if (kind === 'system_notification') {
     const operationKind = firstText(content, ['operation_kind']) || 'background'
     const operationId = firstText(content, ['operation_id'])
+    if (operationKind === 'agent_message') {
+      const title = text(labels?.agentMessage) || 'Agent message'
+      const sender = firstText(content, ['sender_name']) || (operationId ? `#${operationId}` : '')
+      return sender ? `${title} · ${sender}` : title
+    }
     return operationId ? `${operationKind}:${operationId}` : operationKind
   }
   if (kind === 'context_cleared') {
@@ -401,11 +408,12 @@ function displayFields(
   }
   if (kind === 'notice' || kind === 'compaction' || kind === 'context_cleared') {
     const title = shownTitle(part, presentedTitle, noticeTitle(part, presentationLabels))
+    const content = durablePartContent(part)
     let summary =
-      kind === 'compaction' && durablePartContent(part).outcome === 'unchanged'
+      kind === 'compaction' && content.outcome === 'unchanged'
         ? text(presentationLabels?.compactionUnchanged) || 'Context is already compact; the existing history was kept.'
         : shownSummary(part, presentedSummary, noticeSummary(part, presentationLabels))
-    const checkpoint = record(durablePartContent(part).checkpoint)
+    const checkpoint = record(content.checkpoint)
     if (
       kind === 'compaction' &&
       !summary &&
@@ -416,7 +424,8 @@ function displayFields(
         presentationLabels?.compactionTokens?.(checkpoint.before_tokens, checkpoint.after_tokens) ||
         `${checkpoint.before_tokens} → ${checkpoint.after_tokens} tokens`
     }
-    return { title, summary, copyText: [title, summary].filter(Boolean).join('\n') }
+    const body = content.operation_kind === 'agent_message' ? rawText(content.detail) || rawText(content.body) : summary
+    return { title, summary, copyText: [title, body || summary].filter(Boolean).join('\n') }
   }
   const content = durablePartContent(part)
   const body = transcriptPartText(part) || compactJson(content)

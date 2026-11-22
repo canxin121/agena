@@ -1413,6 +1413,7 @@ export default {
       hours: '{hours} h {minutes} min',
     },
     partTitles: {
+      agentMessage: 'Message d’agent',
       answer: 'Réponse',
       reasoning: 'réflexion',
       textSegment: 'Texte',

@@ -103,6 +103,12 @@ fn every_wire_activity_retains_a_title_and_content_summary_when_open_or_closed()
             "System notification",
             "Process finished",
         ),
+        (
+            "system_notification",
+            json!({"operation_kind": "agent_message", "operation_id": "91", "sender_name": "worker", "summary": "Found the files", "body": "Message from worker (91):\nFound the files\nFull details"}),
+            "Agent message · worker",
+            "Found the files",
+        ),
     ] {
         let entry = projected(wire(kind, content));
         assert_eq!(entry.parts.len(), 1, "{kind}");

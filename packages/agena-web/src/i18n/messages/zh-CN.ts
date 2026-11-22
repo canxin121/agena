@@ -1546,6 +1546,7 @@ export default {
       hours: '{hours} 小时 {minutes} 分',
     },
     partTitles: {
+      agentMessage: '子会话消息',
       answer: '回答',
       reasoning: '思考',
       textSegment: '文本',

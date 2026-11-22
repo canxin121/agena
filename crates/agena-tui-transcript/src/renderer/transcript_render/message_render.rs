@@ -1625,7 +1625,7 @@ pub(crate) fn render_part_node(
         )) => render_notice_row(
             message,
             part,
-            notification_notice(notification),
+            notification_notice(notification, i18n),
             out,
             width,
             i18n,

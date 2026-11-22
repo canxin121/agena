@@ -838,8 +838,13 @@ fn apply_hook_content(
 
 fn apply_system_notification(
     part: &mut PartResource,
-    notification: agena_runtime_contracts::part_content::SystemNotificationContent,
+    mut notification: agena_runtime_contracts::part_content::SystemNotificationContent,
 ) {
+    if let Some(body) = notification.agent_message_body()
+        && body != notification.body
+    {
+        notification.detail = Some(body.to_owned());
+    }
     part.kind = agena_runtime_contracts::part_content::SystemNotificationContent::kind().into();
     part.summary = Some(notification.summary.clone());
     part.content = notification.as_value();
@@ -2610,6 +2615,24 @@ mod tool_input_projection_tests {
             SystemNotificationContent::try_from(&part.content).unwrap(),
             expected
         );
+
+        let body = "Message from worker (91):\nFound the files.\nFull details.";
+        let agent_message = SystemNotificationContent::agent_message("91".into(), "worker", body);
+        for text in [
+            system_notification_notice_text(&agent_message).unwrap(),
+            body.into(),
+        ] {
+            let entry_id = attempt.notice(RequestId::new(), text).await.unwrap().value;
+            let entry = reader.entry(session, entry_id).await.unwrap();
+            let part = project_kernel_entry(reader, session, &entry).await.unwrap();
+            assert_eq!(part.kind, "system_notification");
+            assert_eq!(part.summary.as_deref(), Some("Found the files."));
+            assert_eq!(part.content["operation_kind"], "agent_message");
+            assert_eq!(part.content["operation_id"], "91");
+            assert_eq!(part.content["sender_name"], "worker");
+            assert_eq!(part.content["body"], body);
+            assert_eq!(part.content["detail"], "Found the files.\nFull details.");
+        }
     }
 
     #[tokio::test]

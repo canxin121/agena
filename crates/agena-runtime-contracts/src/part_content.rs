@@ -255,7 +255,7 @@ pub struct SystemNotificationContent {
     /// The background operation id (task id or process id).
     #[serde(default)]
     pub operation_id: String,
-    /// "task" | "shell" | "workflow" | "monitor" | "scheduled_delivery".
+    /// Operation category, such as "task", "shell", or "agent_message".
     #[serde(default)]
     pub operation_kind: String,
     /// The launching tool_call's provider operation id (`agena.operation_id`).
@@ -282,8 +282,46 @@ pub struct SystemNotificationContent {
 }
 
 impl SystemNotificationContent {
+    pub const AGENT_MESSAGE: &str = "agent_message";
+
     pub const fn kind() -> &'static str {
         "system_notification"
+    }
+
+    pub fn agent_message(sender_id: String, sender_name: &str, text: &str) -> Self {
+        let mut notice = Self {
+            operation_id: sender_id,
+            operation_kind: Self::AGENT_MESSAGE.into(),
+            status: "event".into(),
+            body: text.to_owned(),
+            extra: [("sender_name".into(), Value::String(sender_name.into()))].into(),
+            ..Self::default()
+        };
+        notice.summary = notice
+            .agent_message_body()
+            .unwrap_or(text)
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .unwrap_or_default()
+            .chars()
+            .take(512)
+            .collect();
+        notice
+    }
+
+    /// The transcript already shows the sender in the title. The stored body
+    /// keeps the attribution for provider input.
+    pub fn agent_message_body(&self) -> Option<&str> {
+        if self.operation_kind != Self::AGENT_MESSAGE {
+            return None;
+        }
+        let name = self.extra.get("sender_name").and_then(Value::as_str);
+        let message = name.and_then(|name| {
+            self.body
+                .strip_prefix(&format!("Message from {name} ({}):\n", self.operation_id))
+        });
+        Some(message.unwrap_or(&self.body))
     }
 
     pub fn as_value(&self) -> Value {
@@ -424,7 +462,35 @@ pub fn decode_notice(text: &str) -> DecodedNotice<'_> {
     if let Some(notice) = decode_notice_part(text) {
         return DecodedNotice::StructuredNotice(notice);
     }
+    if let Some(notification) = decode_legacy_agent_message(text) {
+        return DecodedNotice::SystemNotification(Ok(notification));
+    }
     DecodedNotice::Plain(text)
+}
+
+fn decode_legacy_agent_message(text: &str) -> Option<SystemNotificationContent> {
+    // Consumed deliveries used to persist just the mailbox's attributed text.
+    let (header, body) = text.strip_prefix("Message from ")?.split_once('\n')?;
+    let (name, id) = header.strip_suffix("):")?.split_once(" (")?;
+    let sender = id.parse::<i64>().ok()?;
+    if sender <= 0
+        || sender.to_string() != id
+        || name.is_empty()
+        || name.len() > 64
+        || name == "self"
+        || name.bytes().all(|b| b.is_ascii_digit())
+        || !name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+        || body.trim().is_empty()
+    {
+        return None;
+    }
+    Some(SystemNotificationContent::agent_message(
+        id.to_owned(),
+        name,
+        text,
+    ))
 }
 
 impl DecodedNotice<'_> {
@@ -656,6 +722,27 @@ mod notice_marker_tests {
         assert!(matches!(
             decode_notice(&text),
             DecodedNotice::SystemNotification(Ok(_))
+        ));
+    }
+
+    #[test]
+    fn legacy_agent_messages_keep_their_exact_provider_text() {
+        let text = "Message from parent (13):\n\nReview the report.\n  The details are below.";
+        let notice = decode_notice(text);
+        assert_eq!(notice.model_text(), Some(text));
+        let DecodedNotice::SystemNotification(Ok(notification)) = notice else {
+            panic!("legacy agent message must project as a system notification");
+        };
+        assert_eq!(notification.operation_id, "13");
+        assert_eq!(notification.extra["sender_name"], "parent");
+        assert_eq!(notification.summary, "Review the report.");
+        assert_eq!(
+            notification.agent_message_body(),
+            Some("\nReview the report.\n  The details are below.")
+        );
+        assert!(matches!(
+            decode_notice("Message from worker: Review the report."),
+            DecodedNotice::Plain(_)
         ));
     }
 

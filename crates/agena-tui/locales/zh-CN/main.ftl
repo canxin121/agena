@@ -2702,6 +2702,7 @@ flash-skill-count-limit = 一条消息最多可以引用 {$count} 个 Skill。
 
 # Part headlines retain a useful summary through streaming and disclosure.
 activity-title-system-notification = 系统通知
+activity-title-agent-message = 子会话消息
 activity-title-tool-call = 工具调用
 activity-summary-pending = 等待内容
 activity-summary-streaming = 正在接收内容…

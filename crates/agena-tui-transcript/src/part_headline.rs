@@ -133,17 +133,36 @@ pub(crate) fn hook_notice(hook: &HookContent) -> NoticeActivity {
     }
 }
 
-pub(crate) fn notification_notice(notification: &SystemNotificationContent) -> NoticeActivity {
+pub(crate) fn notification_notice(
+    notification: &SystemNotificationContent,
+    i18n: &I18n,
+) -> NoticeActivity {
+    let agent_message = notification.agent_message_body();
+    let title = agent_message.map(|_| {
+        let label = ui_text::t(i18n, "activity-title-agent-message");
+        match notification
+            .extra
+            .get("sender_name")
+            .and_then(serde_json::Value::as_str)
+        {
+            Some(name) if !name.is_empty() => format!("{label} · {name}"),
+            _ if !notification.operation_id.is_empty() => {
+                format!("{label} · #{}", notification.operation_id)
+            }
+            _ => label,
+        }
+    });
+    let body = agent_message.unwrap_or(&notification.body);
     NoticeActivity {
         kind: "system_notification".into(),
-        title: None,
+        title,
         summary: notification.summary.clone(),
         detail: notification
             .detail
             .as_ref()
             .filter(|text| !text.trim().is_empty())
             .cloned()
-            .or_else(|| (!notification.body.trim().is_empty()).then(|| notification.body.clone())),
+            .or_else(|| (!body.trim().is_empty()).then(|| body.to_owned())),
         occurred_at_ms: None,
     }
 }
@@ -372,7 +391,7 @@ pub(crate) fn part_headline(part: &TranscriptEntryPart, i18n: &I18n) -> Transcri
             }
             Activity::SystemNotification(notification) => {
                 let headline = canonical_headline(
-                    &ActivityPayload::Notice(notification_notice(notification)),
+                    &ActivityPayload::Notice(notification_notice(notification, i18n)),
                     i18n,
                 );
                 let summary = first_content([

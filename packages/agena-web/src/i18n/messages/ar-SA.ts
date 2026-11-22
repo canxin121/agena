@@ -883,6 +883,7 @@ export default {
       hours: '{hours} س {minutes} د',
     },
     partTitles: {
+      agentMessage: 'رسالة من الوكيل',
       answer: 'الإجابة',
       reasoning: 'التفكير',
       textSegment: 'نص',

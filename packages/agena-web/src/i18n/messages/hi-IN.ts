@@ -2024,6 +2024,7 @@ export default {
       hours: '{hours} घंटे {minutes} मिनट',
     },
     partTitles: {
+      agentMessage: 'एजेंट का संदेश',
       answer: 'जवाब',
       reasoning: 'विचार',
       textSegment: 'पाठ',

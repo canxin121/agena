@@ -2702,6 +2702,7 @@ flash-skill-count-limit = A message can include at most {$count} skill reference
 
 # Part headlines retain a useful summary through streaming and disclosure.
 activity-title-system-notification = System notification
+activity-title-agent-message = Agent message
 activity-title-tool-call = Tool call
 activity-summary-pending = Waiting for content
 activity-summary-streaming = Receiving content…

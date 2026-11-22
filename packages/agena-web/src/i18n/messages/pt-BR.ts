@@ -1858,6 +1858,7 @@ export default {
       hours: '{hours} h {minutes} min',
     },
     partTitles: {
+      agentMessage: 'Mensagem de agente',
       answer: 'Resposta',
       reasoning: 'raciocínio',
       textSegment: 'Texto',

@@ -1760,6 +1760,8 @@ export default {
       },
     },
     operations: {
+      childSessions: 'Sessões filhas',
+      noProcesses: 'Não há comandos nem assinaturas nesta conversa.',
       agent: 'Subagente',
       openAgentSession: 'Abrir conversa do agente',
       parentSession: 'Conversa principal',

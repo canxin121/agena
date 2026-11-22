@@ -2385,6 +2385,8 @@ export default {
       },
     },
     operations: {
+      childSessions: 'उप-सत्र',
+      noProcesses: 'इस बातचीत में कोई कमांड या सदस्यता नहीं है।',
       agent: 'उप-एजेंट',
       openAgentSession: 'एजेंट की बातचीत खोलें',
       parentSession: 'मूल बातचीत',

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { RiFolder6Line, RiSettings3Line } from '@remixicon/vue'
 import { computed, defineAsyncComponent, isRef, onScopeDispose, provide, ref, unref, useId, watch } from 'vue'
-import { useElementSize, useResizeObserver, useWindowSize } from '@vueuse/core'
+import { useResizeObserver, useWindowSize } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import {
   RiArrowDownLine,
@@ -339,20 +339,14 @@ function handleAttachProjectFromPanel() {
   openProjectAttachDialog()
 }
 
-// A classic scrollbar reserves space in the transcript. Reserve that same
-// space beside the composer so their shared column aligns on every platform.
-const footerEl = ref<HTMLElement>()
-const { height: footerHeight } = useElementSize(footerEl)
-const extraHeight = computed(() => (unref(composerFullscreenActive) ? 0 : Math.ceil(footerHeight.value)))
-const splitMinHeight = computed(() => (ui.isCompactLayout ? 128 : 112) + extraHeight.value)
+const splitMinHeight = computed(() => (ui.isCompactLayout ? 128 : 112))
 const splitMaxHeight = computed(() => {
   const max = unref(composerMaxHeight)
   return max === undefined ? undefined : Math.max(splitMinHeight.value, max)
 })
-const splitHeight = computed(() =>
-  Math.min(unref(composerTargetHeight) + extraHeight.value, splitMaxHeight.value ?? Infinity),
-)
+const splitHeight = computed(() => Math.min(unref(composerTargetHeight), splitMaxHeight.value ?? Infinity))
 
+// Match the space a classic scrollbar reserves beside the transcript.
 const scrollbarGutter = ref(0)
 useResizeObserver(scrollEl, () => {
   const element = scrollEl.value
@@ -921,6 +915,18 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                     :open="ctx.planViewerOpen.value"
                     @update:open="ctx.planViewerOpen.value = $event"
                   />
+                  <SessionOperationFooter
+                    v-if="chat.selectedSessionId && paneVisible"
+                    :key="`${chat.selectedSessionId}:${authVersion}`"
+                    v-model:schedules-open="ctx.schedulesOpen.value"
+                    :session-id="chat.selectedSessionId"
+                    :messages="chat.messages"
+                    :busy="currentPhase !== 'idle'"
+                    :child-count="chat.selectedSession?.child_session_count"
+                    :browser-open="browserOpen"
+                    :browser-requested="Boolean(browserRequestId)"
+                    @browser="showBrowser"
+                  />
                   <WorkspaceChangesSection
                     v-if="chat.selectedSessionId"
                     :key="chat.selectedSessionId + ':files'"
@@ -1120,20 +1126,6 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                 </template>
               </Composer>
             </div>
-          </div>
-          <div ref="footerEl" class="shrink-0">
-            <SessionOperationFooter
-              v-if="chat.selectedSessionId && paneVisible"
-              :key="`${chat.selectedSessionId}:${authVersion}`"
-              v-model:schedules-open="ctx.schedulesOpen.value"
-              :session-id="chat.selectedSessionId"
-              :messages="chat.messages"
-              :busy="currentPhase !== 'idle'"
-              :child-count="chat.selectedSession?.child_session_count"
-              :browser-open="browserOpen"
-              :browser-requested="Boolean(browserRequestId)"
-              @browser="showBrowser"
-            />
           </div>
         </div>
       </template>

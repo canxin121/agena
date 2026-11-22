@@ -40,7 +40,7 @@ const { data: image, error } = useVisibleResource({
   <button
     ref="trigger"
     type="button"
-    class="composer-resource"
+    class="flex min-h-11 w-full items-center gap-2 rounded px-2 py-1 text-start hover:bg-secondary/50 focus-visible:ring-2 focus-visible:ring-ring"
     :title="title"
     :aria-label="`${t('open')} · ${title}`"
     aria-haspopup="dialog"
@@ -62,9 +62,11 @@ const { data: image, error } = useVisibleResource({
         aria-hidden="true"
       />
     </span>
-    <span class="min-w-0 text-start">
-      <span class="resource-name">{{ title }}</span>
-      <span class="resource-caption" :class="{ 'text-primary': requested }">{{ caption }}</span>
+    <span class="min-w-0">
+      <span class="block truncate text-xs font-medium">{{ title }}</span>
+      <span class="block truncate text-[11px]" :class="requested ? 'text-primary' : 'text-muted-foreground'">
+        {{ caption }}
+      </span>
     </span>
   </button>
 </template>

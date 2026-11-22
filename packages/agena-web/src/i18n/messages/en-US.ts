@@ -1609,6 +1609,8 @@ export default {
       errorBand: 'Error',
     },
     operations: {
+      childSessions: 'Child sessions',
+      noProcesses: 'No commands or subscriptions in this conversation.',
       agent: 'Subagent',
       openAgentSession: 'Open agent conversation',
       parentSession: 'Parent conversation',

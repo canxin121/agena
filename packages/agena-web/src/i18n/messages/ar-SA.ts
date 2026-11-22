@@ -1414,6 +1414,8 @@ export default {
       },
     },
     operations: {
+      childSessions: 'الجلسات الفرعية',
+      noProcesses: 'لا توجد أوامر أو اشتراكات في هذه المحادثة.',
       agent: 'الوكيل الفرعي',
       openAgentSession: 'افتح محادثة الوكيل',
       parentSession: 'المحادثة الأصلية',

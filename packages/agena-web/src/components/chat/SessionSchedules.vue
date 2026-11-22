@@ -48,12 +48,8 @@ function date(value: string) {
   return new Date(value).toLocaleString(locale.value)
 }
 
-const label = computed(() => {
-  const jobs = schedules.value
-  return jobs?.length === 1
-    ? jobs[0]!.prompt
-    : t('chat.operations.schedules') + (jobs?.length ? ` (${jobs.length})` : '')
-})
+const title = computed(() => t('chat.operations.schedules'))
+const label = computed(() => (schedules.value?.length ? `${title.value} · ${schedules.value.length}` : title.value))
 const caption = computed(() => {
   if (error.value) return t('common.retry')
   const jobs = schedules.value ?? []
@@ -63,7 +59,7 @@ const caption = computed(() => {
   if (next) return t('chat.operations.nextRun', { time: date(next) })
   if (jobs.some((job) => job.paused && !job.completed)) return t('chat.operations.paused')
   if (jobs.length && jobs.every((job) => job.completed)) return t('chat.partStatus.completed')
-  return t('chat.operations.schedules')
+  return ''
 })
 
 const reader = createRevalidator(
@@ -142,19 +138,15 @@ onBeforeUnmount(() => {
 <template>
   <SessionChip
     v-if="open || schedules?.length || error"
-    class="composer-resource"
-    :title="t('chat.operations.schedules')"
-    :hint="[...new Set([t('chat.operations.schedules'), label, caption])].join(' · ')"
+    :title="title"
+    :label="label"
+    :hint="[label, caption].filter(Boolean).join(' · ')"
     :open="open"
     data-schedules-chip
     @update:open="open = $event"
   >
-    <template #trigger>
-      <RiCalendarScheduleLine class="resource-icon" aria-hidden="true" />
-      <span class="min-w-0 text-start">
-        <span class="resource-name">{{ label }}</span>
-        <span class="resource-caption">{{ caption }}</span>
-      </span>
+    <template #icon>
+      <RiCalendarScheduleLine class="h-3 w-3 shrink-0" aria-hidden="true" />
     </template>
     <div class="space-y-2 text-xs">
       <p v-if="error" class="text-destructive" role="alert">{{ error }}</p>

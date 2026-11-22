@@ -2084,6 +2084,8 @@ export default {
       },
     },
     operations: {
+      childSessions: 'Sessions enfants',
+      noProcesses: 'Aucune commande ni aucun abonnement dans cette conversation.',
       agent: 'Sous-agent',
       openAgentSession: 'Ouvrir la conversation de l’agent',
       parentSession: 'Conversation parente',

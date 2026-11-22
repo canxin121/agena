@@ -1,23 +1,18 @@
 <script setup lang="ts">
-import { computed, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { RiRefreshLine } from '@remixicon/vue'
-import { apiJson } from '@/lib/api'
+import { RiGlobalLine, RiHand, RiRefreshLine } from '@remixicon/vue'
+import Button from '@/components/ui/Button.vue'
+import IconButton from '@/components/ui/IconButton.vue'
 import { useVisibleResource } from '@/pages/chat/useVisibleResource'
-import {
-  composerProcesses,
-  processCollection,
-  type ProcessKind,
-  type SessionProcess,
-} from '@/pages/chat/sessionProcesses'
-import { listSessions } from '@/stores/chat/api'
-import type { MessageEntry, Session } from '@/types/chat'
+import type { MessageEntry } from '@/types/chat'
 import { readBrowserState } from '@/features/browser/api'
 import { useBrowserCopy } from '@/features/browser/copy'
 import BrowserTabChip from '@/features/browser/BrowserTabChip.vue'
-import SessionAgentChip from './SessionAgentChip.vue'
-import SessionProcessChip from './SessionProcessChip.vue'
+import SessionChildrenSection from './SessionChildrenSection.vue'
+import SessionChip from './SessionChip.vue'
 import SessionSchedules from './SessionSchedules.vue'
+import SessionTerminalSection from './SessionTerminalSection.vue'
 
 const props = defineProps<{
   sessionId: string
@@ -31,175 +26,82 @@ const emit = defineEmits<{ browser: [pageId?: string] }>()
 const schedulesOpen = defineModel<boolean>('schedulesOpen', { default: false })
 const { t } = useI18n()
 const browserText = useBrowserCopy()
-const session = computed(() => props.sessionId)
-
-// Read native collections on entry, including work whose launch Part is outside the transcript window.
-function processList(kind: ProcessKind) {
-  const reader = useVisibleResource<SessionProcess[]>({
-    key: session,
-    minInterval: 1000,
-    interval: (): number => (props.busy || reader.data.value?.some((row) => row.status === 'running') ? 3000 : 30000),
-    load: (id, signal) => apiJson<SessionProcess[]>(processCollection(id, kind), { signal, cache: 'no-store' }),
-  })
-  return reader
-}
-const shells = processList('shell')
-const monitors = processList('monitor')
-const processes = computed(() =>
-  composerProcesses(props.sessionId, props.messages, shells.data.value ?? [], monitors.data.value ?? []),
-)
-
-const agents = useVisibleResource<Session[]>({
-  key: session,
-  minInterval: 1000,
-  interval: (): number =>
-    props.busy || agents.data.value?.some((agent) => agent.agent_status === 'running') ? 4000 : 30000,
-  async load(parentId, signal) {
-    const children = new Map<string, Session>()
-    const cursors = new Set<string>()
-    let cursor: string | undefined
-    do {
-      const page = await listSessions({ parentId, cursor, limit: 100, excludeSubagents: false, force: true, signal })
-      for (const child of page.sessions) {
-        if (String(child.parent_id) === parentId && (child.relation_kind === 'subagent' || child.is_subagent === true))
-          children.set(child.id, child)
-      }
-      if (!page.hasMore) break
-      if (!page.nextCursor || cursors.has(page.nextCursor)) throw new Error(t('chat.errors.historyPaginationStalled'))
-      cursors.add(page.nextCursor)
-      cursor = page.nextCursor
-    } while (cursor)
-    return [...children.values()]
-  },
-})
+const tabsOpen = ref(false)
 const browser = useVisibleResource({
-  key: session,
+  key: computed(() => props.sessionId),
   minInterval: 800,
   interval: (): number => (props.busy || browser.data.value?.tabs.length || props.browserRequested ? 2500 : 30000),
   load: readBrowserState,
 })
 const tabs = computed(() => browser.data.value?.tabs ?? [])
 const helpPage = computed(() => browser.data.value?.help?.page_id)
-const reads = [
-  { label: () => browserText('browser'), reader: browser },
-  { label: () => t('chat.operations.agent'), reader: agents },
-  { label: () => t('chat.operations.process'), reader: shells },
-  { label: () => t('chat.operations.subscription'), reader: monitors },
-]
-const errors = computed(() => reads.filter(({ reader }) => reader.error.value))
-watch(
-  () => props.busy,
-  () => {
-    for (const { reader } of reads) void reader.refresh()
-  },
+const browserLabel = computed(() =>
+  tabs.value.length ? `${browserText('browser')} · ${tabs.value.length}` : browserText('browser'),
 )
-watch(
-  () => props.childCount,
-  () => void agents.refresh(),
-)
-watch([() => props.browserOpen, () => props.browserRequested], () => void browser.refresh())
+
+function openPage(pageId?: string) {
+  tabsOpen.value = false
+  emit('browser', pageId)
+}
+
+watch([() => props.busy, () => props.browserOpen, () => props.browserRequested], () => void browser.refresh())
+watch(tabsOpen, (open) => {
+  if (open) void browser.refresh()
+})
 </script>
 
 <template>
-  <div class="shrink-0" data-composer-resources>
-    <div class="chat-column">
-      <div
-        class="resource-strip flex min-w-0 items-center gap-1.5 overflow-x-auto overscroll-x-contain pb-1 pt-0.5"
-        data-oc-keyboard-tap="blur"
+  <SessionChildrenSection :session-id="sessionId" :child-count="childCount" :busy="busy" />
+  <SessionTerminalSection :session-id="sessionId" :messages="messages" :busy="busy" />
+  <SessionChip
+    v-if="tabsOpen || tabs.length || browserRequested || browser.error.value"
+    data-browser-chip
+    :title="browserText('browser')"
+    :label="browserLabel"
+    :hint="browserRequested ? browserText('requested') : browserLabel"
+    :open="tabsOpen"
+    @update:open="tabsOpen = $event"
+  >
+    <template #icon>
+      <RiHand v-if="browserRequested" class="h-3 w-3 shrink-0 text-primary" aria-hidden="true" />
+      <RiGlobalLine v-else class="h-3 w-3 shrink-0" aria-hidden="true" />
+    </template>
+    <template #actions>
+      <IconButton
+        class="h-7 w-7"
+        :tooltip="t('common.refresh')"
+        :aria-label="t('common.refresh')"
+        :disabled="browser.loading.value"
+        @click="browser.refresh()"
       >
-        <BrowserTabChip
-          v-for="tab in tabs"
-          :key="tab.page_id"
-          :session-id="sessionId"
-          :tab="tab"
-          :human="Boolean(browser.data.value?.human_control)"
-          :requested="browserRequested && tab.page_id === helpPage"
-          :viewer-open="browserOpen"
-          @open="emit('browser', $event)"
-        />
-        <button
-          v-if="browserRequested && !tabs.some((tab) => tab.page_id === helpPage)"
-          type="button"
-          class="composer-resource text-primary"
-          aria-haspopup="dialog"
-          @click="emit('browser', helpPage)"
-        >
-          {{ browserText('requested') }}
-        </button>
-        <SessionAgentChip v-for="agent in agents.data.value" :key="agent.id" :agent="agent" />
-        <SessionSchedules v-model:open="schedulesOpen" :session-id="sessionId" />
-        <SessionProcessChip
-          v-for="entry in processes"
-          :key="entry.key"
-          :session-id="sessionId"
-          :entry="entry"
-          @changed="(entry.kind === 'shell' ? shells : monitors).refresh()"
-        />
-        <button
-          v-for="item in errors"
-          :key="item.label()"
-          type="button"
-          class="composer-resource"
-          :title="item.reader.error.value"
-          @click="item.reader.refresh()"
-        >
-          <RiRefreshLine class="h-4 w-4" aria-hidden="true" />{{ item.label() }} · {{ t('common.retry') }}
-        </button>
-      </div>
-    </div>
-  </div>
+        <RiRefreshLine class="h-3.5 w-3.5" />
+      </IconButton>
+    </template>
+    <p v-if="browser.error.value" role="alert" class="mb-1 break-words text-xs text-destructive">
+      {{ browser.error.value }}
+    </p>
+    <Button
+      v-if="browserRequested && !tabs.some((tab) => tab.page_id === helpPage)"
+      size="sm"
+      variant="ghost"
+      class="text-primary"
+      @click="openPage(helpPage)"
+    >
+      {{ browserText('requested') }}
+    </Button>
+    <p v-else-if="!tabs.length && !browser.error.value" class="text-xs text-muted-foreground">
+      {{ browserText(browser.loading.value ? 'loading' : 'empty') }}
+    </p>
+    <BrowserTabChip
+      v-for="tab in tabs"
+      :key="tab.page_id"
+      :session-id="sessionId"
+      :tab="tab"
+      :human="Boolean(browser.data.value?.human_control)"
+      :requested="browserRequested && tab.page_id === helpPage"
+      :viewer-open="browserOpen"
+      @open="openPage"
+    />
+  </SessionChip>
+  <SessionSchedules v-model:open="schedulesOpen" :session-id="sessionId" />
 </template>
-
-<style scoped>
-[data-composer-resources]:not(:has(button)) {
-  display: none;
-}
-
-.resource-strip {
-  scrollbar-width: thin;
-}
-.resource-strip :deep(.composer-resource) {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  gap: 0.5rem;
-  min-height: 2.75rem;
-  max-width: min(17rem, 75vw);
-  padding: 0.2rem 0.6rem;
-  border: 1px solid var(--color-border);
-  border-radius: 0.5rem;
-  background: var(--color-background);
-  font-size: 0.75rem;
-  line-height: 1rem;
-  cursor: pointer;
-}
-.resource-strip :deep(.composer-resource:hover),
-.resource-strip :deep(.composer-resource[aria-expanded='true']) {
-  background: var(--color-muted);
-}
-.resource-strip :deep(.composer-resource:focus-visible) {
-  outline: 2px solid var(--color-ring);
-  outline-offset: -2px;
-}
-.resource-strip :deep(.resource-icon) {
-  width: 1.1rem;
-  height: 1.1rem;
-  flex: none;
-  color: var(--color-muted-foreground);
-}
-.resource-strip :deep(.resource-name),
-.resource-strip :deep(.resource-caption) {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.resource-strip :deep(.resource-name) {
-  color: var(--color-foreground);
-  font-weight: 500;
-}
-.resource-strip :deep(.resource-caption) {
-  color: var(--color-muted-foreground);
-  font-size: 0.67rem;
-}
-</style>

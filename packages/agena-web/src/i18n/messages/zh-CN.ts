@@ -1580,6 +1580,8 @@ export default {
       errorBand: '错误',
     },
     operations: {
+      childSessions: '子会话',
+      noProcesses: '该会话没有命令或订阅。',
       agent: '子 Agent',
       openAgentSession: '打开子 Agent 会话',
       parentSession: '返回父会话',

@@ -2129,6 +2129,8 @@ export default {
       description: 'Actualizar el título de la sesión',
     },
     operations: {
+      childSessions: 'Sesiones secundarias',
+      noProcesses: 'No hay comandos ni suscripciones en esta conversación.',
       agent: 'Subagente',
       openAgentSession: 'Abrir conversación del agente',
       parentSession: 'Conversación principal',

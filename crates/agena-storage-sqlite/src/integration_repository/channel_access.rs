@@ -1,34 +1,111 @@
 use super::*;
 
 pub(crate) const DECLARATIONS: &[&str] = &[
-    "CREATE INDEX IF NOT EXISTS idx_agena_channel_inbox_execution ON agena_integration_inbox(binding_id,json_extract(event_json,'$.execution_id'))",
-    "CREATE TABLE IF NOT EXISTS agena_channel_sessions (session_id INTEGER PRIMARY KEY, binding_id TEXT NOT NULL REFERENCES agena_integration_bindings(id), scope_key TEXT NOT NULL, epoch INTEGER NOT NULL, actor TEXT NOT NULL, record_json TEXT NOT NULL CHECK(json_valid(record_json)), UNIQUE(binding_id,scope_key))",
+    "CREATE INDEX IF NOT EXISTS idx_agena_channel_inbox_execution ON agena_integration_inbox(binding_id,execution_id) WHERE execution_id IS NOT NULL",
+    "CREATE TABLE IF NOT EXISTS agena_channel_sessions (session_id INTEGER PRIMARY KEY, binding_id TEXT NOT NULL REFERENCES agena_integration_bindings(id), scope_key TEXT NOT NULL, epoch INTEGER NOT NULL, has_work INTEGER NOT NULL DEFAULT 0 CHECK(has_work IN (0,1)), record_json TEXT NOT NULL CHECK(json_valid(record_json)), UNIQUE(binding_id,scope_key))",
     "CREATE INDEX IF NOT EXISTS idx_agena_channel_sessions_binding ON agena_channel_sessions(binding_id,epoch,session_id)",
-    "CREATE TABLE IF NOT EXISTS agena_channel_access_audit (binding_id TEXT NOT NULL REFERENCES agena_integration_bindings(id), request_key TEXT NOT NULL, input_json TEXT NOT NULL CHECK(json_valid(input_json)), result_json TEXT NOT NULL CHECK(json_valid(result_json)), audit_json TEXT NOT NULL CHECK(json_valid(audit_json)), at_ms INTEGER NOT NULL, PRIMARY KEY(binding_id,request_key)) WITHOUT ROWID",
+    "CREATE INDEX IF NOT EXISTS idx_agena_channel_sessions_work ON agena_channel_sessions(binding_id,epoch,session_id) WHERE has_work=1",
+    "CREATE TABLE IF NOT EXISTS agena_channel_pending_outputs (
+        session_id INTEGER NOT NULL REFERENCES agena_channel_sessions(session_id) ON DELETE CASCADE,
+        finished_at_ms INTEGER NOT NULL,
+        execution_id TEXT NOT NULL,
+        generation INTEGER NOT NULL,
+        delivery_id TEXT NOT NULL UNIQUE,
+        PRIMARY KEY(session_id,finished_at_ms,execution_id,generation),
+        FOREIGN KEY(execution_id,generation,session_id) REFERENCES agena_attempts(execution_id,generation,session_id) ON DELETE CASCADE
+     ) WITHOUT ROWID",
+    "CREATE TABLE IF NOT EXISTS agena_channel_access_audit (binding_id TEXT NOT NULL REFERENCES agena_integration_bindings(id), request_key TEXT NOT NULL, input_json TEXT NOT NULL CHECK(json_valid(input_json)), result_json BLOB NOT NULL CHECK(typeof(result_json)='blob' AND length(result_json)>1), audit_json TEXT NOT NULL CHECK(json_valid(audit_json)), at_ms INTEGER NOT NULL, PRIMARY KEY(binding_id,request_key)) WITHOUT ROWID",
+    "CREATE INDEX IF NOT EXISTS idx_agena_channel_access_recent ON agena_channel_access_audit(binding_id,at_ms DESC,request_key)",
     "CREATE TABLE IF NOT EXISTS agena_channel_user_budget (binding_id TEXT NOT NULL REFERENCES agena_integration_bindings(id), actor TEXT NOT NULL, utc_day TEXT NOT NULL, used INTEGER NOT NULL CHECK(used>=0), PRIMARY KEY(binding_id,actor,utc_day)) WITHOUT ROWID",
+    "CREATE VIEW IF NOT EXISTS agena_channel_session_work AS
+     SELECT c.session_id,CASE
+        WHEN EXISTS(SELECT 1 FROM agena_channel_pending_outputs p WHERE p.session_id=c.session_id) THEN 1
+        ELSE EXISTS(
+            SELECT 1 FROM agena_interactions i WHERE i.session_id=c.session_id AND i.decision_json IS NULL
+              AND NOT EXISTS(SELECT 1 FROM agena_integration_outbox o WHERE o.id=c.binding_id||':attention:'||i.id)
+        ) END AS has_work
+     FROM agena_channel_sessions c",
+    "CREATE TRIGGER IF NOT EXISTS agena_channel_ready_output_insert AFTER INSERT ON agena_channel_pending_outputs BEGIN
+        UPDATE agena_channel_sessions SET has_work=1 WHERE session_id=NEW.session_id AND has_work=0;
+     END",
+    "CREATE TRIGGER IF NOT EXISTS agena_channel_ready_output_delete AFTER DELETE ON agena_channel_pending_outputs BEGIN
+        UPDATE agena_channel_sessions SET has_work=(
+            SELECT has_work FROM agena_channel_session_work WHERE session_id=OLD.session_id
+        ) WHERE session_id=OLD.session_id;
+     END",
+    "CREATE TRIGGER IF NOT EXISTS agena_channel_ready_attention_insert AFTER INSERT ON agena_interactions
+     WHEN NEW.decision_json IS NULL BEGIN
+        UPDATE agena_channel_sessions SET has_work=1 WHERE session_id=NEW.session_id AND has_work=0
+          AND NOT EXISTS(SELECT 1 FROM agena_integration_outbox WHERE id=agena_channel_sessions.binding_id||':attention:'||NEW.id);
+     END",
+    "CREATE TRIGGER IF NOT EXISTS agena_channel_ready_attention_decided AFTER UPDATE OF decision_json ON agena_interactions
+     WHEN (OLD.decision_json IS NULL)!=(NEW.decision_json IS NULL) BEGIN
+        UPDATE agena_channel_sessions SET has_work=(
+            SELECT has_work FROM agena_channel_session_work WHERE session_id=NEW.session_id
+        ) WHERE session_id=NEW.session_id;
+     END",
+    "CREATE TRIGGER IF NOT EXISTS agena_channel_ready_attention_delete AFTER DELETE ON agena_interactions
+     WHEN OLD.decision_json IS NULL BEGIN
+        UPDATE agena_channel_sessions SET has_work=(
+            SELECT has_work FROM agena_channel_session_work WHERE session_id=OLD.session_id
+        ) WHERE session_id=OLD.session_id AND has_work=1;
+     END",
+    "CREATE TRIGGER IF NOT EXISTS agena_channel_ready_attention_enqueued AFTER INSERT ON agena_integration_outbox
+     WHEN NEW.id GLOB '*:attention:*' BEGIN
+        UPDATE agena_channel_sessions SET has_work=(
+            SELECT has_work FROM agena_channel_session_work
+            WHERE session_id=agena_channel_sessions.session_id
+        ) WHERE session_id=(
+            SELECT i.session_id FROM agena_interactions i
+            JOIN agena_channel_sessions c ON c.session_id=i.session_id
+            WHERE i.id=CAST(substr(NEW.id,instr(NEW.id,':attention:')+length(':attention:')) AS INTEGER)
+              AND i.decision_json IS NULL AND NEW.id=c.binding_id||':attention:'||i.id
+        ) AND has_work=1;
+     END",
+    "CREATE TRIGGER IF NOT EXISTS agena_channel_ready_attention_reopened AFTER DELETE ON agena_integration_outbox
+     WHEN OLD.id GLOB '*:attention:*' BEGIN
+        UPDATE agena_channel_sessions SET has_work=1 WHERE session_id=(
+            SELECT i.session_id FROM agena_interactions i
+            JOIN agena_channel_sessions c ON c.session_id=i.session_id
+            WHERE i.id=CAST(substr(OLD.id,instr(OLD.id,':attention:')+length(':attention:')) AS INTEGER)
+              AND i.decision_json IS NULL AND OLD.id=c.binding_id||':attention:'||i.id
+        ) AND has_work=0;
+     END",
+    // Completion, generation changes and outbox acknowledgements share the
+    // transaction of the durable fact that changes the export queue.
+    "CREATE TRIGGER IF NOT EXISTS agena_channel_output_finished AFTER UPDATE OF phase ON agena_attempts
+     WHEN OLD.finished_at_ms IS NULL AND NEW.finished_at_ms IS NOT NULL BEGIN
+        INSERT INTO agena_channel_pending_outputs(session_id,finished_at_ms,execution_id,generation,delivery_id)
+        SELECT c.session_id,NEW.finished_at_ms,NEW.execution_id,NEW.generation,c.binding_id||':'||NEW.execution_id||':'||NEW.generation
+        FROM agena_channel_sessions c
+        CROSS JOIN agena_executions e ON e.id=NEW.execution_id AND e.current_generation=NEW.generation
+        WHERE c.session_id=NEW.session_id AND NOT EXISTS(
+            SELECT 1 FROM agena_integration_outbox o WHERE o.id=c.binding_id||':'||NEW.execution_id||':'||NEW.generation
+        );
+     END",
+    "CREATE TRIGGER IF NOT EXISTS agena_channel_output_attached AFTER INSERT ON agena_channel_sessions BEGIN
+        INSERT INTO agena_channel_pending_outputs(session_id,finished_at_ms,execution_id,generation,delivery_id)
+        SELECT NEW.session_id,a.finished_at_ms,e.id,a.generation,NEW.binding_id||':'||e.id||':'||a.generation
+        FROM agena_executions e
+        CROSS JOIN agena_attempts a ON a.execution_id=e.id AND a.generation=e.current_generation
+        WHERE e.session_id=NEW.session_id AND a.finished_at_ms IS NOT NULL AND NOT EXISTS(
+            SELECT 1 FROM agena_integration_outbox o WHERE o.id=NEW.binding_id||':'||e.id||':'||a.generation
+        );
+        UPDATE agena_channel_sessions SET has_work=(
+            SELECT has_work FROM agena_channel_session_work WHERE session_id=NEW.session_id
+        ) WHERE session_id=NEW.session_id AND has_work=0;
+     END",
+    "CREATE TRIGGER IF NOT EXISTS agena_channel_output_retried AFTER UPDATE OF current_generation ON agena_executions
+     WHEN OLD.current_generation!=NEW.current_generation BEGIN
+        DELETE FROM agena_channel_pending_outputs WHERE delivery_id=(
+            SELECT binding_id||':'||OLD.id||':'||OLD.current_generation
+            FROM agena_channel_sessions WHERE session_id=OLD.session_id
+        );
+     END",
+    "CREATE TRIGGER IF NOT EXISTS agena_channel_output_enqueued AFTER INSERT ON agena_integration_outbox BEGIN
+        DELETE FROM agena_channel_pending_outputs WHERE delivery_id=NEW.id;
+     END",
 ];
-
-pub(crate) async fn retire_telegram_grants(database: &DatabaseConnection) -> Result<()> {
-    let tx = database.begin().await.map_err(error)?;
-    let rows = tx
-        .query_all(statement(
-            "SELECT binding_json FROM agena_integration_bindings WHERE json_extract(binding_json,'$.spec.provider')='agena.telegram'",
-            vec![],
-        ))
-        .await
-        .map_err(error)?;
-    for row in rows {
-        let mut binding: IntegrationBinding = decode(row, "binding_json")?;
-        if binding.spec.retire_telegram_grants() {
-            // Fence old executions and deliveries while retaining the revision
-            // used by the Telegram router to recognize policy-paused bindings.
-            binding.epoch += 1;
-            binding.channel_session_id = None;
-            put_binding(&tx, &binding, binding.revision).await?;
-        }
-    }
-    tx.commit().await.map_err(error)
-}
 
 impl SqliteIntegrationRepository {
     pub(super) async fn channel_policy_write(
@@ -54,7 +131,9 @@ impl SqliteIntegrationRepository {
         let input = json(&serde_json::json!({"request":r,"actor":actor}))?;
         if let Some(row)=tx.query_one(statement("SELECT input_json,result_json FROM agena_channel_access_audit WHERE binding_id=? AND request_key=?",vec![id.to_string().into(),r.request_key.clone().into()])).await.map_err(error)? {
             if row.try_get::<String>("","input_json").map_err(error)?!=input{return Err(Error::Conflict("access request identity was reused with different input"));}
-            return decode(row,"result_json");
+            let result: Vec<u8> = row.try_get("", "result_json").map_err(error)?;
+            let result = crate::receipt_payload::unpack(&result).map_err(error)?;
+            return serde_json::from_slice(&result).map_err(error);
         }
         // Replaying a committed receipt never restores access; it stays valid
         // even if that recorded owner's assignment has since expired.
@@ -99,7 +178,7 @@ impl SqliteIntegrationRepository {
             before,
             after: r.policy,
         };
-        tx.execute(statement("INSERT INTO agena_channel_access_audit(binding_id,request_key,input_json,result_json,audit_json,at_ms) VALUES(?,?,?,?,?,?)",vec![id.to_string().into(),r.request_key.into(),input.into(),json(&b)?.into(),json(&audit)?.into(),now.into()])).await.map_err(error)?;
+        tx.execute(statement("INSERT INTO agena_channel_access_audit(binding_id,request_key,input_json,result_json,audit_json,at_ms) VALUES(?,?,?,?,?,?)",vec![id.to_string().into(),r.request_key.into(),input.into(),pack_receipt(&b)?.into(),json(&audit)?.into(),now.into()])).await.map_err(error)?;
         tx.commit().await.map_err(error)?;
         Ok(b)
     }
@@ -158,7 +237,7 @@ impl SqliteIntegrationRepository {
         )?;
         put_binding(&tx, &binding, expected_revision).await?;
         tx.execute(statement("INSERT INTO agena_channel_access_audit(binding_id,request_key,input_json,result_json,audit_json,at_ms) VALUES(?,?,?,?,?,?)",
-            vec![binding.id.to_string().into(), request_key.into(), input.into(), json(&binding)?.into(), json(&audit)?.into(), now.into()])).await.map_err(error)?;
+            vec![binding.id.to_string().into(), request_key.into(), input.into(), pack_receipt(&binding)?.into(), json(&audit)?.into(), now.into()])).await.map_err(error)?;
         tx.commit().await.map_err(error)?;
         Ok(binding)
     }
@@ -218,54 +297,48 @@ impl SqliteIntegrationRepository {
         if json(&stored)? != json(&expected)? {
             return Err(Error::Conflict("channel session changed during recovery"));
         }
-        // Suppress every pre-review execution generation, including a provider
-        // that is still acknowledging cancellation. Its later terminal output
-        // must never be exported under the restored authority.
-        let executions = tx.query_all(statement("SELECT e.id AS execution,a.generation FROM agena_executions e JOIN agena_attempts a ON a.execution_id=e.id AND a.generation=e.current_generation WHERE e.session_id=?", vec![current.session_id.into()])).await.map_err(error)?;
-        for row in executions {
-            let execution: String = row.try_get("", "execution").map_err(error)?;
-            let generation: i64 = row.try_get("", "generation").map_err(error)?;
-            let delivery = IntegrationDelivery {
-                id: format!("{}:{execution}:{generation}", current.binding_id),
-                binding_id: current.binding_id,
-                text: String::new(),
-                state: "skipped".into(),
-                attempts: 0,
-                next_attempt_ms: 0,
-                remote_id: None,
-                created_at_ms: now,
-                error: Some("execution predates compatible channel recovery".into()),
-                route: Some(ChannelOutputRoute::from_authority(
-                    &expected.authority,
-                    expected.session_id,
-                )),
-            };
-            tx.execute(statement("INSERT OR IGNORE INTO agena_integration_outbox(id,binding_id,state,attempts,next_attempt_ms,created_at_ms,delivery_json) VALUES(?,?,?,?,?,?,?)",
-                vec![delivery.id.clone().into(), current.binding_id.to_string().into(), delivery.state.clone().into(), 0.into(), 0.into(), now.into(), json(&delivery)?.into()])).await.map_err(error)?;
-        }
-        let deliveries = tx.query_all(statement("SELECT delivery_json FROM agena_integration_outbox WHERE binding_id=? AND state IN ('queued','uncertain')", vec![current.binding_id.to_string().into()])).await.map_err(error)?;
-        for row in deliveries {
-            let mut delivery: IntegrationDelivery = decode(row, "delivery_json")?;
-            if delivery.route.as_ref().is_some_and(|route| {
-                route.session_id == Some(current.session_id)
-                    && route.epoch < current.authority.epoch
-            }) {
-                delivery.state = "skipped".into();
-                delivery.error = Some("delivery predates compatible channel recovery".into());
-                tx.execute(statement(
-                    "UPDATE agena_integration_outbox SET state=?,delivery_json=? WHERE id=?",
-                    vec![
-                        delivery.state.clone().into(),
-                        json(&delivery)?.into(),
-                        delivery.id.into(),
-                    ],
-                ))
-                .await
-                .map_err(error)?;
-            }
-        }
-        let updated = tx.execute(statement("UPDATE agena_channel_sessions SET scope_key=?,epoch=?,actor=?,record_json=? WHERE session_id=? AND binding_id=? AND scope_key=? AND epoch=?",
-            vec![current.scope_key.clone().into(), current.authority.epoch.into(), current.authority.actor.clone().into(), json(&current)?.into(), current.session_id.into(), current.binding_id.to_string().into(), expected.scope_key.into(), expected.authority.epoch.into()])).await.map_err(error)?;
+        // Pending completions and active attempts are the only generations
+        // that can still create output. Materialize the identities because
+        // inserting their receipts consumes the corresponding pending rows.
+        let route = ChannelOutputRoute::from_authority(&expected.authority, expected.session_id);
+        tx.execute(statement(
+            "WITH candidates AS MATERIALIZED (
+                SELECT delivery_id FROM agena_channel_pending_outputs WHERE session_id=?1
+                UNION ALL
+                SELECT ?2||':'||a.execution_id||':'||a.generation
+                FROM agena_attempts a
+                CROSS JOIN agena_executions e ON e.id=a.execution_id AND e.current_generation=a.generation
+                WHERE a.session_id=?1 AND a.phase IN ('queued','running')
+             )
+             INSERT INTO agena_integration_outbox
+                (id,binding_id,state,attempts,next_attempt_ms,created_at_ms,error,route_json)
+             SELECT delivery_id,?2,'skipped',0,0,?3,'execution predates compatible channel recovery',?4
+             FROM candidates WHERE true ON CONFLICT(id) DO NOTHING",
+            vec![
+                current.session_id.into(),
+                current.binding_id.to_string().into(),
+                now.into(),
+                json(&route)?.into(),
+            ],
+        ))
+        .await
+        .map_err(error)?;
+        tx.execute(statement(
+            "UPDATE agena_integration_outbox SET state='skipped',
+                error='delivery predates compatible channel recovery'
+             WHERE binding_id=? AND (state='queued' OR state='uncertain')
+               AND json_extract(route_json,'$.session_id')=?
+               AND json_extract(route_json,'$.epoch')<?",
+            vec![
+                current.binding_id.to_string().into(),
+                current.session_id.into(),
+                current.authority.epoch.into(),
+            ],
+        ))
+        .await
+        .map_err(error)?;
+        let updated = tx.execute(statement("UPDATE agena_channel_sessions SET scope_key=?,epoch=?,record_json=? WHERE session_id=? AND binding_id=? AND scope_key=? AND epoch=?",
+            vec![current.scope_key.clone().into(), current.authority.epoch.into(), json(&current)?.into(), current.session_id.into(), current.binding_id.to_string().into(), expected.scope_key.into(), expected.authority.epoch.into()])).await.map_err(error)?;
         if updated.rows_affected() != 1 {
             return Err(Error::Conflict("channel session changed during recovery"));
         }
@@ -274,20 +347,20 @@ impl SqliteIntegrationRepository {
     }
 
     pub(super) async fn channel_audit_read(&self, id: Uuid) -> Result<Vec<ChannelAccessAudit>> {
-        self.database.query_all(statement("SELECT audit_json FROM agena_channel_access_audit WHERE binding_id=? ORDER BY at_ms DESC,request_key LIMIT 100",vec![id.to_string().into()])).await.map_err(error)?.into_iter().map(|r|decode(r,"audit_json")).collect()
+        self.reader.query_all(statement("SELECT audit_json FROM agena_channel_access_audit WHERE binding_id=? ORDER BY at_ms DESC,request_key LIMIT 100",vec![id.to_string().into()])).await.map_err(error)?.into_iter().map(|r|decode(r,"audit_json")).collect()
     }
     pub(super) async fn channel_sessions_read(
         &self,
         id: Uuid,
     ) -> Result<Vec<ChannelSessionRecord>> {
-        self.database.query_all(statement("SELECT record_json FROM agena_channel_sessions WHERE binding_id=? ORDER BY epoch DESC,session_id DESC LIMIT 2048",vec![id.to_string().into()])).await.map_err(error)?.into_iter().map(|r|decode(r,"record_json")).collect()
+        self.reader.query_all(statement("SELECT record_json FROM agena_channel_sessions WHERE binding_id=? ORDER BY epoch DESC,session_id DESC LIMIT 2048",vec![id.to_string().into()])).await.map_err(error)?.into_iter().map(|r|decode(r,"record_json")).collect()
     }
     pub(super) async fn channel_session_read(
         &self,
         id: Uuid,
         key: &str,
     ) -> Result<Option<ChannelSessionRecord>> {
-        self.database
+        self.reader
             .query_one(statement(
                 "SELECT record_json FROM agena_channel_sessions WHERE binding_id=? AND scope_key=?",
                 vec![id.to_string().into(), key.into()],
@@ -367,7 +440,7 @@ impl SqliteIntegrationRepository {
                 "channel session capacity reached; archive the binding before accepting more contexts",
             ));
         }
-        tx.execute(statement("INSERT INTO agena_channel_sessions(session_id,binding_id,scope_key,epoch,actor,record_json) VALUES(?,?,?,?,?,?)",vec![record.session_id.into(),record.binding_id.to_string().into(),record.scope_key.clone().into(),record.authority.epoch.into(),record.authority.actor.clone().into(),json(&record)?.into()])).await.map_err(error)?;
+        tx.execute(statement("INSERT INTO agena_channel_sessions(session_id,binding_id,scope_key,epoch,record_json) VALUES(?,?,?,?,?)",vec![record.session_id.into(),record.binding_id.to_string().into(),record.scope_key.clone().into(),record.authority.epoch.into(),json(&record)?.into()])).await.map_err(error)?;
         tx.commit().await.map_err(error)?;
         Ok(record)
     }
@@ -390,12 +463,20 @@ pub(super) async fn charge_channel_user(
     if policy.per_user_daily_limit == 0 {
         return Ok(true);
     }
-    let count=db.query_one(statement("SELECT used FROM agena_channel_user_budget WHERE binding_id=? AND actor=? AND utc_day=?",vec![b.id.to_string().into(),event.actor.clone().into(),day.into()])).await.map_err(error)?.map(|r|r.try_get::<i64>("","used").map_err(error)).transpose()?.unwrap_or(0);
-    if count >= i64::from(policy.per_user_daily_limit) {
-        return Ok(false);
-    }
-    db.execute(statement("INSERT INTO agena_channel_user_budget(binding_id,actor,utc_day,used) VALUES(?,?,?,1) ON CONFLICT(binding_id,actor,utc_day) DO UPDATE SET used=used+1",vec![b.id.to_string().into(),event.actor.clone().into(),day.into()])).await.map_err(error)?;
-    Ok(true)
+    let result = db
+        .execute(statement(
+            "INSERT INTO agena_channel_user_budget(binding_id,actor,utc_day,used) VALUES(?,?,?,1)
+         ON CONFLICT(binding_id,actor,utc_day) DO UPDATE SET used=used+1 WHERE used<?",
+            vec![
+                b.id.to_string().into(),
+                event.actor.clone().into(),
+                day.into(),
+                i64::from(policy.per_user_daily_limit).into(),
+            ],
+        ))
+        .await
+        .map_err(error)?;
+    Ok(result.rows_affected() == 1)
 }
 
 /// Process authenticated loss-of-membership before ordinary inbox admission.
@@ -491,7 +572,7 @@ pub(super) async fn ingest_platform_revocations(
                     before: Some(before),
                     after: next,
                 };
-                db.execute(statement("INSERT INTO agena_channel_access_audit(binding_id,request_key,input_json,result_json,audit_json,at_ms) VALUES(?,?,?,?,?,?)",vec![b.id.to_string().into(),audit.request_key.clone().into(),json(event)?.into(),json(b)?.into(),json(&audit)?.into(),now.into()])).await.map_err(error)?;
+                db.execute(statement("INSERT INTO agena_channel_access_audit(binding_id,request_key,input_json,result_json,audit_json,at_ms) VALUES(?,?,?,?,?,?)",vec![b.id.to_string().into(),audit.request_key.clone().into(),json(event)?.into(),pack_receipt(b)?.into(),json(&audit)?.into(),now.into()])).await.map_err(error)?;
             }
         }
         let record = IntegrationEvent {
@@ -505,7 +586,7 @@ pub(super) async fn ingest_platform_revocations(
             execution_id: None,
             note: Some(note),
         };
-        db.execute(statement("INSERT INTO agena_integration_inbox(binding_id,event_id,state,received_at_ms,event_json) VALUES(?,?,?,?,?)",vec![b.id.to_string().into(),event.id.clone().into(),record.state.clone().into(),now.into(),json(&record)?.into()])).await.map_err(error)?;
+        insert_event(db, &record).await?;
     }
     Ok(())
 }

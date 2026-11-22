@@ -18,6 +18,7 @@ const COLUMNS: &str = "id, action_key, mode, scope, session_id, workspace_id, so
 /// SQLite implementation of the application-facing permission-rule repository.
 pub struct SeaPermissionRuleRepository {
     db: Arc<DatabaseConnection>,
+    reader: Arc<DatabaseConnection>,
 }
 
 /// Transaction-scoped SQLite permission writer. Session orchestration supplies
@@ -46,14 +47,18 @@ impl PermissionRuleTransactionWriter<DatabaseTransaction> for SeaPermissionRuleT
 
 impl SeaPermissionRuleRepository {
     pub fn new(db: Arc<DatabaseConnection>) -> Self {
-        Self { db }
+        Self::with_reader(db.clone(), db)
+    }
+
+    pub fn with_reader(db: Arc<DatabaseConnection>, reader: Arc<DatabaseConnection>) -> Self {
+        Self { db, reader }
     }
 
     async fn record(
         &self,
         id: i64,
     ) -> Result<Option<PermissionRuleRecord>, PermissionRuleRepositoryError> {
-        self.db
+        self.reader
             .query_one(statement(
                 format!("SELECT {COLUMNS} FROM {TABLE} WHERE id = ?"),
                 [id.into()],
@@ -62,6 +67,46 @@ impl SeaPermissionRuleRepository {
             .map_err(map_error)?
             .map(record_from_row)
             .transpose()
+    }
+
+    async fn resolved_rules(
+        &self,
+        action_key: Option<&str>,
+        session_id: Option<i64>,
+        workspace_id: Option<i64>,
+    ) -> Result<Vec<PersistedPermissionRule>, PermissionRuleRepositoryError> {
+        let mut values = vec![workspace_id.into(), session_id.into()];
+        let (action_filter, order) = match action_key {
+            Some(action) => {
+                values.push(action.to_owned().into());
+                (" AND action_key=?3", "precedence")
+            }
+            None => ("", "action_key,scope,updated_at_ms DESC,id DESC"),
+        };
+        // Each branch has the exact subject predicate required by its
+        // partial unique index. One statement observes all three scopes.
+        let query = format!(
+            "SELECT {COLUMNS} FROM (
+                SELECT {COLUMNS},0 AS precedence FROM {TABLE}
+                WHERE revoked_at_ms IS NULL{action_filter} AND scope='global'
+                  AND session_id IS NULL AND workspace_id IS NULL
+                UNION ALL
+                SELECT {COLUMNS},1 FROM {TABLE}
+                WHERE revoked_at_ms IS NULL{action_filter} AND scope='workspace'
+                  AND session_id IS NULL AND workspace_id=?1
+                UNION ALL
+                SELECT {COLUMNS},2 FROM {TABLE}
+                WHERE revoked_at_ms IS NULL{action_filter} AND scope='session'
+                  AND workspace_id IS NULL AND session_id=?2
+            ) ORDER BY {order}"
+        );
+        self.reader
+            .query_all(statement(query, values))
+            .await
+            .map_err(map_error)?
+            .into_iter()
+            .map(persisted_rule_from_row)
+            .collect()
     }
 }
 
@@ -82,8 +127,8 @@ impl PermissionRuleRepository for SeaPermissionRuleRepository {
             values.push(workspace_id.into());
         }
         if let (Some(updated), Some(id)) = (query.before_updated_at_ms, query.before_id) {
-            clauses.push("(updated_at_ms < ? OR (updated_at_ms = ? AND id < ?))");
-            values.extend([updated.into(), updated.into(), id.into()]);
+            clauses.push("(updated_at_ms,id) < (?,?)");
+            values.extend([updated.into(), id.into()]);
         }
         values.push(query.limit.into());
         let where_clause = if clauses.is_empty() {
@@ -91,7 +136,7 @@ impl PermissionRuleRepository for SeaPermissionRuleRepository {
         } else {
             format!(" WHERE {}", clauses.join(" AND "))
         };
-        self.db.query_all(statement(format!("SELECT {COLUMNS} FROM {TABLE}{where_clause} ORDER BY updated_at_ms DESC, id DESC LIMIT ?"), values)).await
+        self.reader.query_all(statement(format!("SELECT {COLUMNS} FROM {TABLE}{where_clause} ORDER BY updated_at_ms DESC, id DESC LIMIT ?"), values)).await
             .map_err(map_error)?.into_iter().map(record_from_row).collect()
     }
 
@@ -257,24 +302,8 @@ impl PermissionRuleRepository for SeaPermissionRuleRepository {
         session_id: Option<i64>,
         workspace_id: Option<i64>,
     ) -> Result<Vec<PersistedPermissionRule>, PermissionRuleRepositoryError> {
-        let mut result = Vec::new();
-        for (scope, session_id, workspace_id) in [
-            ("global", None, None),
-            ("workspace", None, workspace_id),
-            ("session", session_id, None),
-        ] {
-            if scope != "global" && session_id.is_none() && workspace_id.is_none() {
-                continue;
-            }
-            let row = self.db.query_one(statement(
-                format!("SELECT {COLUMNS} FROM {TABLE} WHERE action_key = ? AND scope = ? AND revoked_at_ms IS NULL AND session_id IS ? AND workspace_id IS ? ORDER BY updated_at_ms DESC, id DESC LIMIT 1"),
-                [action_key.to_owned().into(), scope.to_owned().into(), session_id.into(), workspace_id.into()],
-            )).await.map_err(map_error)?;
-            if let Some(row) = row {
-                result.push(persisted_rule_from_row(row)?);
-            }
-        }
-        Ok(result)
+        self.resolved_rules(Some(action_key), session_id, workspace_id)
+            .await
     }
 
     async fn resolve_snapshot(
@@ -282,21 +311,7 @@ impl PermissionRuleRepository for SeaPermissionRuleRepository {
         session_id: Option<i64>,
         workspace_id: Option<i64>,
     ) -> Result<Vec<PersistedPermissionRule>, PermissionRuleRepositoryError> {
-        let rows = self
-            .db
-            .query_all(statement(
-                format!(
-                    "SELECT {COLUMNS} FROM {TABLE} WHERE revoked_at_ms IS NULL AND (scope = 'global' OR (scope = 'workspace' AND workspace_id IS ?) OR (scope = 'session' AND session_id IS ?)) ORDER BY action_key, scope, updated_at_ms DESC, id DESC"
-                ),
-                [workspace_id.into(), session_id.into()],
-            ))
-            .await
-            .map_err(map_error)?;
-        let mut rules = Vec::with_capacity(rows.len());
-        for row in rows {
-            rules.push(persisted_rule_from_row(row)?);
-        }
-        Ok(rules)
+        self.resolved_rules(None, session_id, workspace_id).await
     }
 }
 
@@ -348,7 +363,7 @@ async fn upsert_rule<C: ConnectionTrait>(
             format!(
                 "INSERT INTO {TABLE} (action_key, mode, scope, session_id, workspace_id, source, reason, operator, revoked_at_ms, revoked_reason, revoked_by, created_at_ms, updated_at_ms) \
                  VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?) \
-                 ON CONFLICT(action_key, scope) WHERE session_id IS NULL AND workspace_id IS NULL \
+                 ON CONFLICT(scope,action_key) WHERE session_id IS NULL AND workspace_id IS NULL \
                  DO NOTHING RETURNING id"
             ),
             format!(
@@ -362,7 +377,7 @@ async fn upsert_rule<C: ConnectionTrait>(
             format!(
                 "INSERT INTO {TABLE} (action_key, mode, scope, session_id, workspace_id, source, reason, operator, revoked_at_ms, revoked_reason, revoked_by, created_at_ms, updated_at_ms) \
                  VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
-                 ON CONFLICT(action_key, scope, workspace_id) WHERE session_id IS NULL AND workspace_id IS NOT NULL \
+                 ON CONFLICT(workspace_id,scope,action_key) WHERE session_id IS NULL AND workspace_id IS NOT NULL \
                  DO NOTHING RETURNING id"
             ),
             format!(
@@ -376,7 +391,7 @@ async fn upsert_rule<C: ConnectionTrait>(
             format!(
                 "INSERT INTO {TABLE} (action_key, mode, scope, session_id, workspace_id, source, reason, operator, revoked_at_ms, revoked_reason, revoked_by, created_at_ms, updated_at_ms) \
                  VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?) \
-                 ON CONFLICT(action_key, scope, session_id) WHERE session_id IS NOT NULL AND workspace_id IS NULL \
+                 ON CONFLICT(session_id,scope,action_key) WHERE session_id IS NOT NULL AND workspace_id IS NULL \
                  DO NOTHING RETURNING id"
             ),
             format!(

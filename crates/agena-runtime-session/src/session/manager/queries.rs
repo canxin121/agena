@@ -8,20 +8,6 @@ use agena_domain::{
     SessionSummary, SessionUsage, WorkflowState,
 };
 
-/// The canonical tool result owns this usage transfer. The same metadata can
-/// also appear in raw/model projections, which must never be billed again.
-fn provider_tool_usage(
-    metadata: &serde_json::Value,
-) -> Result<Option<agena_provider::AttributedCompletionUsage>, AppError> {
-    metadata
-        .get(agena_provider::PROVIDER_TOOL_USAGE_METADATA_KEY)
-        .map(|value| {
-            let encoded: String = serde_json::from_value(value.clone())?;
-            Ok(serde_json::from_str(&encoded)?)
-        })
-        .transpose()
-}
-
 impl SessionManager {
     /// The active registration is installed before a claim can create effects,
     /// and removed only after the driver and post-run hooks return. Combining
@@ -849,7 +835,7 @@ impl SessionManager {
             .map_err(kernel_error)?;
         let mut result = Vec::with_capacity(page.sessions.len());
         for summary in &page.sessions {
-            result.push(self.project_summary(summary).await?);
+            result.push(Self::project_summary(summary));
         }
         Ok(result)
     }
@@ -860,66 +846,59 @@ impl SessionManager {
             .summary(session_id(id)?)
             .await
             .map_err(kernel_error)?;
-        self.project_summary(&summary).await
+        Ok(Self::project_summary(&summary))
     }
-    async fn project_summary(
-        &self,
-        summary: &SessionSummaryView,
-    ) -> Result<SessionSummary, AppError> {
-        let configuration = self
-            .kernel()
-            .reader
-            .configuration(summary.id)
-            .await
-            .map_err(kernel_error)?;
-        let (root_id, depth) = (summary.root_session_id.get(), i64::from(summary.depth));
-        Ok(SessionSummary {
+    fn project_summary(summary: &SessionSummaryView) -> SessionSummary {
+        SessionSummary {
             id: summary.id.get(),
-            parent_id: configuration.parent_session_id.map(SessionId::get),
-            depth,
-            root_id,
+            parent_id: summary.parent_session_id.map(SessionId::get),
+            depth: i64::from(summary.depth),
+            root_id: summary.root_session_id.get(),
             workspace_id: summary.workspace_id,
             title: summary.title.clone(),
             favorite: summary.favorite,
             pinned: summary.pinned,
             version: summary.metadata_version.get(),
-            relation_kind: configuration.relation_kind,
+            relation_kind: summary.relation_kind,
             lifecycle_state: agena_domain::SessionLifecycleState::Ready,
             source_cutoff_seq_global: None,
             source_message_id: None,
-            agent_name: configuration.agent.as_ref().map(|t| t.name.clone()),
-            agent_status: configuration.agent.as_ref().map(|t| t.status),
+            agent_name: summary.agent_name.clone(),
+            agent_status: summary.agent_status,
             created_at: timestamp(summary.created_at_ms),
             updated_at: timestamp(summary.updated_at_ms),
             message_count: summary.user_message_count,
             child_session_count: summary.child_session_count,
             last_message_at: summary.last_message_at_ms.map(timestamp),
-        })
+        }
     }
-    pub async fn list_session_tree(&self, root: i64) -> Result<Vec<SessionSummary>, AppError> {
+    pub async fn list_session_tree(&self, root: i64) -> Result<Vec<SessionSummaryView>, AppError> {
+        const MAX_TREE_SESSIONS: usize = 10_000;
+
         let root = session_id(root)?;
-        let workspace = self
+        let root = self
             .kernel()
             .reader
-            .metadata(root)
+            .summary(root)
             .await
-            .map_err(kernel_error)?
-            .workspace_id;
-        let mut frontier = std::collections::VecDeque::from([root]);
+            .map_err(kernel_error)?;
+        let workspace = root.workspace_id;
+        let mut frontier = std::collections::VecDeque::from([(*root).clone()]);
+        drop(root);
         let mut result = Vec::new();
-        let mut visited = std::collections::BTreeSet::new();
-        while let Some(id) = frontier.pop_front() {
+        let mut visited = std::collections::HashSet::new();
+        while let Some(summary) = frontier.pop_front() {
+            let id = summary.id;
             if !visited.insert(id) {
                 return Err(AppError::Internal(
                     "session lineage contains a cycle".into(),
                 ));
             }
-            if result.len() >= 10_000 {
-                return Err(AppError::Config(
-                    "session tree is too large; read children in bounded pages".into(),
-                ));
+            let has_children = summary.child_session_count != 0;
+            result.push(summary);
+            if !has_children {
+                continue;
             }
-            result.push(self.get_session_summary(id.get()).await?);
             let mut before = None;
             loop {
                 let page = self
@@ -935,7 +914,12 @@ impl SessionManager {
                     })
                     .await
                     .map_err(kernel_error)?;
-                frontier.extend(page.sessions.iter().map(|s| s.id));
+                if result.len() + frontier.len() + page.sessions.len() > MAX_TREE_SESSIONS {
+                    return Err(AppError::Config(
+                        "session tree is too large; read children in bounded pages".into(),
+                    ));
+                }
+                frontier.extend(page.sessions.iter().cloned());
                 if !page.has_more {
                     break;
                 }
@@ -1070,54 +1054,16 @@ impl SessionManager {
     }
     async fn cost_summary(&self, id: i64) -> Result<agena_domain::SessionCostSummary, AppError> {
         let id = session_id(id)?;
-        let mut after = None;
         let mut accumulator = super::super::cost::CostAccumulator::default();
-        loop {
-            let page = self
-                .kernel()
-                .reader
-                .rounds(id, after, 200)
-                .await
-                .map_err(kernel_error)?;
-            if page.is_empty() {
-                break;
-            }
-            for round in page.iter() {
-                if let Some(value) = &round.provider_state {
-                    let state: KernelProviderState = serde_json::from_value(value.clone())?;
-                    if let Some(usage) = state.usage {
-                        accumulator.observe(
-                            state.model.provider_id.as_ref(),
-                            state.model.model_id.as_ref(),
-                            &usage,
-                        );
-                    }
+        self.kernel()
+            .reader
+            .visit_session_usage(id, &mut |stored| {
+                if let Some(record) = crate::UsageStatRecord::from_stored(stored) {
+                    accumulator.observe(&record.provider_id, &record.model_id, &record.usage);
                 }
-            }
-            after = page.last().map(|r| r.id);
-        }
-        let mut after = None;
-        loop {
-            let page = self
-                .kernel()
-                .reader
-                .owned_tool_metadata(id, after, 200)
-                .await
-                .map_err(kernel_error)?;
-            if page.is_empty() {
-                break;
-            }
-            for tool in page.iter() {
-                if let Some(attributed) = provider_tool_usage(&tool.metadata)? {
-                    accumulator.observe(
-                        &attributed.provider_id,
-                        &attributed.model_id,
-                        &attributed.usage,
-                    );
-                }
-            }
-            after = page.last().map(|tool| tool.id);
-        }
+            })
+            .await
+            .map_err(kernel_error)?;
         Ok(accumulator.finish())
     }
     pub async fn usage_stats(
@@ -1309,7 +1255,10 @@ impl SessionQueryService for SessionManager {
             workflow_state: session.workflow,
         })
     }
-    async fn list_session_tree(&self, id: i64) -> Result<Vec<SessionSummary>, SessionQueryError> {
+    async fn list_session_tree(
+        &self,
+        id: i64,
+    ) -> Result<Vec<SessionSummaryView>, SessionQueryError> {
         SessionManager::list_session_tree(self, id)
             .await
             .map_err(query_error)

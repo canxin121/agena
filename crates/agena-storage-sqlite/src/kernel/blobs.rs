@@ -227,7 +227,7 @@ pub(super) async fn apply(
                     return Err(KernelError::Ownership);
                 }
             } else {
-                let allowed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agena_blob_references r JOIN agena_segment_entries m ON m.entry_id=r.entry_id JOIN agena_session_segments s ON s.segment_id=m.segment_id WHERE r.blob_id=? AND s.session_id=? AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal AND (NOT EXISTS(SELECT 1 FROM agena_branch_entries f WHERE f.session_id=s.session_id AND f.entry_id=r.entry_id) OR EXISTS(SELECT 1 FROM agena_branch_entries f,json_each(f.facts_json,'$.blobs') b WHERE f.session_id=s.session_id AND f.entry_id=r.entry_id AND b.value=r.blob_id)))")
+                let allowed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agena_blob_references r JOIN agena_segment_entries m ON m.entry_id=r.entry_id JOIN agena_session_segments s ON s.segment_id=m.segment_id WHERE r.blob_id=? AND s.session_id=? AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal AND (NOT EXISTS(SELECT 1 FROM agena_branch_entries f WHERE f.session_id=s.session_id AND f.entry_id=r.entry_id) OR EXISTS(SELECT 1 FROM agena_branch_entries f,json_each(f.blobs_json) b WHERE f.session_id=s.session_id AND f.entry_id=r.entry_id AND b.value=r.blob_id)))")
                     .bind(blob.to_string()).bind(session.get()).fetch_one(&mut *connection).await.map_err(sql_error)?;
                 if !allowed || row.try_get::<String, _>("state").map_err(storage)? != "ready" {
                     return Err(KernelError::Ownership);
@@ -348,7 +348,7 @@ async fn pin(
     };
     // Lifetime protects active handles. Startup clears former-owner pins;
     // bounded maintenance reclaims abandoned response/reader families.
-    sqlx::query("INSERT INTO agena_blob_pins VALUES (?,?,?,9223372036854775807)")
+    sqlx::query("INSERT INTO agena_blob_pins (blob_id,token,owner_epoch) VALUES (?,?,?)")
         .bind(record.id.to_string())
         .bind(lease.token.to_string())
         .bind(epoch.to_string())
@@ -540,7 +540,7 @@ pub(super) async fn collect(database: &KernelDatabase, pins: &Pins) -> Result<Bl
 
 async fn collect_sql(tx: &mut SqliteConnection, released: &[BlobLease]) -> Result<BlobGc> {
     for lease in released {
-        sqlx::query("UPDATE agena_blobs SET abandoned=1 WHERE id=?")
+        sqlx::query("UPDATE agena_blobs SET abandoned=1 WHERE id=? AND abandoned=0")
             .bind(lease.id.to_string())
             .execute(&mut *tx)
             .await
@@ -553,25 +553,19 @@ async fn collect_sql(tx: &mut SqliteConnection, released: &[BlobLease]) -> Resul
             .await
             .map_err(sql_error)?;
     }
-    // Scan a fixed number of identities even when a million earlier blobs
-    // remain referenced. Persist the scan position so later calls make progress.
-    let cursor: String = sqlx::query_scalar("SELECT after_id FROM agena_blob_gc_state WHERE id=1")
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(sql_error)?;
-    let candidates: Vec<String> =
-        sqlx::query_scalar("SELECT id FROM agena_blobs WHERE id>? ORDER BY id LIMIT 16")
-            .bind(cursor)
-            .fetch_all(&mut *tx)
-            .await
-            .map_err(sql_error)?;
-    sqlx::query("UPDATE agena_blob_gc_state SET after_id=? WHERE id=1")
-        .bind(candidates.last().map_or("", String::as_str))
-        .execute(&mut *tx)
-        .await
-        .map_err(sql_error)?;
-    let retired=sqlx::query("UPDATE agena_blobs SET state='retired' WHERE id IN (SELECT value FROM json_each(?)) AND state IN ('preparing','ready') AND (created_at_ms<=? OR abandoned=1) AND NOT EXISTS(SELECT 1 FROM agena_blob_references r WHERE r.blob_id=agena_blobs.id) AND NOT EXISTS(SELECT 1 FROM agena_blob_pins p WHERE p.blob_id=agena_blobs.id)")
-        .bind(encode(&candidates)?).bind(now_ms()-ORPHAN_GRACE.as_millis() as i64).execute(&mut *tx).await.map_err(sql_error)?.rows_affected();
+    let retired = sqlx::query(
+        "UPDATE agena_blobs SET state='retired' WHERE id IN (
+             SELECT id FROM agena_blobs WHERE state!='retired' AND unprotected=1
+               AND CASE WHEN abandoned=1 THEN 0 ELSE created_at_ms END<=?
+             ORDER BY CASE WHEN abandoned=1 THEN 0 ELSE created_at_ms END,id LIMIT 16
+         ) AND NOT EXISTS(SELECT 1 FROM agena_blob_references r WHERE r.blob_id=agena_blobs.id)
+           AND NOT EXISTS(SELECT 1 FROM agena_blob_pins p WHERE p.blob_id=agena_blobs.id)",
+    )
+    .bind(now_ms() - ORPHAN_GRACE.as_millis() as i64)
+    .execute(&mut *tx)
+    .await
+    .map_err(sql_error)?
+    .rows_affected();
     let chunks=sqlx::query("DELETE FROM agena_blob_chunks WHERE (blob_id,logical_start) IN (SELECT blob_id,logical_start FROM agena_blob_chunks WHERE blob_id=(SELECT id FROM agena_blobs WHERE state='retired' ORDER BY created_at_ms,id LIMIT 1) ORDER BY logical_start LIMIT 8)")
         .execute(&mut *tx).await.map_err(sql_error)?.rows_affected();
     let blobs=sqlx::query("DELETE FROM agena_blobs WHERE id IN (SELECT id FROM agena_blobs WHERE state='retired' ORDER BY created_at_ms,id LIMIT 16) AND NOT EXISTS(SELECT 1 FROM agena_blob_chunks c WHERE c.blob_id=agena_blobs.id)")
@@ -581,4 +575,58 @@ async fn collect_sql(tx: &mut SqliteConnection, released: &[BlobLease]) -> Resul
         chunks,
         blobs,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn collection_finds_orphans_without_visiting_protected_blob_ids() {
+        let database = KernelDatabase::open("sqlite::memory:").await.unwrap();
+        let pool = database.writer.get_sqlite_connection_pool();
+        sqlx::raw_sql(
+            "INSERT INTO agena_sessions(id,title,created_at_ms,updated_at_ms) VALUES(1,'Blobs',0,0);
+             WITH RECURSIVE ids(id) AS (VALUES(1) UNION ALL SELECT id+1 FROM ids WHERE id<100)
+             INSERT INTO agena_blobs(id,session_id,state,expected_bytes,created_at_ms)
+             SELECT printf('%03d',id),1,'preparing',0,0 FROM ids;
+             INSERT INTO agena_blob_pins(blob_id,token,owner_epoch)
+             SELECT id,'token','epoch' FROM agena_blobs WHERE id!='100';",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+
+        let pins = Pins::default();
+        let first = collect(&database, &pins).await.unwrap();
+        assert_eq!((first.retired, first.blobs), (1, 1));
+        assert!(
+            !sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS(SELECT 1 FROM agena_blobs WHERE id='100')"
+            )
+            .fetch_one(pool)
+            .await
+            .unwrap()
+        );
+        sqlx::raw_sql(
+            "INSERT INTO agena_blob_pins VALUES('001','second','epoch');
+             DELETE FROM agena_blob_pins WHERE blob_id='001' AND token='token';",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        assert_eq!(collect(&database, &pins).await.unwrap().retired, 0);
+        sqlx::query("DELETE FROM agena_blob_pins WHERE blob_id='001'")
+            .execute(pool)
+            .await
+            .unwrap();
+        assert_eq!(collect(&database, &pins).await.unwrap().retired, 1);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT count(*) FROM agena_blobs")
+                .fetch_one(pool)
+                .await
+                .unwrap(),
+            98
+        );
+    }
 }

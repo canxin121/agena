@@ -284,6 +284,14 @@ pub enum CompactionPolicyOutcome {
     NativeUnavailable,
     Unchanged,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SummarySelection {
+    #[default]
+    Page,
+    PageWithTotal,
+    Total,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SummaryQuery {
     pub workspace_id: Option<i64>,
@@ -311,6 +319,8 @@ pub struct SummaryQuery {
     pub before: Option<SessionSummaryCursor>,
     pub offset: u64,
     pub limit: usize,
+    #[serde(default)]
+    pub selection: SummarySelection,
 }
 /// Canonical activity of visible, non-temporary, non-subagent sessions.
 ///
@@ -364,17 +374,8 @@ pub enum StopDecision {
     Ready,
 }
 
-/// Read-only local Bot mapping. An established mapping with no live target
-/// represents an explicitly deleted conversation and must not adopt old history.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LocalBotSession {
-    pub session: Option<SessionId>,
-    pub established: bool,
-}
-
 impl SessionCommands {
-    /// Return the pinned local conversation, adopting legacy history once.
-    /// A deleted pinned conversation is replaced with a fresh empty root.
+    /// Return the pinned local conversation or create a new root.
     pub async fn ensure_local_bot_session(
         &self,
         request: RequestId,
@@ -835,7 +836,7 @@ impl KernelReader {
         self.0.backend.configuration(session).await
     }
     /// Read the current local root without creating a conversation.
-    pub async fn local_bot_session(&self, bot: uuid::Uuid) -> Result<ReadView<LocalBotSession>> {
+    pub async fn local_bot_session(&self, bot: uuid::Uuid) -> Result<ReadView<Option<SessionId>>> {
         self.0.backend.local_bot_session(bot).await
     }
     pub async fn query_summaries(
@@ -843,6 +844,18 @@ impl KernelReader {
         query: SummaryQuery,
     ) -> Result<ReadView<SessionSummaryPage>> {
         self.0.backend.query_summaries(query).await
+    }
+
+    /// Visible favorites, active and failed sessions, and the bounded recent tail.
+    pub async fn overview_summaries(
+        &self,
+        workspace: i64,
+        recent_limit: usize,
+    ) -> Result<ReadView<Vec<SessionSummaryView>>> {
+        self.0
+            .backend
+            .overview_summaries(workspace, recent_limit)
+            .await
     }
     /// Read cross-session activity and the latest durable terminal outcome
     /// without loading transcripts or relying on lifecycle callback ordering.
@@ -863,20 +876,6 @@ impl KernelReader {
     ) -> Result<ReadView<Vec<ProviderRoundView>>> {
         self.0.backend.rounds(session, after, limit).await
     }
-    /// Read terminal, origin-owned tool result metadata in ascending tool ID
-    /// order. This historical read excludes model/raw-output copies and is not
-    /// filtered by the session's current transcript membership.
-    pub async fn owned_tool_metadata(
-        &self,
-        session: SessionId,
-        after: Option<ToolId>,
-        limit: usize,
-    ) -> Result<ReadView<Vec<OwnedToolMetadata>>> {
-        self.0
-            .backend
-            .owned_tool_metadata(session, after, limit)
-            .await
-    }
 
     /// Visit all visible sessions' usage in one read snapshot. Storage applies
     /// time and session filters. Runtime applies model/provider filters after
@@ -886,7 +885,23 @@ impl KernelReader {
         query: &agena_domain::UsageStatsQuery,
         visit: &mut (dyn FnMut(StoredUsageObservation) + Send),
     ) -> Result<()> {
-        self.0.backend.visit_usage_observations(query, visit).await
+        self.0
+            .backend
+            .visit_usage_observations(UsageScope::Instance(query), visit)
+            .await
+    }
+
+    /// Visit the usage owned by one session, including earlier attempts
+    /// whose entries were removed from its current transcript.
+    pub async fn visit_session_usage(
+        &self,
+        session: SessionId,
+        visit: &mut (dyn FnMut(StoredUsageObservation) + Send),
+    ) -> Result<()> {
+        self.0
+            .backend
+            .visit_usage_observations(UsageScope::Session(session), visit)
+            .await
     }
 
     pub fn watch_all(&self, after: Option<WatchCursor>) -> Result<KernelWatch> {

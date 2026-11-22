@@ -3,7 +3,8 @@ import { createPinia, disposePinia, setActivePinia, type Pinia } from 'pinia'
 
 import { useChatStoreUnscoped } from '../src/stores/chat'
 import * as chatApi from '../src/stores/chat/api'
-import { useDirectorySessionStore } from '../src/stores/directorySessionStore'
+import { fetchAgenaWorkspaces, useDirectorySessionStore } from '../src/stores/directorySessionStore'
+import { noteResourceVersion } from '../src/lib/resourceSync'
 import type { SessionOwnerSurface } from '../src/types/chat'
 
 const BOT_ID = '8f2c0000-0000-4000-8000-000000000001'
@@ -58,6 +59,45 @@ afterEach(() => {
     if (descriptor) Object.defineProperty(globalThis, name, descriptor)
     else Reflect.deleteProperty(globalThis, name)
   }
+})
+
+test('workspace pages use matching cursors and recover when the catalog changes', async () => {
+  const catalog = 'workspaces:catalog'
+  let revision = 'workspace-pages:1'
+  noteResourceVersion(catalog, revision)
+  const requests: URLSearchParams[] = []
+  globalThis.fetch = (async (input) => {
+    const url = new URL(String(input), 'https://agena.test')
+    expect(url.pathname).toBe('/api/v1/workspaces')
+    const params = url.searchParams
+    requests.push(params)
+    const offset = params.get('offset')
+    const cursor = params.get('cursor')
+    const id = cursor ? Number(cursor.slice('after-'.length)) : Number(offset) + 1
+    return Response.json(
+      { items: [{ id, path: `/project/${id}` }], page: { has_more: true, next_cursor: `after-${id + 1}` } },
+      { headers: { 'x-resource-revision': revision } },
+    )
+  }) as typeof fetch
+
+  const search = 'page-anchor'
+  await fetchAgenaWorkspaces({ limit: 1, page: 0, search })
+  await fetchAgenaWorkspaces({ limit: 1, page: 1, search })
+  await fetchAgenaWorkspaces({ limit: 1, page: 1, search: 'other-search' })
+  await fetchAgenaWorkspaces({ limit: 2, page: 1, search })
+  await fetchAgenaWorkspaces({ limit: 1, page: 19, search })
+  revision = 'workspace-pages:2'
+  const page = await fetchAgenaWorkspaces({ limit: 1, page: 2, search })
+  expect(page.entries.map((entry) => entry.id)).toEqual(['3'])
+  expect(requests.map((params) => [params.get('cursor'), params.get('offset')])).toEqual([
+    [null, '0'],
+    ['after-2', null],
+    [null, '1'],
+    [null, '2'],
+    [null, '19'],
+    ['after-3', null],
+    [null, '2'],
+  ])
 })
 
 function session(id: number, surface?: SessionOwnerSurface, parentId?: number) {

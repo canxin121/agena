@@ -14,17 +14,20 @@ use agena_storage::backend::{
     content_events::{DEFAULT_EVENT_BLOCK_BYTES, EventBlockAssembler, ImmutableEventBlock},
     kernel::OutputScope,
 };
+use futures_util::TryStreamExt;
 use tokio::sync::watch;
 
 use super::*;
 
 pub(super) mod events;
+pub(super) mod heads;
 pub(super) mod loss;
 mod retention;
 pub(super) use retention::prune;
 
 pub(super) const MAX_LIVE_SOURCES: i64 = 128;
 pub(super) const MAX_APPEND_BYTES: usize = 256 * 1024;
+pub(super) const BLOCK_PIECE_BYTES: usize = 64 * 1024;
 const MAX_SOURCE_CHARGE: usize = 512 * 1024;
 const CHECKPOINT_BYTES: usize = 64 * 1024;
 const CHECKPOINT_INTERVAL: Duration = Duration::from_millis(500);
@@ -729,9 +732,38 @@ pub(super) async fn stored_head(
     connection: &mut SqliteConnection,
     content: ContentId,
 ) -> Result<ContentStreamView> {
-    let row = sqlx::query("SELECT entry_id,epoch,kind,activity_id,ordinal,committed_head,lost_bytes,lost_packets,retained_start,capture_state,capture_error FROM agena_content_streams WHERE id=?")
+    stored_head_with_key(connection, content)
+        .await
+        .map(|(_, head)| head)
+}
+
+pub(super) async fn stored_head_with_key(
+    connection: &mut SqliteConnection,
+    content: ContentId,
+) -> Result<(i64, ContentStreamView)> {
+    let row = sqlx::query("SELECT source_key,entry_id,epoch,kind,activity_id,ordinal,committed_head,lost_bytes,lost_packets,retained_start,capture_state,capture_error FROM agena_content_streams WHERE id=?")
         .bind(content.to_string()).fetch_optional(connection).await.map_err(sql_error)?
         .ok_or_else(|| KernelError::NotFound("text stream".into()))?;
+    let bytes = row.try_get::<i64, _>("lost_bytes").map_err(storage)? as u64;
+    let packets = row.try_get::<i64, _>("lost_packets").map_err(storage)? as u64;
+    let head = head_row(
+        content,
+        &row,
+        CaptureLossCounters {
+            bytes,
+            packets,
+            committed_bytes: bytes,
+            committed_packets: packets,
+        },
+    )?;
+    Ok((row.try_get("source_key").map_err(storage)?, head))
+}
+
+pub(super) fn head_row(
+    content: ContentId,
+    row: &sqlx::sqlite::SqliteRow,
+    capture_loss: CaptureLossCounters,
+) -> Result<ContentStreamView> {
     let committed: i64 = row.try_get("committed_head").map_err(storage)?;
     Ok(ContentStreamView {
         id: content,
@@ -753,12 +785,7 @@ pub(super) async fn stored_head(
         ordinal: row.try_get::<i64, _>("ordinal").map_err(storage)? as u32,
         accepted: committed as u64,
         committed: committed as u64,
-        capture_loss: CaptureLossCounters {
-            bytes: row.try_get::<i64, _>("lost_bytes").map_err(storage)? as u64,
-            packets: row.try_get::<i64, _>("lost_packets").map_err(storage)? as u64,
-            committed_bytes: row.try_get::<i64, _>("lost_bytes").map_err(storage)? as u64,
-            committed_packets: row.try_get::<i64, _>("lost_packets").map_err(storage)? as u64,
-        },
+        capture_loss,
         retained_start: row.try_get::<i64, _>("retained_start").map_err(storage)? as u64,
         state: decode(&encode(
             &row.try_get::<String, _>("capture_state").map_err(storage)?,
@@ -939,7 +966,7 @@ pub(super) async fn persist(
     sources: &mut [StagedSource],
 ) -> Result<()> {
     for source in sources {
-        let current = stored_head(connection, source.head.id).await?;
+        let (source_key, current) = stored_head_with_key(connection, source.head.id).await?;
         if current.epoch != source.head.epoch {
             return Err(KernelError::ContentReset);
         }
@@ -957,16 +984,40 @@ pub(super) async fn persist(
             if block.start() != position {
                 return Err(storage("non-contiguous staged content"));
             }
-            sqlx::query("INSERT INTO agena_content_blocks (content_id,logical_start,logical_end,codec,digest,body) VALUES (?,?,?,?,?,?)")
-                .bind(source.head.id.to_string()).bind(block.start() as i64).bind(block.end() as i64).bind(block.codec()).bind(block.digest().as_slice()).bind(block.bytes())
+            let bytes = block.bytes();
+            let inline = (bytes.len() <= BLOCK_PIECE_BYTES).then_some(bytes);
+            sqlx::query("INSERT INTO agena_content_blocks (source_key,logical_start,logical_end,codec,digest,body_bytes,body) VALUES (?,?,?,?,?,?,?)")
+                .bind(source_key).bind(block.start() as i64).bind(block.end() as i64).bind(block.codec()).bind(block.digest().as_slice()).bind(bytes.len() as i64).bind(inline)
                 .execute(&mut *connection).await.map_err(sql_error)?;
+            if inline.is_none() {
+                const BATCH_BYTES: usize = 16 * BLOCK_PIECE_BYTES;
+                for (batch, bytes) in bytes.chunks(BATCH_BYTES).enumerate() {
+                    let mut query = sqlx::QueryBuilder::new(
+                        "INSERT INTO agena_content_block_pieces (source_key,block_start,byte_offset,body) ",
+                    );
+                    query.push_values(
+                        bytes.chunks(BLOCK_PIECE_BYTES).enumerate(),
+                        |mut row, (piece, bytes)| {
+                            row.push_bind(source_key)
+                                .push_bind(block.start() as i64)
+                                .push_bind((batch * BATCH_BYTES + piece * BLOCK_PIECE_BYTES) as i64)
+                                .push_bind(bytes);
+                        },
+                    );
+                    query
+                        .build()
+                        .execute(&mut *connection)
+                        .await
+                        .map_err(sql_error)?;
+                }
+            }
             position = block.end();
             if let PendingBlock::Events(block) = block {
                 for record in block.iter() {
                     let record = record.map_err(storage)?;
                     if record.payload.is_checkpoint() {
-                        sqlx::query("INSERT INTO agena_content_checkpoints (content_id,logical_sequence,block_start) VALUES (?,?,?)")
-                            .bind(source.head.id.to_string()).bind(record.sequence as i64).bind(block.start() as i64).execute(&mut *connection).await.map_err(sql_error)?;
+                        sqlx::query("INSERT INTO agena_content_checkpoints (source_key,logical_sequence,block_start) VALUES (?,?,?)")
+                            .bind(source_key).bind(record.sequence as i64).bind(block.start() as i64).execute(&mut *connection).await.map_err(sql_error)?;
                     }
                 }
             }
@@ -974,9 +1025,9 @@ pub(super) async fn persist(
         if position != source.head.committed {
             return Err(storage("staged content head has missing bytes"));
         }
-        loss::persist(connection, source, &current).await?;
-        sqlx::query("UPDATE agena_content_streams SET committed_head=?,lost_bytes=?,lost_packets=?,capture_state=?,capture_error=? WHERE id=?")
-            .bind(source.head.committed as i64).bind(source.head.capture_loss.committed_bytes as i64).bind(source.head.capture_loss.committed_packets as i64).bind(commands::enum_text(&source.head.state)?).bind(&source.head.capture_error).bind(source.head.id.to_string())
+        loss::persist(connection, source_key, source, &current).await?;
+        sqlx::query("UPDATE agena_content_streams SET committed_head=?,lost_bytes=?,lost_packets=?,capture_state=?,capture_error=? WHERE source_key=?")
+            .bind(source.head.committed as i64).bind(source.head.capture_loss.committed_bytes as i64).bind(source.head.capture_loss.committed_packets as i64).bind(commands::enum_text(&source.head.state)?).bind(&source.head.capture_error).bind(source_key)
             .execute(&mut *connection).await.map_err(sql_error)?;
         if source.head.state != CaptureState::Open {
             sqlx::query("UPDATE agena_entries SET revision=revision+1 WHERE id=?")
@@ -987,6 +1038,38 @@ pub(super) async fn persist(
         }
     }
     Ok(())
+}
+
+async fn block_body(
+    connection: &mut SqliteConnection,
+    source_key: i64,
+    block_start: i64,
+    row: &sqlx::sqlite::SqliteRow,
+) -> Result<Vec<u8>> {
+    if let Some(inline) = row.try_get::<Option<Vec<u8>>, _>("body").map_err(storage)? {
+        return Ok(inline);
+    }
+    let bytes: usize =
+        usize::try_from(row.try_get::<i64, _>("body_bytes").map_err(storage)?).map_err(storage)?;
+    let mut body = Vec::with_capacity(bytes);
+    let mut pieces = sqlx::query_as::<_, (i64, Vec<u8>)>(
+        "SELECT byte_offset,body FROM agena_content_block_pieces
+         WHERE source_key=? AND block_start=? ORDER BY byte_offset",
+    )
+    .bind(source_key)
+    .bind(block_start)
+    .fetch(connection);
+    while let Some((offset, piece)) = pieces.try_next().await.map_err(sql_error)? {
+        if offset != body.len() as i64 || piece.len() != (bytes - body.len()).min(BLOCK_PIECE_BYTES)
+        {
+            return Err(storage("content block pieces are not contiguous"));
+        }
+        body.extend_from_slice(&piece);
+    }
+    if body.len() != bytes {
+        return Err(storage("content block pieces are incomplete"));
+    }
+    Ok(body)
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -1160,13 +1243,10 @@ async fn authorize(
     connection: &mut SqliteConnection,
     session: SessionId,
     content: ContentId,
-) -> Result<()> {
-    let member: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agena_content_streams c JOIN agena_segment_entries m ON m.entry_id=c.entry_id JOIN agena_session_segments s ON s.segment_id=m.segment_id JOIN agena_sessions owner ON owner.id=s.session_id WHERE c.id=? AND s.session_id=? AND owner.deleted_at_ms IS NULL AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal AND (NOT EXISTS(SELECT 1 FROM agena_branch_entries frozen WHERE frozen.session_id=s.session_id AND frozen.entry_id=c.entry_id) OR EXISTS(SELECT 1 FROM agena_branch_sources frozen WHERE frozen.session_id=s.session_id AND frozen.content_id=c.id AND frozen.entry_id=c.entry_id)))")
-        .bind(content.to_string()).bind(session.get()).fetch_one(connection).await.map_err(sql_error)?;
-    if !member {
-        return Err(KernelError::Ownership);
-    }
-    Ok(())
+) -> Result<i64> {
+    sqlx::query_scalar("SELECT c.source_key FROM agena_content_streams c JOIN agena_segment_entries m ON m.entry_id=c.entry_id JOIN agena_session_segments s ON s.segment_id=m.segment_id JOIN agena_sessions owner ON owner.id=s.session_id WHERE c.id=? AND s.session_id=? AND owner.deleted_at_ms IS NULL AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal AND (NOT EXISTS(SELECT 1 FROM agena_branch_entries frozen WHERE frozen.session_id=s.session_id AND frozen.entry_id=c.entry_id) OR EXISTS(SELECT 1 FROM agena_branch_sources frozen WHERE frozen.session_id=s.session_id AND frozen.source_key=c.source_key)) LIMIT 1")
+        .bind(content.to_string()).bind(session.get()).fetch_optional(connection).await.map_err(sql_error)?
+        .ok_or(KernelError::Ownership)
 }
 
 async fn validate_boundary(
@@ -1263,7 +1343,7 @@ async fn range_inner(
         .begin()
         .await
         .map_err(storage)?;
-    authorize(&mut transaction, session, content).await?;
+    let source_key = authorize(&mut transaction, session, content).await?;
     let frozen = scoped_boundary(&mut transaction, session, content, boundary).await?;
     let (head, tail) = match (frozen, snapshot) {
         (Some(frozen), _) => (frozen, Vec::new()),
@@ -1291,23 +1371,24 @@ async fn range_inner(
     if start < committed_end {
         // One predecessor block plus forward indexed ranges; SQL never scans
         // all earlier blocks to answer a range near the end of a long stream.
-        let first: Option<i64> = sqlx::query_scalar("SELECT logical_start FROM agena_content_blocks WHERE content_id=? AND logical_start<=? ORDER BY logical_start DESC LIMIT 1")
-            .bind(content.to_string()).bind(start as i64).fetch_optional(&mut *transaction).await.map_err(sql_error)?;
+        let first: Option<i64> = sqlx::query_scalar("SELECT logical_start FROM agena_content_blocks WHERE source_key=? AND logical_start<=? ORDER BY logical_start DESC LIMIT 1")
+            .bind(source_key).bind(start as i64).fetch_optional(&mut *transaction).await.map_err(sql_error)?;
         let first = first.ok_or_else(|| storage("missing committed text block"))?;
-        let rows = sqlx::query("SELECT logical_start,logical_end,codec,digest,body FROM agena_content_blocks WHERE content_id=? AND logical_start>=? AND logical_start<? ORDER BY logical_start LIMIT 128")
-            .bind(content.to_string()).bind(first).bind(committed_end as i64).fetch_all(&mut *transaction).await.map_err(sql_error)?;
+        let rows = sqlx::query("SELECT logical_start,logical_end,codec,digest,body_bytes,body FROM agena_content_blocks WHERE source_key=? AND logical_start>=? AND logical_start<? ORDER BY logical_start LIMIT 128")
+            .bind(source_key).bind(first).bind(committed_end as i64).fetch_all(&mut *transaction).await.map_err(sql_error)?;
         let mut position = start;
         let count = rows.len();
         for row in rows {
             let from: i64 = row.try_get("logical_start").map_err(storage)?;
             let to: i64 = row.try_get("logical_end").map_err(storage)?;
-            let payload: Vec<u8> = row.try_get("body").map_err(storage)?;
-            let digest: Vec<u8> = row.try_get("digest").map_err(storage)?;
-            if payload.len() > DEFAULT_TEXT_BLOCK_BYTES
+            if row.try_get::<i64, _>("body_bytes").map_err(storage)?
+                > DEFAULT_TEXT_BLOCK_BYTES as i64
                 || row.try_get::<String, _>("codec").map_err(storage)? != "utf8"
             {
                 return Err(storage("invalid text block encoding/length"));
             }
+            let payload: Vec<u8> = row.try_get("body").map_err(storage)?;
+            let digest: Vec<u8> = row.try_get("digest").map_err(storage)?;
             let block = ImmutableTextBlock::from_stored(
                 from as u64,
                 to as u64,

@@ -1,6 +1,6 @@
 //! Export roots pin membership generations, not a live SQLite transaction or
-//! an in-memory list of every entry/segment. Only a replaced boundary edge is
-//! archived for roots that actually need that older edge.
+//! an in-memory list of every entry/segment. Retired edges also tell the
+//! bounded collector which detached segments may now be unreferenced.
 
 use std::{
     collections::HashMap,
@@ -18,6 +18,7 @@ use super::*;
 const MAX_ROOTS: i64 = 8;
 const MAX_SESSION_ROOTS: i64 = 2;
 const GC_BATCH: i64 = 64;
+pub(super) const GC_INTERVAL: Duration = Duration::from_millis(500);
 const ORPHAN_GRACE: Duration = Duration::from_secs(30);
 
 struct Family {
@@ -86,6 +87,9 @@ impl Pins {
                     root.retained == 0 && (root.claimed || root.created.elapsed() >= ORPHAN_GRACE)
                 })
     }
+    pub fn schedule_collection(&self) {
+        self.dirty.store(true, Ordering::Release);
+    }
     fn revoke(&self) -> Vec<HistorySnapshotLease> {
         self.roots
             .lock()
@@ -120,6 +124,38 @@ async fn commit(transaction: sqlx::Transaction<'_, sqlx::Sqlite>, token: Request
             }
         }
     })
+}
+
+pub(super) async fn retire_removed_edges(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+    next: MembershipGeneration,
+    sequence: i64,
+    ordinal: i64,
+) -> Result<()> {
+    // A kept prefix still owns its segment. Its previous edge is needed only
+    // for an open snapshot. Every fully detached edge supplies a GC candidate.
+    sqlx::query(
+        "INSERT INTO agena_retired_session_segments
+             (session_id,sequence,segment_id,first_ordinal,end_ordinal,since_generation,until_generation)
+         SELECT session_id,sequence,segment_id,first_ordinal,end_ordinal,since_generation,?1
+         FROM agena_session_segments edge
+         WHERE session_id=?2 AND sequence>=?3 AND (
+            sequence>?3 OR first_ordinal>=?4 OR EXISTS(
+                SELECT 1 FROM agena_history_snapshots root
+                WHERE root.session_id=edge.session_id AND root.generation>=edge.since_generation
+                    AND root.generation<?1
+            )
+         )",
+    )
+    .bind(next.get())
+    .bind(session.get())
+    .bind(sequence)
+    .bind(ordinal)
+    .execute(connection)
+    .await
+    .map_err(sql_error)?;
+    Ok(())
 }
 
 pub(super) async fn open(
@@ -174,68 +210,116 @@ pub(super) async fn open(
     Ok(opened)
 }
 
-pub(super) async fn collect(database: &KernelDatabase, pins: &Pins) -> Result<HistorySnapshotGc> {
-    pins.dirty.swap(false, Ordering::AcqRel);
-    let released = pins.revoke();
-    let mut transaction = match database.writer.get_sqlite_connection_pool().begin().await {
-        Ok(transaction) => transaction,
-        Err(error) => {
-            pins.dirty.store(true, Ordering::Release);
-            return Err(storage(error));
-        }
-    };
-    let result = async {
-        let mut result = HistorySnapshotGc::default();
-        for lease in &released {
-            result.roots += sqlx::query("DELETE FROM agena_history_snapshots WHERE token=? AND owner_epoch=?")
-                .bind(lease.token.to_string()).bind(lease.epoch.to_string()).execute(&mut *transaction).await.map_err(sql_error)?.rows_affected() as usize;
-        }
-        let after: i64 = sqlx::query_scalar("SELECT after_id FROM agena_history_snapshot_gc_state WHERE id=1")
-            .fetch_one(&mut *transaction).await.map_err(sql_error)?;
-        let rows = sqlx::query("SELECT id,segment_id FROM agena_retired_session_segments WHERE id>? ORDER BY id LIMIT ?")
-            .bind(after).bind(GC_BATCH).fetch_all(&mut *transaction).await.map_err(sql_error)?;
-        let next = if rows.len() == GC_BATCH as usize {
-            pins.dirty.store(true, Ordering::Release);
-            rows.last().unwrap().try_get::<i64,_>("id").map_err(storage)?
-        } else { 0 };
-        for row in rows {
-            let id: i64 = row.try_get("id").map_err(storage)?;
-            let segment: i64 = row.try_get("segment_id").map_err(storage)?;
-            let removed = sqlx::query("DELETE FROM agena_retired_session_segments WHERE id=? AND NOT EXISTS(SELECT 1 FROM agena_history_snapshots root WHERE root.session_id=agena_retired_session_segments.session_id AND root.generation>=agena_retired_session_segments.since_generation AND root.generation<agena_retired_session_segments.until_generation)")
-                .bind(id).execute(&mut *transaction).await.map_err(sql_error)?.rows_affected();
-            if removed > 0 {
-                result.references += 1;
-                result.segments += sqlx::query("DELETE FROM agena_history_segments WHERE id=? AND NOT EXISTS(SELECT 1 FROM agena_session_segments WHERE segment_id=?) AND NOT EXISTS(SELECT 1 FROM agena_retired_session_segments WHERE segment_id=?)")
-                    .bind(segment).bind(segment).bind(segment).execute(&mut *transaction).await.map_err(sql_error)?.rows_affected() as usize;
+/// The writer can resume a scan between batches. Recovery starts a new scan
+/// after clearing the old snapshot roots.
+#[derive(Default)]
+pub(super) struct Collector {
+    after_id: i64,
+    revisit: bool,
+}
+
+impl Collector {
+    pub(super) async fn collect(
+        &mut self,
+        database: &KernelDatabase,
+        pins: &Pins,
+    ) -> Result<HistorySnapshotGc> {
+        pins.dirty.swap(false, Ordering::AcqRel);
+        let released = pins.revoke();
+        let mut transaction = match database.writer.get_sqlite_connection_pool().begin().await {
+            Ok(transaction) => transaction,
+            Err(error) => {
+                pins.schedule_collection();
+                return Err(storage(error));
             }
+        };
+        let result = async {
+            let mut result = HistorySnapshotGc::default();
+            for lease in &released {
+                result.roots += sqlx::query(
+                    "DELETE FROM agena_history_snapshots WHERE token=? AND owner_epoch=?",
+                )
+                .bind(lease.token.to_string())
+                .bind(lease.epoch.to_string())
+                .execute(&mut *transaction)
+                .await
+                .map_err(sql_error)?
+                .rows_affected() as usize;
+            }
+            let (scanned, last): (i64, i64) = sqlx::query_as(
+                "SELECT count(*),COALESCE(MAX(id),0) FROM (
+                     SELECT id FROM agena_retired_session_segments WHERE id>? ORDER BY id LIMIT ?
+                 )",
+            )
+            .bind(self.after_id)
+            .bind(GC_BATCH)
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(sql_error)?;
+            if scanned != 0 {
+                let removed: Vec<i64> = sqlx::query_scalar(
+                    "DELETE FROM agena_retired_session_segments AS edge
+                     WHERE id>? AND id<=? AND NOT EXISTS(
+                         SELECT 1 FROM agena_history_snapshots root
+                         WHERE root.session_id=edge.session_id AND root.generation>=edge.since_generation
+                           AND root.generation<edge.until_generation
+                     ) RETURNING segment_id",
+                )
+                .bind(self.after_id)
+                .bind(last)
+                .fetch_all(&mut *transaction)
+                .await
+                .map_err(sql_error)?;
+                result.references = removed.len();
+                if !removed.is_empty() {
+                    result.segments = sqlx::query(
+                        "DELETE FROM agena_history_segments
+                         WHERE id IN (SELECT value FROM json_each(?))
+                           AND NOT EXISTS(SELECT 1 FROM agena_session_segments WHERE segment_id=agena_history_segments.id)
+                           AND NOT EXISTS(SELECT 1 FROM agena_retired_session_segments WHERE segment_id=agena_history_segments.id)",
+                    )
+                    .bind(encode(&removed)?)
+                    .execute(&mut *transaction)
+                    .await
+                    .map_err(sql_error)?
+                    .rows_affected() as usize;
+                }
+            }
+            Ok((result, scanned, last))
         }
-        if after != next {
-            sqlx::query("UPDATE agena_history_snapshot_gc_state SET after_id=? WHERE id=1")
-                .bind(next).execute(&mut *transaction).await.map_err(sql_error)?;
-        }
-        Ok(result)
-    }.await;
-    let result = match result {
-        Ok(result) => result,
-        Err(error) => {
-            pins.dirty.store(true, Ordering::Release);
-            let error = abort_transaction(transaction).await.err().unwrap_or(error);
+        .await;
+        let (result, scanned, last) = match result {
+            Ok(result) => result,
+            Err(error) => {
+                pins.schedule_collection();
+                let error = abort_transaction(transaction).await.err().unwrap_or(error);
+                return Err(error);
+            }
+        };
+        if let Err(error) = commit(transaction, RequestId::new()).await {
+            pins.schedule_collection();
             return Err(error);
         }
-    };
-    if let Err(error) = commit(transaction, RequestId::new()).await {
-        pins.dirty.store(true, Ordering::Release);
-        return Err(error);
+        // Releasing a snapshot can free edges already passed in this sweep.
+        // Finish the sweep before revisiting them so releases can't stall it.
+        let revisit = self.revisit || (self.after_id != 0 && result.roots != 0);
+        let full = scanned == GC_BATCH;
+        self.after_id = if full { last } else { 0 };
+        self.revisit = full && revisit;
+        if full || revisit {
+            pins.schedule_collection();
+        }
+        pins.acknowledge(&released);
+        Ok(result)
     }
-    pins.acknowledge(&released);
-    Ok(result)
 }
 
 // Each arm selects a bounded indexed window before the union's small merge.
 // A newer current edge is invisible to the old generation; its archived edge
 // remains pinned until the last applicable snapshot family has been released.
 pub(super) const SEGMENTS_SQL: &str = "SELECT * FROM (SELECT * FROM (SELECT sequence,segment_id,first_ordinal,end_ordinal FROM agena_session_segments WHERE session_id=? AND sequence>=? AND sequence<=? AND since_generation<=? ORDER BY sequence LIMIT ?) UNION ALL SELECT * FROM (SELECT sequence,segment_id,first_ordinal,end_ordinal FROM agena_retired_session_segments WHERE session_id=? AND sequence>=? AND sequence<=? AND since_generation<=? AND until_generation>? ORDER BY sequence LIMIT ?)) ORDER BY sequence LIMIT ?";
-pub(super) const MEMBERS_SQL: &str = "SELECT m.entry_id,m.ordinal,e.body_bytes FROM agena_segment_entries m JOIN agena_entries e INDEXED BY idx_agena_entry_bytes ON e.id=m.entry_id WHERE m.segment_id=? AND m.ordinal>=? AND m.ordinal<? ORDER BY m.ordinal LIMIT ?";
+const MEMBER_IDS_SQL: &str = "SELECT entry_id,ordinal FROM agena_segment_entries WHERE segment_id=? AND ordinal>=? AND ordinal<? ORDER BY ordinal LIMIT ?";
+const MEMBERS_SQL: &str = "SELECT m.entry_id,m.ordinal,e.body_bytes FROM agena_segment_entries m JOIN agena_entries e INDEXED BY idx_agena_entry_preflight ON e.id=m.entry_id WHERE m.segment_id=? AND m.ordinal>=? AND m.ordinal<? ORDER BY m.ordinal LIMIT ?";
 
 /// Authorize a position through the pinned generation, including retired
 /// membership. Export details never rely on the session's current edges.
@@ -270,13 +354,14 @@ pub(super) async fn member(
         .ok_or_else(|| KernelError::NotFound("snapshot member".into()))
 }
 
-pub(super) async fn page(
-    pool: &sqlx::SqlitePool,
+pub(super) async fn members(
+    connection: &mut SqliteConnection,
     lease: HistorySnapshotLease,
     after: Option<SnapshotCursor>,
     limit: usize,
+    byte_limit: Option<usize>,
     diagnostics: &KernelDiagnostics,
-) -> Result<SnapshotPage> {
+) -> Result<(Vec<(i64, SnapshotCursor)>, bool)> {
     if after.is_some_and(|cursor| cursor.token != lease.token) {
         return Err(KernelError::Ownership);
     }
@@ -284,21 +369,13 @@ pub(super) async fn page(
         return Err(invalid("invalid snapshot cursor"));
     }
     let limit = limit.clamp(1, 200);
-    let mut transaction = pool.begin().await.map_err(storage)?;
-    let read_transaction = diagnostics.read_transaction();
     metrics::add(&diagnostics.0.snapshot_queries, 1);
     let root = sqlx::query("SELECT last_sequence FROM agena_history_snapshots WHERE token=? AND session_id=? AND generation=? AND owner_epoch=?")
         .bind(lease.token.to_string()).bind(lease.session.get()).bind(lease.generation.get()).bind(lease.epoch.to_string())
-        .fetch_optional(&mut *transaction).await.map_err(sql_error)?.ok_or_else(||KernelError::Conflict("history snapshot expired".into()))?;
+        .fetch_optional(&mut *connection).await.map_err(sql_error)?.ok_or_else(||KernelError::Conflict("history snapshot expired".into()))?;
     let last: Option<i64> = root.try_get("last_sequence").map_err(storage)?;
     let Some(last) = last else {
-        transaction.rollback().await.map_err(storage)?;
-        read_transaction.complete();
-        return Ok(SnapshotPage {
-            entries: Vec::new(),
-            next: None,
-            has_more: false,
-        });
+        return Ok((Vec::new(), false));
     };
     let start = after.map_or(0, |cursor| cursor.segment_sequence);
     if start > last {
@@ -318,13 +395,17 @@ pub(super) async fn page(
         .bind(lease.generation.get())
         .bind((limit + 2) as i64)
         .bind((limit + 2) as i64)
-        .fetch_all(&mut *transaction)
+        .fetch_all(&mut *connection)
         .await
         .map_err(sql_error)?;
     let mut selected = Vec::with_capacity(limit);
     let mut bytes = 0usize;
-    let mut has_more = false;
-    'segments: for segment in segments {
+    let sql = if byte_limit.is_some() {
+        MEMBERS_SQL
+    } else {
+        MEMBER_IDS_SQL
+    };
+    for segment in segments {
         let sequence: i64 = segment.try_get("sequence").map_err(storage)?;
         let mut first: i64 = segment.try_get("first_ordinal").map_err(storage)?;
         if let Some(cursor) = after
@@ -333,27 +414,31 @@ pub(super) async fn page(
             first = first.max(i64::from(cursor.ordinal) + 1);
         }
         metrics::add(&diagnostics.0.snapshot_queries, 1);
-        let rows = sqlx::query(MEMBERS_SQL)
+        let rows = sqlx::query(sql)
             .bind(segment.try_get::<i64, _>("segment_id").map_err(storage)?)
             .bind(first)
             .bind(segment.try_get::<i64, _>("end_ordinal").map_err(storage)?)
             .bind((limit + 1 - selected.len()) as i64)
-            .fetch_all(&mut *transaction)
+            .fetch_all(&mut *connection)
             .await
             .map_err(sql_error)?;
         metrics::add(&diagnostics.0.snapshot_candidate_rows, rows.len());
         for row in rows {
-            let charge = usize::try_from(row.try_get::<i64, _>("body_bytes").map_err(storage)?)
-                .map_err(storage)?
-                .saturating_add(512);
-            if selected.len() == limit || bytes.saturating_add(charge) > 1024 * 1024 {
-                if selected.is_empty() {
-                    return Err(storage("entry exceeds snapshot page byte budget"));
-                }
-                has_more = true;
-                break 'segments;
+            if selected.len() == limit {
+                return Ok((selected, true));
             }
-            bytes += charge;
+            if let Some(byte_limit) = byte_limit {
+                let size: i64 = row.try_get("body_bytes").map_err(storage)?;
+                bytes = bytes
+                    .saturating_add(usize::try_from(size).map_err(storage)?)
+                    .saturating_add(512);
+                if bytes > byte_limit {
+                    if selected.is_empty() {
+                        return Err(storage("entry exceeds snapshot page byte budget"));
+                    }
+                    return Ok((selected, true));
+                }
+            }
             selected.push((
                 row.try_get::<i64, _>("entry_id").map_err(storage)?,
                 SnapshotCursor {
@@ -365,6 +450,27 @@ pub(super) async fn page(
             ));
         }
     }
+    Ok((selected, false))
+}
+
+pub(super) async fn page(
+    pool: &sqlx::SqlitePool,
+    lease: HistorySnapshotLease,
+    after: Option<SnapshotCursor>,
+    limit: usize,
+    diagnostics: &KernelDiagnostics,
+) -> Result<SnapshotPage> {
+    let mut transaction = pool.begin().await.map_err(storage)?;
+    let read_transaction = diagnostics.read_transaction();
+    let (selected, has_more) = members(
+        &mut transaction,
+        lease,
+        after,
+        limit,
+        Some(1024 * 1024),
+        diagnostics,
+    )
+    .await?;
     let mut entries = Vec::with_capacity(selected.len());
     if !selected.is_empty() {
         metrics::add(&diagnostics.0.snapshot_queries, 1);
@@ -408,4 +514,82 @@ pub(super) async fn page(
         next,
         has_more,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn collection_revisits_earlier_edges_after_a_snapshot_releases() {
+        let database = KernelDatabase::open("sqlite::memory:").await.unwrap();
+        let pool = database.writer.get_sqlite_connection_pool();
+        sqlx::raw_sql(
+            "INSERT INTO agena_sessions(id,title,membership_generation,created_at_ms,updated_at_ms)
+                 VALUES (1,'Cleared',2,0,0),(2,'Branch',1,0,0);
+             WITH RECURSIVE ids(id) AS (VALUES(1) UNION ALL SELECT id+1 FROM ids WHERE id<69)
+                 INSERT INTO agena_history_segments(id) SELECT id FROM ids;
+             WITH RECURSIVE ids(id) AS (VALUES(1) UNION ALL SELECT id+1 FROM ids WHERE id<70)
+                 INSERT INTO agena_retired_session_segments
+                     (session_id,sequence,segment_id,first_ordinal,end_ordinal,since_generation,until_generation)
+                 SELECT 1,id-1,CASE WHEN id<=2 THEN id ELSE id-1 END,0,1,1,2 FROM ids;
+             INSERT INTO agena_session_segments
+                 (session_id,sequence,segment_id,first_ordinal,end_ordinal,user_message_count,max_entry_created_at_ms)
+                 VALUES (2,0,1,0,1,0,0);",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        let pins = Pins::default();
+        let lease = HistorySnapshotLease {
+            token: RequestId::new(),
+            session: SessionId::try_from(1).unwrap(),
+            generation: MembershipGeneration::INITIAL,
+            epoch: KernelEpoch::new(),
+        };
+        sqlx::query(
+            "INSERT INTO agena_history_snapshots(token,session_id,generation,owner_epoch,last_sequence)
+             VALUES (?,1,1,?,69)",
+        )
+        .bind(lease.token.to_string())
+        .bind(lease.epoch.to_string())
+        .execute(pool)
+        .await
+        .unwrap();
+        pins.install(lease);
+        pins.retain(lease).unwrap();
+
+        let mut collector = Collector::default();
+        assert_eq!(
+            collector.collect(&database, &pins).await.unwrap(),
+            HistorySnapshotGc::default()
+        );
+        assert_eq!(collector.after_id, 64);
+        pins.release(lease);
+        assert_eq!(
+            collector.collect(&database, &pins).await.unwrap(),
+            HistorySnapshotGc {
+                roots: 1,
+                references: 6,
+                segments: 6
+            }
+        );
+        assert!(pins.needs_collection());
+        assert_eq!(
+            collector.collect(&database, &pins).await.unwrap(),
+            HistorySnapshotGc {
+                roots: 0,
+                references: 64,
+                segments: 62
+            }
+        );
+        collector.collect(&database, &pins).await.unwrap();
+        assert!(!pins.needs_collection());
+        let segments: Vec<i64> = sqlx::query_scalar("SELECT id FROM agena_history_segments")
+            .fetch_all(pool)
+            .await
+            .unwrap();
+        assert_eq!(segments, [1]);
+        database.close().await.unwrap();
+    }
 }

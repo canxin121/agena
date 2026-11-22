@@ -1,6 +1,8 @@
 use agena_domain::{SessionOwner, SessionSurface};
 use agena_storage::{WorkspaceListQuery, kernel::*};
 use agena_storage_sqlite::{SqliteKernel, open_kernel_runtime};
+use sea_orm::TransactionTrait;
+use std::time::Duration;
 
 async fn conversation(rt: &SqliteKernel, workspace: i64, bot: bool) -> SessionId {
     rt.ports
@@ -42,6 +44,16 @@ async fn project_catalog_hides_bot_directories_before_search_and_pagination() {
         .await
         .unwrap();
     let bot = conversation(&rt, private, true).await;
+    let stats = rt
+        .ports
+        .reader
+        .workspace_statistics(&[empty, mixed, private])
+        .await
+        .unwrap();
+    assert_eq!(stats[&empty].total, 0);
+    assert_eq!(stats[&mixed].total, 1);
+    assert_eq!(stats[&mixed].roots, 1);
+    assert_eq!(stats[&private].total, 0);
 
     let page = rt
         .workspaces
@@ -105,6 +117,44 @@ async fn project_catalog_hides_bot_directories_before_search_and_pagination() {
         rt.ports.reader.summary(bot).await.unwrap().workspace_id,
         Some(private)
     );
+}
+
+#[tokio::test]
+async fn file_workspace_and_instance_reads_complete_with_writer_occupied() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("instance.db");
+    let rt = open_kernel_runtime(&format!("sqlite://{}?mode=rwc", path.display()))
+        .await
+        .unwrap();
+    let workspace = rt.workspaces.ensure_id("/projects/demo").await.unwrap();
+    rt.instance_state
+        .set_payload("test", "{}".into())
+        .await
+        .unwrap();
+
+    let writer = rt.database.begin().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        assert_eq!(
+            rt.workspaces.lookup_id("/projects/demo").await.unwrap(),
+            Some(workspace)
+        );
+        assert_eq!(
+            rt.workspaces.get(workspace).await.unwrap().unwrap().path,
+            "/projects/demo"
+        );
+        assert_eq!(
+            rt.instance_state
+                .get_payload("test")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("{}")
+        );
+    })
+    .await
+    .expect("repository reads must not wait for the writer connection");
+    writer.rollback().await.unwrap();
+    rt.ports.shutdown().await.unwrap();
 }
 
 #[tokio::test]

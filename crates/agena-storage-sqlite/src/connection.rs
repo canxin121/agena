@@ -296,16 +296,33 @@ fn copy_recovery_snapshot(path: &Path) -> std::io::Result<Option<tempfile::TempD
         .prefix(".agena-sqlite-admission-")
         .tempdir_in(path.parent().unwrap_or_else(|| Path::new(".")))?;
     let target = directory.path().join("instance.sqlite");
-    std::fs::copy(path, &target)?;
+    copy_recovery_file(path, &target)?;
     for (source, suffix) in logs {
         let mut name = target.as_os_str().to_owned();
         name.push(suffix);
-        std::fs::copy(source, Path::new(&name))?;
+        copy_recovery_file(&source, Path::new(&name))?;
     }
     // SHM is derived coordination state. SQLite rebuilds it in
     // this private directory from the copied WAL rather than sharing it with
     // the source database or trusting a stale WAL index.
     Ok(Some(directory))
+}
+
+fn copy_recovery_file(source: &Path, target: &Path) -> std::io::Result<()> {
+    #[cfg(all(
+        target_os = "linux",
+        not(any(target_arch = "sparc", target_arch = "sparc64"))
+    ))]
+    {
+        let source_file = File::open(source)?;
+        let target_file = File::options().write(true).create_new(true).open(target)?;
+        if rustix::fs::ioctl_ficlone(&target_file, &source_file).is_ok() {
+            target_file.set_permissions(source_file.metadata()?.permissions())?;
+            return Ok(());
+        }
+    }
+    std::fs::copy(source, target)?;
+    Ok(())
 }
 
 /// Admit the current baseline without opening any original file for writing.

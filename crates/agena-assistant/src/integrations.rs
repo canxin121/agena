@@ -364,25 +364,15 @@ impl IntegrationSpec {
 
     /// Telegram capability grants come exclusively from named assignments.
     /// Preserve the connection's identity, admission and routing settings.
-    pub fn retire_telegram_grants(&mut self) -> bool {
-        if !self.is_telegram_channel() {
-            return false;
-        }
-        let Some(policy) = &mut self.channel_policy else {
-            return false;
-        };
-        if !policy.grant.has_effects()
-            && policy.administrator_actors.is_empty()
-            && !policy.allow_automated_reports
-            && !policy.service_grant.has_effects()
+    fn clear_telegram_grants(&mut self) {
+        if self.is_telegram_channel()
+            && let Some(policy) = &mut self.channel_policy
         {
-            return false;
+            policy.grant = ChannelGrant::default();
+            policy.administrator_actors.clear();
+            policy.allow_automated_reports = false;
+            policy.service_grant = ChannelGrant::default();
         }
-        policy.grant = ChannelGrant::default();
-        policy.administrator_actors.clear();
-        policy.allow_automated_reports = false;
-        policy.service_grant = ChannelGrant::default();
-        true
     }
 
     /// Zero removes a lifetime or budget limit only for durable chat channels.
@@ -580,7 +570,7 @@ impl IntegrationBinding {
         fingerprint: String,
         now: i64,
     ) -> Result<Self> {
-        spec.retire_telegram_grants();
+        spec.clear_telegram_grants();
         spec.validate(now)?;
         validate_key(&key)?;
         if workspace.is_some() == owner_bot_id.is_some() || source <= 0 {
@@ -991,6 +981,8 @@ pub trait IntegrationRepository: Send + Sync {
     async fn channel_audit(&self, id: Uuid) -> Result<Vec<ChannelAccessAudit>>;
     async fn channel_execution_actor(&self, id: Uuid, execution: &str) -> Result<Option<String>>;
     async fn channel_sessions(&self, id: Uuid) -> Result<Vec<ChannelSessionRecord>>;
+    async fn channel_sessions_with_output(&self, id: Uuid) -> Result<Vec<ChannelSessionRecord>>;
+    async fn unnotified_channel_interactions(&self, id: Uuid, session: i64) -> Result<Vec<i64>>;
     async fn observed_channel_rooms(&self, id: Uuid) -> Result<Vec<ObservedChannelRoom>>;
     async fn channel_participants(
         &self,
@@ -1032,9 +1024,12 @@ pub trait IntegrationRepository: Send + Sync {
     /// committed kernel receipt after a lost inbox-update acknowledgement.
     async fn execution_events(&self, id: Uuid) -> Result<Vec<(IntegrationEvent, i64)>>;
     async fn enqueue_delivery(&self, delivery: IntegrationDelivery) -> Result<()>;
+    /// Publish an execution reply while that exact generation is pending.
+    async fn enqueue_execution_delivery(&self, delivery: IntegrationDelivery) -> Result<()>;
     async fn deliveries(&self, id: Uuid) -> Result<Vec<IntegrationDelivery>>;
     async fn claim_delivery(&self, id: Uuid, now: i64) -> Result<Option<IntegrationDelivery>>;
     async fn finish_delivery(&self, delivery: IntegrationDelivery) -> Result<()>;
+    async fn retry_uncertain_deliveries(&self, binding: Uuid, retry_at_ms: i64) -> Result<()>;
     async fn recover_sending(&self) -> Result<()>;
     async fn unexported_executions(
         &self,

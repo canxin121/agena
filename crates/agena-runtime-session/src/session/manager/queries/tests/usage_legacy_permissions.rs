@@ -308,6 +308,8 @@ async fn usage_stats_preserves_legacy_permission_history_and_subagent_filters() 
 async fn usage_window_preserves_exact_boundaries_and_skips_unreadable_tool_usage() {
     let (manager, session) = fixture().await;
     persist_accounting(&manager, session, 1).await;
+    let cost = manager.cost_summary(session.get()).await.unwrap();
+    assert_eq!((cost.requests, cost.total_tokens), (2, 180));
     let midnight = DateTime::parse_from_rfc3339("2026-01-03T00:00:00Z")
         .unwrap()
         .with_timezone(&Utc);

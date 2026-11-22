@@ -1,6 +1,6 @@
-//! Canonical accounting metadata must retain original ownership and pagination
-//! independently of the tool's duplicated result projections.
+//! Accounting uses canonical result attribution from each session's own tools.
 use agena_domain::{ComposerDocument, ComposerNode};
+use agena_provider::PROVIDER_TOOL_USAGE_METADATA_KEY;
 use agena_storage::kernel::*;
 use agena_storage_sqlite::{SqliteKernel, open_kernel_runtime};
 use serde_json::{Value, json};
@@ -67,7 +67,7 @@ async fn complete(tool: &ToolHandle, phase: ToolPhase, value: Value) {
 }
 
 #[tokio::test]
-async fn canonical_tool_metadata_is_owned_paged_and_excludes_inherited_or_projected_copies() {
+async fn session_usage_excludes_inherited_and_projected_tool_copies() {
     let runtime = open_kernel_runtime("sqlite::memory:").await.unwrap();
     let (first, first_attempt, first_round) = start(&runtime, "First owner").await;
     let (other, other_attempt, other_round) = start(&runtime, "Other owner").await;
@@ -77,9 +77,9 @@ async fn canonical_tool_metadata_is_owned_paged_and_excludes_inherited_or_projec
         &first_tool,
         ToolPhase::Succeeded,
         json!({
-            "metadata": {"accounting": "original-first"},
-            "raw_output": {"payload": {"metadata": {"accounting": "duplicate-first"}}},
-            "result": {"metadata": {"accounting": "model-projection"}}
+            "metadata": {(PROVIDER_TOOL_USAGE_METADATA_KEY): "original-first"},
+            "raw_output": {"payload": {"metadata": {(PROVIDER_TOOL_USAGE_METADATA_KEY): "duplicate-first"}}},
+            "result": {"metadata": {(PROVIDER_TOOL_USAGE_METADATA_KEY): "model-projection"}}
         }),
     )
     .await;
@@ -87,55 +87,31 @@ async fn canonical_tool_metadata_is_owned_paged_and_excludes_inherited_or_projec
     complete(
         &other_tool,
         ToolPhase::Succeeded,
-        json!({"metadata": {"accounting": "other-owner"}}),
+        json!({"metadata": {(PROVIDER_TOOL_USAGE_METADATA_KEY): "other-owner"}}),
     )
     .await;
     let projected = tool(&first_round, "projection-only").await;
     complete(
         &projected,
         ToolPhase::Succeeded,
-        json!({"raw_output": {"payload": {"metadata": {"accounting": "not-canonical"}}}}),
+        json!({"raw_output": {"payload": {"metadata": {(PROVIDER_TOOL_USAGE_METADATA_KEY): "not-canonical"}}}}),
     )
     .await;
     let second_tool = tool(&first_round, "second").await;
     complete(
         &second_tool,
         ToolPhase::Failed,
-        json!({"metadata": {"accounting": "original-second"}}),
+        json!({"metadata": {(PROVIDER_TOOL_USAGE_METADATA_KEY): "original-second"}}),
     )
     .await;
     let pending = tool(&first_round, "not-terminal").await;
 
     let reader = &runtime.ports.reader;
-    let page = reader.owned_tool_metadata(first, None, 1).await.unwrap();
-    assert_eq!(page.len(), 1);
-    assert_eq!(page[0].id, first_tool.id());
-    assert_eq!(page[0].metadata, json!({"accounting": "original-first"}));
-    assert!(page[0].finished_at_ms >= page[0].created_at_ms);
-    let after = page[0].id;
-    drop(page);
-
-    let page = reader
-        .owned_tool_metadata(first, Some(after), 1)
-        .await
-        .unwrap();
-    assert_eq!(page.len(), 1);
-    assert_eq!(page[0].id, second_tool.id());
-    assert_eq!(page[0].metadata, json!({"accounting": "original-second"}));
-    drop(page);
-    assert!(
-        reader
-            .owned_tool_metadata(first, Some(second_tool.id()), 1)
-            .await
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        tool_usage(reader, first).await,
+        ["original-first", "original-second"]
     );
-
-    let other_page = reader.owned_tool_metadata(other, None, 128).await.unwrap();
-    assert_eq!(other_page.len(), 1);
-    assert_eq!(other_page[0].id, other_tool.id());
-    assert_eq!(other_page[0].metadata, json!({"accounting": "other-owner"}));
-    drop(other_page);
+    assert_eq!(tool_usage(reader, other).await, ["other-owner"]);
 
     complete(&pending, ToolPhase::Succeeded, json!({"done": true})).await;
     first_round
@@ -172,18 +148,25 @@ async fn canonical_tool_metadata_is_owned_paged_and_excludes_inherited_or_projec
             .result
             .is_some()
     );
-    assert!(
-        reader
-            .owned_tool_metadata(fork, None, 128)
-            .await
-            .unwrap()
-            .is_empty()
-    );
-    let originals = reader.owned_tool_metadata(first, None, 128).await.unwrap();
+    assert!(tool_usage(reader, fork).await.is_empty());
     assert_eq!(
-        originals.iter().map(|item| item.id).collect::<Vec<_>>(),
-        vec![first_tool.id(), second_tool.id()],
+        tool_usage(reader, first).await,
+        ["original-first", "original-second"]
     );
-    drop(originals);
     runtime.ports.clone().shutdown().await.unwrap();
+}
+
+async fn tool_usage(reader: &KernelReader, session: SessionId) -> Vec<String> {
+    let mut observations = Vec::new();
+    reader
+        .visit_session_usage(session, &mut |row| {
+            assert_eq!(row.session_id, session);
+            if let StoredUsageSource::Tool(payload) = row.source {
+                observations.push(payload);
+            }
+        })
+        .await
+        .unwrap();
+    observations.sort_unstable();
+    observations
 }

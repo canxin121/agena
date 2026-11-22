@@ -4,11 +4,46 @@ use super::*;
 
 // Covering metadata index avoids reading cold JSON overflow pages merely to
 // select a bounded byte window. body_bytes is a generated, stored derivative.
-pub(super) const HISTORY_PREFLIGHT_SQL: &str = "SELECT m.entry_id,m.ordinal,e.body_bytes FROM agena_segment_entries m JOIN agena_entries e INDEXED BY idx_agena_entry_bytes ON e.id=m.entry_id WHERE m.segment_id=? AND m.ordinal>=? AND m.ordinal<? ORDER BY m.ordinal DESC LIMIT ?";
+pub(super) const HISTORY_PREFLIGHT_SQL: &str = "SELECT m.entry_id,m.ordinal,e.body_bytes FROM agena_segment_entries m JOIN agena_entries e INDEXED BY idx_agena_entry_preflight ON e.id=m.entry_id WHERE m.segment_id=? AND m.ordinal>=? AND m.ordinal<? ORDER BY m.ordinal DESC LIMIT ?";
 pub(super) const PENDING_INTERACTIONS_PREFLIGHT_SQL: &str = "SELECT id,request_bytes FROM agena_interactions INDEXED BY idx_agena_interaction_pending_session WHERE session_id=? AND decision_json IS NULL AND id>? ORDER BY id LIMIT ?";
-pub(super) static SUMMARY_SQL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-    format!("SELECT {}", super::lifecycle::summary_fields())
-        + "s.id,s.workspace_id,s.title,s.owner_bot_id,s.owner_surface,s.favorite,s.pinned,s.metadata_version,s.membership_generation,s.created_at_ms,s.updated_at_ms,t.entry_count,t.user_message_count,t.queued_executions,t.running_executions,t.last_message_at_ms FROM agena_sessions s JOIN agena_session_statistics t ON t.session_id=s.id WHERE s.id=? AND s.deleted_at_ms IS NULL"
+pub(super) const ENTRY_COLUMNS: &str = "e.*,
+    EXISTS(SELECT 1 FROM agena_attempts a WHERE a.execution_id=e.execution_id AND a.started_at_ms IS NOT NULL) AS execution_started,
+    CASE WHEN e.kind='user' THEN (SELECT current_generation FROM agena_executions WHERE id=e.execution_id)
+         ELSE e.generation END AS execution_generation,
+    (SELECT a.response_entry_id FROM agena_attempts a WHERE a.execution_id=e.execution_id AND a.generation=e.generation) AS response_entry_id,
+    (SELECT a.phase FROM agena_attempts a WHERE a.execution_id=e.execution_id AND a.generation=
+        CASE WHEN e.kind='user' THEN (SELECT current_generation FROM agena_executions WHERE id=e.execution_id)
+             ELSE e.generation END) AS execution_phase,
+    (SELECT c.capture_state FROM agena_content_streams c WHERE c.id=e.content_id) AS content_state,
+    (SELECT r.phase FROM agena_rounds r JOIN agena_compaction_rounds cr ON cr.round_id=r.id WHERE r.id=e.round_id) AS compaction_phase,
+    EXISTS(SELECT 1 FROM agena_entries checkpoint WHERE checkpoint.round_id=e.round_id AND checkpoint.kind='compaction') AS compaction_committed";
+static HISTORY_ENTRY_SQL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "SELECT {ENTRY_COLUMNS} FROM agena_entries e WHERE e.id IN (SELECT value FROM json_each(?))"
+    )
+});
+static ENTRY_SQL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "SELECT {ENTRY_COLUMNS} FROM agena_entries e WHERE e.id=? AND EXISTS(
+            SELECT 1 FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id
+            JOIN agena_sessions owner ON owner.id=s.session_id
+            WHERE m.entry_id=e.id AND s.session_id=? AND owner.deleted_at_ms IS NULL
+              AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal
+        )"
+    )
+});
+
+pub(super) const SUMMARY_FIELDS: &str = "s.id,s.workspace_id,s.title,s.favorite,s.pinned,
+    s.metadata_version,s.membership_generation,s.created_at_ms,s.updated_at_ms,s.parent_session_id,
+    COALESCE(s.root_session_id,s.id) AS root_session_id,s.depth,s.relation_kind,s.agent_name,
+    s.agent_status,s.owner_bot_id,s.owner_surface,t.child_session_count,t.processing_state,
+    t.entry_count,t.user_message_count,t.queued_executions,t.running_executions,t.last_message_at_ms";
+static SUMMARY_SQL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "SELECT {SUMMARY_FIELDS} FROM agena_sessions s
+             JOIN agena_session_statistics t ON t.session_id=s.id
+             WHERE s.id=? AND s.deleted_at_ms IS NULL"
+    )
 });
 
 pub(super) fn summaries_sql(before: bool) -> String {
@@ -20,10 +55,30 @@ pub(super) fn summaries_sql(before: bool) -> String {
     } else {
         ""
     };
-    let extra = super::lifecycle::summary_fields();
     format!(
-        "SELECT {extra}s.id,s.workspace_id,s.title,s.favorite,s.pinned,s.metadata_version,s.membership_generation,s.created_at_ms,s.updated_at_ms,t.entry_count,t.user_message_count,t.queued_executions,t.running_executions,t.last_message_at_ms FROM agena_sessions s INDEXED BY idx_agena_sessions_workspace CROSS JOIN agena_session_statistics t ON t.session_id=s.id WHERE s.workspace_id=? AND s.deleted_at_ms IS NULL{boundary} ORDER BY s.updated_at_ms DESC,s.id DESC LIMIT ?"
+        "SELECT {SUMMARY_FIELDS} FROM agena_sessions s INDEXED BY idx_agena_sessions_workspace
+         CROSS JOIN agena_session_statistics t ON t.session_id=s.id
+         WHERE s.workspace_id=? AND s.deleted_at_ms IS NULL{boundary}
+         ORDER BY s.updated_at_ms DESC,s.id DESC LIMIT ?"
     )
+}
+
+pub(super) async fn latest_user_entry(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+) -> Result<Option<(i64, i64)>> {
+    sqlx::query_as(
+        "SELECT e.id,e.revision FROM agena_session_segments s
+         CROSS JOIN agena_segment_entries m ON m.segment_id=s.segment_id
+           AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal
+         CROSS JOIN agena_entries e ON e.id=m.entry_id
+         WHERE s.session_id=? AND s.user_message_count>0 AND e.kind='user'
+         ORDER BY s.sequence DESC,m.ordinal DESC LIMIT 1",
+    )
+    .bind(session.get())
+    .fetch_optional(connection)
+    .await
+    .map_err(sql_error)
 }
 
 pub(super) async fn summaries(
@@ -457,12 +512,11 @@ pub(super) async fn history(
     let mut entries = Vec::with_capacity(selected.len());
     if !selected.is_empty() {
         metrics::add(&diagnostics.0.history_queries, 1);
-        let rows =
-            sqlx::query("SELECT e.*,EXISTS(SELECT 1 FROM agena_attempts started WHERE started.execution_id=e.execution_id AND started.started_at_ms IS NOT NULL) AS execution_started,CASE WHEN e.kind='user' THEN (SELECT x.current_generation FROM agena_executions x WHERE x.id=e.execution_id) ELSE e.generation END AS execution_generation,(SELECT a.response_entry_id FROM agena_attempts a WHERE a.execution_id=e.execution_id AND a.generation=e.generation) AS response_entry_id,(SELECT a.phase FROM agena_attempts a WHERE a.execution_id=e.execution_id AND a.generation=CASE WHEN e.kind='user' THEN (SELECT x.current_generation FROM agena_executions x WHERE x.id=e.execution_id) ELSE e.generation END) AS execution_phase,(SELECT c.capture_state FROM agena_content_streams c WHERE c.id=e.content_id) AS content_state,(SELECT r.phase FROM agena_rounds r JOIN agena_compaction_rounds cr ON cr.round_id=r.id WHERE r.id=e.round_id) AS compaction_phase,EXISTS(SELECT 1 FROM agena_entries checkpoint WHERE checkpoint.round_id=e.round_id AND checkpoint.kind='compaction') AS compaction_committed FROM agena_entries e WHERE e.id IN (SELECT value FROM json_each(?))")
-                .bind(encode(&selected)?)
-                .fetch_all(&mut *transaction)
-                .await
-                .map_err(sql_error)?;
+        let rows = sqlx::query(&HISTORY_ENTRY_SQL)
+            .bind(encode(&selected)?)
+            .fetch_all(&mut *transaction)
+            .await
+            .map_err(sql_error)?;
         metrics::add(&diagnostics.0.history_entry_rows, rows.len());
         let mut by_id = std::collections::HashMap::with_capacity(rows.len());
         for row in rows {
@@ -498,8 +552,13 @@ pub(super) async fn entry(
     diagnostics: &KernelDiagnostics,
 ) -> Result<EntryView> {
     metrics::add(&diagnostics.0.detail_queries, 1);
-    let row=sqlx::query("SELECT e.*,EXISTS(SELECT 1 FROM agena_attempts started WHERE started.execution_id=e.execution_id AND started.started_at_ms IS NOT NULL) AS execution_started,CASE WHEN e.kind='user' THEN (SELECT x.current_generation FROM agena_executions x WHERE x.id=e.execution_id) ELSE e.generation END AS execution_generation,(SELECT x.response_entry_id FROM agena_attempts x WHERE x.execution_id=e.execution_id AND x.generation=e.generation) AS response_entry_id,(SELECT phase FROM agena_attempts phase_attempt WHERE phase_attempt.execution_id=e.execution_id AND phase_attempt.generation=CASE WHEN e.kind='user' THEN (SELECT current_generation FROM agena_executions phase_execution WHERE phase_execution.id=e.execution_id) ELSE e.generation END) AS execution_phase,(SELECT c.capture_state FROM agena_content_streams c WHERE c.id=e.content_id) AS content_state,(SELECT r.phase FROM agena_rounds r JOIN agena_compaction_rounds cr ON cr.round_id=r.id WHERE r.id=e.round_id) AS compaction_phase,EXISTS(SELECT 1 FROM agena_entries checkpoint WHERE checkpoint.round_id=e.round_id AND checkpoint.kind='compaction') AS compaction_committed FROM agena_entries e WHERE e.id=? AND EXISTS(SELECT 1 FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id JOIN agena_sessions owner ON owner.id=s.session_id WHERE m.entry_id=e.id AND s.session_id=? AND owner.deleted_at_ms IS NULL AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal)")
-        .bind(id.get()).bind(session.get()).fetch_optional(pool).await.map_err(sql_error)?.ok_or_else(||KernelError::NotFound("entry".into()))?;
+    let row = sqlx::query(&ENTRY_SQL)
+        .bind(id.get())
+        .bind(session.get())
+        .fetch_optional(pool)
+        .await
+        .map_err(sql_error)?
+        .ok_or_else(|| KernelError::NotFound("entry".into()))?;
     let mut entry = entry_row(&row)?;
     let mut connection = pool.acquire().await.map_err(storage)?;
     branches::apply_entries(&mut connection, session, std::slice::from_mut(&mut entry)).await?;
@@ -686,12 +745,26 @@ pub(super) async fn tool(
     metrics::add(&diagnostics.0.detail_queries, 1);
     let row=sqlx::query("SELECT t.round_id,t.execution_kind,t.phase,t.call_id,t.name,t.input_json,t.result_json,t.created_at_ms,t.finished_at_ms,e.id AS entry_id,e.revision FROM agena_tool_calls t JOIN agena_entries e ON e.tool_id=t.id AND e.kind='tool' WHERE t.id=? AND EXISTS(SELECT 1 FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id JOIN agena_sessions owner ON owner.id=s.session_id WHERE s.session_id=? AND owner.deleted_at_ms IS NULL AND m.entry_id=e.id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal)")
         .bind(tool.get()).bind(session.get()).fetch_optional(&mut *transaction).await.map_err(sql_error)?.ok_or_else(||KernelError::NotFound("tool".into()))?;
-    let entry: i64 = row.try_get("entry_id").map_err(storage)?;
+    let entry =
+        EntryId::try_from(row.try_get::<i64, _>("entry_id").map_err(storage)?).map_err(storage)?;
+    let facts = branches::entry_facts(&mut transaction, session, entry).await?;
     metrics::add(&diagnostics.0.detail_queries, 1);
-    let sources = sqlx::query(
-        "SELECT id,epoch,kind,activity_id,ordinal FROM agena_content_streams WHERE entry_id=? ORDER BY ordinal,id LIMIT 129",
-    )
-    .bind(entry)
+    let sources = if facts.is_some() {
+        sqlx::query(
+            "SELECT c.id,h.head_epoch AS epoch,c.kind,c.activity_id,c.ordinal
+             FROM agena_content_streams c
+             CROSS JOIN agena_branch_source_heads h ON h.session_id=? AND h.source_key=c.source_key
+             WHERE c.entry_id=? ORDER BY c.ordinal,c.id LIMIT 129",
+        )
+        .bind(session.get())
+        .bind(entry.get())
+    } else {
+        sqlx::query(
+            "SELECT id,epoch,kind,activity_id,ordinal FROM agena_content_streams
+             WHERE entry_id=? ORDER BY ordinal,id LIMIT 129",
+        )
+        .bind(entry.get())
+    }
     .fetch_all(&mut *transaction)
     .await
     .map_err(sql_error)?;
@@ -707,7 +780,7 @@ pub(super) async fn tool(
                     .map_err(storage)?
                     .parse()
                     .map_err(storage)?,
-                entry: EntryId::try_from(entry).map_err(storage)?,
+                entry,
                 epoch: source
                     .try_get::<String, _>("epoch")
                     .map_err(storage)?
@@ -726,7 +799,7 @@ pub(super) async fn tool(
         })
         .collect::<Result<Vec<_>>>()?;
     metrics::add(&diagnostics.0.detail_queries, 1);
-    let blobs = super::blobs::descriptors(&mut transaction, entry).await?;
+    let blobs = super::blobs::descriptors(&mut transaction, entry.get()).await?;
     let activities: Vec<String> = sqlx::query_scalar(
         "SELECT id FROM agena_background_activities WHERE tool_id=? ORDER BY id LIMIT 17",
     )
@@ -750,7 +823,7 @@ pub(super) async fn tool(
     let mut view = ToolView {
         created_at_ms: row.try_get("created_at_ms").map_err(storage)?,
         finished_at_ms: row.try_get("finished_at_ms").map_err(storage)?,
-        entry_id: EntryId::try_from(entry).map_err(storage)?,
+        entry_id: entry,
         execution_kind: decode(&encode(
             &row.try_get::<&str, _>("execution_kind").map_err(storage)?,
         )?)?,
@@ -785,14 +858,8 @@ pub(super) async fn tool(
             .collect::<Result<_>>()?,
         blobs,
     };
-    if let Some(facts) = branches::entry_facts(&mut transaction, session, view.entry_id).await? {
+    if let Some(facts) = facts {
         facts.apply_tool(&mut view);
-        for output in &mut view.outputs {
-            let head = branches::source(&mut transaction, session, output.id)
-                .await?
-                .ok_or_else(|| storage("branch tool output has no frozen head"))?;
-            output.epoch = head.epoch;
-        }
     }
     Ok(view)
 }
@@ -880,7 +947,7 @@ pub(super) async fn round(
         .bind(round.get()).bind(session.get()).fetch_optional(&mut *transaction).await.map_err(sql_error)?.ok_or_else(||KernelError::NotFound("provider round".into()))?;
     metrics::add(&diagnostics.0.detail_queries, 1);
     let inputs: Vec<i64> = sqlx::query_scalar(
-        "SELECT entry_id FROM agena_round_inputs WHERE round_id=? ORDER BY ordinal LIMIT 10001",
+        "SELECT entry_id FROM agena_round_inputs WHERE round_id=? ORDER BY start_ordinal,block_ordinal LIMIT 10001",
     )
     .bind(round.get())
     .fetch_all(&mut *transaction)
@@ -961,18 +1028,6 @@ mod user_body_tests {
     fn envelope_without_identity_still_round_trips() {
         let document = document("anonymous");
         let encoded = encode_user_body(&document, None, None).unwrap();
-        let decoded = decode_user_body(&encoded).unwrap();
-        assert_eq!(decoded.document, document);
-        assert_eq!(decoded.author, None);
-        assert_eq!(decoded.origin, None);
-    }
-
-    #[test]
-    fn legacy_bare_document_decodes_without_identity() {
-        let document = document("legacy");
-        // Pre-identity rows stored the document itself, which encodes as the
-        // transparent node array rather than an envelope object.
-        let encoded = encode(&document).unwrap();
         let decoded = decode_user_body(&encoded).unwrap();
         assert_eq!(decoded.document, document);
         assert_eq!(decoded.author, None);

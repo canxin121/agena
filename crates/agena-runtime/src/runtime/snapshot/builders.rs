@@ -220,7 +220,7 @@ pub(super) async fn build_model_catalog_services(
         &std::collections::BTreeMap<String, agena_runtime::ResolvedProviderConfig>,
         &Path,
         &PluginHost,
-        Option<Arc<DatabaseConnection>>,
+        Option<Arc<dyn agena_storage::ModelCatalogRepository>>,
     >,
     client_identity: &crate::ProviderClientIdentity,
 ) -> Result<
@@ -234,7 +234,7 @@ pub(super) async fn build_model_catalog_services(
         providers,
         config_path,
         plugins,
-        database,
+        store,
     } = inputs;
     let catalog_source_providers = Arc::new(
         crate::config::build_provider_registry_from_inputs(
@@ -246,7 +246,7 @@ pub(super) async fn build_model_catalog_services(
         )
         .await?,
     );
-    let model_catalog = agena_runtime::ModelCatalogService::compose_default_optional(database)
+    let model_catalog = agena_runtime::ModelCatalogService::compose_repository(store)
         .await
         .map_err(|error| crate::AppError::config_error(&error))?;
     Ok((catalog_source_providers, model_catalog))
@@ -359,11 +359,10 @@ pub(super) fn build_execution_principal(
 
 /// Build a process-wide cron scheduler backed by the active SessionManager.
 ///
-/// The scheduler persists to its own dedicated database; when no scheduler
-/// database is configured the scheduler degrades to its in-memory store.
+/// The scheduler persists to the instance database when configured.
 pub(super) fn build_scheduler(
     session_manager: Arc<SessionManager>,
-    scheduler_database: Option<Arc<DatabaseConnection>>,
+    scheduler_database: Option<crate::scheduler_composition::SchedulerDatabase>,
 ) -> Arc<agena_scheduler::Scheduler> {
     fn scheduler_skip(message: &'static str) -> agena_failure::Failure {
         agena_failure::Failure::new(
@@ -527,8 +526,8 @@ pub(super) fn build_scheduler(
     )
 }
 use super::{
-    Arc, ContextGovernor, DatabaseConnection, ExecutionPrincipal, Path, PluginHost,
-    ProviderRegistry, SessionManager, SessionProcessor, ToolExecutor,
+    Arc, ContextGovernor, ExecutionPrincipal, Path, PluginHost, ProviderRegistry, SessionManager,
+    SessionProcessor, ToolExecutor,
 };
 use agena_domain::{ContextPolicy, PermissionAction, PermissionDecision, ToolInvocation};
 use agena_tool::ToolPermissionCheck;

@@ -7,7 +7,7 @@ import { loadSidebarSessionPage } from './chat/sidebarPaging'
 import { sessionWasDeleted, subscribeSessionDeletions } from './chat/sessionMutationSync'
 import { isDocumentVisible, limitBackgroundReads } from '@/lib/backgroundReads'
 import { createRevalidator } from '@/lib/revalidation'
-import { conditionalJson } from '@/lib/conditionalJson'
+import { conditionalJsonObserved } from '@/lib/conditionalJson'
 import { apiJson } from '@/lib/api'
 import {
   captureResourceObservation,
@@ -51,6 +51,9 @@ type SidebarFooterKind = 'pinned' | 'favorite' | 'recent' | 'running'
 
 type WorkspaceStats = { total: number; roots: number; pinned: number; running: number; attention: number }
 type SidebarWorkspace = DirectoryEntry & { stats?: WorkspaceStats }
+const WORKSPACE_CATALOG_RESOURCE = 'workspaces:catalog'
+const WORKSPACE_CURSOR_LIMIT = 128
+const workspaceCursors = new Map<string, { cursor: string; token: string; scope: number; generation: number }>()
 
 function agenaSessionId(value: UnknownRecord | null | undefined): string {
   const raw = value?.id
@@ -84,15 +87,52 @@ export async function fetchAgenaWorkspaces(opts?: {
   signal?: AbortSignal
 }): Promise<{ entries: SidebarWorkspace[]; hasMore: boolean }> {
   const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit || SIDEBAR_DIRECTORIES_PAGE_SIZE)))
+  const page = Math.max(0, Math.floor(opts?.page || 0))
+  const search = opts?.search || ''
+  const cursorKey = (target: number) => JSON.stringify([limit, search, target])
+  const anchor = workspaceCursors.get(cursorKey(page))
+  const current = captureResourceObservation(WORKSPACE_CATALOG_RESOURCE)
   const params = new URLSearchParams({
     limit: String(limit),
-    offset: String(Math.max(0, opts?.page || 0) * limit),
     include_session_count: 'false',
   })
-  if (opts?.search) params.set('search', opts.search)
-  const payload = asRecord(
-    await conditionalJson<JsonValue>('workspaces:catalog', `/api/v1/workspaces?${params}`, { signal: opts?.signal }),
-  )
+  if (search) params.set('search', search)
+  const fetchPage = () =>
+    conditionalJsonObserved<JsonValue>(WORKSPACE_CATALOG_RESOURCE, `/api/v1/workspaces?${params}`, {
+      signal: opts?.signal,
+    })
+  const fetchOffsetPage = () => {
+    params.delete('cursor')
+    params.set('offset', String(page * limit))
+    return fetchPage()
+  }
+  let response
+  if (
+    anchor &&
+    anchor.scope === current.scope &&
+    anchor.generation === current.generation &&
+    canReuseResource(WORKSPACE_CATALOG_RESOURCE, anchor.token)
+  ) {
+    params.set('cursor', anchor.cursor)
+    response = await fetchPage()
+    // An unseen mutation can move this cursor's page boundary during the read.
+    if (response.observation.token !== anchor.token || !canReuseResource(WORKSPACE_CATALOG_RESOURCE, anchor.token)) {
+      response = await fetchOffsetPage()
+    }
+  } else {
+    response = await fetchOffsetPage()
+  }
+  const payload = asRecord(response.value)
+  const pagination = asRecord(payload?.page)
+  const hasMore = pagination?.has_more === true
+  const nextCursor = pagination?.next_cursor
+  const { token, scope, generation } = response.observation
+  if (hasMore && typeof nextCursor === 'string' && nextCursor && token) {
+    const nextKey = cursorKey(page + 1)
+    workspaceCursors.delete(nextKey)
+    workspaceCursors.set(nextKey, { cursor: nextCursor, token, scope, generation })
+    if (workspaceCursors.size > WORKSPACE_CURSOR_LIMIT) workspaceCursors.delete(workspaceCursors.keys().next().value!)
+  }
   const entries: SidebarWorkspace[] = []
   for (const item of Array.isArray(payload?.items) ? payload.items : []) {
     const ws = asRecord(item)
@@ -100,7 +140,7 @@ export async function fetchAgenaWorkspaces(opts?: {
     if (!id || typeof ws?.path !== 'string') continue
     entries.push({ id, path: ws.path, stats: asRecord(ws.session_stats) as WorkspaceStats | undefined })
   }
-  return { entries, hasMore: asRecord(payload?.page)?.has_more === true }
+  return { entries, hasMore }
 }
 
 function toSidebarRowFromAgenaSession(

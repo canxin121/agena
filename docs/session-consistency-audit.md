@@ -167,7 +167,6 @@ cd ../..
 
 cargo build --locked --offline -p agena --bin agena
 AGENA_TEST_BINARY=/absolute/path/to/current/agena \
-AGENA_TEST_PREVIOUS_BINARY=/absolute/path/to/previous/agena \
 PYTHONDONTWRITEBYTECODE=1 \
 python3 scripts/agena/tests/test_server_lifecycle.py SessionRestartTests -v
 

@@ -421,10 +421,13 @@ impl ConditionalRead {
     ) -> Result<Self, ServerError> {
         let bytes =
             serde_json::to_vec(value).map_err(|error| ServerError::internal_error(&error))?;
-        Ok(Self {
-            token: format!("{}:{}", state.server().id, blake3::hash(&bytes).to_hex()),
+        Ok(Self::for_bytes(state, &bytes))
+    }
+    pub(crate) fn for_bytes(state: &AppState, bytes: &[u8]) -> Self {
+        Self {
+            token: format!("{}:{}", state.server().id, blake3::hash(bytes).to_hex()),
             resource_revision: None,
-        })
+        }
     }
     pub(crate) fn with_resource_revision(mut self, observed: &Self) -> Self {
         self.resource_revision = Some(observed.token.clone());

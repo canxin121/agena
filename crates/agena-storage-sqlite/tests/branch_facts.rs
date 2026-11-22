@@ -5,6 +5,48 @@ use agena_storage::kernel::*;
 use agena_storage_sqlite::{SqliteKernel, open_kernel_runtime};
 
 #[tokio::test]
+async fn invalid_prompt_members_roll_back_the_round_insertion() {
+    let (runtime, root) = fixture().await;
+    let other = runtime
+        .ports
+        .sessions
+        .create_global(
+            RequestId::new(),
+            "Unrelated session".into(),
+            SessionConfiguration::default(),
+        )
+        .await
+        .unwrap()
+        .value
+        .id;
+    let foreign = send(&runtime, other).await.message_id;
+    let execution = send(&runtime, root).await;
+    let attempt = runtime
+        .ports
+        .executor
+        .claim_next(RequestId::new(), root, execution.id)
+        .await
+        .unwrap()
+        .value;
+
+    for invalid in [foreign, execution.message_id] {
+        let result = attempt
+            .begin_round(RequestId::new(), vec![execution.message_id, invalid])
+            .await;
+        assert!(matches!(result, Err(KernelError::Ownership)));
+    }
+    let round = attempt
+        .begin_round(RequestId::new(), vec![execution.message_id])
+        .await
+        .unwrap()
+        .value;
+    let frozen = round.prompt().await.unwrap();
+    assert_eq!(frozen.entries.len(), 1);
+    assert_eq!(frozen.entries[0].entry.id, execution.message_id);
+    runtime.ports.clone().shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn presenting_a_parent_question_does_not_change_the_frozen_branch_request() {
     let (runtime, root) = fixture().await;
     let execution = send(&runtime, root).await;
@@ -115,12 +157,76 @@ async fn presenting_a_parent_question_does_not_change_the_frozen_branch_request(
             .await
             .unwrap();
     }
+    let reply = agena_domain::UserInputReply {
+        request_id: interaction.get().to_string(),
+        kind: agena_domain::UserInputReplyKind::Submit,
+        answers: [("choice".into(), vec!["Yes".into()])].into(),
+        reason: None,
+    };
+    runtime
+        .ports
+        .sessions
+        .reply(
+            RequestId::new(),
+            root,
+            interaction,
+            InteractionDecision::Input(serde_json::to_string(&reply).unwrap()),
+            None,
+        )
+        .await
+        .unwrap();
     runtime
         .ports
         .sessions
         .cancel(RequestId::new(), root, execution.id)
         .await
         .unwrap();
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("interaction.jsonl");
+    let mut archive = tokio::fs::File::create(&path).await.unwrap();
+    let reader = &runtime.ports.reader;
+    reader.export_jsonl(root, &mut archive).await.unwrap();
+    drop(archive);
+    let workspace = runtime
+        .workspaces
+        .ensure_id("/branch-facts-tests")
+        .await
+        .unwrap();
+    let restored = runtime
+        .ports
+        .sessions
+        .import_archive(RequestId::new(), workspace, &path)
+        .await
+        .unwrap()
+        .value
+        .id;
+    let history = reader.history(restored, None, 32).await.unwrap();
+    let imported_interaction = history
+        .entries
+        .iter()
+        .find_map(|entry| match entry.payload {
+            EntryPayload::Interaction { interaction_id } => Some(interaction_id),
+            _ => None,
+        })
+        .unwrap();
+    assert_ne!(imported_interaction, interaction);
+    let imported = reader
+        .interaction(restored, imported_interaction)
+        .await
+        .unwrap();
+    let InteractionRequest::Input { request } = &imported.request else {
+        panic!("expected an imported input request");
+    };
+    assert_eq!(request.request_id, imported_interaction.get().to_string());
+    assert_eq!(request.session_id, Some(restored.get()));
+    let Some(InteractionDecision::Input(encoded)) = &imported.decision else {
+        panic!("expected the imported input reply");
+    };
+    let imported_reply: agena_domain::UserInputReply = serde_json::from_str(encoded).unwrap();
+    assert_eq!(imported_reply.request_id, request.request_id);
+    assert_eq!(imported_reply.answers, reply.answers);
+    drop((imported, history));
     runtime.ports.clone().shutdown().await.unwrap();
 }
 

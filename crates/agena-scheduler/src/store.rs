@@ -528,13 +528,19 @@ impl JobStore for InMemoryJobStore {
 #[derive(Clone)]
 pub struct SqliteJobStore {
     db: DatabaseConnection,
+    reader: DatabaseConnection,
     writer: Arc<tokio::sync::OnceCell<Arc<agena_async::WriteQueue>>>,
 }
 
 impl SqliteJobStore {
     pub fn new(db: DatabaseConnection) -> Self {
+        Self::with_reader(db.clone(), db)
+    }
+
+    pub fn with_reader(db: DatabaseConnection, reader: DatabaseConnection) -> Self {
         Self {
             db,
+            reader,
             writer: Arc::new(tokio::sync::OnceCell::new()),
         }
     }
@@ -640,7 +646,6 @@ impl SqliteJobStore {
             job.retry_at.map(|time| time.timestamp_millis()).into(),
             i64::from(job.paused).into(),
             i64::from(job.completed).into(),
-            crate::clock::now().timestamp_millis().into(),
         ]
     }
 
@@ -699,8 +704,8 @@ impl JobStore for SqliteJobStore {
         values.push(job.id.to_string().into());
         let _permit = self.write_permit().await?;
         let result = self.db.execute(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
-            "INSERT INTO agena_scheduler_jobs (job_json, next_fire_at_ms, retry_at_ms, paused, completed, updated_at_ms, id) \
-             VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING", values,
+            "INSERT INTO agena_scheduler_jobs (job_json, next_fire_at_ms, retry_at_ms, paused, completed, id) \
+             VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING", values,
         )).await?;
         if result.rows_affected() == 0 {
             return Err(SchedulerError::Conflict(job.id));
@@ -731,7 +736,7 @@ impl JobStore for SqliteJobStore {
     }
 
     async fn list(&self) -> SchedulerResult<Vec<JobSnapshot>> {
-        let rows = self.db.query_all(Statement::from_string(DatabaseBackend::Sqlite,
+        let rows = self.reader.query_all(Statement::from_string(DatabaseBackend::Sqlite,
             "SELECT job_json, delivery_key, claimed_at_ms FROM agena_scheduler_jobs ORDER BY next_fire_at_ms IS NULL, next_fire_at_ms, id",
         )).await?;
         Self::decode_rows(rows).await
@@ -742,21 +747,23 @@ impl JobStore for SqliteJobStore {
         session_id: Option<i64>,
         active_only: bool,
     ) -> SchedulerResult<Vec<JobSnapshot>> {
-        self.check_invalid_json().await?;
-        let mut sql = String::from(
-            "SELECT job_json, delivery_key, claimed_at_ms FROM agena_scheduler_jobs WHERE json_valid(job_json)",
-        );
+        let mut sql =
+            String::from("SELECT job_json, delivery_key, claimed_at_ms FROM agena_scheduler_jobs");
         let mut values: Vec<sea_orm::Value> = Vec::new();
         if let Some(id) = session_id {
-            sql.push_str(" AND json_extract(job_json, '$.owner_session_id') = ?");
+            sql.push_str(" WHERE owner_session_id = ?");
             values.push(id.into());
         }
         if active_only {
-            sql.push_str(" AND completed = 0");
+            sql.push_str(if session_id.is_some() {
+                " AND completed = 0"
+            } else {
+                " WHERE completed = 0"
+            });
         }
         sql.push_str(" ORDER BY next_fire_at_ms IS NULL, next_fire_at_ms, id");
         let rows = self
-            .db
+            .reader
             .query_all(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
                 sql,
@@ -771,14 +778,13 @@ impl JobStore for SqliteJobStore {
         workspace: &str,
         session: Option<i64>,
     ) -> SchedulerResult<Vec<JobSnapshot>> {
-        self.check_invalid_json().await?;
         let rows = self
-            .db
+            .reader
             .query_all(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
                 "SELECT job_json, delivery_key, claimed_at_ms FROM agena_scheduler_jobs \
-             WHERE json_valid(job_json) AND json_extract(job_json, '$.owner_workspace') = ? \
-               AND json_extract(job_json, '$.owner_session_id') IS ? \
+             WHERE owner_workspace = ? \
+               AND owner_session_id IS ? \
              ORDER BY next_fire_at_ms IS NULL, next_fire_at_ms, id",
                 [workspace.to_owned().into(), session.into()],
             ))
@@ -802,8 +808,8 @@ impl JobStore for SqliteJobStore {
         &self,
         session_id: i64,
     ) -> SchedulerResult<Vec<ScheduledJob>> {
-        let rows = self.db.query_all(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
-            "SELECT job_json, delivery_key, claimed_at_ms FROM agena_scheduler_jobs WHERE json_extract(job_json, '$.owner_session_id') = ? AND paused = 0 AND completed = 0 AND (next_fire_at_ms IS NOT NULL OR json_extract(job_json, '$.pending_delivery') IS NOT NULL) ORDER BY id",
+        let rows = self.reader.query_all(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
+            "SELECT job_json, delivery_key, claimed_at_ms FROM agena_scheduler_jobs WHERE owner_session_id = ? AND paused = 0 AND completed = 0 AND (next_fire_at_ms IS NOT NULL OR json_extract(job_json, '$.pending_delivery') IS NOT NULL) ORDER BY id",
             [session_id.into()],
         )).await?;
         Ok(Self::decode_rows(rows)
@@ -814,8 +820,8 @@ impl JobStore for SqliteJobStore {
     }
 
     async fn session_has_pending_jobs(&self, session_id: i64) -> SchedulerResult<bool> {
-        let row = self.db.query_one(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
-            "SELECT EXISTS(SELECT 1 FROM agena_scheduler_jobs WHERE json_extract(job_json, '$.owner_session_id') = ? AND paused = 0 AND completed = 0 AND (next_fire_at_ms IS NOT NULL OR json_extract(job_json, '$.pending_delivery') IS NOT NULL)) AS present",
+        let row = self.reader.query_one(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
+            "SELECT EXISTS(SELECT 1 FROM agena_scheduler_jobs WHERE owner_session_id = ? AND paused = 0 AND completed = 0 AND (next_fire_at_ms IS NOT NULL OR json_extract(job_json, '$.pending_delivery') IS NOT NULL)) AS present",
             [session_id.into()],
         )).await?;
         Ok(row
@@ -825,7 +831,7 @@ impl JobStore for SqliteJobStore {
     }
 
     async fn get(&self, id: Uuid) -> SchedulerResult<Option<JobSnapshot>> {
-        let row = self.db.query_one(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
+        let row = self.reader.query_one(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
             "SELECT job_json, delivery_key, claimed_at_ms FROM agena_scheduler_jobs WHERE id = ?", [id.to_string().into()],
         )).await?;
         Ok(Self::decode_rows(row.into_iter().collect()).await?.pop())
@@ -833,7 +839,7 @@ impl JobStore for SqliteJobStore {
 
     async fn list_due(&self, now_ms: i64) -> SchedulerResult<Vec<JobSnapshot>> {
         let rows = self
-            .db
+            .reader
             .query_all(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
                 "SELECT job_json, delivery_key, claimed_at_ms FROM agena_scheduler_jobs \
@@ -857,7 +863,7 @@ impl JobStore for SqliteJobStore {
             expected.claim_key.clone().into(),
         ]);
         self.update_with_history(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
-            "UPDATE agena_scheduler_jobs SET job_json = ?, next_fire_at_ms = ?, retry_at_ms = ?, paused = ?, completed = ?, updated_at_ms = ? \
+            "UPDATE agena_scheduler_jobs SET job_json = ?, next_fire_at_ms = ?, retry_at_ms = ?, paused = ?, completed = ? \
              WHERE id = ? AND job_json = ? AND delivery_key IS ?", values,
         ), expected, &job).await
     }
@@ -881,7 +887,7 @@ impl JobStore for SqliteJobStore {
         ]);
         let _permit = self.write_permit().await?;
         Ok(self.db.execute(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
-            "UPDATE agena_scheduler_jobs SET job_json = ?, next_fire_at_ms = ?, retry_at_ms = ?, paused = ?, completed = ?, updated_at_ms = ?, delivery_key = ?, claimed_at_ms = ? \
+            "UPDATE agena_scheduler_jobs SET job_json = ?, next_fire_at_ms = ?, retry_at_ms = ?, paused = ?, completed = ?, delivery_key = ?, claimed_at_ms = ? \
              WHERE id = ? AND job_json = ? AND delivery_key IS ? \
                AND (delivery_key IS NULL OR claimed_at_ms IS NULL OR claimed_at_ms <= ?)", values,
         )).await?.rows_affected() > 0)
@@ -926,7 +932,7 @@ impl JobStore for SqliteJobStore {
             lease_cutoff(now_ms).into(),
         ]);
         self.update_with_history(Statement::from_sql_and_values(DatabaseBackend::Sqlite,
-            "UPDATE agena_scheduler_jobs SET job_json = ?, next_fire_at_ms = ?, retry_at_ms = ?, paused = ?, completed = ?, updated_at_ms = ?, delivery_key = NULL, claimed_at_ms = NULL \
+            "UPDATE agena_scheduler_jobs SET job_json = ?, next_fire_at_ms = ?, retry_at_ms = ?, paused = ?, completed = ?, delivery_key = NULL, claimed_at_ms = NULL \
              WHERE id = ? AND job_json = ? AND delivery_key = ? AND claimed_at_ms > ?", values,
         ), expected, &job).await
     }
@@ -958,7 +964,7 @@ impl JobStore for SqliteJobStore {
             )
         };
         let rows = self
-            .db
+            .reader
             .query_all(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
                 sql,

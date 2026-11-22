@@ -1,6 +1,5 @@
 use agena_assistant::*;
 use agena_storage_sqlite::{SqliteIntegrationRepository, open_kernel_runtime};
-use sea_orm::ConnectionTrait;
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, path::PathBuf};
 
@@ -337,6 +336,10 @@ async fn recorded_participants_require_verified_interactions_and_keep_room_ident
     search.search = Some("ALI".into());
     let result = repo.channel_participants(b.id, search).await.unwrap();
     assert_eq!(result.participants, page.participants[..1]);
+    let mut after = group_participants();
+    after.after = Some("alice".into());
+    let result = repo.channel_participants(b.id, after).await.unwrap();
+    assert_eq!(result.participants, page.participants[1..]);
     let news = repo
         .channel_participants(
             b.id,
@@ -356,61 +359,6 @@ async fn recorded_participants_require_verified_interactions_and_keep_room_ident
     assert!(repo.events(b.id).await.unwrap().iter().any(|row| {
         row.event.actor == "unlisted" && row.note.as_deref() == Some("member_not_authorized")
     }));
-}
-
-#[tokio::test]
-async fn upgrading_an_existing_database_backfills_verified_participants() {
-    let directory = tempfile::tempdir().unwrap();
-    let url = format!(
-        "sqlite://{}?mode=rwc",
-        directory.path().join("agena.db").display()
-    );
-    let id = {
-        let db = open_kernel_runtime(&url).await.unwrap();
-        let repo = SqliteIntegrationRepository::new(db.database.clone());
-        let b = enabled(&repo).await;
-        let mut passive = event("passive", "unlisted-passive");
-        passive.channel.as_mut().unwrap().addressed_to_bot = false;
-        let mut unknown = event("unknown", "unlisted");
-        unknown.actor_display_name = Some("New participant".into());
-        repo.accept_batch(
-            b.id,
-            b.revision,
-            AdapterBatch {
-                events: vec![event("known", "alice"), unknown, passive],
-                cursor: json!(1),
-                retry_after_seconds: None,
-            },
-            3000,
-        )
-        .await
-        .unwrap();
-        db.database
-            .execute_unprepared("DROP TABLE agena_channel_participants")
-            .await
-            .unwrap();
-        db.ports.clone().shutdown().await.unwrap();
-        b.id
-    };
-    let db = open_kernel_runtime(&url).await.unwrap();
-    let repo = SqliteIntegrationRepository::new(db.database.clone());
-    let page = repo
-        .channel_participants(id, group_participants())
-        .await
-        .unwrap();
-    assert_eq!(
-        page.participants
-            .iter()
-            .map(|member| member.actor.as_str())
-            .collect::<Vec<_>>(),
-        ["alice", "unlisted"]
-    );
-    assert_eq!(
-        page.participants[1].display_name.as_deref(),
-        Some("New participant")
-    );
-    assert_eq!(repo.binding(id).await.unwrap().cursor, json!(1));
-    assert!(repo.channel_audit(id).await.unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -890,6 +838,277 @@ async fn permanent_channel_admits_initial_and_future_events_and_delivers_without
 }
 
 #[tokio::test]
+async fn channel_attention_readiness_tracks_the_interaction_and_delivery_receipt() {
+    use agena_domain::{ComposerDocument, ComposerNode};
+    use agena_storage::kernel::*;
+
+    let runtime = open_kernel_runtime("sqlite::memory:").await.unwrap();
+    let repo = SqliteIntegrationRepository::new(runtime.database.clone());
+    let binding = enabled(&repo).await;
+    let session = runtime
+        .ports
+        .sessions
+        .create_global(
+            RequestId::new(),
+            "Channel attention".into(),
+            Default::default(),
+        )
+        .await
+        .unwrap()
+        .value
+        .id;
+    let execution = runtime
+        .ports
+        .sessions
+        .send(
+            RequestId::new(),
+            session,
+            ComposerDocument(vec![ComposerNode::Text {
+                text: "Ask for access".into(),
+            }]),
+        )
+        .await
+        .unwrap()
+        .value;
+    let attempt = runtime
+        .ports
+        .executor
+        .claim_next(RequestId::new(), session, execution.id)
+        .await
+        .unwrap()
+        .value;
+    let round = attempt
+        .begin_current_round(RequestId::new())
+        .await
+        .unwrap()
+        .value;
+    let tool = round
+        .begin_tool(
+            RequestId::new(),
+            ToolStart {
+                call_id: "attention".into(),
+                name: "ask".into(),
+                input: json!({}),
+            },
+        )
+        .await
+        .unwrap()
+        .value;
+    let interaction = tool
+        .request_interaction(
+            RequestId::new(),
+            InteractionRequest::Permission {
+                action_key: "workspace.read".into(),
+                description: "Read workspace files".into(),
+            },
+        )
+        .await
+        .unwrap()
+        .value;
+
+    let ready = || async {
+        repo.channel_sessions_with_output(binding.id)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|record| record.session_id)
+            .collect::<Vec<_>>()
+    };
+    assert!(ready().await.is_empty());
+    let record = ChannelSessionRecord {
+        binding_id: binding.id,
+        scope_key: "attention".into(),
+        session_id: session.get(),
+        authority: authority(&binding),
+        created_at_ms: 1500,
+    };
+    repo.save_channel_session(record.clone()).await.unwrap();
+    assert_eq!(ready().await, [session.get()]);
+    assert_eq!(
+        repo.unnotified_channel_interactions(binding.id, session.get())
+            .await
+            .unwrap(),
+        [interaction.get()]
+    );
+    let delivery_id = format!("{}:attention:{}", binding.id, interaction.get());
+    repo.enqueue_delivery(IntegrationDelivery {
+        id: delivery_id.clone(),
+        binding_id: binding.id,
+        text: "Input required".into(),
+        state: "queued".into(),
+        attempts: 0,
+        next_attempt_ms: 0,
+        remote_id: None,
+        created_at_ms: 1600,
+        error: None,
+        route: Some(ChannelOutputRoute::from_authority(
+            &record.authority,
+            session.get(),
+        )),
+    })
+    .await
+    .unwrap();
+    assert!(ready().await.is_empty());
+    assert!(
+        repo.unnotified_channel_interactions(binding.id, session.get())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    sea_orm::sqlx::query("DELETE FROM agena_integration_outbox WHERE id=?")
+        .bind(delivery_id)
+        .execute(runtime.database.get_sqlite_connection_pool())
+        .await
+        .unwrap();
+    assert_eq!(ready().await, [session.get()]);
+    runtime
+        .ports
+        .sessions
+        .reply(
+            RequestId::new(),
+            session,
+            interaction,
+            InteractionDecision::Cancel,
+            None,
+        )
+        .await
+        .unwrap();
+    assert!(ready().await.is_empty());
+}
+
+#[tokio::test]
+async fn pending_channel_output_survives_reopen_and_rejects_a_superseded_generation() {
+    use agena_domain::{ComposerDocument, ComposerNode};
+    use agena_storage::kernel::{RequestId, SessionConfiguration};
+    let directory = tempfile::tempdir().unwrap();
+    let url = format!(
+        "sqlite://{}?mode=rwc",
+        directory.path().join("channel.db").display()
+    );
+    let runtime = open_kernel_runtime(&url).await.unwrap();
+    let repo = SqliteIntegrationRepository::new(runtime.database.clone());
+    let binding = enabled(&repo).await;
+    let session = runtime
+        .ports
+        .sessions
+        .create_global(
+            RequestId::new(),
+            "Channel output".into(),
+            SessionConfiguration::default(),
+        )
+        .await
+        .unwrap()
+        .value
+        .id;
+    let record = ChannelSessionRecord {
+        binding_id: binding.id,
+        scope_key: "outbox".into(),
+        session_id: session.get(),
+        authority: authority(&binding),
+        created_at_ms: 1500,
+    };
+    repo.save_channel_session(record.clone()).await.unwrap();
+    assert!(
+        repo.channel_sessions_with_output(binding.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let execution = runtime
+        .ports
+        .sessions
+        .send(
+            RequestId::new(),
+            session,
+            ComposerDocument(vec![ComposerNode::Text {
+                text: "Retry this input".into(),
+            }]),
+        )
+        .await
+        .unwrap()
+        .value;
+    runtime
+        .ports
+        .sessions
+        .cancel_queued(RequestId::new(), session, execution.id)
+        .await
+        .unwrap();
+    runtime.ports.clone().shutdown().await.unwrap();
+    drop((repo, runtime));
+
+    let runtime = open_kernel_runtime(&url).await.unwrap();
+    let repo = SqliteIntegrationRepository::new(runtime.database.clone());
+    assert_eq!(
+        repo.channel_sessions_with_output(binding.id)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    let pending = repo
+        .unexported_executions(binding.id, session.get())
+        .await
+        .unwrap();
+    assert_eq!(pending, [(execution.id.to_string(), 1, "cancelled".into())]);
+    let retry = runtime
+        .ports
+        .sessions
+        .retry(RequestId::new(), session, execution.id)
+        .await
+        .unwrap()
+        .value;
+    let delivery = |generation| IntegrationDelivery {
+        id: format!("{}:{}:{generation}", binding.id, execution.id),
+        binding_id: binding.id,
+        text: "queued reply".into(),
+        state: "queued".into(),
+        attempts: 0,
+        next_attempt_ms: 0,
+        remote_id: None,
+        created_at_ms: 1600,
+        error: None,
+        route: Some(ChannelOutputRoute::from_authority(
+            &record.authority,
+            session.get(),
+        )),
+    };
+    repo.enqueue_execution_delivery(delivery(1)).await.unwrap();
+    assert!(repo.deliveries(binding.id).await.unwrap().is_empty());
+    runtime
+        .ports
+        .sessions
+        .cancel_queued(RequestId::new(), session, retry.id)
+        .await
+        .unwrap();
+    let pending = repo
+        .unexported_executions(binding.id, session.get())
+        .await
+        .unwrap();
+    assert_eq!(
+        pending,
+        [(
+            retry.id.to_string(),
+            retry.generation.get(),
+            "cancelled".into()
+        )]
+    );
+    for _ in 0..2 {
+        repo.enqueue_execution_delivery(delivery(retry.generation.get()))
+            .await
+            .unwrap();
+    }
+    assert!(
+        repo.channel_sessions_with_output(binding.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(repo.deliveries(binding.id).await.unwrap().len(), 1);
+    runtime.ports.clone().shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn compatible_review_keeps_session_and_suppresses_only_pre_review_output() {
     use agena_domain::{ComposerDocument, ComposerNode};
     use agena_storage::kernel::{RequestId, SessionConfiguration};
@@ -934,6 +1153,19 @@ async fn compatible_review_keeps_session_and_suppresses_only_pre_review_output()
         created_at_ms: 1500,
     };
     repo.save_channel_session(previous.clone()).await.unwrap();
+    let queued = db
+        .ports
+        .sessions
+        .send(
+            RequestId::new(),
+            session,
+            ComposerDocument(vec![ComposerNode::Text {
+                text: "Queued before review".into(),
+            }]),
+        )
+        .await
+        .unwrap()
+        .value;
     repo.enqueue_delivery(IntegrationDelivery {
         id: "old-queued-reply".into(),
         binding_id: binding.id,
@@ -1006,6 +1238,11 @@ async fn compatible_review_keeps_session_and_suppresses_only_pre_review_output()
         .unwrap();
     assert_eq!(restored.session_id, session.get());
     assert_eq!(restored.created_at_ms, previous.created_at_ms);
+    db.ports
+        .sessions
+        .cancel_queued(RequestId::new(), session, queued.id)
+        .await
+        .unwrap();
     assert!(
         repo.unexported_executions(reviewed.id, session.get())
             .await
@@ -1013,7 +1250,7 @@ async fn compatible_review_keeps_session_and_suppresses_only_pre_review_output()
             .is_empty()
     );
     let deliveries = repo.deliveries(reviewed.id).await.unwrap();
-    assert_eq!(deliveries.len(), 2);
+    assert_eq!(deliveries.len(), 3);
     assert!(
         deliveries
             .iter()

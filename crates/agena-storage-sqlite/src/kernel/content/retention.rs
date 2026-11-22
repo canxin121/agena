@@ -22,7 +22,7 @@ pub(in crate::kernel) async fn prune(
     if owner != Some(session.get()) {
         return Err(KernelError::Ownership);
     }
-    let mut head = stored_head(connection, content).await?;
+    let (source_key, mut head) = stored_head_with_key(connection, content).await?;
     let checkpoint: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agena_entries e JOIN agena_prompt_windows w ON w.checkpoint_entry_id=e.id WHERE e.content_id=?)")
         .bind(content.to_string()).fetch_one(&mut *connection).await.map_err(sql_error)?;
     if checkpoint && before > head.retained_start {
@@ -43,8 +43,8 @@ pub(in crate::kernel) async fn prune(
         // A declared prefix gap must not leave a retained suffix starting in
         // the middle of a UTF-8 scalar. Only one indexed immutable block is
         // loaded; canonical byte positions after that scalar stay unchanged.
-        let row=sqlx::query("SELECT logical_start,logical_end,codec,digest,body FROM agena_content_blocks WHERE content_id=? AND logical_start<=? ORDER BY logical_start DESC LIMIT 1")
-            .bind(content.to_string()).bind(floor as i64).fetch_optional(&mut *connection).await.map_err(sql_error)?.ok_or_else(||storage("retention boundary has no text block"))?;
+        let row=sqlx::query("SELECT logical_start,logical_end,codec,digest,body_bytes,body FROM agena_content_blocks WHERE source_key=? AND logical_start<=? ORDER BY logical_start DESC LIMIT 1")
+            .bind(source_key).bind(floor as i64).fetch_optional(&mut *connection).await.map_err(sql_error)?.ok_or_else(||storage("retention boundary has no text block"))?;
         if row.try_get::<&str, _>("codec").map_err(storage)? != "utf8" {
             return Err(storage("retention text codec mismatch"));
         }
@@ -56,7 +56,7 @@ pub(in crate::kernel) async fn prune(
         let block = ImmutableTextBlock::from_stored(
             start,
             end,
-            row.try_get("body").map_err(storage)?,
+            block_body(connection, source_key, start as i64, &row).await?,
             digest
                 .try_into()
                 .map_err(|_| storage("invalid text digest"))?,
@@ -77,14 +77,15 @@ pub(in crate::kernel) async fn prune(
         ContentKind::Structured | ContentKind::Terminal | ContentKind::Document
     ) && floor > head.retained_start
     {
-        let checkpoint=sqlx::query("SELECT logical_sequence,block_start FROM agena_content_checkpoints WHERE content_id=? AND logical_sequence<=? ORDER BY logical_sequence DESC LIMIT 1")
-            .bind(content.to_string()).bind(floor.saturating_add(1).min(head.committed) as i64).fetch_optional(&mut *connection).await.map_err(sql_error)?
+        let checkpoint=sqlx::query("SELECT logical_sequence,block_start FROM agena_content_checkpoints WHERE source_key=? AND logical_sequence<=? ORDER BY logical_sequence DESC LIMIT 1")
+            .bind(source_key).bind(floor.saturating_add(1).min(head.committed) as i64).fetch_optional(&mut *connection).await.map_err(sql_error)?
             .ok_or_else(||storage("cannot retain a projection without a valid checkpoint"))?;
         let sequence = checkpoint
             .try_get::<i64, _>("logical_sequence")
             .map_err(storage)? as u64;
         let block = events::stored_block(
             connection,
+            source_key,
             &head,
             checkpoint.try_get("block_start").map_err(storage)?,
         )
@@ -114,14 +115,14 @@ pub(in crate::kernel) async fn prune(
         floor = (sequence - 1).max(head.retained_start);
     }
     if floor > head.retained_start {
-        sqlx::query("UPDATE agena_content_streams SET retained_start=? WHERE id=?")
+        sqlx::query("UPDATE agena_content_streams SET retained_start=? WHERE source_key=?")
             .bind(floor as i64)
-            .bind(content.to_string())
+            .bind(source_key)
             .execute(&mut *connection)
             .await
             .map_err(sql_error)?;
-        sqlx::query("INSERT INTO agena_content_gaps (content_id,logical_start,logical_end,reason) VALUES (?,0,?,'retention') ON CONFLICT(content_id,logical_start) DO UPDATE SET logical_end=MAX(logical_end,excluded.logical_end),reason=excluded.reason")
-            .bind(content.to_string()).bind(floor as i64).execute(&mut *connection).await.map_err(sql_error)?;
+        sqlx::query("INSERT INTO agena_content_gaps (source_key,logical_start,logical_end,reason) VALUES (?,0,?,'retention') ON CONFLICT(source_key,logical_start) DO UPDATE SET logical_end=MAX(logical_end,excluded.logical_end),reason=excluded.reason")
+            .bind(source_key).bind(floor as i64).execute(&mut *connection).await.map_err(sql_error)?;
         sqlx::query("UPDATE agena_entries SET revision=revision+1 WHERE id=?")
             .bind(head.entry.get())
             .execute(&mut *connection)
@@ -129,12 +130,12 @@ pub(in crate::kernel) async fn prune(
             .map_err(sql_error)?;
         head.retained_start = floor;
     }
-    let rows=sqlx::query("SELECT logical_start,length(body) AS bytes FROM agena_content_blocks WHERE content_id=? AND logical_start<? AND logical_end<=? ORDER BY logical_start LIMIT 8")
-        .bind(content.to_string()).bind(floor as i64).bind(floor as i64).fetch_all(&mut *connection).await.map_err(sql_error)?;
+    let rows=sqlx::query("SELECT logical_start,body_bytes FROM agena_content_blocks WHERE source_key=? AND logical_start<? AND logical_end<=? ORDER BY logical_start LIMIT 8")
+        .bind(source_key).bind(floor as i64).bind(floor as i64).fetch_all(&mut *connection).await.map_err(sql_error)?;
     let mut starts = Vec::new();
     let mut bytes = 0;
     for row in rows {
-        let size = row.try_get::<i64, _>("bytes").map_err(storage)? as usize;
+        let size = row.try_get::<i64, _>("body_bytes").map_err(storage)? as usize;
         // Preserve the existing allowance for one large atomic terminal block.
         if !starts.is_empty() && bytes + size > MAX_CHECKPOINT_BYTES {
             break;
@@ -144,13 +145,13 @@ pub(in crate::kernel) async fn prune(
     }
     if !starts.is_empty() {
         let keys = encode(&starts)?;
-        sqlx::query("DELETE FROM agena_content_checkpoints WHERE content_id=? AND block_start IN (SELECT value FROM json_each(?))")
-            .bind(content.to_string()).bind(&keys).execute(&mut *connection).await.map_err(sql_error)?;
-        sqlx::query("DELETE FROM agena_content_blocks WHERE content_id=? AND logical_start IN (SELECT value FROM json_each(?))")
-            .bind(content.to_string()).bind(keys).execute(&mut *connection).await.map_err(sql_error)?;
+        sqlx::query("DELETE FROM agena_content_checkpoints WHERE source_key=? AND block_start IN (SELECT value FROM json_each(?))")
+            .bind(source_key).bind(&keys).execute(&mut *connection).await.map_err(sql_error)?;
+        sqlx::query("DELETE FROM agena_content_blocks WHERE source_key=? AND logical_start IN (SELECT value FROM json_each(?))")
+            .bind(source_key).bind(keys).execute(&mut *connection).await.map_err(sql_error)?;
     }
-    let pending_reclamation=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agena_content_blocks WHERE content_id=? AND logical_start<? AND logical_end<=?)")
-        .bind(content.to_string()).bind(floor as i64).bind(floor as i64).fetch_one(connection).await.map_err(sql_error)?;
+    let pending_reclamation=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agena_content_blocks WHERE source_key=? AND logical_start<? AND logical_end<=?)")
+        .bind(source_key).bind(floor as i64).bind(floor as i64).fetch_one(connection).await.map_err(sql_error)?;
     Ok(ContentRetention {
         stream: head,
         blocks_removed: starts.len() as u32,

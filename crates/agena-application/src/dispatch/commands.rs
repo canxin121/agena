@@ -155,16 +155,9 @@ pub async fn dispatch_command(
                 )
                 .await?,
         )),
-        Command::ListSessionTree(ListSessionTreeParams { root_id }) => {
-            let summaries = state
-                .session_execution_services()?
-                .queries
-                .list_session_tree(root_id)
-                .await
-                .map_err(|error| ApplicationError::from_failure(*error.failure))?;
-            let resources = state.session_resources_from_summaries(summaries).await?;
-            Ok(CommandResult::SessionTree(resources))
-        }
+        Command::ListSessionTree(ListSessionTreeParams { root_id }) => Ok(
+            CommandResult::SessionTree(state.session_tree(root_id).await?),
+        ),
         Command::ReplyPermission(ReplyPermissionParams {
             session_id,
             options,

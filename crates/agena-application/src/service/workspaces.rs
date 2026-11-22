@@ -36,39 +36,31 @@ impl ApplicationService {
             .await
             .map_err(|error| ApplicationError::internal_error(&error))?;
         let (slice, has_more) = trim_page(rows, limit)?;
-        let workspace_ids = slice.iter().map(|row| row.id).collect::<Vec<_>>();
-        let session_counts = if query.include_session_count {
-            self.workspace_session_counts(&workspace_ids).await?
+        let stats = if query.include_session_count && !slice.is_empty() {
+            let workspace_ids = slice.iter().map(|row| row.id).collect::<Vec<_>>();
+            Some(
+                self.session_kernel
+                    .reader
+                    .workspace_statistics(&workspace_ids)
+                    .await
+                    .map_err(crate::kernel_error)?,
+            )
         } else {
-            HashMap::new()
-        };
-        let stats = if query.include_session_count {
-            self.session_kernel
-                .reader
-                .workspace_statistics(&workspace_ids)
-                .await
-                .map_err(crate::kernel_error)?
-                .iter()
-                .map(|(id, stats)| (*id, *stats))
-                .collect::<std::collections::BTreeMap<_, _>>()
-        } else {
-            std::collections::BTreeMap::new()
+            None
         };
         let items = slice
             .iter()
             .map(|row| {
-                let mut resource =
-                    workspace_record_resource(row, session_counts.get(&row.id).copied())?;
+                let stats = stats.as_ref().and_then(|stats| stats.get(&row.id));
+                let mut resource = workspace_record_resource(row, stats.map(|stats| stats.total))?;
                 resource.session_stats =
-                    stats
-                        .get(&row.id)
-                        .map(|stats| agena_api::resource::WorkspaceSessionStats {
-                            total: stats.total,
-                            roots: stats.roots,
-                            pinned: stats.pinned,
-                            running: stats.running,
-                            attention: stats.attention,
-                        });
+                    stats.map(|stats| agena_api::resource::WorkspaceSessionStats {
+                        total: stats.total,
+                        roots: stats.roots,
+                        pinned: stats.pinned,
+                        running: stats.running,
+                        attention: stats.attention,
+                    });
                 Ok(resource)
             })
             .collect::<ApplicationResult<Vec<_>>>()?;
@@ -1491,12 +1483,12 @@ fn is_windows_drive_root(path: &str) -> bool {
 }
 
 use super::{
-    ApplicationError, ApplicationResult, ApplicationService, HashMap, PageOrder, PaginatedResponse,
-    Path, PathBuf, WorkspaceCursor, WorkspaceFileDownloadQuery, WorkspaceFileKind,
-    WorkspaceFileNode, WorkspaceFileTreeQuery, WorkspaceFileTreeResource,
-    WorkspaceFileUploadRequest, WorkspaceFileUploadResource, WorkspaceListQuery,
-    WorkspacePathRequest, WorkspaceResolveRequest, WorkspaceResource, build_page, decode_cursor,
-    fs, io, non_empty, normalize_resource_limit, timestamp_millis_to_utc, trim_page,
+    ApplicationError, ApplicationResult, ApplicationService, PageOrder, PaginatedResponse, Path,
+    PathBuf, WorkspaceCursor, WorkspaceFileDownloadQuery, WorkspaceFileKind, WorkspaceFileNode,
+    WorkspaceFileTreeQuery, WorkspaceFileTreeResource, WorkspaceFileUploadRequest,
+    WorkspaceFileUploadResource, WorkspaceListQuery, WorkspacePathRequest, WorkspaceResolveRequest,
+    WorkspaceResource, build_page, decode_cursor, fs, io, non_empty, normalize_resource_limit,
+    timestamp_millis_to_utc, trim_page,
 };
 
 #[cfg(test)]

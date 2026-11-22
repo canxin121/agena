@@ -2046,7 +2046,7 @@ impl SessionManager {
         // aggregate. User instructions remain present through the checkpoint.
         let history = self.kernel().reader.history(session, None, 64).await.ok()?;
         let mut transcript = String::new();
-        for (reverse_index, entry) in history.entries.iter().rev().enumerate() {
+        for entry in history.entries.iter().rev() {
             match &entry.payload {
                 EntryPayload::User {
                     document,
@@ -2096,25 +2096,6 @@ impl SessionManager {
                             "execution failure notice could not be decoded; omitting it from permission context"
                         ),
                         _ => {}
-                    }
-                    if matches!(&decoded, DecodedNotice::LegacyStopHookFollowup(_)) {
-                        let original_index =
-                            history.entries.len().saturating_sub(reverse_index + 1);
-                        let paired = original_index
-                            .checked_sub(1)
-                            .and_then(|index| history.entries.get(index))
-                            .is_some_and(|previous| {
-                                let EntryPayload::Notice { text } = &previous.payload else {
-                                    return false;
-                                };
-                                agena_runtime_contracts::part_content::decode_legacy_hook_observation(
-                                    text,
-                                )
-                                .is_some()
-                            });
-                        if paired {
-                            continue;
-                        }
                     }
                     let Some(message) = decoded.model_text() else {
                         continue;

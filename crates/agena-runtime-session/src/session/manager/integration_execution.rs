@@ -95,27 +95,10 @@ impl SessionManager {
     pub async fn integration_execution_result(
         &self,
         id: i64,
-        execution: &str,
+        execution: ExecutionId,
+        generation: AttemptGeneration,
     ) -> Result<Option<String>, AppError> {
-        let execution = execution
-            .parse()
-            .map_err(|e| AppError::Config(format!("invalid integration execution: {e}")))?;
-        self.final_text_for(session_id(id)?, Some(execution), 24 * 1024)
+        self.final_execution_text(session_id(id)?, execution, Some(generation), 24 * 1024)
             .await
-    }
-
-    pub async fn integration_execution_questions(
-        &self,
-        id: i64,
-    ) -> Result<Vec<InteractionView>, AppError> {
-        Ok(self
-            .kernel()
-            .reader
-            .control_snapshot(session_id(id)?, 32)
-            .await
-            .map_err(kernel_error)?
-            .pending_interactions
-            .interactions
-            .clone())
     }
 }

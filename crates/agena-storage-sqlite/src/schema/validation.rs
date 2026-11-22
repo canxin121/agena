@@ -19,10 +19,14 @@ pub(crate) fn declaration(sql: &str) -> Result<Declaration<'_>, DbErr> {
         ("CREATE TABLE IF NOT EXISTS ", "table"),
         ("CREATE INDEX IF NOT EXISTS ", "index"),
         ("CREATE UNIQUE INDEX IF NOT EXISTS ", "index"),
+        ("CREATE VIEW IF NOT EXISTS ", "view"),
         ("CREATE TRIGGER IF NOT EXISTS ", "trigger"),
     ] {
         if let Some(rest) = sql.strip_prefix(prefix) {
-            let name = rest.split([' ', '(']).next().unwrap_or_default();
+            let name = rest
+                .split(|character: char| character.is_ascii_whitespace() || character == '(')
+                .next()
+                .unwrap_or_default();
             if !name.is_empty()
                 && name
                     .bytes()

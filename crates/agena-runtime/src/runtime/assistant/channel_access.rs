@@ -430,9 +430,7 @@ impl AssistantRuntime {
                 "history review applies to channel connections only",
             ));
         }
-        let identity =
-            self.provider_identity_check(&binding.spec.provider, &binding.provider_fingerprint)?;
-        if !identity.kind.is_compatible() {
+        if provider.fingerprint != binding.provider_fingerprint {
             return Err(Error::Conflict(
                 "the provider transport or connection identity changed; the existing conversation cannot be resumed under a different boundary",
             ));
@@ -475,7 +473,6 @@ impl AssistantRuntime {
             ));
         }
         let expected_revision = binding.revision;
-        binding.provider_fingerprint = identity.fingerprint;
         binding.state = BindingState::Enabled;
         binding.epoch += 1;
         binding.revision += 1;

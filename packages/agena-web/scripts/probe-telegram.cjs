@@ -908,42 +908,9 @@ connection.commit()
 
     const compatibleRoute = await waitBinding(work.source_session_id, work.id, -100888)
     const previousIds = (await integrations(work.source_session_id, work.id)).map((binding) => binding.id).sort()
-    const inspection = await request('GET', '/api/v1/plugins/agena.telegram')
-    assert.ok(inspection.ok, 'the local provider inspection is available')
-    // Use the trusted legacy manifest and preserve its key order and schema
-    // floats. Parsing the response in JavaScript would turn 0.0 into 0.
-    const hasher = spawn(
-      'python3',
-      [
-        '-c',
-        `
-import hashlib, json, sys
-plugin = json.load(sys.stdin)['plugin']
-with open(sys.argv[1]) as source:
-    manifest = json.load(source)
-payload = {'manifest': manifest, 'configuration': plugin['configured_plugin']}
-print(hashlib.sha256(json.dumps(payload, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest())
-`,
-        path.join(repo, 'crates/agena-runtime/src/runtime/assistant/integrations/legacy/telegram-885d63f24.json'),
-      ],
-      { stdio: ['pipe', 'pipe', 'pipe'] },
-    )
-    let legacyFingerprint = '',
-      hashError = ''
-    hasher.stdout.on('data', (chunk) => {
-      legacyFingerprint += chunk
-    })
-    hasher.stderr.on('data', (chunk) => {
-      hashError += chunk
-    })
-    hasher.stdin.end(await inspection.text())
-    assert.equal((await once(hasher, 'exit'))[0], 0, hashError)
-    legacyFingerprint = legacyFingerprint.trim()
-    assert.match(legacyFingerprint, /^[a-f0-9]{64}$/)
     await patchIsolatedBinding(compatibleRoute.id, {
       state: 'faulted',
       last_error: null,
-      provider_fingerprint: legacyFingerprint,
     })
     await command('sync_chats', { bot_id: work.id })
     const reviewable = await waitBinding(work.source_session_id, work.id, -100888, 'faulted')
@@ -976,7 +943,7 @@ print(hashlib.sha256(json.dumps(payload, ensure_ascii=False, separators=(',', ':
       previousIds,
     )
     pass(
-      'the real Review button restores a compatible legacy fingerprint with no error text, keeps the original binding and refreshes its controls',
+      'the real Review button restores a faulted binding with the same transport and permissions, keeps the original binding and refreshes its controls',
     )
 
     await browser.send('Emulation.setDeviceMetricsOverride', {
@@ -1033,25 +1000,12 @@ print(hashlib.sha256(json.dumps(payload, ensure_ascii=False, separators=(',', ':
     })
     assert.equal(duplicateReplacement.id, replacementRoute.id)
     pass(
-      'upgraded fingerprints stay stopped until explicit review; rebuilding preserves policy and old records, starts fresh context and is idempotent',
+      'faulted connections stay stopped until explicit review; rebuilding preserves policy and old records, starts fresh context and is idempotent',
     )
 
     const savedCatalog = await command('list_bots')
-    const beforeUpgrade = await waitBinding(work.source_session_id, work.id, 77)
+    const beforeRestart = await waitBinding(work.source_session_id, work.id, 77)
     await stop(server)
-    await patchIsolatedBinding(direct.id, {
-      spec: {
-        ...beforeUpgrade.spec,
-        channel_policy: {
-          ...beforeUpgrade.spec.channel_policy,
-          administrator_actors: ['77'],
-          members: beforeUpgrade.spec.channel_policy.members.map((member) =>
-            member.actor === '77' ? { ...member, role: 'administrator' } : member,
-          ),
-          grant: { ...beforeUpgrade.spec.channel_policy.grant, tools: ['agena.fs.write'] },
-        },
-      },
-    })
     await start()
     const restored = await command('list_bots')
     assert.equal(restored.bots.length, 2)
@@ -1068,11 +1022,11 @@ print(hashlib.sha256(json.dumps(payload, ensure_ascii=False, separators=(',', ':
     await openBot(work.id)
     assert.equal(await browser.evaluate('document.querySelector("[data-testid=telegram-ai-bot]").value'), atlas.id)
     const restoredDirect = await waitBinding(work.source_session_id, work.id, 77)
-    assert.equal(restoredDirect.epoch, beforeUpgrade.epoch + 1)
+    assert.equal(restoredDirect.epoch, beforeRestart.epoch)
     assert.deepEqual(restoredDirect.spec.channel_policy.administrator_actors, [])
     assert.deepEqual(restoredDirect.spec.channel_policy.grant.tools, [])
     assert.equal((await api('GET', assignmentsPath)).value.conversations[0].default_profile_id, 'reader')
-    pass('restart revokes legacy Telegram grants and preserves named profiles, chat enablement and bindings')
+    pass('restart preserves named Telegram profiles, chat enablement and bindings')
 
     await browser.click('[data-testid="telegram-toggle-bot"]')
     await until(

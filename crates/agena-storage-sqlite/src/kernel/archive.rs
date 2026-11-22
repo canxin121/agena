@@ -1,6 +1,8 @@
-//! Versioned transcript archives. Every SQL transaction ends before sink I/O.
+//! Versioned transcript archives. Reads of the instance end before sink I/O.
 //! Membership is pinned; other facts explicitly use per-record observations.
 //! Content block bytes are streamed without decoding even a large PTY frame.
+
+use std::sync::LazyLock;
 
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -9,12 +11,21 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 use super::*;
 
-const PIECE_BYTES: usize = 64 * 1024;
+const PIECE_BYTES: usize = content::BLOCK_PIECE_BYTES;
 const MAX_FACT_BYTES: i64 = 4 * 1024 * 1024;
 // A captured input manifest admits up to 8 MiB, including metadata. Raw JSON
 // strings can double when escaped inside an archive line; leave room for the
 // provider state/record envelope without rejecting a valid captured metadata.
 const MAX_LINE_BYTES: usize = 32 * 1024 * 1024;
+static BRANCH_SOURCES_SQL: LazyLock<String> = LazyLock::new(|| {
+    let head_json = &*content::heads::WIRE_JSON;
+    format!(
+        "SELECT c.id AS content_id,c.entry_id,{head_json} AS head_json
+         FROM agena_content_streams c
+         CROSS JOIN agena_branch_source_heads h ON h.session_id=? AND h.source_key=c.source_key
+         WHERE c.entry_id=? ORDER BY c.id LIMIT 129"
+    )
+});
 
 #[derive(Default)]
 pub(super) struct Exports(std::sync::Mutex<std::collections::HashMap<SessionId, usize>>);
@@ -76,15 +87,26 @@ async fn authorized(
         }
     }
 }
-async fn enqueue(graph: &mut SqliteConnection, id: i64) -> Result<()> {
-    if id <= 0 {
+async fn enqueue(graph: &mut SqliteConnection, mut entries: Vec<i64>) -> Result<()> {
+    if entries.is_empty() {
+        return Ok(());
+    }
+    entries.sort_unstable();
+    entries.dedup();
+    if entries[0] <= 0 {
         return Err(storage("archive dependency identity is invalid"));
     }
-    sqlx::query("INSERT INTO entries(id,member) VALUES (?,0) ON CONFLICT(id) DO NOTHING")
-        .bind(id)
-        .execute(graph)
-        .await
-        .map_err(storage)?;
+    let query = if let [id] = entries.as_slice() {
+        sqlx::query("INSERT INTO entries(id,member) VALUES(?,0) ON CONFLICT(id) DO NOTHING")
+            .bind(*id)
+    } else {
+        sqlx::query(
+            "INSERT INTO entries(id,member)
+             SELECT value,0 FROM json_each(?) WHERE 1 ON CONFLICT(id) DO NOTHING",
+        )
+        .bind(encode(&entries)?)
+    };
+    query.execute(graph).await.map_err(storage)?;
     Ok(())
 }
 fn content_references(value: &Value, ids: &mut Vec<String>) -> Result<()> {
@@ -112,160 +134,80 @@ fn content_references(value: &Value, ids: &mut Vec<String>) -> Result<()> {
     }
     Ok(())
 }
-async fn discover(
+async fn discover_entry(
     backend: &Backend,
     graph: &mut SqliteConnection,
-    session: SessionId,
-    kind: &str,
-    value: &Value,
+    facts: &Bundle,
 ) -> Result<()> {
-    let mut entries = Vec::new();
-    let mut source_ids = Vec::new();
-    match kind {
-        "entry" | "support_entry" => {
-            let facts = &value["facts"];
-            for value in [
-                &facts["entry"]["message_id"],
-                &facts["entry"]["response_entry_id"],
-                &facts["execution"]["message_id"],
-                &facts["attempt"]["response_entry_id"],
-                &facts["branch_facts"]["response_entry_id"],
-            ] {
-                if let Some(id) = value.as_i64() {
-                    entries.push(id);
-                }
-            }
-            if let Some(interactions) = facts["branch_facts"]["interactions"].as_array() {
-                let linked: Vec<i64> = sqlx::query_scalar(
-                    "SELECT id FROM agena_entries WHERE interaction_id IN (SELECT value FROM json_each(?))",
-                )
-                .bind(encode(interactions)?)
-                .fetch_all(backend.reader.get_sqlite_connection_pool())
-                .await
-                .map_err(sql_error)?;
-                entries.extend(linked);
-            }
-            if facts["entry"]["payload"]["kind"] == "compaction" {
-                if let Some(id) = facts["entry"]["payload"]["through"].as_i64() {
-                    entries.push(id);
-                }
-                if let Some(id) = facts["entry"]["payload"]["summary"].as_str() {
-                    let owner: i64 =
-                        sqlx::query_scalar("SELECT entry_id FROM agena_content_streams WHERE id=?")
-                            .bind(id)
-                            .fetch_one(backend.reader.get_sqlite_connection_pool())
-                            .await
-                            .map_err(sql_error)?;
-                    entries.push(owner);
-                }
-            }
-            for raw in [&facts["tool"]["input_json"], &facts["tool"]["result_json"]] {
-                if let Some(raw) = raw.as_str() {
-                    let value: Value = decode(raw)?;
-                    content_references(&value, &mut source_ids)?;
-                }
-            }
-        }
-        "attempt" => {
-            if let Some(id) = value["response_entry_id"].as_i64() {
-                entries.push(id);
-            }
-        }
-        "round" => {
-            let id = value["id"]
-                .as_i64()
-                .ok_or_else(|| storage("archive round identity is invalid"))?;
-            sqlx::query("INSERT INTO rounds VALUES (?) ON CONFLICT(id) DO NOTHING")
-                .bind(id)
-                .execute(&mut *graph)
-                .await
-                .map_err(storage)?;
-            if let Some(id) = value["base_checkpoint_entry_id"].as_i64() {
-                entries.push(id);
-            }
-        }
-        "round_input" => {
-            for key in ["entry_id", "response_entry_id"] {
-                if let Some(id) = value[key].as_i64() {
-                    entries.push(id);
-                }
-            }
-        }
-        "round_input_source" => {
-            if let Some(id) = value["entry_id"].as_i64() {
-                entries.push(id);
-            }
-            let head: ContentStreamView = decode(
-                value["head_json"]
-                    .as_str()
-                    .ok_or_else(|| storage("archive frozen source has no head"))?,
-            )?;
-            let actual = sqlx::query(
-                "SELECT entry_id,epoch,kind,committed_head FROM agena_content_streams WHERE id=?",
+    let mut entries = vec![facts.entry.message_id.get()];
+    entries.extend(facts.entry.response_entry_id.map(EntryId::get));
+    entries.extend(facts.execution["message_id"].as_i64());
+    entries.extend(facts.attempt["response_entry_id"].as_i64());
+    if let Some(frozen) = &facts.branch_facts {
+        entries.extend(frozen["response_entry_id"].as_i64());
+        if let Some(interactions) = frozen["interactions"].as_array()
+            && !interactions.is_empty()
+        {
+            let linked: Vec<i64> = sqlx::query_scalar(
+                "SELECT id FROM agena_entries WHERE interaction_id IN (SELECT value FROM json_each(?))",
             )
-            .bind(head.id.to_string())
-            .fetch_one(backend.reader.get_sqlite_connection_pool())
+            .bind(encode(interactions)?)
+            .fetch_all(backend.reader.get_sqlite_connection_pool())
             .await
             .map_err(sql_error)?;
-            let mut epoch_matches =
-                actual.try_get::<String, _>("epoch").map_err(storage)? == head.epoch.to_string();
-            if !epoch_matches {
-                let frozen: Option<String> = sqlx::query_scalar("SELECT head_json FROM agena_branch_sources WHERE session_id=? AND content_id=?")
-                    .bind(session.get()).bind(head.id.to_string()).fetch_optional(backend.reader.get_sqlite_connection_pool()).await.map_err(sql_error)?;
-                if let Some(frozen) = frozen {
-                    let frozen: ContentStreamView = decode(&frozen)?;
-                    epoch_matches = frozen.id == head.id
-                        && frozen.entry == head.entry
-                        && frozen.kind == head.kind
-                        && frozen.epoch == head.epoch
-                        && head.committed <= frozen.committed;
-                }
-            }
-            if actual.try_get::<i64, _>("entry_id").map_err(storage)? != head.entry.get()
-                || !epoch_matches
-                || head.committed
-                    > actual
-                        .try_get::<i64, _>("committed_head")
-                        .map_err(storage)? as u64
-                || actual.try_get::<String, _>("kind").map_err(storage)?
-                    != commands::enum_text(&head.kind)?
-            {
-                return Err(KernelError::ContentReset);
-            }
-            entries.push(head.entry.get());
+            entries.extend(linked);
         }
-        "round_input_replay" => {
-            let id = value["source_round_id"]
-                .as_i64()
-                .ok_or_else(|| storage("archive replay round identity is invalid"))?;
-            let owner:i64=sqlx::query_scalar("SELECT x.message_id FROM agena_rounds r JOIN agena_executions x ON x.id=r.execution_id WHERE r.id=?").bind(id).fetch_one(backend.reader.get_sqlite_connection_pool()).await.map_err(sql_error)?;
-            entries.push(owner);
+    }
+    if let EntryPayload::Compaction { summary, through } = &facts.entry.payload {
+        entries.push(through.get());
+        let owner: i64 =
+            sqlx::query_scalar("SELECT entry_id FROM agena_content_streams WHERE id=?")
+                .bind(summary.to_string())
+                .fetch_one(backend.reader.get_sqlite_connection_pool())
+                .await
+                .map_err(sql_error)?;
+        entries.push(owner);
+    }
+    let mut source_ids = Vec::new();
+    if let Some(tool) = &facts.tool {
+        for key in ["input_json", "result_json"] {
+            if let Some(raw) = tool[key].as_str() {
+                let value: Value = decode(raw)?;
+                content_references(&value, &mut source_ids)?;
+            }
         }
-        _ => {}
     }
-    for id in entries {
-        enqueue(graph, id).await?;
-    }
+    enqueue(graph, entries).await?;
     // Embedded tool references may follow an existing membership/dependency,
     // or a source explicitly authorized by an exported frozen round manifest.
-    for id in source_ids {
-        let Some(owner) =
-            sqlx::query_scalar::<_, i64>("SELECT entry_id FROM agena_content_streams WHERE id=?")
-                .bind(&id)
-                .fetch_optional(backend.reader.get_sqlite_connection_pool())
-                .await
-                .map_err(sql_error)?
-        else {
-            return Err(storage("archive tool source reference is missing"));
-        };
-        let known: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM entries WHERE id=?)")
-            .bind(owner)
-            .fetch_one(&mut *graph)
-            .await
-            .map_err(storage)?;
-        if !known {
-            return Err(KernelError::Ownership);
-        }
+    if source_ids.is_empty() {
+        return Ok(());
+    }
+    source_ids.sort_unstable();
+    source_ids.dedup();
+    let mut owners: Vec<i64> = sqlx::query_scalar(
+        "SELECT s.entry_id FROM json_each(?) ref
+         CROSS JOIN agena_content_streams s ON s.id=ref.value",
+    )
+    .bind(encode(&source_ids)?)
+    .fetch_all(backend.reader.get_sqlite_connection_pool())
+    .await
+    .map_err(sql_error)?;
+    if owners.len() != source_ids.len() {
+        return Err(storage("archive tool source reference is missing"));
+    }
+    owners.sort_unstable();
+    owners.dedup();
+    let unknown: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM json_each(?) ref LEFT JOIN entries e ON e.id=ref.value
+         WHERE e.id IS NULL)",
+    )
+    .bind(encode(&owners)?)
+    .fetch_one(graph)
+    .await
+    .map_err(storage)?;
+    if unknown {
+        return Err(KernelError::Ownership);
     }
     Ok(())
 }
@@ -307,25 +249,6 @@ impl Writer<'_, '_> {
         data: &T,
         hashed: bool,
     ) -> Result<()> {
-        if matches!(
-            kind,
-            "entry"
-                | "support_entry"
-                | "attempt"
-                | "round"
-                | "round_input"
-                | "round_input_source"
-                | "round_input_replay"
-        ) {
-            discover(
-                self.backend,
-                self.graph,
-                self.session,
-                kind,
-                &serde_json::to_value(data).map_err(storage)?,
-            )
-            .await?;
-        }
         let record = Record { kind, data };
         let mut count = Count(0);
         serde_json::to_writer(&mut count, &record).map_err(storage)?;
@@ -550,43 +473,73 @@ async fn bundle(
     .map_err(sql_error)?
     .map(|purpose| decode(&encode(&purpose)?))
     .transpose()?;
-    let branch_facts: Option<String> = sqlx::query_scalar(
-        "SELECT facts_json FROM agena_branch_entries WHERE session_id=? AND entry_id=?",
-    )
-    .bind(lease.session.get())
-    .bind(id)
-    .fetch_optional(&mut *tx)
-    .await
-    .map_err(sql_error)?;
-    let branch_facts: Option<Value> = branch_facts.as_deref().map(decode).transpose()?;
-    let branch_sources = sqlx::query(
-        "SELECT content_id,entry_id,head_json FROM agena_branch_sources WHERE session_id=? AND entry_id=? ORDER BY content_id LIMIT 129",
-    )
-    .bind(lease.session.get()).bind(id).fetch_all(&mut *tx).await.map_err(sql_error)?
-    .iter().map(|row| raw(row, &["content_id","head_json"], &["entry_id"])).collect::<Result<Vec<_>>>()?;
-    if branch_sources.len() > 128 {
-        return Err(storage("archive frozen source identity budget is corrupt"));
-    }
-    let branch_round = sqlx::query(
-        "SELECT round_id,phase,has_provider_state,finished_at_ms FROM agena_branch_rounds WHERE session_id=? AND round_id=?",
-    )
-    .bind(lease.session.get()).bind(row.try_get::<Option<i64>,_>("round_id").map_err(storage)?)
-    .fetch_optional(&mut *tx).await.map_err(sql_error)?
-    .as_ref().map(|row| raw(row, &["phase"], &["round_id","has_provider_state","finished_at_ms"])).transpose()?;
-    let branch_activities = sqlx::query(
-        "SELECT b.activity_id,b.has_outcome,b.finished_at_ms FROM agena_branch_activities b JOIN agena_background_activities a ON a.id=b.activity_id WHERE b.session_id=? AND a.entry_id=? ORDER BY b.activity_id LIMIT 17",
-    )
-    .bind(lease.session.get()).bind(id).fetch_all(&mut *tx).await.map_err(sql_error)?
-    .iter().map(|row| raw(row, &["activity_id"], &["has_outcome","finished_at_ms"])).collect::<Result<Vec<_>>>()?;
-    if branch_activities.len() > super::activity::MAX_ACTIVITIES_PER_TOOL as usize {
-        return Err(storage(
-            "archive frozen activity identity budget is corrupt",
-        ));
-    }
+    let round_id: Option<i64> = row.try_get("round_id").map_err(storage)?;
+    let (branch_facts, branch_sources, branch_round, branch_activities) = if let Some(facts) =
+        branches::encoded_entry_facts(&mut tx, lease.session, entry.id).await?
+    {
+        let sources = sqlx::query(&BRANCH_SOURCES_SQL)
+            .bind(lease.session.get())
+            .bind(id)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(sql_error)?
+            .iter()
+            .map(|row| raw(row, &["content_id", "head_json"], &["entry_id"]))
+            .collect::<Result<Vec<_>>>()?;
+        if sources.len() > 128 {
+            return Err(storage("archive frozen source identity budget is corrupt"));
+        }
+        let mut facts: Value = decode(&facts)?;
+        facts["sources"] = Value::Array(
+            sources
+                .iter()
+                .map(|source| source["content_id"].clone())
+                .collect(),
+        );
+        let round = sqlx::query(
+            "SELECT round_id,phase,has_provider_state,finished_at_ms
+                 FROM agena_branch_rounds WHERE session_id=? AND round_id=?",
+        )
+        .bind(lease.session.get())
+        .bind(round_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(sql_error)?
+        .as_ref()
+        .map(|row| {
+            raw(
+                row,
+                &["phase"],
+                &["round_id", "has_provider_state", "finished_at_ms"],
+            )
+        })
+        .transpose()?;
+        let activities = sqlx::query(
+            "SELECT b.activity_id,b.has_outcome,b.finished_at_ms FROM agena_background_activities a
+                 CROSS JOIN agena_branch_activities b ON b.session_id=? AND b.activity_id=a.id
+                 WHERE a.entry_id=? ORDER BY a.id LIMIT 17",
+        )
+        .bind(lease.session.get())
+        .bind(id)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(sql_error)?
+        .iter()
+        .map(|row| raw(row, &["activity_id"], &["has_outcome", "finished_at_ms"]))
+        .collect::<Result<Vec<_>>>()?;
+        if activities.len() > super::activity::MAX_ACTIVITIES_PER_TOOL as usize {
+            return Err(storage(
+                "archive frozen activity identity budget is corrupt",
+            ));
+        }
+        (Some(facts), sources, round, activities)
+    } else {
+        (None, Vec::new(), None, Vec::new())
+    };
     let result = Bundle {
         entry,
         created_at_ms: row.try_get("created_at_ms").map_err(storage)?,
-        round_id: row.try_get("round_id").map_err(storage)?,
+        round_id,
         execution: raw(
             &execution,
             &["id"],
@@ -713,7 +666,10 @@ impl Collection {
         match self {
             Self::Inputs => (
                 "round_input",
-                "SELECT * FROM agena_round_inputs WHERE round_id=? AND ordinal>CAST(? AS INTEGER) ORDER BY ordinal LIMIT 200",
+                "SELECT * FROM agena_round_inputs
+                 WHERE round_id=?1 AND start_ordinal>=COALESCE((SELECT MAX(start_ordinal)
+                       FROM agena_round_input_blocks WHERE round_id=?1 AND start_ordinal<=?2),0)
+                   AND ordinal>?2 ORDER BY start_ordinal,block_ordinal LIMIT 200",
                 &["tool_phase", "execution_phase"],
                 &[
                     "round_id",
@@ -727,31 +683,62 @@ impl Collection {
             ),
             Self::Sources => (
                 "round_input_source",
-                "SELECT * FROM agena_round_input_sources WHERE round_id=? AND content_id>? ORDER BY content_id LIMIT 1",
+                &prompt_sources::EXPORT_SQL,
                 &["content_id", "head_json"],
                 &["round_id", "entry_id"],
-                "content_id",
+                "source_key",
             ),
             Self::Replays => (
                 "round_input_replay",
-                "SELECT * FROM agena_round_input_replays WHERE round_id=? AND source_round_id>CAST(? AS INTEGER) ORDER BY source_round_id LIMIT 200",
+                prompt_replays::EXPORT_SQL,
                 &["phase"],
                 &["round_id", "source_round_id", "has_provider_state"],
                 "source_round_id",
             ),
         }
     }
+
+    fn dependencies(self, row: &SqliteRow, entries: &mut Vec<i64>) -> Result<()> {
+        match self {
+            Self::Inputs => {
+                entries.push(row.try_get("entry_id").map_err(storage)?);
+                entries.extend(
+                    row.try_get::<Option<i64>, _>("response_entry_id")
+                        .map_err(storage)?,
+                );
+            }
+            Self::Sources => {
+                if !row
+                    .try_get::<bool, _>("boundary_matches")
+                    .map_err(storage)?
+                {
+                    return Err(KernelError::ContentReset);
+                }
+                entries.push(row.try_get("entry_id").map_err(storage)?);
+                entries.push(row.try_get("source_entry_id").map_err(storage)?);
+            }
+            Self::Replays => {
+                entries.push(
+                    row.try_get::<Option<i64>, _>("replay_owner")
+                        .map_err(storage)?
+                        .ok_or_else(|| storage("archive replay owner is missing"))?,
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 async fn collection(
-    backend: &Backend,
+    writer: &mut Writer<'_, '_>,
     lease: port::HistorySnapshotLease,
     position: ExportPosition,
     round: i64,
     kind: Collection,
-    after: &str,
-) -> Result<ReadView<Vec<Value>>> {
-    let _read = admission(backend)?;
+    after: i64,
+) -> Result<(ReadView<Vec<Value>>, i64)> {
+    let backend = writer.backend;
+    let read = admission(backend)?;
     let mut tx = backend
         .reader
         .get_sqlite_connection_pool()
@@ -765,17 +752,30 @@ async fn collection(
     if !allowed {
         return Err(KernelError::Ownership);
     }
-    let (_, sql, texts, integers, _) = kind.specification();
-    let rows = sqlx::query(sql)
-        .bind(round)
-        .bind(after)
-        .fetch_all(&mut *tx)
-        .await
-        .map_err(sql_error)?;
+    let (_, sql, texts, integers, key) = kind.specification();
+    let query = sqlx::query(sql).bind(round).bind(after);
+    let query = if matches!(kind, Collection::Sources) {
+        let end = prompt_sources::export_page_end(&mut tx, round, after).await?;
+        (end != after).then(|| query.bind(end).bind(lease.session.get()))
+    } else {
+        Some(query)
+    };
+    let rows = match query {
+        Some(query) => query.fetch_all(&mut *tx).await.map_err(sql_error)?,
+        None => Vec::new(),
+    };
+    let next = rows
+        .last()
+        .map(|row| row.try_get::<i64, _>(key))
+        .transpose()
+        .map_err(storage)?
+        .unwrap_or(after);
+    let mut deps = Vec::with_capacity(rows.len());
     let values = rows
-        .iter()
+        .into_iter()
         .map(|row| {
-            let mut value = raw(row, texts, integers)?;
+            kind.dependencies(&row, &mut deps)?;
+            let mut value = raw(&row, texts, integers)?;
             if matches!(kind, Collection::Inputs) {
                 value["tool_phase"] = row
                     .try_get::<Option<String>, _>("tool_phase")
@@ -788,7 +788,10 @@ async fn collection(
     tx.rollback().await.map_err(storage)?;
     read_transaction.complete();
     let bytes = modeled_read_bytes(&values)?;
-    backend.wrap_read(lease.session, values, bytes)
+    let page = backend.wrap_read(lease.session, values, bytes)?;
+    drop(read);
+    enqueue(writer.graph, deps).await?;
+    Ok((page, next))
 }
 
 async fn attempts(
@@ -800,7 +803,7 @@ async fn attempts(
     let mut after = 0;
     loop {
         let values = {
-            let _read = admission(writer.backend)?;
+            let read = admission(writer.backend)?;
             let mut tx = writer
                 .backend
                 .reader
@@ -812,11 +815,16 @@ async fn attempts(
             let entry = authorized(&mut tx, lease, position).await?;
             let rows = sqlx::query("SELECT * FROM agena_attempts WHERE execution_id=(SELECT execution_id FROM agena_entries WHERE id=?) AND generation>? AND generation<=? ORDER BY generation LIMIT 200")
                 .bind(entry).bind(after).bind(through).fetch_all(&mut *tx).await.map_err(sql_error)?;
+            let mut deps = Vec::new();
             let values = rows
-                .iter()
+                .into_iter()
                 .map(|row| {
+                    deps.extend(
+                        row.try_get::<Option<i64>, _>("response_entry_id")
+                            .map_err(storage)?,
+                    );
                     raw(
-                        row,
+                        &row,
                         &["execution_id", "owner_epoch", "phase"],
                         &[
                             "generation",
@@ -831,7 +839,10 @@ async fn attempts(
             tx.rollback().await.map_err(storage)?;
             read_transaction.complete();
             let bytes = modeled_read_bytes(&values)?;
-            writer.backend.wrap_read(lease.session, values, bytes)?
+            let page = writer.backend.wrap_read(lease.session, values, bytes)?;
+            drop(read);
+            enqueue(writer.graph, deps).await?;
+            page
         };
         if values.is_empty() {
             break;
@@ -861,35 +872,26 @@ async fn rounds(
         after = value["id"]
             .as_i64()
             .ok_or_else(|| storage("invalid archive round"))?;
+        if let Some(checkpoint) = value["base_checkpoint_entry_id"].as_i64() {
+            enqueue(writer.graph, vec![checkpoint]).await?;
+        }
         writer.line("round", value, true).await?;
         for kind in [Collection::Inputs, Collection::Sources, Collection::Replays] {
-            let (tag, _, _, _, key) = kind.specification();
+            let (tag, _, _, _, _) = kind.specification();
             let mut cursor = if matches!(kind, Collection::Inputs) {
-                "-1".into()
+                -1
             } else {
-                String::new()
+                0
             };
-            // Empty text casts to zero for the positive replay identities.
             loop {
-                let page =
-                    collection(writer.backend, lease, position, after, kind, &cursor).await?;
+                let (page, next) = collection(writer, lease, position, after, kind, cursor).await?;
                 if page.is_empty() {
                     break;
                 }
                 for value in &*page {
                     writer.line(tag, value, true).await?;
-                    cursor = if matches!(kind, Collection::Sources) {
-                        value[key]
-                            .as_str()
-                            .ok_or_else(|| storage("invalid archive source"))?
-                            .into()
-                    } else {
-                        value[key]
-                            .as_i64()
-                            .ok_or_else(|| storage("invalid archive input cursor"))?
-                            .to_string()
-                    };
                 }
+                cursor = next;
             }
         }
     }
@@ -901,9 +903,9 @@ async fn check_source(
     lease: port::HistorySnapshotLease,
     position: ExportPosition,
     head: &ContentStreamView,
-) -> Result<()> {
+) -> Result<i64> {
     let entry = authorized(connection, lease, position).await?;
-    let row = sqlx::query("SELECT entry_id,epoch,kind,committed_head,retained_start,lost_bytes,lost_packets FROM agena_content_streams WHERE id=?")
+    let row = sqlx::query("SELECT source_key,entry_id,epoch,kind,committed_head,retained_start,lost_bytes,lost_packets FROM agena_content_streams WHERE id=?")
         .bind(head.id.to_string()).fetch_one(connection).await.map_err(sql_error)?;
     if entry != head.entry.get() || row.try_get::<i64, _>("entry_id").map_err(storage)? != entry {
         return Err(KernelError::Ownership);
@@ -929,7 +931,7 @@ async fn check_source(
             retained_start: floor,
         });
     }
-    Ok(())
+    row.try_get("source_key").map_err(storage)
 }
 
 #[derive(Serialize)]
@@ -957,9 +959,9 @@ async fn block(
         .await
         .map_err(storage)?;
     let read_transaction = backend.live.diagnostics().read_transaction();
-    check_source(&mut tx, lease, position, head).await?;
-    let row = sqlx::query("SELECT logical_start,logical_end,codec,digest,length(body) AS bytes FROM agena_content_blocks WHERE content_id=? AND logical_start>=? AND logical_start<? ORDER BY logical_start LIMIT 1")
-        .bind(head.id.to_string()).bind(start).bind(head.committed as i64).fetch_optional(&mut *tx).await.map_err(sql_error)?;
+    let source_key = check_source(&mut tx, lease, position, head).await?;
+    let row = sqlx::query("SELECT logical_start,logical_end,codec,digest,body_bytes FROM agena_content_blocks WHERE source_key=? AND logical_start>=? AND logical_start<? ORDER BY logical_start LIMIT 1")
+        .bind(source_key).bind(start).bind(head.committed as i64).fetch_optional(&mut *tx).await.map_err(sql_error)?;
     let value = row
         .map(|row| -> Result<Block> {
             Ok(Block {
@@ -968,7 +970,7 @@ async fn block(
                 logical_end: row.try_get("logical_end").map_err(storage)?,
                 codec: row.try_get("codec").map_err(storage)?,
                 sha256: row.try_get("digest").map_err(storage)?,
-                byte_len: row.try_get("bytes").map_err(storage)?,
+                byte_len: row.try_get("body_bytes").map_err(storage)?,
             })
         })
         .transpose()?;
@@ -994,11 +996,27 @@ async fn piece(
         .await
         .map_err(storage)?;
     let read_transaction = backend.live.diagnostics().read_transaction();
-    check_source(&mut tx, lease, position, head).await?;
-    let bytes: Vec<u8> = sqlx::query_scalar("SELECT substr(body,?,?) FROM agena_content_blocks WHERE content_id=? AND logical_start=? AND logical_end=? AND digest=?")
-        .bind(offset + 1).bind(PIECE_BYTES as i64).bind(head.id.to_string()).bind(block.logical_start).bind(block.logical_end).bind(&block.sha256)
-        .fetch_optional(&mut *tx).await.map_err(sql_error)?.ok_or_else(|| storage("archive content block disappeared"))?;
-    if bytes.is_empty() || offset + bytes.len() as i64 > block.byte_len {
+    let source_key = check_source(&mut tx, lease, position, head).await?;
+    // Both representations read at most one piece. A new snapshot can seek
+    // directly to the offset even if an earlier sink write suspended export.
+    let bytes: Vec<u8> = sqlx::query_scalar::<_, Option<Vec<u8>>>(
+        "SELECT COALESCE(b.body,p.body) FROM agena_content_blocks b
+         LEFT JOIN agena_content_block_pieces p
+            ON p.source_key=b.source_key AND p.block_start=b.logical_start AND p.byte_offset=?
+         WHERE b.source_key=? AND b.logical_start=? AND b.logical_end=? AND b.digest=? AND b.body_bytes=?",
+    )
+    .bind(offset)
+    .bind(source_key)
+    .bind(block.logical_start)
+    .bind(block.logical_end)
+    .bind(&block.sha256)
+    .bind(block.byte_len)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(sql_error)?
+    .flatten()
+    .ok_or_else(|| storage("archive content block piece disappeared"))?;
+    if bytes.len() as i64 != (block.byte_len - offset).min(PIECE_BYTES as i64) {
         return Err(storage("archive content block length mismatch"));
     }
     tx.rollback().await.map_err(storage)?;
@@ -1058,22 +1076,23 @@ async fn source_rows(
                 .await
                 .map_err(storage)?;
             let read_transaction = writer.backend.live.diagnostics().read_transaction();
-            check_source(&mut tx, lease, position, head).await?;
+            let source_key = check_source(&mut tx, lease, position, head).await?;
             let (sql, integers, texts): (&str, &[&str], &[&str]) = if checkpoints {
                 (
-                    "SELECT * FROM agena_content_checkpoints WHERE content_id=? AND logical_sequence>? AND logical_sequence<=? AND block_start>=? ORDER BY logical_sequence LIMIT 200",
+                    "SELECT ? AS content_id,logical_sequence,block_start FROM agena_content_checkpoints WHERE source_key=? AND logical_sequence>? AND logical_sequence<=? AND block_start>=? ORDER BY logical_sequence LIMIT 200",
                     &["logical_sequence", "block_start"],
                     &["content_id"],
                 )
             } else {
                 (
-                    "SELECT * FROM agena_content_gaps WHERE content_id=? AND logical_start>? AND logical_start<? ORDER BY logical_start LIMIT 1",
+                    "SELECT ? AS content_id,logical_start,logical_end,reason FROM agena_content_gaps WHERE source_key=? AND logical_start>? AND logical_start<? ORDER BY logical_start LIMIT 1",
                     &["logical_start", "logical_end"],
                     &["content_id", "reason"],
                 )
             };
             let query = sqlx::query(sql)
                 .bind(head.id.to_string())
+                .bind(source_key)
                 .bind(after)
                 .bind(head.committed as i64);
             let rows = if checkpoints {
@@ -1135,7 +1154,7 @@ async fn source_export(
             .map_err(storage)?;
         let read_transaction = writer.backend.live.diagnostics().read_transaction();
         let entry = authorized(&mut tx, lease, position).await?;
-        let head = content::stored_head(&mut tx, source).await?;
+        let (source_key, head) = content::stored_head_with_key(&mut tx, source).await?;
         if head.entry.get() != entry {
             return Err(KernelError::Ownership);
         }
@@ -1143,8 +1162,8 @@ async fn source_export(
         // that boundary block intact (including its digest/codec); the logical
         // floor and gap remain authoritative when restoring or projecting it.
         let physical_start = if head.retained_start < head.committed {
-            sqlx::query_scalar::<_,i64>("SELECT logical_start FROM agena_content_blocks WHERE content_id=? AND logical_start<=? AND logical_end>? ORDER BY logical_start DESC LIMIT 1")
-                .bind(source.to_string()).bind(head.retained_start as i64).bind(head.retained_start as i64)
+            sqlx::query_scalar::<_,i64>("SELECT logical_start FROM agena_content_blocks WHERE source_key=? AND logical_start<=? AND logical_end>? ORDER BY logical_start DESC LIMIT 1")
+                .bind(source_key).bind(head.retained_start as i64).bind(head.retained_start as i64)
                 .fetch_optional(&mut *tx).await.map_err(sql_error)?.ok_or_else(|| storage("archive retained content has no boundary block"))?
         } else {
             head.committed as i64
@@ -1219,10 +1238,10 @@ async fn source_export(
                 .await
                 .map_err(storage)?;
             let read_transaction = writer.backend.live.diagnostics().read_transaction();
-            check_source(&mut tx, lease, position, &head).await?;
+            let source_key = check_source(&mut tx, lease, position, &head).await?;
             let losses = content::loss::records(
                 &mut tx,
-                head.id,
+                source_key,
                 packets,
                 head.capture_loss.committed_packets,
                 128,
@@ -1405,29 +1424,55 @@ pub(super) async fn export(
         .create_if_missing(true)
         .pragma("journal_mode", "DELETE")
         .pragma("cache_size", "-2048");
-    let mut graph = SqliteConnection::connect_with(&options)
+    let mut graph_connection = SqliteConnection::connect_with(&options)
         .await
         .map_err(storage)?;
-    sqlx::query("CREATE TABLE entries(id INTEGER PRIMARY KEY,member INTEGER NOT NULL,position_json TEXT,emitted INTEGER NOT NULL DEFAULT 0,segment_sequence INTEGER,ordinal INTEGER)").execute(&mut graph).await.map_err(storage)?;
-    sqlx::query("CREATE TABLE rounds(id INTEGER PRIMARY KEY)")
-        .execute(&mut graph)
-        .await
-        .map_err(storage)?;
+    // The private graph is discarded after this export. Keep all graph writes
+    // in one transaction so following dependencies makes no per-entry commits.
+    let mut graph = graph_connection.begin().await.map_err(storage)?;
+    sqlx::query("CREATE TABLE entries(id INTEGER PRIMARY KEY,member INTEGER NOT NULL,emitted INTEGER NOT NULL DEFAULT 0,segment_sequence INTEGER,ordinal INTEGER)").execute(&mut *graph).await.map_err(storage)?;
     sqlx::query(
-        "CREATE INDEX pending_entries ON entries(emitted,member DESC,segment_sequence,ordinal,id)",
+        "CREATE INDEX pending_entries ON entries(member DESC,segment_sequence,ordinal,id) WHERE emitted=0",
     )
-    .execute(&mut graph)
+    .execute(&mut *graph)
     .await
     .map_err(storage)?;
     // Seed all fixed membership on disk before following support references.
     let mut after = None;
     loop {
-        let page = backend.snapshot_page(lease, after, 128).await?;
-        for entry in &page.entries {
-            sqlx::query("INSERT INTO entries(id,member,position_json,segment_sequence,ordinal) VALUES (?,1,?,?,?)").bind(entry.entry.id.get()).bind(encode(&entry.position)?).bind(entry.position.segment_sequence).bind(i64::from(entry.position.ordinal)).execute(&mut graph).await.map_err(sql_error)?;
+        let (members, has_more) = {
+            let _read = admission(backend)?;
+            let mut tx = backend
+                .reader
+                .get_sqlite_connection_pool()
+                .begin()
+                .await
+                .map_err(storage)?;
+            let diagnostics = backend.live.diagnostics();
+            let read_transaction = diagnostics.read_transaction();
+            let result = snapshots::members(&mut tx, lease, after, 128, None, diagnostics).await?;
+            tx.rollback().await.map_err(storage)?;
+            read_transaction.complete();
+            result
+        };
+        if members.is_empty() {
+            break;
         }
-        after = page.next;
-        if !page.has_more {
+        let mut insert =
+            sqlx::QueryBuilder::new("INSERT INTO entries(id,member,segment_sequence,ordinal) ");
+        insert.push_values(&members, |mut row, (id, position)| {
+            row.push_bind(*id)
+                .push("1")
+                .push_bind(position.segment_sequence)
+                .push_bind(i64::from(position.ordinal));
+        });
+        insert
+            .build()
+            .execute(&mut *graph)
+            .await
+            .map_err(sql_error)?;
+        after = members.last().map(|(_, position)| *position);
+        if !has_more {
             break;
         }
     }
@@ -1482,11 +1527,11 @@ pub(super) async fn export(
         read_transaction.complete();
         value
     };
-    for key in ["checkpoint_entry_id", "through_entry_id"] {
-        if let Some(id) = prompt_window[key].as_i64() {
-            enqueue(&mut graph, id).await?;
-        }
-    }
+    let window_entries = ["checkpoint_entry_id", "through_entry_id"]
+        .into_iter()
+        .filter_map(|key| prompt_window[key].as_i64())
+        .collect();
+    enqueue(&mut graph, window_entries).await?;
     let mut writer = Writer {
         backend,
         session: lease.session,
@@ -1501,17 +1546,17 @@ pub(super) async fn export(
     // Member order is fixed by the persisted snapshot cursor. Support facts
     // are discovered from each exported record and never count as membership.
     loop {
-        let row=sqlx::query("SELECT id,member,position_json FROM entries WHERE emitted=0 ORDER BY member DESC,segment_sequence,ordinal,id LIMIT 1").fetch_optional(&mut *writer.graph).await.map_err(storage)?;
+        let row=sqlx::query("SELECT id,member,segment_sequence,ordinal FROM entries WHERE emitted=0 ORDER BY member DESC,segment_sequence,ordinal,id LIMIT 1").fetch_optional(&mut *writer.graph).await.map_err(storage)?;
         let Some(row) = row else { break };
         let id: i64 = row.try_get("id").map_err(storage)?;
         let member = row.try_get::<i64, _>("member").map_err(storage)? == 1;
-        let cursor = row
-            .try_get::<Option<String>, _>("position_json")
-            .map_err(storage)?
-            .map(|value| decode::<SnapshotCursor>(&value))
-            .transpose()?;
-        let position = if let Some(cursor) = cursor {
-            ExportPosition::Member(cursor)
+        let position = if member {
+            ExportPosition::Member(SnapshotCursor {
+                token: lease.token,
+                segment_sequence: row.try_get("segment_sequence").map_err(storage)?,
+                ordinal: u32::try_from(row.try_get::<i64, _>("ordinal").map_err(storage)?)
+                    .map_err(storage)?,
+            })
         } else {
             ExportPosition::Support(id)
         };
@@ -1521,12 +1566,13 @@ pub(super) async fn export(
             .execute(&mut *writer.graph)
             .await
             .map_err(storage)?;
-        if member {
+        discover_entry(backend, writer.graph, &fact).await?;
+        if let ExportPosition::Member(cursor) = position {
             writer
                 .line(
                     "entry",
                     &EntryRecord {
-                        position: cursor.ok_or_else(|| storage("member has no cursor"))?,
+                        position: cursor,
                         facts: &fact,
                     },
                     true,

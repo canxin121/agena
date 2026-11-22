@@ -7,16 +7,24 @@ use agena_storage::instance_state::{InstanceStateError, InstanceStateRepository}
 use async_trait::async_trait;
 use sea_orm::{ConnectionTrait, DatabaseBackend, DatabaseConnection, DbErr, Statement};
 
-/// Small application documents on the service instance's shared writer pool.
+/// Small application documents in the instance database.
 /// This adapter has no independent schema initialization or close operation.
 pub struct ServerStateRepository {
     database: Arc<DatabaseConnection>,
+    reader: Arc<DatabaseConnection>,
     path: PathBuf,
 }
 
 impl ServerStateRepository {
     pub async fn new(database: Arc<DatabaseConnection>) -> Result<Self, DbErr> {
-        let row = database
+        Self::with_reader(database.clone(), database).await
+    }
+
+    pub async fn with_reader(
+        database: Arc<DatabaseConnection>,
+        reader: Arc<DatabaseConnection>,
+    ) -> Result<Self, DbErr> {
+        let row = reader
             .query_one(Statement::from_string(
                 DatabaseBackend::Sqlite,
                 "PRAGMA database_list",
@@ -27,12 +35,16 @@ impl ServerStateRepository {
         let path = if file.is_empty() {
             PathBuf::from(format!(
                 ":memory:{}",
-                crate::kernel::schema::instance_id(&database).await?
+                crate::kernel::schema::instance_id(&reader).await?
             ))
         } else {
             PathBuf::from(file)
         };
-        Ok(Self { database, path })
+        Ok(Self {
+            database,
+            reader,
+            path,
+        })
     }
 }
 
@@ -44,7 +56,7 @@ impl InstanceStateRepository for ServerStateRepository {
 
     async fn get_payload(&self, key: &str) -> Result<Option<String>, InstanceStateError> {
         let key = normalize_key(key)?;
-        self.database
+        self.reader
             .query_one(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
                 "SELECT value_json FROM agena_server_state WHERE key=?",
@@ -64,8 +76,10 @@ impl InstanceStateRepository for ServerStateRepository {
         self.database
             .execute(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
-                "INSERT INTO agena_server_state (key,value_json,updated_at_ms) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, updated_at_ms=excluded.updated_at_ms WHERE agena_server_state.value_json!=excluded.value_json",
-                [key.into(), payload.into(), chrono::Utc::now().timestamp_millis().into()],
+                "INSERT INTO agena_server_state(key,value_json) VALUES (?,?)
+                 ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json
+                 WHERE agena_server_state.value_json!=excluded.value_json",
+                [key.into(), payload.into()],
             ))
             .await
             .map_err(backend_error)?;

@@ -1,43 +1,12 @@
 //! Stable integration authority, separate from plugin presentation and schemas.
-//!
-//! The legacy Telegram manifest is an exact host-localized export from commit
-//! 885d63f244193ca6ebe1fd39e5fea94c426ff887. It is used only with the CURRENT
-//! configuration and the same static provider/protocol, proving that a legacy
-//! grant did not change transport, credentials configuration or settings.
-use std::{collections::BTreeMap, sync::LazyLock};
+use std::collections::BTreeMap;
 
 use agena_assistant::{Error, INTEGRATION_API_VERSION, INTEGRATION_SERVICE, Result};
-use agena_plugin_host::{
-    LoadedPlugin,
-    config::{ConfiguredPlugin, PluginPackage},
-};
+use agena_plugin_host::{LoadedPlugin, config::ConfiguredPlugin};
 use agena_plugin_sdk::PluginManifest;
 use serde_json::{Value, json};
 
 const PREFIX: &str = "integration-provider:v2:";
-static LEGACY_TELEGRAM: LazyLock<std::result::Result<Value, String>> = LazyLock::new(|| {
-    serde_json::from_str(include_str!("legacy/telegram-885d63f24.json"))
-        .map_err(|error| error.to_string())
-});
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ProviderFingerprintMatch {
-    Current,
-    CompatibleLegacy,
-    Mismatch,
-}
-
-impl ProviderFingerprintMatch {
-    pub(crate) fn is_compatible(self) -> bool {
-        self != Self::Mismatch
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ProviderIdentityCheck {
-    pub(crate) fingerprint: String,
-    pub(crate) kind: ProviderFingerprintMatch,
-}
 
 fn protocol(manifest: &PluginManifest) -> Result<Value> {
     let export = manifest
@@ -99,64 +68,10 @@ pub(super) fn identity(plugin: &LoadedPlugin) -> Result<String> {
     fingerprint(plugin.kind, &plugin.manifest, &plugin.configured_plugin)
 }
 
-pub(super) fn check(plugin: &LoadedPlugin, stored: &str) -> Result<ProviderIdentityCheck> {
-    check_parts(
-        plugin.kind,
-        &plugin.manifest,
-        &plugin.configured_plugin,
-        stored,
-    )
-}
-
-fn check_parts(
-    kind: &str,
-    manifest: &PluginManifest,
-    configured: &ConfiguredPlugin,
-    stored: &str,
-) -> Result<ProviderIdentityCheck> {
-    let fingerprint = fingerprint(kind, manifest, configured)?;
-    let result = |kind| ProviderIdentityCheck {
-        fingerprint: fingerprint.clone(),
-        kind,
-    };
-    if stored == fingerprint {
-        return Ok(result(ProviderFingerprintMatch::Current));
-    }
-    if stored.len() != 64 || !stored.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Ok(result(ProviderFingerprintMatch::Mismatch));
-    }
-    // Preserve exact legacy serialization. This path proves equality to the
-    // active plugin rather than treating an arbitrary old digest as trusted.
-    if stored == super::digest(&json!({"manifest":manifest,"configuration":configured}))? {
-        return Ok(result(ProviderFingerprintMatch::CompatibleLegacy));
-    }
-    if kind == "static"
-        && matches!(configured.package, PluginPackage::Static {})
-        && manifest.namespace == "agena"
-        && manifest.name == "telegram"
-    {
-        let legacy = LEGACY_TELEGRAM.as_ref().map_err(|error| {
-            Error::Storage(format!("trusted integration manifest is invalid: {error}"))
-        })?;
-        let legacy_manifest: PluginManifest =
-            serde_json::from_value(legacy.clone()).map_err(|error| {
-                Error::Storage(format!("trusted integration contract is invalid: {error}"))
-            })?;
-        // The supported integration API and its operation set must match the
-        // trusted manifest even when the plugin key remains unchanged.
-        if protocol(manifest)? == protocol(&legacy_manifest)?
-            && stored == super::digest(&json!({"manifest":legacy,"configuration":configured}))?
-        {
-            return Ok(result(ProviderFingerprintMatch::CompatibleLegacy));
-        }
-    }
-    Ok(result(ProviderFingerprintMatch::Mismatch))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agena_plugin_host::config::{DurationSpec, HttpAuth};
+    use agena_plugin_host::config::{DurationSpec, HttpAuth, PluginPackage};
     use agena_plugin_sdk::{Plugin, PluginServiceMethod};
 
     fn telegram() -> PluginManifest {
@@ -171,14 +86,6 @@ mod tests {
             "long_poll_seconds": 0,
             "allow_loopback_http": false
         }))
-    }
-
-    fn legacy_fingerprint(configured: &ConfiguredPlugin) -> String {
-        super::super::digest(&json!({
-            "manifest": LEGACY_TELEGRAM.as_ref().unwrap(),
-            "configuration": configured
-        }))
-        .unwrap()
     }
 
     #[test]
@@ -203,28 +110,9 @@ mod tests {
             .activation
             .after
             .push(agena_plugin_sdk::PluginKey::new("example", "optional").unwrap());
-        let check = check_parts("static", &manifest, &configured, &stored).unwrap();
-        assert_eq!(check.kind, ProviderFingerprintMatch::Current);
-        assert_eq!(check.fingerprint, stored);
-    }
-
-    #[test]
-    fn current_legacy_and_trusted_previous_telegram_manifest_are_compatible() {
-        let manifest = telegram();
-        let configured = configuration();
-        let legacy_current =
-            super::super::digest(&json!({"manifest":manifest,"configuration":configured})).unwrap();
-        for stored in [legacy_current, legacy_fingerprint(&configured)] {
-            let check = check_parts("static", &manifest, &configured, &stored).unwrap();
-            assert_eq!(check.kind, ProviderFingerprintMatch::CompatibleLegacy);
-            assert!(check.fingerprint.starts_with(PREFIX));
-        }
-        let stored = fingerprint("static", &manifest, &configured).unwrap();
         assert_eq!(
-            check_parts("static", &manifest, &configured, &stored)
-                .unwrap()
-                .kind,
-            ProviderFingerprintMatch::Current
+            fingerprint("static", &manifest, &configured).unwrap(),
+            stored
         );
     }
 
@@ -233,33 +121,15 @@ mod tests {
         let manifest = telegram();
         let configured = configuration();
         let current = fingerprint("static", &manifest, &configured).unwrap();
-        let legacy = legacy_fingerprint(&configured);
         let mut changed = configured.clone();
         changed.settings["api_base"] = json!("https://another-endpoint.invalid");
-        for stored in [&current, &legacy] {
-            assert_eq!(
-                check_parts("static", &manifest, &changed, stored)
-                    .unwrap()
-                    .kind,
-                ProviderFingerprintMatch::Mismatch
-            );
-        }
+        assert_ne!(fingerprint("static", &manifest, &changed).unwrap(), current);
         changed = configured.clone();
         changed.settings["bot_token_env"] = json!("OTHER_TELEGRAM_TOKEN");
-        assert_eq!(
-            check_parts("static", &manifest, &changed, &legacy)
-                .unwrap()
-                .kind,
-            ProviderFingerprintMatch::Mismatch
-        );
+        assert_ne!(fingerprint("static", &manifest, &changed).unwrap(), current);
         changed = configured.clone();
         changed.package_root = Some("/another-package".into());
-        assert_eq!(
-            check_parts("static", &manifest, &changed, &current)
-                .unwrap()
-                .kind,
-            ProviderFingerprintMatch::Mismatch
-        );
+        assert_ne!(fingerprint("static", &manifest, &changed).unwrap(), current);
         changed.package = PluginPackage::Http {
             url: "https://plugin.invalid".parse().unwrap(),
             auth: HttpAuth::Bearer {
@@ -275,18 +145,7 @@ mod tests {
             token: Some("fixture-token-b".into()),
             token_env: None,
         };
-        assert_eq!(
-            check_parts("http", &manifest, &changed, &http)
-                .unwrap()
-                .kind,
-            ProviderFingerprintMatch::Mismatch
-        );
-        assert_eq!(
-            check_parts("http", &manifest, &changed, &legacy)
-                .unwrap()
-                .kind,
-            ProviderFingerprintMatch::Mismatch
-        );
+        assert_ne!(fingerprint("http", &manifest, &changed).unwrap(), http);
         changed.package = PluginPackage::Wasm {
             path: "/plugin.wasm".into(),
             sha256: Some("first".into()),
@@ -296,46 +155,35 @@ mod tests {
             path: "/plugin.wasm".into(),
             sha256: Some("second".into()),
         };
-        assert_eq!(
-            check_parts("wasm", &manifest, &changed, &wasm)
-                .unwrap()
-                .kind,
-            ProviderFingerprintMatch::Mismatch
-        );
+        assert_ne!(fingerprint("wasm", &manifest, &changed).unwrap(), wasm);
     }
 
     #[test]
-    fn legacy_compatibility_is_scoped_to_the_exact_static_provider_and_protocol() {
+    fn provider_and_protocol_operations_are_part_of_the_fingerprint() {
         let configured = configuration();
-        let stored = legacy_fingerprint(&configured);
         let mut manifest = telegram();
+        let stored = fingerprint("static", &manifest, &configured).unwrap();
         manifest.name = "other".into();
-        assert_eq!(
-            check_parts("static", &manifest, &configured, &stored)
-                .unwrap()
-                .kind,
-            ProviderFingerprintMatch::Mismatch
+        assert_ne!(
+            fingerprint("static", &manifest, &configured).unwrap(),
+            stored
         );
         manifest = telegram();
-        manifest
+        let export = manifest
             .services
             .exports
             .iter_mut()
             .find(|export| export.id == INTEGRATION_SERVICE)
-            .unwrap()
-            .methods
-            .push(PluginServiceMethod::bounded_json(
-                "new_authority_operation",
-                4096,
-                4,
-            ));
-        assert_eq!(
-            check_parts("static", &manifest, &configured, &stored)
-                .unwrap()
-                .kind,
-            ProviderFingerprintMatch::Mismatch
+            .unwrap();
+        export.methods.push(PluginServiceMethod::bounded_json(
+            "new_authority_operation",
+            4096,
+            4,
+        ));
+        assert_ne!(
+            fingerprint("static", &manifest, &configured).unwrap(),
+            stored
         );
-        let mut manifest = telegram();
         manifest
             .services
             .exports
@@ -343,13 +191,7 @@ mod tests {
             .find(|export| export.id == INTEGRATION_SERVICE)
             .unwrap()
             .api_version += 1;
-        assert!(check_parts("static", &manifest, &configured, &stored).is_err());
-        assert_eq!(
-            check_parts("static", &telegram(), &configured, &"0".repeat(64))
-                .unwrap()
-                .kind,
-            ProviderFingerprintMatch::Mismatch
-        );
+        assert!(fingerprint("static", &manifest, &configured).is_err());
     }
 
     #[test]

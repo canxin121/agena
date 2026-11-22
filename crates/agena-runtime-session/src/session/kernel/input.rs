@@ -378,7 +378,7 @@ impl KernelPromptHydrator {
                 item.entry.id,
             )
         });
-        for (entry_index, item) in entries.iter().copied().enumerate() {
+        for item in entries.iter().copied() {
             if item.entry.origin_session_id == facts.metadata.id
                 && matches!(item.entry.payload, EntryPayload::User { .. })
                 && let Some(text) = boundary.take()
@@ -573,24 +573,6 @@ impl KernelPromptHydrator {
                             "execution failure notice could not be decoded; omitting it from model input"
                         ),
                         _ => {}
-                    }
-                    // The old writer emitted the stop continuation twice: once
-                    // inside the hook observation and once immediately after
-                    // it. Suppress the adjacent duplicate in model input.
-                    if matches!(&decoded, DecodedNotice::LegacyStopHookFollowup(_)) {
-                        let paired = entry_index.checked_sub(1).is_some_and(|index| {
-                            let EntryPayload::Notice { text } = &entries[index].entry.payload
-                            else {
-                                return false;
-                            };
-                            agena_runtime_contracts::part_content::decode_legacy_hook_observation(
-                                text,
-                            )
-                            .is_some()
-                        });
-                        if paired {
-                            continue;
-                        }
                     }
                     let Some(message) = decoded.model_text() else {
                         continue;

@@ -4,24 +4,78 @@ use async_trait::async_trait;
 use sea_orm::{
     ConnectionTrait, DatabaseBackend, DatabaseConnection, Statement, TransactionTrait, Value,
 };
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use uuid::Uuid;
 
 pub(crate) const DECLARATIONS: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS agena_assistant_profiles (workspace_id INTEGER PRIMARY KEY CHECK(workspace_id>0), revision INTEGER NOT NULL CHECK(revision>0), profile_json TEXT NOT NULL CHECK(json_valid(profile_json)))",
-    "CREATE TABLE IF NOT EXISTS agena_assistant_profile_receipts (workspace_id INTEGER NOT NULL, request_key TEXT NOT NULL, input_json TEXT NOT NULL CHECK(json_valid(input_json)), result_json TEXT NOT NULL CHECK(json_valid(result_json)), PRIMARY KEY(workspace_id,request_key)) WITHOUT ROWID",
+    "CREATE TABLE IF NOT EXISTS agena_assistant_profile_receipts (
+        scope_id INTEGER NOT NULL CHECK(scope_id>=0),
+        request_key TEXT NOT NULL,
+        receipt BLOB NOT NULL CHECK(length(receipt)>33),
+        PRIMARY KEY(scope_id,request_key)
+    ) WITHOUT ROWID, STRICT",
     "CREATE TABLE IF NOT EXISTS agena_assistant_reminders (id TEXT NOT NULL PRIMARY KEY, workspace_id INTEGER CHECK(workspace_id IS NULL OR workspace_id>0), source_session_id INTEGER NOT NULL CHECK(source_session_id>0), request_key TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('active','paused','delivering','completed','cancelled')), revision INTEGER NOT NULL CHECK(revision>0), next_due_ms INTEGER NOT NULL, retry_at_ms INTEGER NOT NULL, reminder_json TEXT NOT NULL CHECK(json_valid(reminder_json) AND length(CAST(reminder_json AS BLOB))<=65536), UNIQUE(source_session_id,request_key))",
-    "CREATE INDEX IF NOT EXISTS idx_agena_assistant_reminders_due ON agena_assistant_reminders(state,next_due_ms,retry_at_ms)",
-    "CREATE INDEX IF NOT EXISTS idx_agena_assistant_reminders_workspace ON agena_assistant_reminders(workspace_id,next_due_ms)",
-    "CREATE TABLE IF NOT EXISTS agena_assistant_contact_budget (workspace_id INTEGER NOT NULL, local_day TEXT NOT NULL, contacts INTEGER NOT NULL CHECK(contacts>=0), last_contact_ms INTEGER NOT NULL, PRIMARY KEY(workspace_id,local_day)) WITHOUT ROWID",
+    "CREATE INDEX IF NOT EXISTS idx_agena_assistant_reminders_due ON agena_assistant_reminders(next_due_ms,id,retry_at_ms) WHERE state IN ('active','delivering')",
+    "CREATE INDEX IF NOT EXISTS idx_agena_assistant_reminders_deadline ON agena_assistant_reminders(MAX(next_due_ms,retry_at_ms),next_due_ms,id) WHERE state IN ('active','delivering')",
+    "CREATE INDEX IF NOT EXISTS idx_agena_assistant_reminders_workspace ON agena_assistant_reminders(workspace_id,(state NOT IN ('active','paused','delivering')),next_due_ms DESC,id)",
+    "CREATE INDEX IF NOT EXISTS idx_agena_assistant_reminders_source ON agena_assistant_reminders(source_session_id,workspace_id,(state NOT IN ('active','paused','delivering')),next_due_ms DESC,id)",
+    "CREATE TABLE IF NOT EXISTS agena_assistant_contact_budget (
+        scope_id INTEGER NOT NULL CHECK(scope_id>=0),
+        local_day INTEGER NOT NULL,
+        contacts INTEGER NOT NULL CHECK(contacts>=0),
+        last_contact_ms INTEGER NOT NULL,
+        PRIMARY KEY(scope_id,local_day)
+    ) WITHOUT ROWID, STRICT",
+    "CREATE INDEX IF NOT EXISTS idx_agena_assistant_contact_latest
+     ON agena_assistant_contact_budget(scope_id,last_contact_ms DESC) WHERE scope_id>0",
+    "CREATE INDEX IF NOT EXISTS idx_agena_assistant_global_contact_day
+     ON agena_assistant_contact_budget(local_day,contacts) WHERE scope_id=0",
+    "CREATE INDEX IF NOT EXISTS idx_agena_assistant_global_contact_latest
+     ON agena_assistant_contact_budget(last_contact_ms DESC) WHERE scope_id=0",
 ];
+
+const GLOBAL_SCOPE: i64 = 0;
+const INACTIVE: &str = "(state NOT IN ('active','paused','delivering'))";
+
+// A small deadline range can be sorted cheaply even if many earlier
+// reminders are cooling down. A dense range uses the original ordered index.
+const DUE_REMINDER_FALLBACK_SQL: &str = "
+    WITH eligible AS MATERIALIZED (
+        SELECT rowid,next_due_ms,id FROM agena_assistant_reminders
+            INDEXED BY idx_agena_assistant_reminders_deadline
+        WHERE state IN ('active','delivering') AND MAX(next_due_ms,retry_at_ms)<=?1
+        LIMIT 33
+    ), counts AS MATERIALIZED (
+        SELECT count(*) AS eligible_count FROM eligible
+    )
+    SELECT r.reminder_json FROM (
+        SELECT rowid,next_due_ms,id FROM eligible WHERE (SELECT eligible_count FROM counts)<33
+        UNION ALL
+        SELECT rowid,next_due_ms,id FROM (
+            SELECT rowid,next_due_ms,id FROM agena_assistant_reminders
+                INDEXED BY idx_agena_assistant_reminders_due
+            WHERE state IN ('active','delivering') AND retry_at_ms<=?1
+              AND next_due_ms<=(SELECT CASE WHEN eligible_count=33 THEN ?1 END FROM counts)
+            ORDER BY next_due_ms,id LIMIT 32
+        )
+        ORDER BY next_due_ms,id LIMIT 32
+    ) due
+    CROSS JOIN agena_assistant_reminders r ON r.rowid=due.rowid
+    ORDER BY due.next_due_ms,due.id";
 
 pub struct SqliteCompanionRepository {
     database: Arc<DatabaseConnection>,
+    reader: Arc<DatabaseConnection>,
 }
 impl SqliteCompanionRepository {
     pub fn new(database: Arc<DatabaseConnection>) -> Self {
-        Self { database }
+        Self::with_reader(database.clone(), database)
+    }
+
+    pub fn with_reader(database: Arc<DatabaseConnection>, reader: Arc<DatabaseConnection>) -> Self {
+        Self { database, reader }
     }
 }
 fn err(e: impl std::fmt::Display) -> Error {
@@ -76,7 +130,7 @@ async fn save(db: &impl ConnectionTrait, r: &mut Reminder, now: i64) -> Result<(
 #[async_trait]
 impl CompanionRepository for SqliteCompanionRepository {
     async fn profile_scoped(&self, workspace: Option<i64>) -> Result<AssistantProfile> {
-        profile(self.database.as_ref(), workspace).await
+        profile(self.reader.as_ref(), workspace).await
     }
     async fn update_profile_scoped(
         &self,
@@ -93,14 +147,31 @@ impl CompanionRepository for SqliteCompanionRepository {
                 "invalid assistant profile scope, request key or revision",
             ));
         }
-        let input = encode(&update)?;
+        let input_digest = Sha256::digest(encode(&update)?);
         let _permit = crate::acquire_write_permit(&self.database)
             .await
             .map_err(err)?;
         let tx = self.database.begin().await.map_err(err)?;
-        if let Some(row)=tx.query_one(stmt(if workspace.is_some() { "SELECT input_json,result_json FROM agena_assistant_profile_receipts WHERE workspace_id=? AND request_key=?" } else { "SELECT input_json,result_json FROM agena_assistant_global_profile_receipts WHERE ? IS NULL AND request_key=?" },vec![workspace.into(),update.request_key.clone().into()])).await.map_err(err)?{
-            if row.try_get::<String>("","input_json").map_err(err)?!=input{return Err(Error::Conflict("profile request key was reused with different input"));}
-            return serde_json::from_str(&row.try_get::<String>("","result_json").map_err(err)?).map_err(err);
+        let scope = workspace.unwrap_or(GLOBAL_SCOPE);
+        if let Some(row) = tx
+            .query_one(stmt(
+                "SELECT receipt FROM agena_assistant_profile_receipts WHERE scope_id=? AND request_key=?",
+                vec![scope.into(), update.request_key.clone().into()],
+            ))
+            .await
+            .map_err(err)?
+        {
+            let receipt: Vec<u8> = row.try_get("", "receipt").map_err(err)?;
+            let (stored, result) = receipt
+                .split_at_checked(input_digest.len())
+                .ok_or_else(|| err("assistant profile receipt has an incomplete digest"))?;
+            if stored != &input_digest[..] {
+                return Err(Error::Conflict(
+                    "profile request key was reused with different input",
+                ));
+            }
+            let result = crate::receipt_payload::unpack(result).map_err(err)?;
+            return serde_json::from_slice(&result).map_err(err);
         }
         let mut value = profile(&tx, workspace).await?;
         if value.revision != update.expected_revision {
@@ -112,11 +183,22 @@ impl CompanionRepository for SqliteCompanionRepository {
         value.revision += 1;
         value.updated_at_ms = now;
         let json = encode(&value)?;
-        tx.execute(stmt(if workspace.is_some() { "INSERT INTO agena_assistant_profiles(workspace_id,revision,profile_json) VALUES(?,?,?) ON CONFLICT(workspace_id) DO UPDATE SET revision=excluded.revision,profile_json=excluded.profile_json" } else { "INSERT INTO agena_assistant_global_profile(singleton,revision,profile_json) VALUES(COALESCE(?,1),?,?) ON CONFLICT(singleton) DO UPDATE SET revision=excluded.revision,profile_json=excluded.profile_json" },vec![workspace.into(),value.revision.into(),json.clone().into()])).await.map_err(err)?;
-        tx.execute(stmt(if workspace.is_some() { "INSERT INTO agena_assistant_profile_receipts(workspace_id,request_key,input_json,result_json) VALUES(?,?,?,?)" } else { "INSERT INTO agena_assistant_global_profile_receipts(request_key,input_json,result_json) SELECT ?2,?3,?4 WHERE ?1 IS NULL" },vec![workspace.into(),update.request_key.into(),input.into(),json.into()])).await.map_err(err)?;
+        let receipt = crate::receipt_payload::pack_with_prefix(&input_digest, json.as_bytes())
+            .map_err(err)?;
+        tx.execute(stmt(if workspace.is_some() { "INSERT INTO agena_assistant_profiles(workspace_id,revision,profile_json) VALUES(?,?,?) ON CONFLICT(workspace_id) DO UPDATE SET revision=excluded.revision,profile_json=excluded.profile_json" } else { "INSERT INTO agena_assistant_global_profile(singleton,revision,profile_json) VALUES(COALESCE(?,1),?,?) ON CONFLICT(singleton) DO UPDATE SET revision=excluded.revision,profile_json=excluded.profile_json" },vec![workspace.into(),value.revision.into(),json.into()])).await.map_err(err)?;
+        tx.execute(stmt(
+            "INSERT INTO agena_assistant_profile_receipts(scope_id,request_key,receipt) VALUES(?,?,?)",
+            vec![scope.into(), update.request_key.into(), receipt.into()],
+        ))
+        .await
+        .map_err(err)?;
         // Changes to quiet hours/unmute must not leave reminders sleeping on an
         // obsolete policy-derived deadline. Due time itself is unchanged.
-        let rows=tx.query_all(stmt("SELECT reminder_json FROM agena_assistant_reminders WHERE workspace_id IS ? AND state IN ('active','delivering')",vec![workspace.into()])).await.map_err(err)?;
+        let rows = tx.query_all(stmt(
+            &format!("SELECT reminder_json FROM agena_assistant_reminders
+                      WHERE workspace_id IS ? AND {INACTIVE}=0 AND state IN ('active','delivering')"),
+            vec![workspace.into()],
+        )).await.map_err(err)?;
         for row in rows {
             let mut r: Reminder =
                 serde_json::from_str(&row.try_get::<String>("", "reminder_json").map_err(err)?)
@@ -136,7 +218,10 @@ impl CompanionRepository for SqliteCompanionRepository {
             let saved:Reminder=serde_json::from_str(&row.try_get::<String>("","reminder_json").map_err(err)?).map_err(err)?;
             if encode(&saved.spec)?!=encode(&r.spec)? || saved.workspace_id!=r.workspace_id{return Err(Error::Conflict("this request already scheduled different contact"));}return Ok(saved);
         }
-        let row=tx.query_one(stmt("SELECT COUNT(*) AS n FROM agena_assistant_reminders WHERE workspace_id IS ? AND state IN ('active','paused','delivering')",vec![r.workspace_id.into()])).await.map_err(err)?.ok_or(Error::NotFound)?;
+        let row = tx.query_one(stmt(
+            &format!("SELECT count(*) AS n FROM agena_assistant_reminders WHERE workspace_id IS ? AND {INACTIVE}=0"),
+            vec![r.workspace_id.into()],
+        )).await.map_err(err)?.ok_or(Error::NotFound)?;
         if row.try_get::<i64>("", "n").map_err(err)? >= 32 {
             return Err(Error::Conflict(
                 "workspace already has 32 pending reminders; cancel or finish some first",
@@ -148,10 +233,20 @@ impl CompanionRepository for SqliteCompanionRepository {
         Ok(r)
     }
     async fn reminder(&self, id: Uuid) -> Result<Reminder> {
-        reminder(self.database.as_ref(), id).await
+        reminder(self.reader.as_ref(), id).await
     }
     async fn reminders_scoped(&self, workspace: Option<i64>) -> Result<Vec<Reminder>> {
-        let rows=self.database.query_all(stmt("SELECT reminder_json FROM agena_assistant_reminders WHERE workspace_id IS ? ORDER BY CASE WHEN state IN ('active','paused','delivering') THEN 0 ELSE 1 END,next_due_ms DESC LIMIT 100",vec![workspace.into()])).await.map_err(err)?;
+        let rows = self
+            .reader
+            .query_all(stmt(
+                &format!(
+                    "SELECT reminder_json FROM agena_assistant_reminders WHERE workspace_id IS ?
+                      ORDER BY {INACTIVE},next_due_ms DESC,id LIMIT 100"
+                ),
+                vec![workspace.into()],
+            ))
+            .await
+            .map_err(err)?;
         rows.into_iter()
             .map(|r| {
                 serde_json::from_str(&r.try_get::<String>("", "reminder_json").map_err(err)?)
@@ -164,7 +259,18 @@ impl CompanionRepository for SqliteCompanionRepository {
         workspace: Option<i64>,
         source: i64,
     ) -> Result<Vec<Reminder>> {
-        let rows = self.database.query_all(stmt("SELECT reminder_json FROM agena_assistant_reminders WHERE workspace_id IS ? AND source_session_id=? ORDER BY CASE WHEN state IN ('active','paused','delivering') THEN 0 ELSE 1 END,next_due_ms DESC LIMIT 100", vec![workspace.into(), source.into()])).await.map_err(err)?;
+        let rows = self
+            .reader
+            .query_all(stmt(
+                &format!(
+                    "SELECT reminder_json FROM agena_assistant_reminders
+                      WHERE workspace_id IS ? AND source_session_id=?
+                      ORDER BY {INACTIVE},next_due_ms DESC,id LIMIT 100"
+                ),
+                vec![workspace.into(), source.into()],
+            ))
+            .await
+            .map_err(err)?;
         rows.into_iter()
             .map(|r| {
                 serde_json::from_str(&r.try_get::<String>("", "reminder_json").map_err(err)?)
@@ -173,12 +279,44 @@ impl CompanionRepository for SqliteCompanionRepository {
             .collect()
     }
     async fn due_reminders(&self, now: i64) -> Result<Vec<Reminder>> {
-        let rows=self.database.query_all(stmt("SELECT reminder_json FROM agena_assistant_reminders WHERE state IN ('active','delivering') AND next_due_ms<=? AND retry_at_ms<=? ORDER BY next_due_ms,id LIMIT 32",vec![now.into(),now.into()])).await.map_err(err)?;
-        rows.into_iter()
+        let rows = self
+            .reader
+            .query_all(stmt(
+                "SELECT CASE WHEN retry_at_ms<=?1 THEN reminder_json END AS reminder_json
+                 FROM agena_assistant_reminders INDEXED BY idx_agena_assistant_reminders_due
+                 WHERE state IN ('active','delivering') AND next_due_ms<=?1
+                 ORDER BY next_due_ms,id LIMIT 32",
+                vec![now.into()],
+            ))
+            .await
+            .map_err(err)?;
+        let prefix = rows
+            .iter()
             .map(|r| {
-                serde_json::from_str(&r.try_get::<String>("", "reminder_json").map_err(err)?)
+                r.try_get::<Option<String>>("", "reminder_json")
                     .map_err(err)
             })
+            .collect::<Result<Vec<_>>>()?;
+        if prefix.len() == 32 && prefix.iter().any(Option::is_none) {
+            // The ordered prefix missed some candidates. Read the complete
+            // result from a fresh statement to keep the batch consistent.
+            drop((rows, prefix));
+            return self
+                .reader
+                .query_all(stmt(DUE_REMINDER_FALLBACK_SQL, vec![now.into()]))
+                .await
+                .map_err(err)?
+                .iter()
+                .map(|r| {
+                    serde_json::from_str(&r.try_get::<String>("", "reminder_json").map_err(err)?)
+                        .map_err(err)
+                })
+                .collect();
+        }
+        prefix
+            .into_iter()
+            .flatten()
+            .map(|value| serde_json::from_str(&value).map_err(err))
             .collect()
     }
     async fn reserve_reminder(&self, id: Uuid, now: i64) -> Result<Option<Reminder>> {
@@ -207,8 +345,33 @@ impl CompanionRepository for SqliteCompanionRepository {
             tx.commit().await.map_err(err)?;
             return Ok(None);
         }
-        let day = p.local_day(now)?;
-        let row=tx.query_one(stmt(if r.workspace_id.is_some() { "SELECT COALESCE(SUM(CASE WHEN local_day=? THEN contacts ELSE 0 END),0) AS n,COALESCE(MAX(last_contact_ms),0) AS last FROM agena_assistant_contact_budget WHERE workspace_id=?" } else { "SELECT COALESCE(SUM(CASE WHEN local_day=? THEN contacts ELSE 0 END),0) AS n,COALESCE(MAX(last_contact_ms),0) AS last FROM agena_assistant_global_contact_budget WHERE ? IS NULL" },vec![day.clone().into(),r.workspace_id.into()])).await.map_err(err)?.ok_or(Error::NotFound)?;
+        let (day, day_number) = p.local_day_and_number(now)?;
+        // Today's quota and the latest contact can be on different dates
+        // after midnight or a change to the profile's time zone.
+        let (budget_sql, args) = match r.workspace_id {
+            Some(workspace) => (
+                "SELECT COALESCE((SELECT contacts FROM agena_assistant_contact_budget
+                                  WHERE scope_id=?1 AND local_day=?2),0) AS n,
+                        COALESCE((SELECT last_contact_ms FROM agena_assistant_contact_budget
+                                  INDEXED BY idx_agena_assistant_contact_latest
+                                  WHERE scope_id=?1 AND scope_id>0 ORDER BY last_contact_ms DESC LIMIT 1),0) AS last",
+                vec![workspace.into(), day_number.into()],
+            ),
+            None => (
+                "SELECT COALESCE((SELECT contacts FROM agena_assistant_contact_budget
+                                  INDEXED BY idx_agena_assistant_global_contact_day
+                                  WHERE scope_id=0 AND local_day=?),0) AS n,
+                        COALESCE((SELECT last_contact_ms FROM agena_assistant_contact_budget
+                                  INDEXED BY idx_agena_assistant_global_contact_latest
+                                  WHERE scope_id=0 ORDER BY last_contact_ms DESC LIMIT 1),0) AS last",
+                vec![day_number.into()],
+            ),
+        };
+        let row = tx
+            .query_one(stmt(budget_sql, args))
+            .await
+            .map_err(err)?
+            .ok_or(Error::NotFound)?;
         let count = row.try_get::<i64>("", "n").map_err(err)?;
         let last = row.try_get::<i64>("", "last").map_err(err)?;
         let charge = r.delivery_text.is_none() || r.reserved_day.as_deref() != Some(day.as_str());
@@ -230,7 +393,18 @@ impl CompanionRepository for SqliteCompanionRepository {
         }
         let changed = charge || r.state != ReminderState::Delivering || r.last_error.is_some();
         if charge {
-            tx.execute(stmt(if r.workspace_id.is_some() { "INSERT INTO agena_assistant_contact_budget(workspace_id,local_day,contacts,last_contact_ms) VALUES(?,?,1,?) ON CONFLICT(workspace_id,local_day) DO UPDATE SET contacts=contacts+1,last_contact_ms=excluded.last_contact_ms" } else { "INSERT INTO agena_assistant_global_contact_budget(local_day,contacts,last_contact_ms) SELECT ?2,1,?3 WHERE ?1 IS NULL ON CONFLICT(local_day) DO UPDATE SET contacts=contacts+1,last_contact_ms=excluded.last_contact_ms" },vec![r.workspace_id.into(),day.clone().into(),now.into()])).await.map_err(err)?;
+            tx.execute(stmt(
+                "INSERT INTO agena_assistant_contact_budget(scope_id,local_day,contacts,last_contact_ms)
+                 VALUES(?,?,1,?) ON CONFLICT(scope_id,local_day) DO UPDATE SET
+                     contacts=contacts+1,last_contact_ms=excluded.last_contact_ms",
+                vec![
+                    r.workspace_id.unwrap_or(GLOBAL_SCOPE).into(),
+                    day_number.into(),
+                    now.into(),
+                ],
+            ))
+            .await
+            .map_err(err)?;
             r.reserved_day = Some(day);
             r.reserved_at_ms = now;
         }
@@ -258,9 +432,21 @@ impl CompanionRepository for SqliteCompanionRepository {
             return Ok(());
         }
         let profile = profile(&tx, r.workspace_id).await?;
-        let day = profile.preferences.local_day(now)?;
+        let (day, day_number) = profile.preferences.local_day_and_number(now)?;
         let extra = i64::from(r.reserved_day.as_deref() != Some(day.as_str()));
-        tx.execute(stmt(if r.workspace_id.is_some() { "INSERT INTO agena_assistant_contact_budget(workspace_id,local_day,contacts,last_contact_ms) VALUES(?,?,?,?) ON CONFLICT(workspace_id,local_day) DO UPDATE SET contacts=contacts+excluded.contacts,last_contact_ms=MAX(last_contact_ms,excluded.last_contact_ms)" } else { "INSERT INTO agena_assistant_global_contact_budget(local_day,contacts,last_contact_ms) SELECT ?2,?3,?4 WHERE ?1 IS NULL ON CONFLICT(local_day) DO UPDATE SET contacts=contacts+excluded.contacts,last_contact_ms=MAX(last_contact_ms,excluded.last_contact_ms)" },vec![r.workspace_id.into(),day.into(),extra.into(),now.into()])).await.map_err(err)?;
+        tx.execute(stmt(
+            "INSERT INTO agena_assistant_contact_budget(scope_id,local_day,contacts,last_contact_ms)
+             VALUES(?,?,?,?) ON CONFLICT(scope_id,local_day) DO UPDATE SET
+                 contacts=contacts+excluded.contacts,last_contact_ms=MAX(last_contact_ms,excluded.last_contact_ms)",
+            vec![
+                r.workspace_id.unwrap_or(GLOBAL_SCOPE).into(),
+                day_number.into(),
+                extra.into(),
+                now.into(),
+            ],
+        ))
+        .await
+        .map_err(err)?;
         r.reserved_day = None;
         r.reserved_at_ms = 0;
         r.delivered = r.delivered.saturating_add(1);

@@ -205,12 +205,10 @@ impl PerformanceAccumulator {
         totals.end_to_end_tokens_per_second =
             measured_ratio(totals.timed_tokens, totals.timed_duration_ms)
                 .map(|tokens_per_ms| tokens_per_ms * 1_000.0);
-        self.durations.sort_unstable();
-        self.first_outputs.sort_unstable();
-        totals.p50_duration_ms = percentile(&self.durations, 50);
-        totals.p95_duration_ms = percentile(&self.durations, 95);
-        totals.p50_ttft_ms = percentile(&self.first_outputs, 50);
-        totals.p95_ttft_ms = percentile(&self.first_outputs, 95);
+        totals.p50_duration_ms = percentile(&mut self.durations, 50);
+        totals.p95_duration_ms = percentile(&mut self.durations, 95);
+        totals.p50_ttft_ms = percentile(&mut self.first_outputs, 50);
+        totals.p95_ttft_ms = percentile(&mut self.first_outputs, 95);
         self.totals
     }
 }
@@ -220,12 +218,12 @@ fn measured_ratio(total: u64, count: u64) -> Option<f64> {
 }
 
 /// Nearest rank: at least this percentage of measurements is at or below it.
-fn percentile(sorted: &[u64], percent: usize) -> Option<u64> {
-    if sorted.is_empty() {
+fn percentile(samples: &mut [u64], percent: usize) -> Option<u64> {
+    if samples.is_empty() {
         return None;
     }
-    let rank = (sorted.len() as u128 * percent as u128).div_ceil(100) as usize;
-    sorted.get(rank.saturating_sub(1)).copied()
+    let rank = (samples.len() as u128 * percent as u128).div_ceil(100) as usize;
+    Some(*samples.select_nth_unstable(rank - 1).1)
 }
 
 #[derive(Debug, Clone, Default)]
@@ -243,6 +241,10 @@ impl TotalsAccumulator {
         cost: CompletionUsageCostContribution,
     ) {
         self.sessions.insert(session_id);
+        self.fold_usage(usage, cost);
+    }
+
+    fn fold_usage(&mut self, usage: &CompletionUsage, cost: CompletionUsageCostContribution) {
         fold(&mut self.totals, usage, cost);
         for sample in &usage.performance {
             self.performance.observe(sample);
@@ -296,7 +298,7 @@ impl SessionAccumulator {
     ) {
         self.first_message_at = self.first_message_at.min(record.created_at);
         self.last_message_at = self.last_message_at.max(record.created_at);
-        self.totals.fold(record.session_id, usage, cost);
+        self.totals.fold_usage(usage, cost);
     }
 }
 
@@ -392,13 +394,17 @@ impl UsageStatsAccumulator {
         by_model.sort_by(|left, right| compare_totals(&left.totals, &right.totals));
         let mut by_session = by_session
             .into_iter()
-            .map(|(session_id, item)| SessionUsageBreakdown {
-                session_id,
-                title: item.title,
-                is_subagent: item.is_subagent,
-                first_message_at: item.first_message_at,
-                last_message_at: item.last_message_at,
-                totals: item.totals.into_totals(),
+            .map(|(session_id, item)| {
+                let mut totals = item.totals.into_totals();
+                totals.sessions = 1;
+                SessionUsageBreakdown {
+                    session_id,
+                    title: item.title,
+                    is_subagent: item.is_subagent,
+                    first_message_at: item.first_message_at,
+                    last_message_at: item.last_message_at,
+                    totals,
+                }
             })
             .collect::<Vec<_>>();
         by_session.sort_by(|left, right| compare_totals(&left.totals, &right.totals));

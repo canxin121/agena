@@ -138,6 +138,66 @@ async fn inbox_checkpoint_dedupe_budget_and_revocation_are_atomic() {
     assert!(repo.next_event(b.id, 3700).await.unwrap().is_none());
 }
 #[tokio::test]
+async fn old_epoch_backlog_does_not_delay_current_dispatch_or_consume_capacity() {
+    let db = open_kernel_runtime("sqlite::memory:").await.unwrap();
+    let repo = SqliteIntegrationRepository::new(db.database.clone());
+    let mut binding = enabled(&repo).await;
+    for batch in 0..4 {
+        repo.accept_batch(
+            binding.id,
+            binding.revision,
+            AdapterBatch {
+                events: (batch * 32..(batch + 1) * 32)
+                    .map(|index| event(&format!("old-{index:03}")))
+                    .collect(),
+                cursor: json!(batch),
+                retry_after_seconds: None,
+            },
+            3000,
+        )
+        .await
+        .unwrap();
+    }
+    let accept_current = |revision| {
+        repo.accept_batch(
+            binding.id,
+            revision,
+            AdapterBatch {
+                events: vec![event("current-b"), event("current-a")],
+                cursor: json!("current"),
+                retry_after_seconds: None,
+            },
+            3100,
+        )
+    };
+    assert!(accept_current(binding.revision).await.is_err());
+    assert_eq!(repo.binding(binding.id).await.unwrap().cursor, json!(3));
+
+    let old_revision = binding.revision;
+    binding.epoch += 1;
+    binding.revision += 1;
+    let binding = repo
+        .save_binding(binding.clone(), old_revision)
+        .await
+        .unwrap();
+    accept_current(binding.revision).await.unwrap();
+    let first = repo.next_event(binding.id, 3200).await.unwrap().unwrap();
+    assert_eq!(first.epoch, binding.epoch);
+    assert_eq!(first.event.id, "current-a");
+    let ignored: i64 = sea_orm::sqlx::query_scalar(
+        "SELECT count(*) FROM agena_integration_inbox WHERE note='authorization_revoked'",
+    )
+    .fetch_one(db.database.get_sqlite_connection_pool())
+    .await
+    .unwrap();
+    assert_eq!(ignored, 32);
+    assert_eq!(
+        repo.binding(binding.id).await.unwrap().cursor,
+        json!("current")
+    );
+}
+
+#[tokio::test]
 async fn filters_and_payload_limits_cannot_be_overridden_by_provider_data() {
     let db = open_kernel_runtime("sqlite::memory:").await.unwrap();
     let repo = SqliteIntegrationRepository::new(db.database.clone());
@@ -211,7 +271,54 @@ async fn sending_recovery_never_silently_requeues_unknown_remote_effects() {
     repo.recover_sending().await.unwrap();
     assert_eq!(repo.deliveries(b.id).await.unwrap()[0].state, "uncertain");
     assert!(repo.claim_delivery(b.id, 4000).await.unwrap().is_none());
+
+    repo.retry_uncertain_deliveries(b.id, 5000).await.unwrap();
+    assert!(repo.claim_delivery(b.id, 4999).await.unwrap().is_none());
+    let retry = repo.claim_delivery(b.id, 5000).await.unwrap().unwrap();
+    assert_eq!(retry.id, claimed.id);
+    assert_eq!(retry.text, "hello");
+    assert_eq!(retry.attempts, 2);
+    assert_eq!(retry.state, "sending");
 }
+
+#[tokio::test]
+async fn claim_merges_deadline_ranges_in_creation_order() {
+    let db = open_kernel_runtime("sqlite::memory:").await.unwrap();
+    let repo = SqliteIntegrationRepository::new(db.database.clone());
+    let binding = enabled(&repo).await;
+    for (id, created_at_ms, next_attempt_ms) in [
+        ("future", 1, 5000),
+        ("a-retry", 2, 1000),
+        ("immediate-b", 2, 0),
+        ("immediate-a", 2, 0),
+        ("negative-deadline", 3, -10),
+    ] {
+        repo.enqueue_delivery(IntegrationDelivery {
+            id: id.into(),
+            binding_id: binding.id,
+            text: String::new(),
+            state: "queued".into(),
+            attempts: 0,
+            next_attempt_ms,
+            remote_id: None,
+            created_at_ms,
+            error: None,
+            route: None,
+        })
+        .await
+        .unwrap();
+    }
+    // At a negative host clock, only the negative deadline has arrived.
+    let claim = async |now| repo.claim_delivery(binding.id, now).await.unwrap();
+    assert_eq!(claim(-1).await.unwrap().id, "negative-deadline");
+    for expected in ["a-retry", "immediate-a", "immediate-b"] {
+        assert_eq!(claim(3000).await.unwrap().id, expected);
+    }
+    assert!(claim(3000).await.is_none());
+    assert_eq!(claim(5000).await.unwrap().id, "future");
+    db.ports.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn same_creation_key_cannot_rebind_identity_or_authority() {
     let db = open_kernel_runtime("sqlite::memory:").await.unwrap();
@@ -267,8 +374,10 @@ async fn partial_schema_missing_integration_bundles_is_rejected() {
         .unwrap();
     for table in [
         "agena_channel_participants",
+        "agena_channel_rooms",
         "agena_channel_access_audit",
         "agena_channel_user_budget",
+        "agena_channel_pending_outputs",
         "agena_channel_sessions",
     ] {
         sea_orm::sqlx::query(&format!("DROP TABLE {table}"))
@@ -277,7 +386,9 @@ async fn partial_schema_missing_integration_bundles_is_rejected() {
             .unwrap();
     }
     for table in [
+        "agena_integration_event_payloads",
         "agena_integration_inbox",
+        "agena_integration_delivery_text",
         "agena_integration_outbox",
         "agena_integration_bindings",
     ] {
@@ -442,7 +553,7 @@ async fn native_receipt_recovers_lost_inbox_ack_and_stays_reconcilable_after_pau
     paused.state = BindingState::Paused;
     paused.revision += 1;
     paused.epoch += 1;
-    repo.save_binding(paused, revision).await.unwrap();
+    let paused = repo.save_binding(paused, revision).await.unwrap();
     assert!(
         repo.bindings(None)
             .await
@@ -456,6 +567,20 @@ async fn native_receipt_recovers_lost_inbox_ack_and_stays_reconcilable_after_pau
             .execution_id,
         Some(receipt.id.to_string())
     );
+    let mut resumed = paused.clone();
+    resumed.state = BindingState::Enabled;
+    resumed.revision += 1;
+    resumed.epoch += 1;
+    let resumed = repo.save_binding(resumed, paused.revision).await.unwrap();
+    assert!(repo.next_event(binding.id, 3300).await.unwrap().is_none());
+    let executing = &repo.execution_events(binding.id).await.unwrap()[0].0;
+    assert_eq!(executing.state, "executing");
+    assert_eq!(executing.execution_id, Some(receipt.id.to_string()));
+    let mut stop = resumed.clone();
+    stop.state = BindingState::Paused;
+    stop.revision += 1;
+    stop.epoch += 1;
+    repo.save_binding(stop, resumed.revision).await.unwrap();
     let mut completed = facts[0].0.clone();
     completed.state = "handled".into();
     repo.finish_event(completed).await.unwrap();

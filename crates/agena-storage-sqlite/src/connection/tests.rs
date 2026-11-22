@@ -131,7 +131,7 @@ async fn fresh_baseline_reopens_with_identity_data_and_transaction_guards() {
     );
     execute(
         db,
-        "INSERT INTO agena_server_state VALUES('fixture', '{\"ready\":true}', 1)",
+        "INSERT INTO agena_server_state VALUES('fixture', '{\"ready\":true}')",
     )
     .await;
     database.close().await.unwrap();
@@ -252,7 +252,7 @@ async fn missing_schema_object_is_rejected_instead_of_reinstalled() {
         .await
         .unwrap();
     let fixture = raw_fixture(&path).await;
-    execute(&fixture, "DROP INDEX idx_agena_server_state_updated").await;
+    execute(&fixture, "DROP INDEX idx_agena_sessions_workspace").await;
     fixture.close().await.unwrap();
     assert_rejected_unchanged(&path).await;
 }
@@ -324,13 +324,13 @@ async fn crash_fixture_child() {
             execute(db, "PRAGMA wal_autocheckpoint=0").await;
             execute(
                 db,
-                "INSERT INTO agena_server_state VALUES('committed', '{\"durable\":true}', 1)",
+                "INSERT INTO agena_server_state VALUES('committed', '{\"durable\":true}')",
             )
             .await;
             let transaction = db.begin().await.unwrap();
             execute(
                 &transaction,
-                "INSERT INTO agena_server_state VALUES('uncommitted', '{}', 2)",
+                "INSERT INTO agena_server_state VALUES('uncommitted', '{}')",
             )
             .await;
             // No pool, transaction or connection destructor may checkpoint the
@@ -343,11 +343,11 @@ async fn crash_fixture_child() {
             execute(db, "PRAGMA wal_autocheckpoint=0").await;
             execute(
                 db,
-                "INSERT INTO agena_server_state VALUES('keep', '{\"durable\":true}', 1)",
+                "INSERT INTO agena_server_state VALUES('keep', '{\"durable\":true}')",
             )
             .await;
             if kind == "current-wal-schema-drift" {
-                execute(db, "DROP INDEX idx_agena_server_state_updated").await;
+                execute(db, "DROP INDEX idx_agena_sessions_workspace").await;
             } else {
                 execute(db, "PRAGMA ignore_check_constraints=ON").await;
                 execute(

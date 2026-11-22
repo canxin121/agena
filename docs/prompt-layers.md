@@ -34,16 +34,9 @@ Use `order` to attach a saved entry to a layer.
 File-backed `prompts/<id>.md` fragments and inline fragments also participate in
 resolution. The saved prompt picker lists JSON-backed entries.
 
-The previous `additional_system_prompt` setting has been retired. Configuration
-files and the session API have no compatibility alias for it, and session
-updates reject it as an unknown field. On startup, SQLite initialization does
-migrate the retired field inside each stored session's `configuration_json`:
-a string becomes one inline fragment named `legacy-session-prompt`, an empty or
-whitespace-only string becomes an empty `replace` layer, `null` removes the key,
-and any other JSON type aborts initialization with a diagnostic. If the session
-already has a non-null `prompts` layer, that layer is preserved. Provider-model
-`additional_system_prompt` entries are configuration, not session storage, and
-must be removed manually.
+Use `prompts` for session, profile, and provider-model instructions. To move
+text from `additional_system_prompt`, save it as a prompt fragment and add its
+id to the applicable prompt layer.
 
 ## Data model
 
@@ -396,17 +389,13 @@ global and workspace `prompts` settings remain available in **Advanced settings*
 
 ## Migrating from `additional_system_prompt`
 
-There is no compatibility alias. Stored session values are migrated once by the
-SQLite initializer as described above; provider-model configuration values are
-not migrated and must be removed manually. To move any remaining text:
+To move existing instructions into prompt layers:
 
 1. Put each reusable instruction in the appropriate `prompts/<id>.md` file.
 2. Add its id to that scope's `order`.
 3. Use an inline session fragment only for instructions that belong to one
    session.
-4. Remove any provider-model `additional_system_prompt` entries. Session
-   database values do not need a manual step: the initializer performs the
-   migration described at the top of this page.
+4. Remove the retired settings from the configuration files.
 
 The old model replaced lower scopes. The new default is composition; use
 `disabled` to hide one inherited fragment or `replace` to deliberately discard

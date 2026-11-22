@@ -102,22 +102,18 @@ impl AgenaRuntime {
             workspace_root: _,
         } = config;
         let loader = ConfigLoader::new(ProcessEnvironment);
-        let migration_config_path = load_request
-            .config_path
-            .clone()
-            .unwrap_or_else(|| agena_runtime::default_config_path(&ProcessEnvironment));
-        let database = agena_runtime::connect_runtime_database(
-            agena_runtime::DatabaseCompositionInputs {
+        let database =
+            agena_runtime::connect_runtime_database(agena_runtime::DatabaseCompositionInputs {
                 database_url,
                 database_path,
-            },
-            migration_config_path,
-        )
-        .await
-        .map_err(runtime_database_error)?;
+            })
+            .await
+            .map_err(runtime_database_error)?;
 
         // Every durable service shares the owned instance database.
-        let scheduler_database = database.as_ref().map(|kernel| kernel.database.clone());
+        let scheduler_database = database
+            .as_ref()
+            .map(|kernel| (kernel.database.clone(), kernel.reader_database.clone()));
 
         // Publish directly to the bounded signal hub. Its synchronous clock
         // observers see every mutation; slow clients receive an explicit lag.
@@ -243,17 +239,24 @@ impl AgenaRuntime {
             super::host_client::install_plugin_host_event_publisher(host_handle, &runtime);
         }
 
-        if let (Some(database), Some(_)) =
-            (runtime.inner.database.as_ref(), runtime.session_manager())
-        {
+        if let (Some(kernel), Some(_)) = (
+            runtime.inner.session_kernel.as_ref(),
+            runtime.session_manager(),
+        ) {
             let assistant = super::assistant::AssistantRuntime::new(
                 runtime.downgrade(),
-                Arc::new(agena_storage_sqlite::SqliteCompanionRepository::new(
-                    database.clone(),
-                )),
-                Arc::new(agena_storage_sqlite::SqliteIntegrationRepository::new(
-                    database.clone(),
-                )),
+                Arc::new(
+                    agena_storage_sqlite::SqliteCompanionRepository::with_reader(
+                        kernel.database.clone(),
+                        kernel.reader_database.clone(),
+                    ),
+                ),
+                Arc::new(
+                    agena_storage_sqlite::SqliteIntegrationRepository::with_reader(
+                        kernel.database.clone(),
+                        kernel.reader_database.clone(),
+                    ),
+                ),
             );
             let _ = runtime.assistant_service.set(assistant.clone());
         }
@@ -2450,15 +2453,11 @@ impl AgenaRuntime {
         &self,
         session_manager: Option<Arc<SessionManager>>,
     ) -> agena_runtime::RuntimeApplicationServices {
-        let repositories = self.inner.database.as_ref().map(|database| {
+        let repositories = self.inner.session_kernel.as_ref().map(|kernel| {
             agena_runtime::RuntimeApplicationRepositories {
                 memory: Arc::new(MemoryStore::for_workspace(self.workspace_root())),
-                workspace: Arc::new(agena_storage_sqlite::SeaWorkspaceRepository::new(
-                    Arc::clone(database),
-                )),
-                permission_rules: Arc::new(agena_storage_sqlite::SeaPermissionRuleRepository::new(
-                    Arc::clone(database),
-                )),
+                workspace: kernel.workspaces.clone(),
+                permission_rules: kernel.permissions.clone(),
             }
         });
         let session_kernel = session_manager

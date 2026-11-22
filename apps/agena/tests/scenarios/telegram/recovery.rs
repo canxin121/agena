@@ -1,6 +1,5 @@
-//! Restore an upgraded, faulted private chat through the real HTTP surface.
+//! Restore a faulted private chat through the real HTTP surface.
 use super::*;
-use sha2::{Digest, Sha256};
 
 fn private_message(message_id: i64, text: &str) -> Value {
     json!({
@@ -59,12 +58,12 @@ async fn review_restores_existing_private_history_and_local_replies_without_repl
                 action: IntegrationControlAction::Enable,
             }).await?;
             let model = case.model();
-            let first = model.expect(RequestMatch::user_text("private-history-before-upgrade"))
+            let first = model.expect(RequestMatch::user_text("private-history-before-review"))
                 .reply(Reply::function_call("unassigned-tools", "tools_list", json!({"plugin":"agena.fs"})));
             model.expect(RequestMatch::tool_output("unassigned-tools")).after(&first)
                 .check_tool_output_contains("unassigned-tools", "returned 0 of 0")
                 .reply(Reply::text("private-history-preserved-response"));
-            observed.updates.lock().unwrap().push(update(1, private_message(101, "private-history-before-upgrade")));
+            observed.updates.lock().unwrap().push(update(1, private_message(101, "private-history-before-review")));
             client.control_integration(source.session_id, active.id, &IntegrationControl {
                 not_before_ms: None, expected_revision: active.revision,
                 action: IntegrationControlAction::PollNow,
@@ -74,47 +73,56 @@ async fn review_restores_existing_private_history_and_local_replies_without_repl
                 let detail = client.integration_detail(source.session_id, active.id).await?;
                 Ok((detail.channel_sessions.len() == 1 && detail.deliveries.iter().any(|d| d.state == "sent")).then_some(detail))
             }, "original private chat and delivery").await?;
+            let delivered = original
+                .deliveries
+                .iter()
+                .find(|delivery| delivery.state == "sent")
+                .context("original execution delivery")?;
             let original_scope = original.channel_sessions.first().context("original private scope")?.clone();
             let session_id = original_scope.session_id;
             ensure!(original_scope.authority.epoch == 1);
             ensure!(original_scope.authority.role == ChannelRole::Member);
             let http = case.http().await;
-            let inspection: Value = http.get("/api/v1/plugins/agena.telegram").await?.require_success()?.json()?;
-            let legacy_manifest: Value = serde_json::from_str(include_str!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../crates/agena-runtime/src/runtime/assistant/integrations/legacy/telegram-885d63f24.json"
-            )))?;
-            let legacy_identity = json!({
-                "manifest": legacy_manifest,
-                "configuration": inspection["plugin"]["configured_plugin"],
-            });
-            let legacy_fingerprint: String = Sha256::digest(serde_json::to_vec(&legacy_identity)?)
-                .iter().map(|byte| format!("{byte:02x}")).collect();
             let paused = client.control_integration(source.session_id, active.id, &IntegrationControl {
                 not_before_ms: None, expected_revision: original.binding.revision,
                 action: IntegrationControlAction::Pause,
             }).await?;
             ensure!(paused.epoch == 2);
-            // Reconstruct the persisted upgrade failure in this isolated fixture.
-            // The absent outbox row represents a completed old execution that
-            // crashed before export; recovery must not send it a second time.
+            // Restore the durable state of a faulted binding with a completed
+            // execution interrupted before its outbox receipt was enqueued.
             let injected = tokio::process::Command::new("python3")
                 .arg("-c")
-                .arg(r#"import json,sqlite3,sys
-c=sqlite3.connect(sys.argv[1])
-with c:
-    row=c.execute('SELECT binding_json FROM agena_integration_bindings WHERE id=?',(sys.argv[2],)).fetchone()
-    b=json.loads(row[0])
-    assert b['state']=='paused' and b['epoch']==2
-    b['state']='faulted'
-    b['provider_fingerprint']=sys.argv[3]
-    b['last_error']='channel provider or source permissions changed; explicit review is required'
-    c.execute('UPDATE agena_integration_bindings SET state=?,binding_json=? WHERE id=?',('faulted',json.dumps(b),sys.argv[2]))
-    c.execute('DELETE FROM agena_integration_outbox WHERE binding_id=?',(sys.argv[2],))
+                .arg(r#"import json
+import sqlite3
+import sys
+
+connection = sqlite3.connect(sys.argv[1])
+connection.execute('PRAGMA foreign_keys=ON')
+delivery_id = sys.argv[2]
+binding_id, execution_id, generation = delivery_id.split(':')
+with connection:
+    row = connection.execute(
+        'SELECT binding_json FROM agena_integration_bindings WHERE id=?', (binding_id,)
+    ).fetchone()
+    binding = json.loads(row[0])
+    assert binding['state'] == 'paused' and binding['epoch'] == 2
+    binding['state'] = 'faulted'
+    binding['last_error'] = 'local review is required'
+    connection.execute(
+        'UPDATE agena_integration_bindings SET state=?,binding_json=? WHERE id=?',
+        ('faulted', json.dumps(binding), binding_id),
+    )
+    deleted = connection.execute('DELETE FROM agena_integration_outbox WHERE id=?', (delivery_id,))
+    assert deleted.rowcount == 1
+    pending = connection.execute('''
+        INSERT INTO agena_channel_pending_outputs(session_id,finished_at_ms,execution_id,generation,delivery_id)
+        SELECT session_id,finished_at_ms,execution_id,generation,? FROM agena_attempts
+        WHERE execution_id=? AND generation=? AND finished_at_ms IS NOT NULL
+    ''', (delivery_id, execution_id, int(generation)))
+    assert pending.rowcount == 1
 "#)
                 .arg(case.data_dir().join("agena.db"))
-                .arg(active.id.to_string())
-                .arg(legacy_fingerprint)
+                .arg(&delivered.id)
                 .output().await?;
             ensure!(injected.status.success(), "fixture fault injection: {}", String::from_utf8_lossy(&injected.stderr));
             let mut policy = paused.spec.channel_policy.clone().context("private policy")?;

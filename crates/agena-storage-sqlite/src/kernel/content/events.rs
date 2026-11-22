@@ -530,16 +530,17 @@ fn accept_record(
 /// Every stored record is validated before either path can inspect a suffix.
 pub(super) async fn stored_block(
     connection: &mut SqliteConnection,
+    source_key: i64,
     head: &ContentStreamView,
     start: i64,
 ) -> Result<ImmutableEventBlock> {
-    let row=sqlx::query("SELECT logical_end,codec,digest,body FROM agena_content_blocks WHERE content_id=? AND logical_start=?")
-        .bind(head.id.to_string()).bind(start).fetch_one(connection).await.map_err(sql_error)?;
+    let row=sqlx::query("SELECT logical_end,codec,digest,body_bytes,body FROM agena_content_blocks WHERE source_key=? AND logical_start=?")
+        .bind(source_key).bind(start).fetch_one(&mut *connection).await.map_err(sql_error)?;
     if row.try_get::<String, _>("codec").map_err(storage)? != "events_v1" {
         return Err(storage("event block has an incompatible codec"));
     }
     let end: i64 = row.try_get("logical_end").map_err(storage)?;
-    let bytes: Vec<u8> = row.try_get("body").map_err(storage)?;
+    let bytes = block_body(connection, source_key, start, &row).await?;
     let digest: Vec<u8> = row.try_get("digest").map_err(storage)?;
     let block = ImmutableEventBlock::from_stored(
         u64::try_from(start).map_err(storage)?,
@@ -560,6 +561,7 @@ pub(super) async fn block(
     backend: &Backend,
     connection: &mut SqliteConnection,
     session: SessionId,
+    source_key: i64,
     head: &ContentStreamView,
     start: i64,
 ) -> Result<ReadView<ImmutableEventBlock>> {
@@ -573,7 +575,7 @@ pub(super) async fn block(
         read_cache::Lookup::Miss(fill) => fill,
     };
     metrics::add(&backend.live.diagnostics().0.event_block_queries, 1);
-    let block = stored_block(connection, head, start).await?;
+    let block = stored_block(connection, source_key, head, start).await?;
     metrics::add(&backend.live.diagnostics().0.event_block_rows, 1);
     metrics::add(
         &backend.live.diagnostics().0.event_block_validated_bytes,
@@ -845,7 +847,7 @@ async fn page_inner(
         .map_err(storage)?;
     let measurement = backend.live.diagnostics().read_transaction();
     let result = async {
-        authorize(&mut transaction, session, content).await?;
+        let source_key = authorize(&mut transaction, session, content).await?;
         let frozen = scoped_boundary(&mut transaction, session, content, boundary).await?;
         let (head, tail, context, large_read) = if let Some(frozen) = frozen {
             // A branch must never install a live authorization context or
@@ -873,10 +875,10 @@ async fn page_inner(
             } else {
                 // Usually a single physical block covers the requested page.
                 // Do not collect 64 future metadata rows for every 32 events.
-                let row = sqlx::query("SELECT logical_start,length(body) AS bytes FROM agena_content_blocks WHERE content_id=? AND logical_start<=? ORDER BY logical_start DESC LIMIT 1")
-                    .bind(content.to_string()).bind(page.position as i64).fetch_optional(&mut *transaction).await.map_err(sql_error)?
+                let row = sqlx::query("SELECT logical_start,body_bytes FROM agena_content_blocks WHERE source_key=? AND logical_start<=? ORDER BY logical_start DESC LIMIT 1")
+                    .bind(source_key).bind(page.position as i64).fetch_optional(&mut *transaction).await.map_err(sql_error)?
                     .ok_or_else(|| storage("committed event range has no block"))?;
-                if row.try_get::<i64, _>("bytes").map_err(storage)? > MAX_EVENT_PAGE_BYTES as i64 {
+                if row.try_get::<i64, _>("body_bytes").map_err(storage)? > MAX_EVENT_PAGE_BYTES as i64 {
                     if !page.records.is_empty() {
                         page.done = true;
                         break;
@@ -885,7 +887,7 @@ async fn page_inner(
                         page.large_read = Some(backend.frame_reads.clone().try_acquire_owned().map_err(|_| KernelError::Busy)?);
                     }
                 }
-                block(backend, &mut transaction, session, &head, row.try_get("logical_start").map_err(storage)?).await?
+                block(backend, &mut transaction, session, source_key, &head, row.try_get("logical_start").map_err(storage)?).await?
             };
             page.block(backend, &head, &block, head.committed)?;
         }
@@ -961,7 +963,7 @@ async fn snapshot_inner(
         .map_err(storage)?;
     let measurement = backend.live.diagnostics().read_transaction();
     let result = async {
-    authorize(&mut transaction, session, content).await?;
+    let source_key = authorize(&mut transaction, session, content).await?;
     let frozen = scoped_boundary(&mut transaction, session, content, boundary).await?;
     if frozen.is_none() && let Some((head, projection)) = capture {
         return projection.snapshot(head);
@@ -982,12 +984,12 @@ async fn snapshot_inner(
     if head.committed == 0 {
         return EventProjection::new(kind).snapshot(head);
     }
-    let checkpoint=sqlx::query("SELECT logical_sequence,block_start FROM agena_content_checkpoints WHERE content_id=? AND logical_sequence<=? ORDER BY logical_sequence DESC LIMIT 1")
-        .bind(content.to_string()).bind(head.committed as i64).fetch_optional(&mut *transaction).await.map_err(sql_error)?.ok_or_else(||KernelError::NotFound("event checkpoint".into()))?;
+    let checkpoint=sqlx::query("SELECT logical_sequence,block_start FROM agena_content_checkpoints WHERE source_key=? AND logical_sequence<=? ORDER BY logical_sequence DESC LIMIT 1")
+        .bind(source_key).bind(head.committed as i64).fetch_optional(&mut *transaction).await.map_err(sql_error)?.ok_or_else(||KernelError::NotFound("event checkpoint".into()))?;
     let sequence: i64 = checkpoint.try_get("logical_sequence").map_err(storage)?;
     let start: i64 = checkpoint.try_get("block_start").map_err(storage)?;
-    let starts: Vec<i64>=sqlx::query_scalar("SELECT logical_start FROM agena_content_blocks WHERE content_id=? AND logical_start>=? AND logical_start<? ORDER BY logical_start LIMIT 66")
-        .bind(content.to_string()).bind(start).bind(head.committed as i64).fetch_all(&mut *transaction).await.map_err(sql_error)?;
+    let starts: Vec<i64>=sqlx::query_scalar("SELECT logical_start FROM agena_content_blocks WHERE source_key=? AND logical_start>=? AND logical_start<? ORDER BY logical_start LIMIT 66")
+        .bind(source_key).bind(start).bind(head.committed as i64).fetch_all(&mut *transaction).await.map_err(sql_error)?;
     let _large = backend
         .frame_reads
         .clone()
@@ -995,7 +997,7 @@ async fn snapshot_inner(
         .map_err(|_| KernelError::Busy)?;
     let mut projection = None;
     for start in starts {
-        let block = block(backend, &mut transaction, session, &head, start).await?;
+        let block = block(backend, &mut transaction, session, source_key, &head, start).await?;
         block.validate_kind(kind).map_err(storage)?;
         for record in block.iter_after((sequence as u64).saturating_sub(1)) {
             let record = record.map_err(storage)?;

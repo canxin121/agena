@@ -22,7 +22,7 @@ async fn worker_permit(
     }
 }
 
-pub(super) async fn launch_worker_permit(
+async fn launch_worker_permit(
     executor: &ToolExecutor,
 ) -> Result<tokio::sync::SemaphorePermit<'static>, ToolError> {
     worker_permit(executor, &SHELL_LAUNCH_WORKERS).await
@@ -509,7 +509,6 @@ fn execute_spawn_prepared(
                 argv: Some(argv),
                 process_id: reserved_process_id,
                 command: final_command,
-                ws: None,
                 description: command.description.clone(),
                 workdir: final_cwd,
                 timeout_ms: command.timeout_ms,
@@ -756,7 +755,7 @@ fn render_list(processes: Vec<ProcessSummary>) -> ToolPayloadExecution {
                 "- {id} [{status}] kind={kind} buffered={buf} last_seq={seq} dropped={dropped}{exit}{reason} :: {command}",
                 id = summary.process_id,
                 status = summary.status,
-                kind = if summary.tty { "terminal" } else if summary.websocket { "websocket" } else if summary.monitored { "watch" } else { "background" },
+                kind = if summary.tty { "terminal" } else if summary.monitored { "watch" } else { "background" },
                 buf = summary.buffered_lines,
                 seq = summary.last_seq,
                 dropped = summary.dropped_lines,

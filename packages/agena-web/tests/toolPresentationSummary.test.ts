@@ -56,4 +56,19 @@ describe('authoritative tool presentation summaries', () => {
     expect(legacy.summary).toBe(source.agenaSummary)
     expect(operationPresentation(legacy).summary).toBe(source.agenaSummary)
   })
+
+  test('renders retained monitor output in the transcript', () => {
+    const output = { type: 'content', id: 'events', resource: { resource_id: 'log-2', kind: 'log' } }
+    const display = projectLocalPart(
+      {
+        ...source,
+        agenaContent: { name: 'agena.monitor.start' },
+        agenaPresentation: {
+          blocks: [{ type: 'monitor_subscription', id: 'monitor', subscription_id: 'proc-1' }, output],
+        },
+      },
+      'assistant',
+    )
+    expect(operationPresentation(display).presentationBlocks).toEqual([output])
+  })
 })

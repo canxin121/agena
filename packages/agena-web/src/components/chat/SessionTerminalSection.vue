@@ -1,14 +1,13 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { RiArrowLeftLine, RiArrowRightSLine, RiPlugLine, RiRefreshLine, RiTerminalBoxLine } from '@remixicon/vue'
+import { RiArrowLeftLine, RiArrowRightSLine, RiRefreshLine, RiTerminalBoxLine } from '@remixicon/vue'
 import { apiJson } from '@/lib/api'
 import type { MessageEntry } from '@/types/chat'
 import {
   composerProcesses,
   processCollection,
   type ComposerProcess,
-  type ProcessKind,
   type SessionProcess,
 } from '@/pages/chat/sessionProcesses'
 import { useVisibleResource } from '@/pages/chat/useVisibleResource'
@@ -29,29 +28,16 @@ const expanded = ref(true)
 const session = computed(() => props.sessionId)
 
 // Managed processes can outlive the launch part's loaded transcript window.
-function processList(kind: ProcessKind) {
-  const reader = useVisibleResource<SessionProcess[]>({
-    key: session,
-    minInterval: 1000,
-    interval: (): number => (props.busy || reader.data.value?.some((row) => row.status === 'running') ? 3000 : 30000),
-    load: (id, signal) => apiJson<SessionProcess[]>(processCollection(id, kind), { signal, cache: 'no-store' }),
-  })
-  return reader
-}
-const shells = processList('shell')
-const monitors = processList('monitor')
-const processes = computed(() =>
-  composerProcesses(props.sessionId, props.messages, shells.data.value ?? [], monitors.data.value ?? []),
-)
+const shells = useVisibleResource<SessionProcess[]>({
+  key: session,
+  minInterval: 1000,
+  interval: (): number => (props.busy || shells.data.value?.some((row) => row.status === 'running') ? 3000 : 30000),
+  load: (id, signal) => apiJson<SessionProcess[]>(processCollection(id), { signal, cache: 'no-store' }),
+})
+const { loading, error } = shells
+const processes = computed(() => composerProcesses(props.sessionId, props.messages, shells.data.value ?? []))
 const selected = computed(() => processes.value.find((entry) => entry.key === selectedKey.value))
 const part = computed(() => selected.value?.part && projectLocalPart(selected.value.part, 'assistant'))
-const loading = computed(() => shells.loading.value || monitors.loading.value)
-const errors = computed(() =>
-  [
-    { label: t('chat.operations.process'), error: shells.error.value },
-    { label: t('chat.operations.subscription'), error: monitors.error.value },
-  ].filter((entry) => entry.error),
-)
 const title = computed(() => t('nav.terminal'))
 const label = computed(() => (processes.value.length ? `${title.value} · ${processes.value.length}` : title.value))
 
@@ -60,9 +46,9 @@ function select(key?: string) {
   expanded.value = true
 }
 function status(entry: ComposerProcess) {
-  const { process, exitCode, kind, part } = entry
+  const { process, exitCode, part } = entry
   const code = process?.exit_code ?? exitCode
-  if (kind === 'shell' && code != null) return t('chat.activityLog.exitCode', { code })
+  if (code != null) return t('chat.activityLog.exitCode', { code })
   if (process)
     return t(
       process.ready && process.status === 'running'
@@ -74,7 +60,6 @@ function status(entry: ComposerProcess) {
 }
 function refresh() {
   void shells.refresh()
-  void monitors.refresh()
 }
 watch(() => props.busy, refresh)
 watch(open, (value) => {
@@ -85,7 +70,7 @@ watch(open, (value) => {
 
 <template>
   <SessionChip
-    v-if="open || processes.length || errors.length"
+    v-if="open || processes.length || error"
     data-terminal-chip
     :title="selected?.label || title"
     :label="label"
@@ -125,9 +110,8 @@ watch(open, (value) => {
         <ProcessControls
           :key="selected.key"
           :session-id="sessionId"
-          :kind="selected.kind"
           :id="selected.process.process_id"
-          @changed="(selected.kind === 'shell' ? shells : monitors).refresh()"
+          @changed="refresh"
         />
       </template>
       <AgenaOperationPart
@@ -141,10 +125,10 @@ watch(open, (value) => {
       />
     </template>
     <template v-else>
-      <p v-for="item in errors" :key="item.label" role="alert" class="mb-1 break-words text-xs text-destructive">
-        {{ item.label }} · {{ item.error }}
+      <p v-if="error" role="alert" class="mb-1 break-words text-xs text-destructive">
+        {{ t('chat.operations.process') }} · {{ error }}
       </p>
-      <p v-if="!processes.length && !errors.length" class="text-xs text-muted-foreground">
+      <p v-if="!processes.length && !error" class="text-xs text-muted-foreground">
         {{ t(loading ? 'common.loading' : 'chat.operations.noProcesses') }}
       </p>
       <ul v-if="processes.length" class="space-y-0.5">
@@ -155,12 +139,8 @@ watch(open, (value) => {
             :title="entry.label"
             @click="select(entry.key)"
           >
-            <component
-              :is="entry.kind === 'shell' ? RiTerminalBoxLine : RiPlugLine"
-              class="h-4 w-4 shrink-0 text-muted-foreground"
-              aria-hidden="true"
-            />
-            <span class="min-w-0 flex-1 truncate" :class="{ 'font-mono': entry.kind === 'shell' }" dir="auto">
+            <RiTerminalBoxLine class="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <span class="min-w-0 flex-1 truncate font-mono" dir="auto">
               {{ entry.label }}
             </span>
             <span class="shrink-0 text-muted-foreground">{{ status(entry) }}</span>

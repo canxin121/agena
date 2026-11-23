@@ -1,35 +1,33 @@
-//! Runtime background-process / monitor registry.
+//! Runtime background process registry.
 //!
 //! A background process runs a long-lived shell command and captures every
-//! stdout/stderr line as a numbered event; a monitor may alternatively watch a
-//! WebSocket feed whose text frames become events. The public model-visible
-//! tool surface is shell.spawn / shell.watch / shell.logs / shell.stop plus
-//! WebSocket monitor.start / monitor.stop, backed by this registry.
+//! stdout/stderr line as a numbered event. The shell tools use this registry
+//! to launch, watch, read, and stop background processes.
 //!
 //! Captured events live in a ring buffer (default 1000 lines) so the model can
 //! walk forward through history without losing recent activity. Lines that get
 //! evicted are counted in `dropped_lines` so the model knows it missed
 //! something. A [`MonitorListener`] receives start/finish transitions and
-//! selected events as they arrive — the runtime coalesces watched-command and
-//! WebSocket events into bounded system_notification batches. Ordinary jobs
-//! notify only on completion. The ring buffer retains diagnostic output even
+//! selected events as they arrive. The runtime coalesces watched command events
+//! into bounded system_notification batches. Ordinary jobs notify only on
+//! completion. The ring buffer retains diagnostic output even
 //! when an event is excluded from notifications.
 //!
 //! # Concurrency model
 //!
-//! The process runner, pipe readers, WebSocket reader, timeout, cancellation,
+//! The process runner, pipe readers, timeout, cancellation,
 //! and child wait all run on the caller's Tokio runtime. The registry also has
 //! synchronous readers for non-async consumers; those reads sleep on a condition
 //! variable and async callers isolate them with `spawn_blocking`.
 
-use portable_atomic::{AtomicI64, AtomicU64};
+use portable_atomic::AtomicU64;
 use std::collections::{HashMap, VecDeque};
 use std::process::Stdio;
 use std::sync::{Arc, Condvar, Mutex, atomic::Ordering};
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
-use futures_util::{FutureExt as _, StreamExt as _};
+use futures_util::FutureExt as _;
 use regex::Regex;
 use thiserror::Error;
 use tokio::process::Command;
@@ -43,15 +41,12 @@ use agena_process::ManagedChild;
 #[path = "monitor/watch.rs"]
 mod watch;
 use watch::{OutputMatcher, WatchState};
-#[path = "monitor/websocket.rs"]
-mod websocket;
-pub use websocket::try_run_monitor_worker;
 
 const DEFAULT_BUFFER_LINES: usize = 1_000;
 const MAX_BUFFER_LINES: usize = 10_000;
 const MAX_BUFFER_BYTES: usize = 1024 * 1024;
 const DEFAULT_TIMEOUT_MS: u64 = 300_000;
-const MAX_TIMEOUT_MS: u64 = 3_600_000;
+const MAX_TIMEOUT_MS: u64 = 86_400_000;
 const DEFAULT_READ_LIMIT: usize = 200;
 const MAX_READ_LIMIT: usize = 2_000;
 const MAX_WAIT_MS: u64 = 60_000;
@@ -83,12 +78,8 @@ pub struct StartParams {
     /// id. Reusing a reserved id is idempotent and returns the existing
     /// monitor instead of spawning a duplicate side effect.
     pub process_id: Option<String>,
-    /// Shell command to run. Exactly one of `command` / `ws` must be set
-    /// (`command` empty + `ws` `None` is invalid, both set is invalid).
+    /// Shell command to run.
     pub command: String,
-    /// WebSocket endpoint to watch instead of a command; text frames become
-    /// events.
-    pub ws: Option<MonitorWsParams>,
     pub description: String,
     pub workdir: std::path::PathBuf,
     pub timeout_ms: Option<u64>,
@@ -102,18 +93,6 @@ pub struct StartParams {
     pub max_buffered_lines: Option<u32>,
     pub capture_stderr: bool,
     pub env: HashMap<String, String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-/// WebSocket endpoint parameters for a monitor.
-pub struct MonitorWsParams {
-    pub url: String,
-    pub protocols: Vec<String>,
-    /// Addresses authorized immediately before launch; neither execution mode
-    /// resolves the URL a second time.
-    pub addresses: Vec<std::net::SocketAddr>,
-    /// Host-selected execution policy, never deserialized from a tool input.
-    pub policy: agena_process::sandbox::SandboxPolicy,
 }
 
 #[derive(Debug, Clone)]
@@ -212,10 +191,10 @@ pub trait MonitorService: Send + Sync + std::fmt::Debug {
         ))
     }
     fn list(&self) -> Vec<ProcessSummary>;
-    fn list_session(&self, session_id: i64, websocket: bool) -> Vec<ProcessSummary> {
+    fn list_session(&self, session_id: i64) -> Vec<ProcessSummary> {
         self.list()
             .into_iter()
-            .filter(|item| item.owner_session_id == Some(session_id) && item.websocket == websocket)
+            .filter(|item| item.owner_session_id == Some(session_id))
             .collect()
     }
     fn summary(&self, id: &str) -> Option<ProcessSummary> {
@@ -298,16 +277,11 @@ struct MonitorState {
     owner: Option<crate::TerminalOwner>,
     launch: StartParams,
     monitor_id: String,
-    /// The source line shown in the transcript / activity panel: the command,
-    /// or `ws <url>` for a WebSocket monitor.
-    command: String,
-    description: String,
     started_at_ms: i64,
     watch: Mutex<WatchState>,
     watch_changed: tokio::sync::Notify,
     interaction: Mutex<()>,
     last_activity: Mutex<Instant>,
-    last_activity_ms: AtomicI64,
     capacity: usize,
     /// Latest assigned seq (0 means no events yet).
     last_seq: AtomicU64,
@@ -339,6 +313,10 @@ struct MonitorInner {
 impl MonitorState {
     fn snapshot(&self) -> ProcessSummary {
         let inner = self.inner.lock().unwrap();
+        let (monitored, ready) = {
+            let watch = self.watch.lock().unwrap();
+            (watch.policy.is_some(), watch.ready)
+        };
         ProcessSummary {
             process_id: self.monitor_id.clone(),
             output_resource: self
@@ -347,13 +325,13 @@ impl MonitorState {
                 .as_ref()
                 .map(crate::tool::ToolOutputStreams::reference),
             tty: false,
-            websocket: self.launch.ws.is_some(),
-            command: self.command.clone(),
-            description: self.description.clone(),
+            websocket: false,
+            command: self.launch.command.clone(),
+            description: self.launch.description.clone(),
             status: inner.status,
             background: true,
-            monitored: self.watch.lock().unwrap().policy.is_some() || self.launch.ws.is_some(),
-            ready: self.watch.lock().unwrap().ready,
+            monitored,
+            ready,
             started_at_ms: self.started_at_ms,
             ended_at_ms: inner.ended_at_ms,
             buffered_lines: inner.buffer.len() as u32,
@@ -434,7 +412,7 @@ impl MonitorService for MonitorRegistry {
             .or_else(|| self.lookup(id).map(|state| state.snapshot()))
     }
 
-    fn list_session(&self, session_id: i64, websocket: bool) -> Vec<ProcessSummary> {
+    fn list_session(&self, session_id: i64) -> Vec<ProcessSummary> {
         let mut rows: Vec<_> = self
             .monitors
             .lock()
@@ -442,13 +420,10 @@ impl MonitorService for MonitorRegistry {
             .values()
             .filter(|state| {
                 state.owner.as_ref().and_then(|owner| owner.session_id) == Some(session_id)
-                    && state.launch.ws.is_some() == websocket
             })
             .map(|state| state.snapshot())
             .collect();
-        if !websocket {
-            rows.extend(self.terminals.list_session(session_id));
-        }
+        rows.extend(self.terminals.list_session(session_id));
         rows.sort_by(|a, b| {
             b.started_at_ms
                 .cmp(&a.started_at_ms)
@@ -501,31 +476,13 @@ impl MonitorService for MonitorRegistry {
         }
     }
     fn start(&self, params: StartParams) -> Result<MonitorStart, MonitorError> {
-        // Exactly one of `command` / `ws` must be provided.
-        let has_command = !params.command.trim().is_empty();
-        let has_ws = params.ws.is_some();
-        match (has_command, has_ws) {
-            (false, false) => {
-                return Err(MonitorError::Invalid(
-                    "monitor requires exactly one of `command` or `ws`".into(),
-                ));
-            }
-            (true, true) => {
-                return Err(MonitorError::Invalid(
-                    "monitor accepts only one of `command` or `ws`, not both".into(),
-                ));
-            }
-            _ => {}
+        if params.command.trim().is_empty() {
+            return Err(MonitorError::Invalid("a shell command is required".into()));
         }
-        let timeout_ms =
-            params
-                .timeout_ms
-                .unwrap_or(DEFAULT_TIMEOUT_MS)
-                .min(if params.ws.is_some() {
-                    MAX_TIMEOUT_MS
-                } else {
-                    86_400_000
-                });
+        let timeout_ms = params
+            .timeout_ms
+            .unwrap_or(DEFAULT_TIMEOUT_MS)
+            .min(MAX_TIMEOUT_MS);
         if !params.persistent && timeout_ms == 0 {
             return Err(MonitorError::Invalid(
                 "non-persistent monitors must have timeout_ms > 0".into(),
@@ -550,13 +507,6 @@ impl MonitorService for MonitorRegistry {
         let (abort_tx, abort_rx) = tokio::sync::oneshot::channel::<()>();
 
         let started_at_ms = Utc::now().timestamp_millis();
-        // A WebSocket monitor displays its endpoint as the "command" line so
-        // the transcript and activity panel identify the source.
-        let source = params
-            .ws
-            .as_ref()
-            .map(|ws| format!("ws {}", ws.url))
-            .unwrap_or_else(|| params.command.clone());
         let process_id = params
             .process_id
             .clone()
@@ -570,14 +520,11 @@ impl MonitorService for MonitorRegistry {
             owner: params.owner.clone(),
             launch: params.clone(),
             monitor_id: process_id,
-            command: source,
-            description: params.description.clone(),
             started_at_ms,
             watch: Mutex::new(watch),
             watch_changed: tokio::sync::Notify::new(),
             interaction: Mutex::new(()),
             last_activity: Mutex::new(Instant::now()),
-            last_activity_ms: AtomicI64::new(started_at_ms),
             capacity,
             last_seq: AtomicU64::new(0),
             notification_seq: AtomicU64::new(0),
@@ -660,46 +607,23 @@ impl MonitorService for MonitorRegistry {
 
         let runner_state = Arc::clone(&state);
         let supervisor_state = Arc::clone(&state);
-        let worker = if let Some(ws) = params.ws.clone() {
-            let runner_ws = ws;
-            let runner_quiet_period_ms = params.quiet_period_ms;
-            handle.spawn(async move {
-                supervise_runner(
-                    supervisor_state,
-                    run_ws_monitor(
-                        runner_state,
-                        runner_ws,
-                        runner_quiet_period_ms,
-                        timeout_ms,
-                        abort_rx,
-                    ),
-                )
-                .await;
-            })
-        } else {
-            let runner_workdir = params.workdir.clone();
-            let runner_env = params.env.clone();
-            let runner_command = params.command.clone();
-            let runner_capture_stderr = params.capture_stderr;
-            let runner_persistent = params.persistent;
-            handle.spawn(async move {
-                supervise_runner(
-                    supervisor_state,
-                    run_monitor(
-                        runner_state,
-                        params.argv,
-                        runner_command,
-                        runner_workdir,
-                        runner_env,
-                        runner_capture_stderr,
-                        runner_persistent,
-                        timeout_ms,
-                        abort_rx,
-                    ),
-                )
-                .await;
-            })
-        };
+        let worker = handle.spawn(async move {
+            supervise_runner(
+                supervisor_state,
+                run_monitor(
+                    runner_state,
+                    params.argv,
+                    params.command,
+                    params.workdir,
+                    params.env,
+                    params.capture_stderr,
+                    params.persistent,
+                    timeout_ms,
+                    abort_rx,
+                ),
+            )
+            .await;
+        });
         {
             let mut inner = state.inner.lock().unwrap();
             if inner.status == ProcessStatus::Running {
@@ -730,9 +654,6 @@ impl MonitorService for MonitorRegistry {
         let state = self
             .lookup(id)
             .ok_or_else(|| MonitorError::NotFound(id.into()))?;
-        if state.launch.ws.is_some() {
-            return Err(MonitorError::Invalid("shell.watch configures noninteractive shell processes; use monitor tools for WebSocket subscriptions".into()));
-        }
         // Compile before touching live state: invalid updates leave the old
         // policy intact. No global registry lock spans compilation or replay.
         let mut next = WatchState::compile(policy, 0)?;
@@ -1277,7 +1198,7 @@ async fn run_monitor(
             terminate_monitored_child(&state, &mut child, ProcessStatus::Failed, "failure_pattern")
                 .await
         }
-        TerminationCause::WatchQuiet(_) | TerminationCause::Quiet => {
+        TerminationCause::WatchQuiet(_) => {
             terminate_monitored_child(&state, &mut child, ProcessStatus::Exited, "quiet_period")
                 .await
         }
@@ -1346,141 +1267,6 @@ async fn run_monitor(
     }
     if let Some(output) = &state.launch.output {
         output.finish_activity(&state.snapshot()).await;
-    }
-    state.changed.notify_all();
-    if let Some(listener) = state.listener.as_ref() {
-        listener.on_finished(&state.snapshot());
-    }
-}
-
-/// Run a WebSocket monitor: each text frame becomes an event. The connection
-/// stays open until stopped (abort), the timeout elapses, or the peer closes.
-async fn run_ws_monitor(
-    state: Arc<MonitorState>,
-    ws: MonitorWsParams,
-    quiet_period_ms: Option<u64>,
-    timeout_ms: u64,
-    abort_rx: tokio::sync::oneshot::Receiver<()>,
-) {
-    let mut abort_rx = abort_rx;
-    let connect = websocket::connect(ws);
-    tokio::pin!(connect);
-    let timeout_sleep = tokio::time::sleep(Duration::from_millis(timeout_ms));
-    tokio::pin!(timeout_sleep);
-    let stream = tokio::select! {
-        biased;
-        _ = &mut abort_rx => {
-            mark_ws_finished(&state, ProcessStatus::Stopped, "explicit_stop".to_string());
-            return;
-        }
-        result = &mut connect => match result {
-            Ok(stream) => stream,
-            Err(error) => {
-                push_event(&state, ProcessStream::Stderr, error.to_string());
-                mark_ws_finished(&state, ProcessStatus::Failed, "ws_connect_failed".to_string());
-                return;
-            }
-        },
-        _ = &mut timeout_sleep => {
-            mark_ws_finished(&state, ProcessStatus::TimedOut, "timeout".to_string());
-            return;
-        }
-    };
-
-    let quiet_wait = async {
-        let Some(quiet_period_ms) = quiet_period_ms else {
-            std::future::pending::<()>().await;
-            return;
-        };
-        wait_for_quiet(&state, quiet_period_ms).await;
-    };
-    tokio::pin!(quiet_wait);
-
-    // The timeout now covers the whole feed lifetime, not just the connect.
-    let lifetime = async {
-        let mut stream = stream;
-        loop {
-            tokio::task::consume_budget().await;
-            match stream.next().await {
-                Some(Ok(websocket::Event::Text(text))) => {
-                    push_event(&state, ProcessStream::Stdout, text.to_string());
-                }
-                Some(Ok(websocket::Event::Binary(bytes))) => {
-                    if let Some(output) = &state.launch.output {
-                        output.record_loss(
-                            agena_domain::ContentKind::Log,
-                            bytes,
-                            "binary WebSocket frame cannot be represented by the text feed",
-                        );
-                    }
-                    push_event(
-                        &state,
-                        ProcessStream::Stderr,
-                        format!("[binary frame, {bytes} bytes]"),
-                    );
-                }
-                Some(Ok(websocket::Event::Close(reason))) => {
-                    push_event(
-                        &state,
-                        ProcessStream::Stderr,
-                        format!("[ws closed {reason}]"),
-                    );
-                    return TerminationCause::Exited(None);
-                }
-                Some(Err(error)) => {
-                    push_event(
-                        &state,
-                        ProcessStream::Stderr,
-                        format!("[ws error: {error}]"),
-                    );
-                    return TerminationCause::WaitError(error.to_string());
-                }
-                None => {
-                    push_event(&state, ProcessStream::Stderr, "[ws closed]".to_string());
-                    return TerminationCause::Exited(None);
-                }
-            }
-        }
-    };
-    tokio::pin!(lifetime);
-
-    let outcome = tokio::select! {
-        biased;
-        _ = &mut abort_rx => TerminationCause::Stopped,
-        _ = &mut quiet_wait => TerminationCause::Quiet,
-        _ = &mut timeout_sleep => TerminationCause::TimedOut,
-        result = &mut lifetime => result,
-    };
-    let (final_status, completion_reason) = match outcome {
-        TerminationCause::Stopped => (ProcessStatus::Stopped, "explicit_stop".to_string()),
-        TerminationCause::TimedOut => (ProcessStatus::TimedOut, "timeout".to_string()),
-        TerminationCause::Quiet => (ProcessStatus::Exited, "quiet_period".to_string()),
-        TerminationCause::Exited(_) => (ProcessStatus::Exited, "ws_closed".to_string()),
-        TerminationCause::WaitError(reason) => (ProcessStatus::Failed, reason),
-        TerminationCause::Condition(..) | TerminationCause::WatchQuiet(_) => {
-            unreachable!("ws monitor has no success/failure patterns")
-        }
-    };
-    mark_ws_finished(&state, final_status, completion_reason);
-}
-
-/// Terminalize a ws monitor's state and notify the listener once.
-fn mark_ws_finished(state: &MonitorState, status: ProcessStatus, completion_reason: String) {
-    {
-        let mut inner = state.inner.lock().unwrap();
-        if inner.status == ProcessStatus::Running {
-            inner.status = status;
-            inner.completion_reason = Some(completion_reason);
-            inner.ended_at_ms = Some(Utc::now().timestamp_millis());
-            inner.abort = None;
-            inner.worker = None;
-        }
-    }
-    if let Some(output) = state.launch.output.clone() {
-        let summary = state.snapshot();
-        tokio::spawn(async move {
-            output.finish_activity(&summary).await;
-        });
     }
     state.changed.notify_all();
     if let Some(listener) = state.listener.as_ref() {
@@ -1613,7 +1399,6 @@ enum TerminationCause {
     TimedOut,
     Condition(PatternOutcome, u64),
     WatchQuiet(u64),
-    Quiet,
     Exited(Option<i32>),
     WaitError(String),
 }
@@ -1680,9 +1465,6 @@ impl<R: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for ProcessActivityRe
         let before = buffer.filled().len();
         let result = std::pin::Pin::new(&mut this.reader).poll_read(cx, buffer);
         if buffer.filled().len() > before {
-            this.state
-                .last_activity_ms
-                .store(Utc::now().timestamp_millis(), Ordering::Release);
             *this.state.last_activity.lock().unwrap() = Instant::now();
         }
         result
@@ -1725,7 +1507,7 @@ where
                             );
                         }
                     }
-                    let event = push_output_event_filtered(&state, stream, text, true, false);
+                    let event = push_output_event(&state, stream, text, true);
                     matcher.push(&state, &event, count == 0);
                 }
                 if count == 0 {
@@ -1752,52 +1534,16 @@ where
     }
 }
 
-async fn wait_for_quiet(state: &MonitorState, quiet_period_ms: u64) {
-    let quiet_period_ms = quiet_period_ms.max(1);
-    loop {
-        let now = Utc::now().timestamp_millis();
-        let last = state.last_activity_ms.load(Ordering::Acquire);
-        let elapsed = now.saturating_sub(last) as u64;
-        if elapsed >= quiet_period_ms {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(
-            quiet_period_ms.saturating_sub(elapsed).min(100),
-        ))
-        .await;
-    }
-}
-
 fn push_event(state: &MonitorState, stream: ProcessStream, line: String) {
     push_output_event(state, stream, line, false);
 }
 
-fn push_output_event(state: &MonitorState, stream: ProcessStream, line: String, chunk: bool) {
-    let _ = push_output_event_filtered(state, stream, line, chunk, state.launch.ws.is_some());
-}
-
-fn push_output_event_filtered(
+fn push_output_event(
     state: &MonitorState,
     stream: ProcessStream,
     line: String,
     chunk: bool,
-    notify: bool,
 ) -> ProcessEvent {
-    if state.launch.ws.is_some()
-        && let Some(output) = &state.launch.output
-    {
-        let channel = match stream {
-            ProcessStream::Stdout => agena_domain::CommandOutputStream::Stdout,
-            ProcessStream::Stderr => agena_domain::CommandOutputStream::Stderr,
-        };
-        if let Err(error) = output.try_log(channel, &line) {
-            output.record_loss(
-                agena_domain::ContentKind::Log,
-                line.len(),
-                &error.to_string(),
-            );
-        }
-    }
     let mut inner = state.inner.lock().unwrap();
     // Assign and append under one lock: concurrent stdout/stderr must not
     // insert an older sequence after a newer cursor has already been read.
@@ -1821,11 +1567,6 @@ fn push_output_event_filtered(
     }
     drop(inner);
     state.changed.notify_all();
-    // Forward the event to the observer so the runtime can project it into the
-    // transcript as a `system_notification` part (everything-is-a-part).
-    if notify && let Some(listener) = state.listener.as_ref() {
-        listener.on_event(&event, &state.snapshot());
-    }
     event
 }
 

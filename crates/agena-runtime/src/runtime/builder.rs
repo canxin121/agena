@@ -1515,42 +1515,28 @@ impl agena_runtime::RuntimeControlService for AgenaRuntime {
             .await
     }
 
-    fn session_processes(
-        &self,
-        session_id: i64,
-        websocket: bool,
-    ) -> Vec<agena_domain::ProcessSummary> {
+    fn session_processes(&self, session_id: i64) -> Vec<agena_domain::ProcessSummary> {
         self.activities
             .monitor
             .as_ref()
-            .map_or_else(Vec::new, |service| {
-                service.list_session(session_id, websocket)
-            })
+            .map_or_else(Vec::new, |service| service.list_session(session_id))
     }
 
-    fn session_process(
-        &self,
-        session_id: i64,
-        id: &str,
-        websocket: bool,
-    ) -> Option<agena_domain::ProcessSummary> {
+    fn session_process(&self, session_id: i64, id: &str) -> Option<agena_domain::ProcessSummary> {
         self.activities
             .monitor
             .as_ref()?
             .summary(id)
-            .filter(|process| {
-                process.owner_session_id == Some(session_id) && process.websocket == websocket
-            })
+            .filter(|process| process.owner_session_id == Some(session_id))
     }
 
     async fn stop_session_process(
         &self,
         session_id: i64,
         id: &str,
-        websocket: bool,
     ) -> Result<Option<agena_domain::ProcessSummary>, agena_runtime::RuntimeControlServiceError>
     {
-        let Some(process) = self.session_process(session_id, id, websocket) else {
+        let Some(process) = self.session_process(session_id, id) else {
             return Ok(None);
         };
         if process.status != agena_domain::ProcessStatus::Running {

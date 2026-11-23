@@ -206,8 +206,6 @@ fn shell_activity(summary: &ProcessSummary) -> BackgroundActivity {
                 "{} · {label}",
                 if summary.tty {
                     "Terminal"
-                } else if summary.websocket {
-                    "WebSocket"
                 } else if summary.monitored {
                     "Watch command"
                 } else {
@@ -448,7 +446,7 @@ impl BackgroundCompletionBridge {
         }
     }
 
-    /// Settle the durable shell/monitor aggregate for a process that just
+    /// Settle the durable shell activity for a process that just
     /// reached a terminal state.
     pub(crate) fn complete_shell(&self, summary: &ProcessSummary) {
         // Persistent interactive terminals are explicitly read/written by the
@@ -496,7 +494,6 @@ impl BackgroundCompletionBridge {
         };
         let bridge = self.clone();
         let process_id = summary.process_id.clone();
-        let kind = process_notification_kind(summary).to_owned();
         let status = match summary.status {
             ProcessStatus::Exited => "completed",
             ProcessStatus::TimedOut => "timed_out",
@@ -524,7 +521,7 @@ impl BackgroundCompletionBridge {
             // The kernel retains a business delivery; consuming it and
             // queueing an idle continuation is one durable transaction.
             let result=bridge.deliver_background(session_id,&process_id,format!("process:{process_id}:completion"),
-                serde_json::json!({"text":summary_line,"kind":kind,"process_id":process_id,"status":status})).await;
+                serde_json::json!({"text":summary_line,"kind":"shell","process_id":process_id,"status":status})).await;
             if let Err(error) = &result {
                 tracing::warn!(
                     target: "agena_background",
@@ -535,10 +532,7 @@ impl BackgroundCompletionBridge {
         });
     }
 
-    /// Project one monitor event as an Assistant-owned `system_notification`
-    /// on the monitor's launch run.
-    /// Watched shell commands and WebSocket subscriptions share the bounded
-    /// event bridge while retaining their own durable operation kind.
+    /// Project a shell watch event as a `system_notification` on its launch run.
     pub(crate) fn settle_monitor_event(&self, event: &ProcessEvent, summary: &ProcessSummary) {
         // Plain shell/PTY logs are read from their process buffer. Only a
         // monitored process can need transcript event notifications.
@@ -577,7 +571,6 @@ impl BackgroundCompletionBridge {
         );
         drop(routes);
         let bridge = self.clone();
-        let kind = process_notification_kind(summary).to_owned();
         tokio::spawn(async move {
             // Resolve once through the durable index for either launch kind;
             // never query the database or start a new worker for every line.
@@ -634,7 +627,7 @@ impl BackgroundCompletionBridge {
                     };
                     let notification = SystemNotificationContent {
                         operation_id: process_id.clone(),
-                        operation_kind: kind.clone(),
+                        operation_kind: "shell".to_owned(),
                         status: if ready { "ready" } else { "event" }.to_owned(),
                         summary,
                         body,
@@ -650,7 +643,7 @@ impl BackgroundCompletionBridge {
                             break;
                         }
                         match bridge.deliver_background(session_id,&process_id,format!("process:{process_id}:event:{}",tail.last_seq),
-                            serde_json::json!({"text":notification.body,"kind":kind,"process_id":process_id,"status":notification.status,"event_seq":tail.last_seq})).await
+                            serde_json::json!({"text":notification.body,"kind":notification.operation_kind,"process_id":process_id,"status":notification.status,"event_seq":tail.last_seq})).await
                         {
                             Ok(()) => {
                                 settled = true;
@@ -810,17 +803,6 @@ fn background_failure(status: ProcessStatus, fallback: String) -> Failure {
             detail_key: None,
         },
     )
-}
-
-// The durable provider call may be tools_call/tools_run, so its name does not
-// identify the underlying plugin. The managed process knows which transport it
-// actually opened, including when a monitor was launched through a gateway.
-fn process_notification_kind(summary: &ProcessSummary) -> &'static str {
-    if summary.websocket {
-        "monitor"
-    } else {
-        "shell"
-    }
 }
 
 /// Resolve the deterministic launch identity without enumerating processes.

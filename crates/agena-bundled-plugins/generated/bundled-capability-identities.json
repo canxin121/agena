@@ -2,8 +2,8 @@
   "schema_version": 3,
   "snapshot_date": "2026-07-27",
   "counts": {
-    "plugins": 28,
-    "tools": 221,
+    "plugins": 27,
+    "tools": 219,
     "bundled_commands": 14
   },
   "plugins": [
@@ -2138,39 +2138,6 @@
       "conditional": null
     },
     {
-      "id": "agena.monitor",
-      "version": "0.1.0",
-      "tools": [
-        {
-          "canonical_name": "agena.monitor.start",
-          "conditional": null,
-          "tags": [
-            "execute",
-            "network",
-            "mutate"
-          ],
-          "definition_identity": "198f6f8dc55797d4c0c2d5eb37a7b2d3798c924c6f1c052c0c8d7ae45e3f7e94",
-          "input_schema_sha256": "3bcb5e554ca43514934c956947e458fb511a7cd03f81fcab1520562ece3f4db9",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
-        },
-        {
-          "canonical_name": "agena.monitor.stop",
-          "conditional": null,
-          "tags": [
-            "mutate",
-            "network"
-          ],
-          "definition_identity": "d2feb3a99cc369b13cfa1e152606a4779452cfd2019bc30213f97efe0da7c698",
-          "input_schema_sha256": "e07b92b5bdbeda06f6ae999f1904ce648e388f1be40a82d924c0a3190f786b34",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
-        }
-      ],
-      "hooks": [
-        "tool.invoke"
-      ],
-      "conditional": null
-    },
-    {
       "id": "agena.notebook",
       "version": "0.1.0",
       "tools": [
@@ -2974,7 +2941,7 @@
     },
     {
       "name": "run",
-      "content_sha256": "7610d70e9e46696cf8f3fbafa7cafab4859631eeeae3e8bb259ac1744eeac321",
+      "content_sha256": "73b4d363539c6f0528763cc3f2ab14b7cc7ac8fb49b2a89179d0d13b5b26e3d0",
       "aliases": [
         "start"
       ]

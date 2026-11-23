@@ -7,9 +7,9 @@ import { captureResourceObservation } from '@/lib/resourceSync'
 import { readServerAuthTokenVersion, subscribeServerAuthTokenVersion } from '@/lib/serverAuthToken'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 
-import { processCollection, type ProcessKind, type SessionProcess } from '@/pages/chat/sessionProcesses'
+import { processCollection, type SessionProcess } from '@/pages/chat/sessionProcesses'
 
-const props = defineProps<{ sessionId: string; id: string; kind: ProcessKind }>()
+const props = defineProps<{ sessionId: string; id: string }>()
 const emit = defineEmits<{ changed: [process: SessionProcess] }>()
 const { t } = useI18n()
 const pane = useWorkspacePaneContext()
@@ -20,7 +20,7 @@ const readError = ref('')
 const authVersion = ref(readServerAuthTokenVersion())
 onScopeDispose(subscribeServerAuthTokenVersion((version) => (authVersion.value = version)))
 const visible = computed(() => pane?.isVisible.value ?? true)
-const endpoint = computed(() => `${processCollection(props.sessionId, props.kind)}/${encodeURIComponent(props.id)}`)
+const endpoint = computed(() => `${processCollection(props.sessionId)}/${encodeURIComponent(props.id)}`)
 let controller: AbortController | undefined
 let revision = 0
 let observedScope = ''
@@ -117,20 +117,20 @@ async function stop() {
   <div v-if="state || error || readError" class="flex flex-wrap items-center gap-2 py-0.5 text-xs">
     <template v-if="state">
       <span class="font-medium text-foreground">
-        {{ t(kind === 'shell' ? 'chat.operations.process' : 'chat.operations.subscription') }}
+        {{ t('chat.operations.process') }}
       </span>
       <span class="text-muted-foreground">
         {{
-          kind === 'shell' && state.exit_code != null
+          state.exit_code != null
             ? t('chat.activityLog.exitCode', { code: state.exit_code })
             : t(`chat.operations.status.${state.status}`)
         }}
       </span>
-      <span v-if="kind === 'shell' && state.ready && state.status === 'running'" class="text-muted-foreground">
+      <span v-if="state.ready && state.status === 'running'" class="text-muted-foreground">
         {{ t('chat.operations.ready') }}
       </span>
       <Button v-if="state.status === 'running'" size="sm" variant="outline" :disabled="stopping" @click="stop">
-        {{ t(kind === 'shell' ? 'chat.operations.stopProcess' : 'chat.operations.disconnect') }}
+        {{ t('chat.operations.stopProcess') }}
       </Button>
     </template>
     <span v-if="error || readError" class="text-destructive" role="alert">{{ error || readError }}</span>

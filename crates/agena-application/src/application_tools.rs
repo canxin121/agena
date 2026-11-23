@@ -95,10 +95,6 @@ fn tool_part_control(
                 process_id: field("process_id")?,
             })
         }
-        "monitor.start" => Some(ViewBlock::MonitorSubscription {
-            id: "monitor-subscription".to_owned(),
-            subscription_id: field("monitor_id")?,
-        }),
         "agent.spawn" | "agent.followup" => {
             let session_id = payload.get("agent_id")?.as_i64().filter(|id| *id > 0)?;
             Some(ViewBlock::AgentSession {

@@ -64,20 +64,11 @@ pub trait RuntimeControlService: Send + Sync {
         ))
     }
 
-    fn session_processes(
-        &self,
-        _session_id: i64,
-        _websocket: bool,
-    ) -> Vec<agena_domain::ProcessSummary> {
+    fn session_processes(&self, _session_id: i64) -> Vec<agena_domain::ProcessSummary> {
         Vec::new()
     }
 
-    fn session_process(
-        &self,
-        _session_id: i64,
-        _id: &str,
-        _websocket: bool,
-    ) -> Option<agena_domain::ProcessSummary> {
+    fn session_process(&self, _session_id: i64, _id: &str) -> Option<agena_domain::ProcessSummary> {
         None
     }
 
@@ -85,7 +76,6 @@ pub trait RuntimeControlService: Send + Sync {
         &self,
         _session_id: i64,
         _id: &str,
-        _websocket: bool,
     ) -> Result<Option<agena_domain::ProcessSummary>, RuntimeControlServiceError> {
         Ok(None)
     }

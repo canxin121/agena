@@ -38,7 +38,7 @@ fn command_rules_keep_document_order_including_the_catch_all() {
         );
     }
     assert!(matches!(
-        policy.check_tool("agena.monitor.start", None, &[ToolTag::Network]),
+        policy.check_tool("agena.web.fetch", None, &[ToolTag::Network]),
         PermissionDecision::Allow
     ));
     let later_broad = shell_policy(json!({"tools": {"rules": {

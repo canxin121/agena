@@ -111,6 +111,7 @@ pub enum ViewBlock {
         id: String,
         process_id: String,
     },
+    /// Retained for reading historical view documents.
     MonitorSubscription {
         id: String,
         subscription_id: String,

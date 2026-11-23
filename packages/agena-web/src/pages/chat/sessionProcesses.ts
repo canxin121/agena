@@ -3,7 +3,6 @@ import { toolInputRecord } from '@/lib/toolInput'
 import type { MessageEntry, MessagePart } from '@/types/chat'
 import { jsonArray, jsonRecord, stringValue } from './transcriptPartPresentation'
 
-export type ProcessKind = 'shell' | 'monitor'
 export type SessionProcess = {
   process_id: string
   command: string
@@ -17,7 +16,6 @@ export type SessionProcess = {
 
 export type ComposerProcess = {
   key: string
-  kind: ProcessKind
   label: string
   started: number
   process?: SessionProcess
@@ -26,9 +24,8 @@ export type ComposerProcess = {
   retained?: boolean
 }
 
-export function processCollection(sessionId: string, kind: ProcessKind) {
-  const collection = kind === 'shell' ? 'shell/processes' : 'monitor/subscriptions'
-  return `/api/v1/sessions/${encodeURIComponent(sessionId)}/${collection}`
+export function processCollection(sessionId: string) {
+  return `/api/v1/sessions/${encodeURIComponent(sessionId)}/shell/processes`
 }
 
 /** Foreground commands only have a Part. Managed output can also outlive the live registry. */
@@ -36,27 +33,21 @@ export function composerProcesses(
   sessionId: string,
   messages: MessageEntry[],
   shells: SessionProcess[],
-  monitors: SessionProcess[],
 ): ComposerProcess[] {
   const entries = new Map<string, ComposerProcess>()
   const processKeys = new Map<string, string>()
-  function addProcess(kind: ProcessKind, process: SessionProcess) {
+  for (const process of shells) {
     const key = process.output_resource
       ? `output:${process.output_resource.resource_id}`
-      : `${kind}:${process.process_id}`
-    processKeys.set(`${kind}:${process.process_id}`, key)
+      : `shell:${process.process_id}`
+    processKeys.set(process.process_id, key)
     entries.set(key, {
       key,
-      kind,
       process,
       started: process.started_at_ms,
-      label:
-        (kind === 'monitor' ? process.description || process.command : process.command || process.description) ||
-        process.process_id,
+      label: process.command || process.description || process.process_id,
     })
   }
-  for (const shell of shells) addProcess('shell', shell)
-  for (const monitor of monitors) addProcess('monitor', monitor)
 
   for (const message of messages) {
     for (const part of message.parts) {
@@ -69,14 +60,11 @@ export function composerProcesses(
         .replace(/^agena[._]/, '')
         .replaceAll('__', '.')
         .replace(/[\/_]/g, '.')
-      if (!['shell.exec', 'shell.spawn', 'shell.open', 'shell.watch', 'monitor.start'].includes(name)) continue
-      const kind = name === 'monitor.start' ? 'monitor' : 'shell'
+      if (!['shell.exec', 'shell.spawn', 'shell.open', 'shell.watch'].includes(name)) continue
       const document = jsonRecord(part.agenaPresentation)
       const blocks = jsonArray(document.blocks).map(jsonRecord)
-      const control = blocks.find(
-        (block) => block.type === (kind === 'shell' ? 'shell_process' : 'monitor_subscription'),
-      )
-      const id = stringValue(control?.process_id || control?.subscription_id)
+      const control = blocks.find((block) => block.type === 'shell_process')
+      const id = stringValue(control?.process_id)
       const resource = jsonArray(source.resources)
         .map(jsonRecord)
         .find((item) => item.kind === 'log' || item.kind === 'terminal')
@@ -87,7 +75,7 @@ export function composerProcesses(
       const key =
         name === 'shell.exec'
           ? `part:${part.id}`
-          : processKeys.get(`${kind}:${id}`) || (resourceId ? `output:${resourceId}` : `${kind}:${id}`)
+          : processKeys.get(id) || (resourceId ? `output:${resourceId}` : `shell:${id}`)
       const existing = entries.get(key)
       if (existing) {
         if (existing.process && !existing.process.output_resource && !existing.part) existing.part = part
@@ -96,7 +84,6 @@ export function composerProcesses(
       const command = blocks.find((block) => block.type === 'command')
       entries.set(key, {
         key,
-        kind,
         part,
         started: part.createdAt ?? message.info.time?.created ?? 0,
         label:

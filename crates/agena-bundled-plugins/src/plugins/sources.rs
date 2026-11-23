@@ -68,10 +68,6 @@ pub fn bundled_plugin_entries() -> BTreeMap<String, ConfiguredPlugin> {
             static_entry(serde_json::Value::Null),
         ),
         (
-            crate::tool::monitor_plugin_id().to_string(),
-            static_entry(serde_json::Value::Null),
-        ),
-        (
             crate::tool::session_plugin_id().to_string(),
             static_entry(serde_json::Value::Null),
         ),
@@ -198,10 +194,6 @@ pub fn static_plugin_registrations(
         localized_static_plugin(
             plugin_key(crate::tool::shell_plugin_id()),
             crate::tool::new_shell_plugin(),
-        ),
-        localized_static_plugin(
-            plugin_key(crate::tool::monitor_plugin_id()),
-            crate::tool::new_monitor_plugin(),
         ),
         localized_static_plugin(
             plugin_key(crate::tool::session_plugin_id()),

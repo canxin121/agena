@@ -332,9 +332,7 @@ git 属于目录，不属于会话，也不要求目录已被登记。
 | 方法 | 路径 | 原 |
 |---|---|---|
 | GET | `/api/v1/sessions/{session_id}/shell/processes` | 当前会话的 Shell 进程，带状态和输出引用 |
-| GET | `/api/v1/sessions/{session_id}/monitor/subscriptions` | 当前会话的 WebSocket 订阅，带状态和事件流引用 |
 | GET, DELETE | `/api/v1/sessions/{session_id}/shell/processes/{process_id}` | 查看或停止 Shell 进程 |
-| GET, DELETE | `/api/v1/sessions/{session_id}/monitor/subscriptions/{subscription_id}` | 查看或断开 WebSocket 订阅 |
 | GET | `/api/v1/sessions?parent_id={session_id}&exclude_subagents=false` | 子 Agent 使用自己的会话 ID 读取消息和订阅更新 |
 | GET, POST | `/api/v1/sessions/{session_id}/browser` | 列出标签页、读取实时画面或缩略图、接管、发送输入和交还控制 |
 | GET | `/api/v1/sessions/{session_id}/schedules` | 查看会话计划 |

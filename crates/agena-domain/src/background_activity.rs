@@ -18,7 +18,7 @@ use strum::{Display, EnumString};
 pub enum BackgroundActivityKind {
     /// A long-lived shell process started by `shell.spawn` or `shell.open`.
     Shell,
-    /// An output event from shell.watch or a WebSocket subscription.
+    /// A historical WebSocket monitor activity.
     Monitor,
     /// A delegated agent execution started by `agent.spawn` or `agent.followup`.
     Agent,

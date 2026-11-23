@@ -13,7 +13,6 @@ pub(crate) mod glob;
 pub(crate) mod grep;
 pub mod human_view;
 pub(crate) mod lsp;
-pub(crate) mod monitor_tool;
 pub(crate) mod orchestrator;
 mod output_helpers;
 mod output_streams;

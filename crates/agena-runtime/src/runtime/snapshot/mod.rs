@@ -38,36 +38,28 @@ pub(super) type RuntimeServices = agena_runtime::RuntimeServiceBundle<
 
 type SnapshotState = agena_runtime::RuntimeSnapshotState<Arc<ResolvedConfig>, RuntimeServices>;
 
-struct BrowserConfiguration {
-    plugin: Option<agena_plugin_host::ConfiguredPlugin>,
-    sessions: BrowserSessionPool,
-}
-
-impl BrowserConfiguration {
-    fn resolve(
-        config: &ResolvedConfig,
-        host: Arc<super::host_client::RuntimeHostClient>,
-        previous: Option<&Self>,
-    ) -> Self {
-        let plugin = config.plugins.list.get(browser_plugin_id()).cloned();
-        let sessions = previous
-            .filter(|previous| previous.plugin == plugin)
-            .map_or_else(
-                || BrowserSessionPool::new(host),
-                |previous| previous.sessions.clone(),
-            );
-        Self { plugin, sessions }
-    }
-}
-
 fn resolve_bundled_plugins(
     configured: agena_plugin_host::PluginsConfig,
 ) -> Result<agena_plugin_host::PluginsConfig, AppError> {
-    let mut plugins = agena_runtime::merge_bundled_plugin_config(
-        configured,
-        agena_bundled_plugins::plugins::sources::bundled_plugin_entries(),
-    )
-    .map_err(AppError::Config)?;
+    const RETIRED_MONITOR: &str = "agena.monitor";
+    let mut bundled = agena_bundled_plugins::plugins::sources::bundled_plugin_entries();
+    // Older profiles may patch, disable, or remove the former bundled default.
+    if configured
+        .profiles
+        .values()
+        .any(|profile| profile.plugins.contains_key(RETIRED_MONITOR))
+    {
+        bundled.insert(
+            RETIRED_MONITOR.to_owned(),
+            agena_plugin_host::ConfiguredPlugin::static_default(),
+        );
+    }
+    let mut plugins = agena_runtime::merge_bundled_plugin_config(configured, bundled)
+        .map_err(AppError::Config)?;
+    plugins.list.retain(|id, plugin| {
+        id != RETIRED_MONITOR
+            || !matches!(plugin.package, agena_plugin_host::PluginPackage::Static {})
+    });
     // Resolve the former interactive-only setting before validating the two manifests.
     let legacy_capture_console = plugins
         .list
@@ -97,6 +89,41 @@ fn resolve_bundled_plugins(
     Ok(plugins)
 }
 
+fn use_instance_chrome_settings(project: &mut ResolvedConfig, instance: &ResolvedConfig) {
+    let Some(project) = project
+        .plugins
+        .list
+        .get_mut(browser_plugin_id())
+        .filter(|plugin| matches!(plugin.package, agena_plugin_host::PluginPackage::Static {}))
+    else {
+        return;
+    };
+    let instance = instance
+        .plugins
+        .list
+        .get(browser_plugin_id())
+        .filter(|plugin| matches!(plugin.package, agena_plugin_host::PluginPackage::Static {}))
+        .and_then(|plugin| plugin.settings.as_object());
+    if project.settings.is_null() {
+        project.settings = serde_json::json!({});
+    }
+    let Some(settings) = project.settings.as_object_mut() else {
+        return;
+    };
+    // Both hosts use the same child process. A workspace can configure its
+    // request and console behavior through its own Browser settings.
+    for key in [
+        "executable_path",
+        "startup_timeout_secs",
+        "idle_timeout_secs",
+    ] {
+        settings.remove(key);
+        if let Some(value) = instance.and_then(|settings| settings.get(key)) {
+            settings.insert(key.to_owned(), value.clone());
+        }
+    }
+}
+
 /// Connections handed to snapshot composition. The chat database backs
 /// session and model-catalog storage; the scheduler database backs the cron
 /// scheduler (`None` degrades the scheduler to its in-memory store).
@@ -111,8 +138,7 @@ pub(crate) struct RuntimeSnapshot {
     plugin_shutdown: agena_runtime::PluginShutdownCoordinator,
     global_plugins: Arc<PluginHost>,
     global_plugin_config: agena_plugin_host::PluginsConfig,
-    project_browser: BrowserConfiguration,
-    global_browser: BrowserConfiguration,
+    browser_sessions: BrowserSessionPool,
     _global_mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
     _global_plugin_shutdown: Option<Arc<agena_runtime::CallbackOnDrop>>,
     _global_lsp_registration: Option<Arc<agena_runtime::AbortOnDrop>>,
@@ -153,8 +179,7 @@ impl RuntimeSnapshot {
     /// their instance binds the host handle during `meta/init`, so they are
     /// always recreated against the new handle instead of reused, keeping
     /// display contributions (plan chip, terminal activity) on the live host.
-    /// Browser instances share their Chrome sessions when the browser
-    /// configuration stays the same.
+    /// Browser instances share one Chrome session pool across runtime reloads.
     pub(crate) async fn build_with_previous(
         generation: u64,
         loader: &ConfigLoader<ProcessEnvironment>,
@@ -213,6 +238,7 @@ impl RuntimeSnapshot {
         resolution.config.plugins = resolve_bundled_plugins(resolution.config.plugins)?;
         global_resolution.config.plugins =
             resolve_bundled_plugins(global_resolution.config.plugins)?;
+        use_instance_chrome_settings(&mut resolution.config, &global_resolution.config);
         // Only process initialization uses this instance location. Per-session
         // executors clear it when binding a global session.
         let global_internal_root = global_resolution
@@ -287,15 +313,9 @@ impl RuntimeSnapshot {
             generation,
             agena_runtime::config_resolution_json_value(&global_resolution)?,
         );
-        let project_browser = BrowserConfiguration::resolve(
-            &resolution.config,
-            host_client.clone(),
-            previous.as_ref().map(|previous| &previous.project_browser),
-        );
-        let global_browser = BrowserConfiguration::resolve(
-            &global_resolution.config,
-            global_host_client.clone(),
-            previous.as_ref().map(|previous| &previous.global_browser),
+        let browser_sessions = previous.as_ref().map_or_else(
+            || BrowserSessionPool::new(host_client.clone()),
+            |previous| previous.browser_sessions.clone(),
         );
         let plugins = build_plugin_services(
             agena_runtime::PluginCompositionInputs {
@@ -319,7 +339,7 @@ impl RuntimeSnapshot {
                     reader: kernel.ports.reader.clone(),
                     state: kernel.instance_state.clone(),
                 }),
-            project_browser.sessions.clone(),
+            browser_sessions.clone(),
         )
         .await?;
         // Own successful plugin initialization across every later service
@@ -359,7 +379,7 @@ impl RuntimeSnapshot {
                     reader: kernel.ports.reader.clone(),
                     state: kernel.instance_state.clone(),
                 }),
-            global_browser.sessions.clone(),
+            browser_sessions.clone(),
         )
         .await?;
         let global_plugin_shutdown =
@@ -479,8 +499,7 @@ impl RuntimeSnapshot {
             plugin_shutdown: plugin_shutdown_coordinator,
             global_plugins,
             global_plugin_config: global_resolution.config.plugins,
-            project_browser,
-            global_browser,
+            browser_sessions,
             _global_mcp_manager: global_mcp_manager,
             _global_plugin_shutdown: global_plugin_shutdown,
             _global_lsp_registration: global_lsp_registration,
@@ -871,6 +890,23 @@ impl fmt::Debug for RuntimeSnapshot {
 mod global_plugin_tests {
     use super::*;
     use agena_plugin_host::sdk::host_api::HostClient;
+
+    #[test]
+    fn legacy_monitor_profiles_resolve_without_loading_the_retired_plugin() {
+        let configured = serde_json::from_value(serde_json::json!({
+            "active_profiles": ["legacy-monitor"],
+            "profiles": {
+                "legacy-monitor": {
+                    "plugins": {"agena.monitor": {"action": "patch", "enabled": true}}
+                }
+            }
+        }))
+        .unwrap();
+
+        let plugins = resolve_bundled_plugins(configured).unwrap();
+        assert!(!plugins.list.contains_key("agena.monitor"));
+        assert!(plugins.list.contains_key("agena.shell"));
+    }
 
     #[test]
     fn legacy_browser_profile_keeps_supported_settings() {

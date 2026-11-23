@@ -188,8 +188,7 @@ fn apply_tool_permission_rules(
             Ok(base)
         }
         ToolPermissionRules::Ordered(entries) => {
-            // Keep accepting historical command tables for the current
-            // WebSocket-only monitor.
+            // Accept historical monitor command tables when loading older configs.
             if matches!(tool_name, SHELL_COMMAND_RULE_GROUP | "agena.monitor.start") {
                 for (pattern, mode) in ordered_rule_entries(entries) {
                     let trimmed = pattern.trim();

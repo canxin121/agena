@@ -259,9 +259,7 @@
 //! | POST | `/api/v1/sessions/{session_id}/storage/cleanup` | `confirm_session_storage()` |
 //! | GET,POST | `/api/v1/sessions/{session_id}/browser` | `list_browser_tabs()`, `control_browser()` |
 //! | GET | `/api/v1/sessions/{session_id}/shell/processes` | `list_shell_processes()` |
-//! | GET | `/api/v1/sessions/{session_id}/monitor/subscriptions` | `list_monitor_subscriptions()` |
 //! | GET,DELETE | `/api/v1/sessions/{session_id}/shell/processes/{process_id}` | `get_shell_process()`, `stop_shell_process()` |
-//! | GET,DELETE | `/api/v1/sessions/{session_id}/monitor/subscriptions/{subscription_id}` | `get_monitor_subscription()`, `stop_monitor_subscription()` |
 //! | GET | `/api/v1/sessions/{session_id}/schedules` | `list_session_schedules()` |
 //! | PATCH,DELETE | `/api/v1/sessions/{session_id}/schedules/{schedule_id}` | `set_session_schedule_paused()`, `delete_session_schedule()` |
 //! | GET,PUT | `/api/v1/sessions/{session_id}/assistant` | `get_assistant()`, `put_assistant()` |

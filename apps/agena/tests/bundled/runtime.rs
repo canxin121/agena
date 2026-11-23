@@ -2,17 +2,14 @@
 //! Model scripts choose actions; persisted output, session state and external
 //! effects establish what the product actually did.
 
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, time::Duration};
 
 use agena_api::{live::ToolDetailSection, resource::UserInputReplyKind};
 use agena_domain::{AgentStatus, RawOutput};
 use agena_testkit::{ModelRequest, Reply, RequestMatch, TestResult, UserSession};
 use anyhow::{Context, Result, ensure};
 use chrono::{Datelike, Timelike, Utc};
-use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
-use tokio::{net::TcpListener, sync::Semaphore};
-use tokio_tungstenite::tungstenite::Message;
 
 use super::{allow_permissions, fixture};
 
@@ -24,10 +21,6 @@ pub(super) const CASES: &[(&str, fn() -> TestResult)] = &[
     (
         "agena.cron",
         cron_persists_edits_and_delivers_a_real_scheduled_wake,
-    ),
-    (
-        "agena.monitor",
-        monitor_delivers_websocket_events_and_stops_the_owned_connection,
     ),
     (
         "agena.plan",
@@ -650,246 +643,6 @@ async fn agent_runs_messages_follows_up_and_cancels_a_real_child() -> TestResult
                     "parent did not durably consume the child's {status} notification"
                 );
             }
-            Ok(())
-        })
-        .await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn monitor_delivers_websocket_events_and_stops_the_owned_connection() -> TestResult {
-    super::fixture_without_memory()
-        .env("AGENA_SANDBOX", "disabled")
-        .expect_plugin("agena.monitor")
-        .run(|case| async move {
-            // Own the WS transport explicitly: its accepted connection is joined by
-            // the case, and cancellation closes it even when an assertion fails.
-            let listener = TcpListener::bind((super::native_fixture_address()?, 0)).await?;
-            let address = listener.local_addr()?;
-            let connected = Arc::new(Semaphore::new(0));
-            let emit = Arc::new(Semaphore::new(0));
-            let closed = Arc::new(Semaphore::new(0));
-            let connected_service = connected.clone();
-            let emit_service = emit.clone();
-            let closed_service = closed.clone();
-            let stop = case.service_cancellation_token();
-            case.spawn_service(async move {
-                let connection = async {
-                    let (stream, _) = listener.accept().await?;
-                    let mut socket = tokio_tungstenite::accept_async(stream).await?;
-                    connected_service.add_permits(1);
-                    emit_service.acquire().await?.forget();
-                    socket
-                        .send(Message::Text("runtime-monitor-event-proof".into()))
-                        .await?;
-                    // Stopping the real subscription must close its actual socket.
-                    while let Some(message) = socket.next().await {
-                        match message {
-                            Ok(Message::Close(_)) | Err(_) => break,
-                            Ok(_) => {}
-                        }
-                    }
-                    closed_service.add_permits(1);
-                    Ok::<(), anyhow::Error>(())
-                };
-                tokio::select! {
-                    result = connection => result,
-                    () = stop.cancelled() => Ok(()),
-                }
-            });
-
-            let user = case.user().new_session().await?;
-            allow_permissions(&user).await?;
-            let first = case
-                .model()
-                .expect(RequestMatch::user_text("runtime-monitor-start"))
-                .reply(Reply::tool_call(
-                    "call_monitor_start",
-                    "monitor.start",
-                    json!({
-                        "ws": {"url": format!("ws://{address}/feed")},
-                        "timeout_ms": 60000, "description": "case-owned monitor feed"
-                    }),
-                ));
-            let started = case
-                .model()
-                .expect(RequestMatch::tool_output("call_monitor_start"))
-                .after(&first)
-                .reply(
-                    // The monitor's delivery is consumed at the provider
-                    // boundary that follows monitor.start, so the event is
-                    // already in the next request. A short wait keeps this a
-                    // wake observation instead of outlasting the scripted
-                    // model's own 30 s deadline when it does time out.
-                    Reply::tool_call(
-                        "call_monitor_wait_event",
-                        "agent.wait",
-                        json!({"timeout_ms": 1000}),
-                    )
-                    .held(),
-                );
-            let run = user.send("runtime-monitor-start").await?;
-            started.observed().await?;
-            let payload = raw_tool_payload(&user, "monitor.start").await?;
-            let monitor_id = payload["monitor_id"]
-                .as_str()
-                .context("started monitor id")?
-                .to_owned();
-            ensure!(
-                payload["status"] == "running",
-                "monitor did not start: {payload}"
-            );
-            let http = case.http().await;
-            let subscription = format!(
-                "/api/v1/sessions/{}/monitor/subscriptions/{monitor_id}",
-                user.id()
-            );
-            let state: Value = http.get(&subscription).await?.require_success()?.json()?;
-            let rows: Vec<Value> = http
-                .get(&format!(
-                    "/api/v1/sessions/{}/monitor/subscriptions",
-                    user.id()
-                ))
-                .await?
-                .require_success()?
-                .json()?;
-            ensure!(rows.iter().any(|row| row["process_id"] == monitor_id
-                && row["websocket"] == true
-                && row["output_resource"]["resource_id"].is_string()));
-            let shells: Vec<Value> = http
-                .get(&format!("/api/v1/sessions/{}/shell/processes", user.id()))
-                .await?
-                .require_success()?
-                .json()?;
-            ensure!(!shells.iter().any(|row| row["process_id"] == monitor_id));
-            ensure!(state["status"] == "running");
-            ensure!(
-                user.parts()
-                    .await?
-                    .iter()
-                    .any(|part| part.presentation.as_ref().is_some_and(|view| {
-                        view.blocks.iter().any(|block| {
-                            matches!(block, agena_domain::ViewBlock::MonitorSubscription {
-                    subscription_id, ..
-                } if subscription_id == &monitor_id)
-                        })
-                    }))
-            );
-
-            let stopping = case
-                .model()
-                .expect(RequestMatch::tool_output("call_monitor_wait_event"))
-                .after(&started)
-                .check(|request| {
-                    model_tool_succeeded(request, "call_monitor_wait_event")?;
-                    ensure!(
-                        request
-                            .body
-                            .to_string()
-                            .contains("runtime-monitor-event-proof")
-                    );
-                    Ok(())
-                })
-                .reply(Reply::tool_call(
-                    "call_monitor_stop",
-                    "monitor.stop",
-                    json!({"monitor_id": monitor_id}),
-                ));
-            let draining = case
-                .model()
-                .expect(RequestMatch::tool_output("call_monitor_stop"))
-                .after(&stopping)
-                .check(|request| {
-                    let output: Value = serde_json::from_str(
-                        &request
-                            .tool_output_text("call_monitor_stop")
-                            .context("monitor stop output")?,
-                    )?;
-                    ensure!(
-                        output["phase"] == "succeeded",
-                        "monitor stop failed: {output}"
-                    );
-                    Ok(())
-                })
-                .reply(
-                    Reply::tool_call(
-                        "call_monitor_wait_finish",
-                        "agent.wait",
-                        json!({"timeout_ms": 5000}),
-                    )
-                    .held(),
-                );
-            let finishing = case
-                .model()
-                .expect(RequestMatch::tool_output("call_monitor_wait_finish"))
-                .after(&draining)
-                .reply(Reply::text("runtime-monitor-complete").held());
-
-            tokio::time::timeout(Duration::from_secs(10), connected.acquire())
-                .await
-                .context("monitor did not establish the real WebSocket")??
-                .forget();
-            emit.add_permits(1);
-            started.release();
-            draining.observed().await?;
-            tokio::time::timeout(Duration::from_secs(10), closed.acquire())
-                .await
-                .context("monitor.stop did not close the real WebSocket")??
-                .forget();
-            let stopped = raw_tool_payload(&user, "monitor.stop").await?;
-            ensure!(
-                stopped["status"] == "stopped",
-                "monitor stop was not persisted: {stopped}"
-            );
-            draining.release();
-            finishing.observed().await?;
-            let parts = user.parts().await?;
-            ensure!(
-                parts.iter().any(|part| part.kind == "system_notification"
-                    && part.content["operation_kind"] == "monitor"
-                    && part.content["operation_id"] == monitor_id
-                    && part.content["body"]
-                        .as_str()
-                        .is_some_and(|text| text.contains("runtime-monitor-event-proof"))),
-                "monitor event was not durably delivered"
-            );
-            ensure!(
-                parts.iter().any(|part| part.kind == "system_notification"
-                    && part.content["operation_kind"] == "monitor"
-                    && part.content["operation_id"] == monitor_id
-                    && part.content["status"] == "stopped"),
-                "monitor final notification was not consumed before finishing"
-            );
-            finishing.release();
-            let result = run.wait_settled().await?;
-            result.assert_succeeded()?;
-            result.assert_assistant_text("runtime-monitor-complete")?;
-            let state: Value = http.get(&subscription).await?.require_success()?.json()?;
-            let rows: Vec<Value> = http
-                .get(&format!(
-                    "/api/v1/sessions/{}/monitor/subscriptions",
-                    user.id()
-                ))
-                .await?
-                .require_success()?
-                .json()?;
-            ensure!(rows.iter().any(|row| row["process_id"] == monitor_id
-                && row["websocket"] == true
-                && row["output_resource"]["resource_id"].is_string()));
-            let shells: Vec<Value> = http
-                .get(&format!("/api/v1/sessions/{}/shell/processes", user.id()))
-                .await?
-                .require_success()?
-                .json()?;
-            ensure!(!shells.iter().any(|row| row["process_id"] == monitor_id));
-            ensure!(state["status"] == "stopped");
-            let shell_path = format!(
-                "/api/v1/sessions/{}/shell/processes/{monitor_id}",
-                user.id()
-            );
-            assert_eq!(
-                http.get(&shell_path).await?.status,
-                reqwest::StatusCode::NOT_FOUND
-            );
             Ok(())
         })
         .await

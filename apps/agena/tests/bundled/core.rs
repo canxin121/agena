@@ -252,10 +252,19 @@ async fn shell_runs_commands_and_owns_background_jobs() -> TestResult {
             .await?
             .assert_text_contains("background-ready-marker")?;
 
+            let watched = call(
+                &user,
+                "shell.watch",
+                json!({"process_id":process_id,"policy":{"include_pattern":"^watch-event-marker$"}}),
+            )
+            .await?;
+            assert_eq!(watched.data()?["action"], "watch_update");
+
             let http = case.http().await;
             let endpoint = format!("/api/v1/sessions/{}/shell/processes/{process_id}", user.id());
             let running: Value = http.get(&endpoint).await?.require_success()?.json()?;
             assert_eq!(running["status"], "running");
+            assert_eq!(running["monitored"], true);
             let resource = running["output_resource"]["resource_id"].as_str().context("shell output resource")?;
             let output = format!("/api/v1/sessions/{}/content/{resource}/text", user.id());
             assert!(user.parts().await?.iter().any(|part| part.presentation.as_ref().is_some_and(|view| {
@@ -269,10 +278,11 @@ async fn shell_runs_commands_and_owns_background_jobs() -> TestResult {
             let stranger = self::user(&case).await?;
             let owned: Vec<Value> = http.get(&format!("/api/v1/sessions/{}/shell/processes", user.id())).await?.require_success()?.json()?;
             assert!(owned.iter().any(|row| row["process_id"] == process_id && row["output_resource"] == running["output_resource"]));
-            for (session_id, collection) in [(stranger.id(), "shell/processes"), (user.id(), "monitor/subscriptions")] {
-                let rows: Vec<Value> = http.get(&format!("/api/v1/sessions/{session_id}/{collection}")).await?.require_success()?.json()?;
-                assert!(!rows.iter().any(|row| row["process_id"] == process_id));
-            }
+            let rows: Vec<Value> = http.get(&format!("/api/v1/sessions/{}/shell/processes", stranger.id())).await?.require_success()?.json()?;
+            assert!(!rows.iter().any(|row| row["process_id"] == process_id));
+            let retired = format!("/api/v1/sessions/{}/monitor/subscriptions", user.id());
+            assert_eq!(http.get(&retired).await?.status, reqwest::StatusCode::NOT_FOUND);
+            assert_eq!(http.get("/api/v1/plugins/agena.monitor").await?.status, reqwest::StatusCode::NOT_FOUND);
             let wrong_owner = format!("/api/v1/sessions/{}/shell/processes/{process_id}", stranger.id());
             assert_eq!(
                 http.send_json(reqwest::Method::DELETE, &wrong_owner, &json!({})).await?.status,

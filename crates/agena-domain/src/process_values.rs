@@ -90,7 +90,7 @@ pub struct ProcessSummary {
     /// not newline-delimited log records.
     #[serde(default)]
     pub tty: bool,
-    /// True for a WebSocket event subscription rather than a local command.
+    /// Compatibility field for summaries of historical WebSocket subscriptions.
     #[serde(default)]
     pub websocket: bool,
     pub command: String,

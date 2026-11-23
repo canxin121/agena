@@ -71,7 +71,6 @@ const contentFormat = computed(
 const kind = computed(() => stringValue(props.block.type) || 'unknown')
 const nativePart = computed(() => !props.ownerSessionId || String(props.ownerSessionId) === props.sessionId)
 const processId = computed(() => stringValue(props.block.process_id))
-const subscriptionId = computed(() => stringValue(props.block.subscription_id))
 const agentSessionId = computed(() => {
   const id = props.block.session_id
   return typeof id === 'number' && Number.isSafeInteger(id) && id > 0 ? String(id) : ''
@@ -149,13 +148,6 @@ const progressCount = computed(() =>
       v-else-if="kind === 'shell_process' && sessionId && nativePart && processId"
       :session-id="sessionId"
       :id="processId"
-      kind="shell"
-    />
-    <ProcessControls
-      v-else-if="kind === 'monitor_subscription' && sessionId && nativePart && subscriptionId"
-      :session-id="sessionId"
-      :id="subscriptionId"
-      kind="monitor"
     />
     <Button
       v-else-if="kind === 'agent_session' && agentSessionId"

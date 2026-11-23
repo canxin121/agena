@@ -177,8 +177,8 @@ fn relevance_score(
     }
 
     // An unmatched action changes what a tool does, not merely how narrowly
-    // the user described it. For example, `monitor.start` must not be returned
-    // for "stop background monitor" just because two nouns overlap.
+    // the user described it. For example, a search for "stop shell process"
+    // should match the action "stop" as well as the object "shell process".
     if matched_action_terms < action_term_count {
         return None;
     }
@@ -480,7 +480,7 @@ fn edit_distance(left: &str, right: &str) -> usize {
 
 /// Normalize punctuation to token boundaries for exact-name and lexical
 /// comparisons. Case-insensitive and whitespace-collapsed:
-/// `monitor.start`, `Monitor.Start`, and `monitor . start` compare equally.
+/// `shell.spawn`, `Shell.Spawn`, and `shell . spawn` compare equally.
 fn normalize_search_text(text: &str) -> String {
     text.chars()
         .flat_map(char::to_lowercase)

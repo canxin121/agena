@@ -26,7 +26,6 @@ Plugin authorship metadata refers to the plugin implementation, independently of
 | agena.lsp | RiCodeBoxLine |
 | agena.mcp | RiPlugLine |
 | agena.memory | RiBrainLine |
-| agena.monitor | RiPulseLine |
 | agena.notebook | RiBook2Line |
 | agena.notifications | RiNotification3Line |
 | agena.plan | RiListCheck3 |

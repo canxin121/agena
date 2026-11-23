@@ -495,7 +495,7 @@ TUI 使用 `Tab` 切换面板，`Ctrl+N` 新增规则，`Enter` 编辑字段，`
 
 支持重定向的 Web 抓取、robots.txt、技能下载与 OAuth 由宿主审核下一跳后再启动请求。HTML 搜索只跟随已授权同源跳转，并继续固定同一批获准地址；provider 与 MCP 协议请求保留原有的禁止自动跳转策略。Cookie、User-Agent、认证头和超时由调用端明确传入；搜索在复用 Cookie 时仍为每次调用刷新权限与取消状态。响应被丢弃或所属调用结束时回收 HTTP 工作进程，即使没有继续读取 SSE 正文也会停止。
 
-这类受控 HTTP 请求的 DNS 查询由宿主执行，审核后的目的 IP 才进入 worker。Shell 或其他程序自行在沙盒内解析域名时，仍需允许其实际 DNS 服务器。provider 实时语音和 WebSocket monitor 同样先由宿主授权 URL 与解析结果，再由独立 worker 直接连接固定 IP。
+这类受控 HTTP 请求的 DNS 查询由宿主执行，审核后的目的 IP 才进入 worker。Shell 或其他程序自行在沙盒内解析域名时，仍需允许其实际 DNS 服务器。provider 实时语音同样先由宿主授权 URL 与解析结果，再由独立 worker 直接连接固定 IP。
 
 这条校验通过宿主的 `check_resolved_network_permission` 接口执行，保留原调用的身份与权限上限；原生、HTTP 和 stdio 插件回调使用相同接口。
 
@@ -550,7 +550,6 @@ Agena 不会为不支持的规则改用代理，也不会降级为不受沙盒�
 | 工具侧 HTTP MCP 与 OAuth                                  | POST、GET/SSE、DELETE 及 OAuth 发现、注册、刷新、令牌交换进入 HTTP worker；重定向与重连继续使用当前调用授权          |
 | ChatGPT / Claude / Gemini 的本地媒体分析和文件上传        | 文件读取与媒体识别在离线 worker；目标授权后通过 HTTP worker 上传，保留大小、修订、哈希和格式校验                     |
 | ChatGPT / Gemini 实时语音                                 | 有界语音 turn 的 WebSocket 连接、输入发送和响应收集在 MXC worker；宿主只准备已授权输入和发布校验后的音频             |
-| WebSocket monitor                                         | 独立 MXC worker 使用获准固定 IP、原 TLS hostname 与子协议；停止、超时或句柄释放时回收进程树                          |
 | Skills 目录、资源与安装                                   | 列表、读取、修改、安装预览及安装在离线 worker；目录扫描、归档解包与包校验也在 worker，远程下载使用 HTTP worker       |
 | Memory 存储与搜索                                         | 读取、列表、搜索、写入、删除、恢复在离线 worker；保留原有锁、修订和事务日志，派生搜索索引放在任务私有目录            |
 | 浏览器渲染和交互                                          | Browser 在宿主启动带原生沙盒的 Chrome，Web JavaScript 渲染要求直接执行模式                                          |
@@ -818,5 +817,4 @@ AGENA_TEST_SANDBOX_LAUNCHER=/absolute/path/to/agena cargo test -p agena-mcp-clie
 | `agena-process/src/sandbox_http.rs`                                 | 固定目标的单跳 HTTP、流式匿名管道、连接取消和超时         |
 | `agena-process/src/sandbox_file.rs`                                 | 上传文件的隔离读取、大小限制与修订校验                    |
 | `agena-bundled-plugins/src/worker.rs`                               | 技能、记忆与实时语音的最小请求协议和调用生命周期          |
-| `agena-runtime-tools/src/monitor/websocket.rs`                      | 固定目标的监控 WebSocket 与工作进程清理                   |
 | `agena-lsp/src/registry.rs`                                         | 按完整权限策略区分语言服务实例                            |

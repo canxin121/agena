@@ -354,9 +354,6 @@ impl ToolExecutor {
             ToolPayloadInput::Shell(input) => {
                 self.collect_shell_effect_checks(checks, &input)?;
             }
-            ToolPayloadInput::Monitor(crate::part::MonitorToolInput::Start { ws, .. }) => {
-                self.push_network_check(checks, ws.url.as_str())?;
-            }
             _ => {}
         }
         Ok(())

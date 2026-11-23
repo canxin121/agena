@@ -720,40 +720,6 @@ impl ShellToolInput {
     }
 }
 
-/// WebSocket endpoint monitored by the monitor tool.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
-#[input(trim("url"), non_empty("url"))]
-pub struct MonitorWsInput {
-    pub url: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub protocols: Vec<String>,
-}
-
-/// Input of the monitor tool: watch a command's output or a WebSocket feed,
-/// emitting each event to the model as a `system_notification` part appended to
-/// the launching run (everything-is-a-part: the monitor is its `tool_call`
-/// part, every event is a `system_notification` part).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
-#[serde(tag = "action", rename_all = "snake_case")]
-pub enum MonitorToolInput {
-    /// Subscribe to a WebSocket feed. Command capture uses shell.watch.
-    #[input(
-        trim("description"),
-        minimum("timeout_ms", 1),
-        maximum("timeout_ms", 3600000)
-    )]
-    Start {
-        ws: MonitorWsInput,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        timeout_ms: Option<u64>,
-        #[serde(default, skip_serializing_if = "String::is_empty")]
-        description: String,
-    },
-    /// Stop a running monitor (kills its command / closes its WebSocket).
-    #[input(non_empty("monitor_id"))]
-    Stop { monitor_id: String },
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[input(
     validate = validate_ask_user_questions,

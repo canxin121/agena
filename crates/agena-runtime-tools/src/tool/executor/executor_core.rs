@@ -492,6 +492,7 @@ impl ToolExecutor {
                 ("agena", "interaction", "ask" | "notify")
                     | ("agena", "plan", "set" | "review" | "phase" | "clear")
                     | ("agena", "agent", "spawn" | "followup" | "cancel")
+                    | ("agena", "bot", "profile")
             )
         {
             return false;

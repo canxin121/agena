@@ -8,8 +8,8 @@ use crate::part::{
     ApplyPatchToolInput, AskUserToolInput, AttachmentKind, CronCreateToolInput,
     CronDeleteToolInput, CronHistoryToolInput, CronJobControlToolInput, CronListToolInput,
     CronUpdateToolInput, GlobToolInput, GrepToolInput, LspDefinitionToolInput,
-    LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput, MonitorToolInput,
-    ReadToolInput, ShellToolInput, ToolSearchToolInput, WebFetchToolInput, WebSearchToolInput,
+    LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput, ReadToolInput,
+    ShellToolInput, ToolSearchToolInput, WebFetchToolInput, WebSearchToolInput,
 };
 use agena_domain::{
     FileChangeRecord, StructuredObject, ToolInvocation, ToolOutput, WebSearchResult,
@@ -27,7 +27,6 @@ fn is_false(value: &bool) -> bool {
 /// Input payload of a tool execution.
 pub enum ToolPayloadInput {
     Shell(ShellToolInput),
-    Monitor(MonitorToolInput),
     Read(ReadToolInput),
     ApplyPatch(ApplyPatchToolInput),
     Glob(GlobToolInput),
@@ -55,7 +54,6 @@ impl ToolPayloadInput {
     pub fn tool_name(&self) -> &'static str {
         match self {
             Self::Shell(_) => "shell",
-            Self::Monitor(_) => "monitor",
             Self::Read(_) => "read",
             Self::ApplyPatch(_) => "apply_patch",
             Self::Glob(_) => "glob",
@@ -172,10 +170,9 @@ impl ToolPayloadInput {
             (
                 "agena",
                 "shell",
-                action @ ("exec" | "spawn" | "open" | "list" | "logs" | "read" | "stop" | "write"
-                | "resize" | "signal"),
+                action @ ("exec" | "spawn" | "watch" | "open" | "list" | "logs" | "read" | "stop"
+                | "write" | "resize" | "signal"),
             ) => ("shell", Some(action)),
-            ("agena", "monitor", action @ ("start" | "stop")) => ("monitor", Some(action)),
             ("agena", "cron", "create") => ("cron_create", None),
             ("agena", "cron", "list") => ("cron_list", None),
             ("agena", "cron", "delete") => ("cron_delete", None),
@@ -238,17 +235,6 @@ impl ToolPayloadInput {
             return Some(
                 parsed
                     .map(Self::Shell)
-                    .map_err(|error| serde::de::Error::custom(error.to_string())),
-            );
-        }
-        if payload_name == "monitor" {
-            object.insert(
-                "action".to_owned(),
-                serde_json::Value::String(action?.to_owned()),
-            );
-            return Some(
-                MonitorToolInput::parse_input(serde_json::Value::Object(object))
-                    .map(Self::Monitor)
                     .map_err(|error| serde::de::Error::custom(error.to_string())),
             );
         }
@@ -449,9 +435,7 @@ pub enum ToolPayloadOutput {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         completion_reason: Option<String>,
     },
-    /// `monitor.start` / `monitor.stop` output. The monitor keeps running after
-    /// `start` returns; its tool part stays `InProgress` until the monitor
-    /// settles, with every event projected as a `system_notification` part.
+    /// Output retained in historical WebSocket monitor tool calls.
     Monitor {
         action: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -787,13 +771,6 @@ fn invocation_name_for_payload_tool(
                 .unwrap_or_else(|| "list".to_string());
             canonical_registry_tool_name("agena.shell", action.as_str())
         }
-        "monitor" => {
-            let action = input
-                .remove("action")
-                .and_then(|value| value.as_str().map(str::to_string))
-                .unwrap_or_else(|| "start".to_string());
-            canonical_registry_tool_name("agena.monitor", action.as_str())
-        }
         "cron_create" => canonical_registry_tool_name("agena.cron", "create"),
         "cron_list" => canonical_registry_tool_name("agena.cron", "list"),
         "cron_delete" => canonical_registry_tool_name("agena.cron", "delete"),
@@ -842,35 +819,17 @@ fn payload_name_for_invocation(
         "agena_fs_apply_patch" | "agena.fs.apply_patch" => {
             return Some("apply_patch".to_string());
         }
-        "monitor.start" | "agena_monitor_start" | "agena.monitor.start" => {
-            input.insert(
-                "action".to_string(),
-                serde_json::Value::String("start".to_string()),
-            );
-            return Some("monitor".to_string());
-        }
-        "monitor.stop" | "agena_monitor_stop" | "agena.monitor.stop" => {
-            input.insert(
-                "action".to_string(),
-                serde_json::Value::String("stop".to_string()),
-            );
-            return Some("monitor".to_string());
-        }
         _ => {}
     }
     // Every other typed payload reuses the explicit current-name mapping.
-    payload_name_for_output_tool(invocation_name)
+    payload_name_for_table(invocation_name)
 }
 
 fn payload_name_for_output_tool(tool_name: &str) -> Option<String> {
     if tool_name == "web_search" {
         return Some("web_search".to_owned());
     }
-    // Shell/process tools share one `shell` payload variant; the subcommand
-    // lives in `action`, not in the variant tag. Registered spellings are
-    // owned by the shared shell identity contract.
-    // Monitor tools share one `monitor` payload variant; the subcommand
-    // (`start`/`stop`) lives in `action`, not in the variant tag.
+    // Decode results retained in transcripts from the retired WebSocket tools.
     if matches!(
         tool_name,
         "monitor"
@@ -883,6 +842,7 @@ fn payload_name_for_output_tool(tool_name: &str) -> Option<String> {
     ) {
         return Some("monitor".to_string());
     }
+    // Shell tools use the same output payload for every action.
     if tool_name == "shell"
         || agena_domain::ToolPermissionConfig::canonical_shell_tool_name(tool_name).is_some()
     {

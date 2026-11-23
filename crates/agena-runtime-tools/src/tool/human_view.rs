@@ -4785,6 +4785,7 @@ impl BuiltinHumanRenderer {
                             sessions,
                             &[
                                 ("session_id", "Session"),
+                                ("context_id", "Context"),
                                 ("opener_session_id", "Opened from"),
                                 ("title", "Title"),
                                 ("url", "URL"),
@@ -4815,6 +4816,7 @@ impl BuiltinHumanRenderer {
                 let snapshot = Self::browser_snapshot_object(object);
                 let fields = [
                     ("Session", Self::object_text(object, "session_id")),
+                    ("Context", Self::object_text(object, "context_id")),
                     ("Action", Self::browser_action_summary(key, object)),
                     (
                         "Observation",

@@ -32,10 +32,9 @@ pub use atomic_file::{
     atomic_create_file, atomic_replace_file, atomic_replace_file_with_check, atomic_write_file,
     canonicalize_mutation_path, verify_file_contents, with_file_mutation_locks,
 };
-pub use monitor::try_run_monitor_worker;
 pub use monitor::{
     MonitorError, MonitorListener, MonitorRead, MonitorRegistry, MonitorService, MonitorStart,
-    MonitorStopOutcome, MonitorWsParams, ProcessReadOptions, default_monitor_registry,
+    MonitorStopOutcome, ProcessReadOptions, default_monitor_registry,
 };
 pub use monitor::{ReadParams as MonitorReadParams, StartParams as MonitorStartParams};
 

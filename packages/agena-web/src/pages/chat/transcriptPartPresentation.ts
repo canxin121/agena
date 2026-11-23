@@ -495,6 +495,7 @@ export function operationPresentation(
       .filter(Boolean),
   )
   const presentationBlocks = (details ? blocks : []).flatMap((block) => {
+    if (block.type === 'monitor_subscription') return []
     if (block.type === 'file_changes') {
       const changes = jsonArray(block.changes).filter((change) => !diffPaths.has(stringValue(jsonRecord(change).path)))
       return changes.length ? [{ ...block, changes }] : []

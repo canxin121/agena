@@ -38,16 +38,8 @@ pub(super) fn routes() -> Router<AppState> {
             get(rest::list_shell_processes),
         )
         .route(
-            "/api/v1/sessions/{session_id}/monitor/subscriptions",
-            get(rest::list_monitor_subscriptions),
-        )
-        .route(
             "/api/v1/sessions/{session_id}/shell/processes/{process_id}",
             get(rest::get_shell_process).delete(rest::stop_shell_process),
-        )
-        .route(
-            "/api/v1/sessions/{session_id}/monitor/subscriptions/{subscription_id}",
-            get(rest::get_monitor_subscription).delete(rest::stop_monitor_subscription),
         )
         .route(
             "/api/v1/sessions/{session_id}/schedules",

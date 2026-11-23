@@ -17,7 +17,7 @@ use agena_agent_browser::agena::{CdpClient, PageEngine, connect_cdp, is_session_
 use agena_plugin_host::sdk::{Result as SdkResult, host_api, permission_wait};
 use agena_plugin_host::{PluginError, sdk::PluginErrorKind};
 use serde_json::{Value, json};
-use tokio::sync::{Mutex, Notify, RwLock, Semaphore, mpsc};
+use tokio::sync::{Mutex, Notify, OwnedMutexGuard, RwLock, Semaphore, mpsc};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
@@ -248,6 +248,7 @@ struct Page {
     session: String,
     engine: Mutex<PageEngine>,
     events: Arc<PageEventsState>,
+    capture: Arc<Mutex<()>>,
 }
 
 struct Connection {
@@ -445,6 +446,7 @@ impl BrowserDriver {
             session,
             engine: Mutex::new(engine),
             events: state,
+            capture: Arc::default(),
         });
         Ok(Self(Arc::new(connection)))
     }
@@ -565,6 +567,23 @@ impl BrowserDriver {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone())
+    }
+
+    pub async fn lock_capture(&self) -> SdkResult<OwnedMutexGuard<()>> {
+        self.ensure_connected()?;
+        // Chrome temporarily resizes the surface for full-page screenshots.
+        // Capture preview pixels and measure the viewport after it is restored.
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            self.page()?.capture.clone().lock_owned(),
+        )
+        .await
+        .map_err(|_| {
+            PluginError::from_kind(
+                PluginErrorKind::HostUnavailable,
+                "The browser is capturing another screenshot",
+            )
+        })
     }
 
     /// An operator observation must not consume a document rejection recorded

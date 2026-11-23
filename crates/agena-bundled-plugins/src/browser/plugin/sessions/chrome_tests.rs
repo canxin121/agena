@@ -7,6 +7,7 @@ use agena_plugin_host::sdk::{
         current_host_callback_context, run_in_isolated_host_callback_context,
     },
 };
+use agena_plugin_sdk::browser::{BrowserControlCommand, BrowserControlResult};
 use serde_json::{Value, json};
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Mutex as SyncMutex;
@@ -346,6 +347,95 @@ impl Drop for Fixture {
     }
 }
 
+#[tokio::test]
+#[ignore = "starts Chrome with sandbox support and a local HTTP fixture"]
+async fn full_page_screenshot_keeps_concurrent_previews_at_viewport_size() {
+    let fixture = Fixture::new().await;
+    let opened = fixture
+        .call("open", json!({"url": "http://8.8.8.8/preview-frame"}))
+        .await;
+    let page_id = opened["session_id"].as_str().unwrap();
+    let state = &fixture.plugin.browser_state;
+    let preview = async |thumbnail| {
+        let frame = state
+            .operator_command(
+                19,
+                BrowserControlCommand::Frame {
+                    page_id: page_id.to_owned(),
+                    control_id: None,
+                    thumbnail,
+                },
+                None,
+                Arc::new(FixtureHost),
+                &[],
+            )
+            .await
+            .unwrap();
+        let BrowserControlResult::Frame { jpeg, .. } = frame else {
+            panic!("expected a browser frame");
+        };
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(jpeg)
+            .unwrap();
+        image::load_from_memory_with_format(&bytes, image::ImageFormat::Jpeg)
+            .unwrap()
+            .into_rgb8()
+    };
+
+    let initial = preview(false).await;
+    let initial_thumbnail = preview(true).await;
+    let page = state.pages.lock().await.get(page_id).cloned().unwrap();
+    let capture_slot = page.driver.lock_capture().await.unwrap();
+    let screenshot = fixture.call(
+        "screenshot",
+        json!({"session_id": page_id, "path": "full.png", "full_page": true}),
+    );
+    let frame = preview(false);
+    let thumbnail = preview(true);
+    tokio::pin!(screenshot, frame, thumbnail);
+    let wait = Duration::from_millis(350);
+    let (screenshot_wait, frame_wait, thumbnail_wait) = tokio::join!(
+        biased;
+        tokio::time::timeout(wait, &mut screenshot),
+        tokio::time::timeout(wait, &mut frame),
+        tokio::time::timeout(wait, &mut thumbnail),
+    );
+    assert!(screenshot_wait.is_err() && frame_wait.is_err() && thumbnail_wait.is_err());
+    drop(capture_slot);
+    let (_, overlap, overlap_thumbnail) = tokio::join!(screenshot, frame, thumbnail);
+    let following = preview(false).await;
+    let full_page = image::image_dimensions(fixture.workspace.path().join("full.png")).unwrap();
+    assert!(full_page.0 > initial.width() && full_page.1 > initial.height());
+
+    for (label, frame, expected) in [
+        ("concurrent preview", overlap, initial.dimensions()),
+        (
+            "concurrent thumbnail",
+            overlap_thumbnail,
+            initial_thumbnail.dimensions(),
+        ),
+        ("following preview", following, initial.dimensions()),
+    ] {
+        assert_eq!(frame.dimensions(), expected, "{label}");
+        let [r, g, b] = frame
+            .get_pixel(frame.width() * 4 / 5, frame.height() * 4 / 5)
+            .0;
+        assert!(
+            r > 180 && (80..160).contains(&g) && b < 90,
+            "{label}: bottom-right marker was [{r}, {g}, {b}]"
+        );
+    }
+    Plugin::shutdown(&fixture.plugin).await.unwrap();
+}
+
+const PREVIEW_FRAME: &str = r#"<!doctype html><title>Viewport fixture</title>
+<style>
+body { margin: 0; width: 2600px; height: 2800px; }
+#viewport { position: fixed; inset: 0; background: rgb(36, 112, 176); }
+#marker { position: fixed; inset: 65% 0 0 65%; background: rgb(216, 120, 48); }
+</style>
+<div id="viewport"></div><div id="marker"></div>"#;
+
 async fn serve(listener: TcpListener, requests: Arc<SyncMutex<Vec<String>>>) {
     while let Ok((stream, _)) = listener.accept().await {
         let requests = requests.clone();
@@ -359,6 +449,7 @@ async fn serve(listener: TcpListener, requests: Arc<SyncMutex<Vec<String>>>) {
             let path = target.as_ref().map_or("/", url::Url::path);
             let (status, content_type, disposition, body) = match (method, path) {
                 ("GET", "/") => (200, "text/html; charset=utf-8", "", PAGE),
+                ("GET", "/preview-frame") => (200, "text/html; charset=utf-8", "", PREVIEW_FRAME),
                 ("GET", "/search") => (200, "text/html; charset=utf-8", "", SEARCH_FORM),
                 ("GET", "/results") => (200, "text/html; charset=utf-8", "", SEARCH_RESULTS),
                 ("GET", "/search-api") => (200, "application/json", "", "{}"),

@@ -15,7 +15,10 @@ use agena_plugin_host::sdk::{
     Result as SdkResult, ToolInvokeContext, ToolInvokeOutput, async_trait,
     browser::BrowserController,
 };
-use agena_plugin_host::{PluginError, sdk::host_api::HostClient};
+use agena_plugin_host::{
+    PluginError,
+    sdk::host_api::{self, HostClient},
+};
 use agena_web::{managed_preview::ManagedPreviewTarget, prepare_fetch_url};
 use base64::Engine as _;
 use schemars::JsonSchema;
@@ -1017,16 +1020,32 @@ impl BrowserPlugin {
         input: &BrowserScreenshotInput,
     ) -> SdkResult<ToolInvokeOutput> {
         let access = self.browser_access(context, &input.session_id).await?;
-        let screenshot = access
-            .page
-            .driver
-            .command(
-                "Page.captureScreenshot",
-                serde_json::json!({
-                    "format": "png", "captureBeyondViewport": input.full_page,
-                }),
-            )
-            .await?;
+        let full_page = input.full_page;
+        let capture_slot = access.page.driver.lock_capture().await?;
+        let capture = async move {
+            let _slot = capture_slot;
+            let screenshot = access
+                .page
+                .driver
+                .command(
+                    "Page.captureScreenshot",
+                    serde_json::json!({"format": "png", "captureBeyondViewport": full_page}),
+                )
+                .await?;
+            Ok::<_, PluginError>((access, screenshot))
+        };
+        let (access, screenshot) = if full_page {
+            // A cancelled tool can leave the CDP command in flight. Keep the
+            // capture slot and page access while the command is pending.
+            let callback = host_api::current_host_callback_context().unwrap_or_default();
+            tokio::spawn(host_api::run_in_isolated_host_callback_context(
+                callback, capture,
+            ))
+            .await
+            .map_err(|error| PluginError::internal_error(&error))??
+        } else {
+            capture.await?
+        };
         access.page.verify_committed_url().await?;
         let encoded = screenshot["data"]
             .as_str()

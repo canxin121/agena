@@ -39,11 +39,6 @@ pub(super) async fn frame(page: &BrowserPage, thumbnail: bool) -> SdkResult<Brow
             "The browser preview is busy",
         )
     };
-    let thumbnail_slot = thumbnail
-        .then(|| THUMBNAILS.try_acquire())
-        .transpose()
-        .map_err(|_| busy())?;
-    let capture = CAPTURES.try_acquire().map_err(|_| busy())?;
     if let Some(dialog) = page.driver.dialog()? {
         return Ok(BrowserControlResult::Frame {
             jpeg: String::new(),
@@ -53,6 +48,12 @@ pub(super) async fn frame(page: &BrowserPage, thumbnail: bool) -> SdkResult<Brow
             dialog: (!thumbnail).then_some(dialog),
         });
     }
+    let viewport = page.driver.lock_capture().await?;
+    let thumbnail_slot = thumbnail
+        .then(|| THUMBNAILS.try_acquire())
+        .transpose()
+        .map_err(|_| busy())?;
+    let capture = CAPTURES.try_acquire().map_err(|_| busy())?;
     let screenshot = page.driver.viewport_command(
         "Page.captureScreenshot",
         json!({"format":"jpeg", "quality":65, "captureBeyondViewport":false}),
@@ -62,6 +63,7 @@ pub(super) async fn frame(page: &BrowserPage, thumbnail: bool) -> SdkResult<Brow
         // viewport. Downsample the pixels instead, so a thumbnail never changes
         // what a simultaneous full capture or the operator sees.
         let frame = screenshot.await?;
+        drop(viewport);
         let jpeg = jpeg_data(&frame)?.to_owned();
         return tokio::task::spawn_blocking(move || {
             let _slots = (capture, thumbnail_slot);
@@ -75,6 +77,7 @@ pub(super) async fn frame(page: &BrowserPage, thumbnail: bool) -> SdkResult<Brow
         page.driver.viewport_command("Page.getFrameTree", json!({})),
         dimensions(page),
     )?;
+    drop(viewport);
     let jpeg = jpeg_data(&frame)?;
     let origin = location
         .pointer("/frameTree/frame/url")

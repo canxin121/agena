@@ -1,6 +1,7 @@
 use agena_assistant::*;
 use agena_storage_sqlite::{SqliteCompanionRepository, open_kernel_runtime};
 use chrono::{TimeZone, Utc};
+use sha2::{Digest, Sha256};
 
 fn now() -> i64 {
     Utc.with_ymd_and_hms(2026, 11, 8, 12, 0, 0)
@@ -85,8 +86,8 @@ async fn profiles_are_workspace_scoped_revision_checked_and_replay_safe() {
         0,
         "profile-1",
         AssistantPatch {
-            name: Some("小鱼".into()),
-            tone: Some(AssistantTone::Warm),
+            timezone: Some("Europe/Paris".into()),
+            daily_limit: Some(3),
             ..Default::default()
         },
     );
@@ -94,12 +95,12 @@ async fn profiles_are_workspace_scoped_revision_checked_and_replay_safe() {
         .update_profile(1, request.clone(), now())
         .await
         .unwrap();
-    assert_eq!(saved.preferences.name, "小鱼");
+    assert_eq!(saved.preferences.timezone, "Europe/Paris");
     assert_eq!(
         repo.update_profile(1, request, now() + 1).await.unwrap(),
         saved
     );
-    assert_eq!(repo.profile(2).await.unwrap().preferences.name, "Agena");
+    assert_eq!(repo.profile(2).await.unwrap().preferences.timezone, "UTC");
     assert!(
         repo.update_profile(
             1,
@@ -107,7 +108,7 @@ async fn profiles_are_workspace_scoped_revision_checked_and_replay_safe() {
                 0,
                 "stale",
                 AssistantPatch {
-                    name: Some("stale".into()),
+                    daily_limit: Some(2),
                     ..Default::default()
                 }
             ),
@@ -123,7 +124,7 @@ async fn profiles_are_workspace_scoped_revision_checked_and_replay_safe() {
                 1,
                 "profile-1",
                 AssistantPatch {
-                    name: Some("changed replay".into()),
+                    daily_limit: Some(2),
                     ..Default::default()
                 }
             ),
@@ -131,6 +132,62 @@ async fn profiles_are_workspace_scoped_revision_checked_and_replay_safe() {
         )
         .await
         .is_err()
+    );
+}
+
+#[tokio::test]
+async fn legacy_profiles_and_receipts_preserve_policy_after_presentation_is_retired() {
+    let runtime = open_kernel_runtime("sqlite::memory:").await.unwrap();
+    let repo = SqliteCompanionRepository::new(runtime.database.clone());
+    let pool = runtime.database.get_sqlite_connection_pool();
+    let mut expected = AssistantProfile::empty(1);
+    expected.revision = 1;
+    expected.preferences.memory_enabled = false;
+    let mut legacy = serde_json::to_value(&expected).unwrap();
+    let fields = legacy["preferences"].as_object_mut().unwrap();
+    for (key, value) in [
+        ("name", "Old assistant"),
+        ("address_user", "Operator"),
+        ("tone", "warm"),
+        ("language", "English"),
+        ("instructions", "Old presentation instructions"),
+    ] {
+        fields.insert(key.into(), value.into());
+    }
+    let legacy = serde_json::to_string(&legacy).unwrap();
+    sea_orm::sqlx::query(
+        "INSERT INTO agena_assistant_profiles(workspace_id, revision, profile_json) VALUES(1, 1, ?)",
+    )
+    .bind(&legacy)
+    .execute(pool)
+    .await
+    .unwrap();
+    let old_request = concat!(
+        r#"{"expected_revision":0,"request_key":"old-policy","patch":{"name":null,"address_user":null,"tone":null,"language":null,"instructions":null,"memory_enabled":false,"#,
+        r#""proactive_enabled":null,"timezone":null,"quiet_enabled":null,"quiet_start_minute":null,"quiet_end_minute":null,"daily_limit":null,"cooldown_seconds":null}}"#,
+    );
+    let mut receipt = Sha256::digest(old_request).to_vec();
+    receipt.push(0); // Raw JSON payload marker.
+    receipt.extend_from_slice(legacy.as_bytes());
+    sea_orm::sqlx::query(
+        "INSERT INTO agena_assistant_profile_receipts(scope_id, request_key, receipt) VALUES(1, 'old-policy', ?)",
+    )
+    .bind(receipt)
+    .execute(pool)
+    .await
+    .unwrap();
+    assert_eq!(repo.profile(1).await.unwrap(), expected);
+    let retry = update(
+        0,
+        "old-policy",
+        AssistantPatch {
+            memory_enabled: Some(false),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        repo.update_profile(1, retry, now()).await.unwrap(),
+        expected
     );
 }
 
@@ -381,7 +438,7 @@ async fn scoped_preferences_and_receipts_survive_restart() {
         0,
         "saved",
         AssistantPatch {
-            name: Some("持久人格".into()),
+            timezone: Some("Asia/Shanghai".into()),
             ..Default::default()
         },
     );
@@ -389,7 +446,7 @@ async fn scoped_preferences_and_receipts_survive_restart() {
         0,
         "saved",
         AssistantPatch {
-            instructions: Some("原始偏好。".repeat(2048)),
+            timezone: Some("Europe/Paris".into()),
             ..Default::default()
         },
     );
@@ -408,7 +465,7 @@ async fn scoped_preferences_and_receipts_survive_restart() {
                 global.revision,
                 "revised",
                 AssistantPatch {
-                    instructions: Some("最新偏好。".into()),
+                    daily_limit: Some(8),
                     ..Default::default()
                 },
             ),

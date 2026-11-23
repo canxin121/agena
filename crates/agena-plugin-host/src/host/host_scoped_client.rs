@@ -340,6 +340,20 @@ impl HostClient for ScopedHostClient {
         })
         .await
     }
+    async fn bot_profile_operation(
+        &self,
+        request: crate::sdk::host_api::BotProfileRequest,
+    ) -> crate::sdk::Result<serde_json::Value> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.bot_profile_operation(request),
+            )
+            .await
+        })
+        .await
+    }
     async fn spawn_agent(&self, req: AgentSpawnRequest) -> crate::sdk::Result<AgentHandle> {
         self.run_callback(async {
             let inner = self.handle.inner.read().await.clone();

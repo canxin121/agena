@@ -163,22 +163,23 @@ def main() -> None:
                     wait(lambda: value in capture(), "composed assistant request")
                     keys("Enter")
                     wait(lambda: marker in capture(), marker, 60)
-                chat("以后叫你小鱼，叫我阿林", "assistant-ui-persona-saved")
+                chat("设置提醒时区为 Asia/Shanghai", "assistant-ui-policy-saved")
                 chat("记住我希望报告先给结论", "assistant-ui-memory-saved")
                 chat("两秒后提醒我核对结果", "assistant-ui-reminder-scheduled")
                 wait(lambda: "assistant-ui-contact-delivered" in capture(), "proactive reminder in original terminal", 60)
                 chat("一小时后再提醒我一次", "assistant-ui-later-scheduled")
                 before = assistant()
-                assert before["profile"]["preferences"]["name"] == "小鱼"
+                assert before["profile"]["preferences"]["timezone"] == "Asia/Shanghai"
                 future = next(r for r in before["reminders"] if r["state"] == "active")
                 command("/assistant")
-                wait(lambda: "Personality" in capture() and "Minimum" in capture(), "assistant terminal panel")
-                keys("Enter")
+                wait(lambda: "Settings" in capture() and "Asia/Shanghai" in capture(), "assistant terminal panel")
+                assert "Assistant name" not in capture()
+                keys("Down", "Down", "Enter")
                 keys("C-a", "C-k")
-                text("TUI小鱼")
+                text("Europe/Paris")
                 keys("M-Enter")
                 keys("s")
-                wait(lambda: assistant()["profile"]["preferences"]["name"] == "TUI小鱼", "save terminal persona")
+                wait(lambda: assistant()["profile"]["preferences"]["timezone"] == "Europe/Paris", "save terminal timezone")
                 (evidence / "assistant-tui-profile.txt").write_text(capture())
                 keys("2")
                 wait(lambda: "ui-report-style" in capture(), "terminal memory list")
@@ -202,7 +203,7 @@ def main() -> None:
                 wait(lambda: "Assistant" in capture(), "compact assistant panel")
                 (evidence / "assistant-tui-narrow.txt").write_text(capture())
                 assert tmux("display-message", "-p", "-t", "assistant:0.0", "#{pane_dead}").strip() == "0"
-                print(json.dumps({"ok": True, "source": source, "checks": ["natural persona", "natural memory", "proactive original-chat reminder", "native profile editor", "memory edit/delete", "cancel reminder", "resize"], "evidence": str(evidence)}, ensure_ascii=False))
+                print(json.dumps({"ok": True, "source": source, "checks": ["workspace reminder policy", "natural memory", "proactive original-chat reminder", "native profile editor", "memory edit/delete", "cancel reminder", "resize"], "evidence": str(evidence)}, ensure_ascii=False))
                 return
             raise AssertionError("select CHANNEL_ACCESS_PROBE, INTEGRATIONS_PROBE or ASSISTANT_PROBE")
         finally:

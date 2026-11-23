@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Fail CI if removed per-Bot personality options reappear.
 
-AssistantPreferences continues to own independent reminder policy and ordinary
-assistant presentation. Named BotPersona owns additional system instructions and prompt references.
-Historical conversion lives outside the shipped runtime.
+AssistantPreferences owns memory and reminder policy. Named BotPersona owns
+additional system instructions and prompt references.
 """
 from __future__ import annotations
 from pathlib import Path
@@ -38,13 +37,12 @@ for file in ('packages/agena-web/src/features/bots/BotManagerHost.vue',
              'crates/agena-tui-app/src/app_bot/render.rs'):
     check(file,forbidden=(r'persona\.address_user',r'persona\.tone',r'persona\.language',
                           r'bot-edit-address',r'bot-edit-tone',r'bot-edit-language'))
+check('crates/agena-runtime-session/src/session/manager/bot/registry.rs',
+      (r'profile\.persona\.instructions', r'pub async fn bot_profile_operation'))
 check('crates/agena-runtime/src/runtime/assistant/companion.rs',
-      (r'bot\.persona\.instructions',
-       r'patch\.memory_enabled\.is_some\(\)',
-       r'patch\.daily_limit\.is_some\(\)'),
-      (r'bot\.persona\.address_user',r'bot\.persona\.tone',r'bot\.persona\.language',
-       r'update\.patch\.\$field\.as_ref\(\)\.is_some_and',
-       r'Existing clients may submit a full form'))
+      forbidden=(r'\bBotUpdate\b', r'\bbot\.persona\.'))
+check('crates/agena-assistant/src/companion.rs',
+      forbidden=(r'pub struct Assistant(?:Preferences|Patch)\s*\{[^}]*\bpub (?:name|address_user|tone|language|instructions):',))
 if errors:
     print('\n'.join(errors),file=sys.stderr)
     raise SystemExit(1)

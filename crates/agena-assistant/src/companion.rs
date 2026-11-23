@@ -1,5 +1,4 @@
-//! Workspace-scoped assistant preferences and explicitly authorized proactive
-//! contact. Preferences are presentation data, never tool authority.
+//! Workspace-scoped memory and reminder policy and authorized proactive contact.
 use crate::{Error, Result, validate_key};
 use async_trait::async_trait;
 use chrono::{DateTime, Datelike, Duration, TimeZone, Timelike, Utc};
@@ -7,27 +6,9 @@ use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum AssistantTone {
-    #[default]
-    Balanced,
-    Warm,
-    Direct,
-    Playful,
-}
-
+// Older stored profiles can still contain retired presentation fields.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
 pub struct AssistantPreferences {
-    pub name: String,
-    pub address_user: String,
-    pub tone: AssistantTone,
-    /// "auto" follows the current user's language; otherwise a language label.
-    pub language: String,
-    pub instructions: String,
     pub memory_enabled: bool,
     /// Allows only explicitly created reminders/check-ins, not invented jobs.
     pub proactive_enabled: bool,
@@ -41,11 +22,6 @@ pub struct AssistantPreferences {
 impl Default for AssistantPreferences {
     fn default() -> Self {
         Self {
-            name: "Agena".into(),
-            address_user: String::new(),
-            tone: AssistantTone::Balanced,
-            language: "auto".into(),
-            instructions: String::new(),
             memory_enabled: true,
             proactive_enabled: true,
             timezone: "UTC".into(),
@@ -59,27 +35,6 @@ impl Default for AssistantPreferences {
 }
 impl AssistantPreferences {
     pub fn validate(&self) -> Result<()> {
-        if self.name.trim().is_empty()
-            || self.name.len() > 128
-            || self.address_user.len() > 128
-            || self.language.trim().is_empty()
-            || self.language.len() > 64
-            || self.instructions.len() > crate::bot::MAX_BOT_INSTRUCTIONS_BYTES
-        {
-            return Err(Error::Invalid(
-                "assistant name/address/language/instructions exceed their bounds",
-            ));
-        }
-        if self
-            .name
-            .chars()
-            .chain(self.address_user.chars())
-            .any(char::is_control)
-        {
-            return Err(Error::Invalid(
-                "assistant names cannot contain control characters",
-            ));
-        }
         self.timezone.parse::<Tz>().map_err(|_| {
             Error::Invalid(
                 "use a valid IANA timezone, for example Asia/Shanghai or America/Chicago",
@@ -160,11 +115,6 @@ impl AssistantPreferences {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(default, deny_unknown_fields)]
 pub struct AssistantPatch {
-    pub name: Option<String>,
-    pub address_user: Option<String>,
-    pub tone: Option<AssistantTone>,
-    pub language: Option<String>,
-    pub instructions: Option<String>,
     pub memory_enabled: Option<bool>,
     pub proactive_enabled: Option<bool>,
     pub timezone: Option<String>,
@@ -178,11 +128,6 @@ impl AssistantPatch {
     pub fn apply(&self, p: &mut AssistantPreferences) -> Result<()> {
         macro_rules! fields {($($field:ident),*)=>{$(if let Some(v)=&self.$field {p.$field=v.clone();})*};}
         fields!(
-            name,
-            address_user,
-            tone,
-            language,
-            instructions,
             memory_enabled,
             proactive_enabled,
             timezone,

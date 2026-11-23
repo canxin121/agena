@@ -27,7 +27,7 @@ mod operations;
 pub use operations::HostClientExt;
 mod session;
 mod workspace;
-pub use bot::{BotAction, BotRequest};
+pub use bot::{BotAction, BotProfileRequest, BotRequest};
 pub use companion::{CompanionAction, CompanionRequest};
 pub use integrations::{IntegrationAction, IntegrationRequest};
 pub use session::{
@@ -104,6 +104,13 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
     async fn bot_operation(&self, _request: BotRequest) -> Result<serde_json::Value> {
+        Err(unavailable())
+    }
+    /// Inspect or edit the current Bot from a native tool callback.
+    async fn bot_profile_operation(
+        &self,
+        _request: BotProfileRequest,
+    ) -> Result<serde_json::Value> {
         Err(unavailable())
     }
 

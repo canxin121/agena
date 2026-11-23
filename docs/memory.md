@@ -12,7 +12,7 @@ Agena 将当前任务、历史经历和长期知识分别管理。原始会话�
 - `memory.list` 是有分页的导航列表；`memory.get` 按 Unicode 字符分页返回正文、完整记录的 SHA 和元数据，默认每页 8000 字符，最多 32000 字符。使用 `body_range.next_offset` 继续读取，跨页核对 SHA，防止拼接两个不同版本。
 - 默认搜索和自动召回只使用当前有效、作用域匹配的记录；搜索或列表传 `include_history: true` 可查看已归档和被替代的历史。因来源遗忘而抑制的派生记录在历史查询和直接读取中也保持隐藏。
 
-每次写入必须明确提供 `kind`：`fact`、`preference`、`episode`、`procedure` 或 `task`。`scope` 决定记录适用于整个工作区还是当前 session，响应中的分类统一位于 `metadata.kind`。模型通过 `memory.search/get/list/write/delete` 管理记忆；`companion.manage` 负责人格和提醒。记忆名称支持中文和名称内部空格，模型工具、管理 API 与 Assistant 面板共享同一名称规则。
+每次写入必须明确提供 `kind`：`fact`、`preference`、`episode`、`procedure` 或 `task`。`scope` 决定记录适用于整个工作区还是当前 session，响应中的分类统一位于 `metadata.kind`。模型通过 `memory.search/get/list/write/delete` 管理记忆，通过 `companion.manage` 管理自动召回设置和提醒。记忆名称支持中文和名称内部空格，模型工具、管理 API 与 Assistant 面板共享同一名称规则。
 
 ### 保存与纠正
 

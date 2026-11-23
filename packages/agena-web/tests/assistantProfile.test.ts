@@ -7,16 +7,10 @@ import {
   preferencePatch,
   rebasePreferences,
 } from '../src/features/assistant/profileForm'
-import { MAX_INSTRUCTIONS_BYTES } from '../src/features/bots/draft'
 import type { AssistantPreferences } from '../src/generated/agenaState'
 
 function profile(): AssistantPreferences {
   return {
-    name: 'Agena',
-    address_user: '',
-    tone: 'balanced',
-    language: 'auto',
-    instructions: '',
     memory_enabled: true,
     proactive_enabled: true,
     timezone: 'UTC',
@@ -31,10 +25,10 @@ function profile(): AssistantPreferences {
 describe('workspace assistant settings', () => {
   test('explicit conflict reconciliation preserves unrelated newer preferences', () => {
     const before = profile(),
-      draft = { ...before, name: '小鱼' }
+      draft = { ...before, memory_enabled: false }
     const latest = { ...before, timezone: 'Asia/Shanghai', daily_limit: 2 }
-    expect(preferencePatch(before, draft)).toEqual({ name: '小鱼' })
-    expect(rebasePreferences(before, draft, latest)).toEqual({ ...latest, name: '小鱼' })
+    expect(preferencePatch(before, draft)).toEqual({ memory_enabled: false })
+    expect(rebasePreferences(before, draft, latest)).toEqual({ ...latest, memory_enabled: false })
   })
   test('quiet-hour editing round-trips without accepting malformed local times', () => {
     for (const minutes of [0, 1, 59, 60, 480, 1320, 1439]) expect(parseMinute(minuteText(minutes))).toBe(minutes)
@@ -44,18 +38,15 @@ describe('workspace assistant settings', () => {
   test('invalid or unbounded contact settings cannot be saved from the form', () => {
     expect(validPreferences(profile())).toBe(true)
     for (const patch of [
-      { name: '' },
+      { timezone: '' },
       { daily_limit: 0 },
       { daily_limit: 25 },
       { cooldown_seconds: 1 },
       { cooldown_seconds: 86401 },
       { quiet_start_minute: 1440 },
       { quiet_enabled: true, quiet_start_minute: 480, quiet_end_minute: 480 },
-      { instructions: '中'.repeat(MAX_INSTRUCTIONS_BYTES / 3 + 1) },
     ])
       expect(validPreferences({ ...profile(), ...patch })).toBe(false)
-    // A long character sheet is ordinary input, not an invalid profile.
-    expect(validPreferences({ ...profile(), instructions: '中'.repeat(1400) })).toBe(true)
     expect(validPreferences({ ...profile(), quiet_enabled: true })).toBe(true)
   })
   test('turning off recall or proactive contact is an explicit dirty profile', () => {

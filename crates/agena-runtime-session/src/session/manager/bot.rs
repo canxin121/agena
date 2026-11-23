@@ -340,19 +340,6 @@ impl SessionManager {
         self.verify_channel_session(source).await
     }
 
-    pub async fn bot_context(&self, source: i64) -> Result<Value, AppError> {
-        let Some((profile, _)) = self.bot_owner_of(source).await? else {
-            return Ok(json!({"enabled":false}));
-        };
-        if profile.archived {
-            return Err(invalid("archived Bot history has no active identity"));
-        }
-        self.verify_channel_session(source).await?;
-        Ok(
-            json!({"enabled":true,"session_id":source,"role":"instance_operator_bot","bot_id":profile.id,"id":profile.id,"name":profile.name,"revision":profile.revision}),
-        )
-    }
-
     async fn bot_target(&self, source: i64, target: Option<i64>) -> Result<i64, AppError> {
         self.require_operator_bot(source).await?;
         let target = target.ok_or_else(|| invalid("session_id is required"))?;

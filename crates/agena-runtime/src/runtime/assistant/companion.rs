@@ -1,5 +1,5 @@
 use super::{AssistantRuntime, runtime_error};
-use agena_assistant::bot::{BotPersona, BotProfile, BotUpdate};
+use agena_assistant::bot::BotProfile;
 use agena_assistant::*;
 use agena_plugin_sdk::host_api::{CompanionAction, CompanionRequest};
 use agena_storage::{MemoryStore, NewMemory, normalize_memory_name};
@@ -12,84 +12,10 @@ const INACTIVE_BOT_REMINDER: &str = "Source Bot conversation is archived or repl
 fn active_bot_source(bot: Option<BotProfile>, reserved: bool) -> Result<Option<BotProfile>> {
     if bot.as_ref().is_some_and(|bot| bot.archived) || (bot.is_none() && reserved) {
         return Err(Error::Invalid(
-            "this Bot conversation is archived or replaced; select an active Bot to change its personality or reminders",
+            "this Bot conversation is archived or replaced; select an active conversation to manage memory or reminders",
         ));
     }
     Ok(bot)
-}
-
-/// A Bot replaces presentation only. Memory and contact policy remain native
-/// workspace settings, and the revision belongs to the profile being edited.
-fn effective_profile(
-    mut workspace: AssistantProfile,
-    bot: Option<&BotProfile>,
-) -> AssistantProfile {
-    if let Some(bot) = bot {
-        workspace.preferences.name = bot.name.clone();
-        workspace.preferences.address_user.clear();
-        workspace.preferences.tone = AssistantTone::Balanced;
-        workspace.preferences.language = "auto".into();
-        workspace.preferences.instructions = bot.persona.instructions.clone();
-        workspace.revision = bot.revision;
-        workspace.updated_at_ms = bot.updated_at_ms;
-    }
-    workspace
-}
-
-fn bot_profile_update(
-    workspace: &AssistantProfile,
-    bot: &BotProfile,
-    update: AssistantUpdate,
-) -> Result<BotUpdate> {
-    if update.patch.address_user.is_some()
-        || update.patch.tone.is_some()
-        || update.patch.language.is_some()
-    {
-        return Err(Error::Invalid(
-            "Bot personality accepts only name and instructions; address_user, tone and language are not supported",
-        ));
-    }
-    // Bot configuration has precisely two inputs: name and instructions.
-    // Shared instance policy is managed separately; do not accept a former
-    // full-form submission even when its values happen to be unchanged.
-    let patch = &update.patch;
-    if patch.memory_enabled.is_some()
-        || patch.proactive_enabled.is_some()
-        || patch.timezone.is_some()
-        || patch.quiet_enabled.is_some()
-        || patch.quiet_start_minute.is_some()
-        || patch.quiet_end_minute.is_some()
-        || patch.daily_limit.is_some()
-        || patch.cooldown_seconds.is_some()
-    {
-        return Err(Error::Invalid(
-            "memory and reminder preferences are instance settings; configure only this Bot's name and additional system instructions",
-        ));
-    }
-    let mut preferences = effective_profile(workspace.clone(), Some(bot)).preferences;
-    update.patch.apply(&mut preferences)?;
-    Ok(BotUpdate {
-        request_key: update.request_key,
-        expected_revision: update.expected_revision,
-        name: preferences.name,
-        persona: BotPersona {
-            instructions: preferences.instructions,
-            prompts: None,
-        },
-        avatar: None,
-    })
-}
-
-fn bot_profile_error(error: crate::AppError) -> Error {
-    match error {
-        crate::AppError::Config(message) => Error::Policy(message),
-        crate::AppError::BotConflict(reason) => Error::Conflict(reason),
-        crate::AppError::PersistenceConflict(_) => Error::Conflict(
-            "Bot profile revision, name or request conflicts with the registry; reload this Bot's profile before retrying",
-        ),
-        crate::AppError::BotNotFound(_) => Error::NotFound,
-        other => runtime_error(other),
-    }
 }
 
 fn memory_view(record: agena_storage::MemoryRecord) -> AssistantMemory {
@@ -139,20 +65,7 @@ impl AssistantRuntime {
         active_bot_source(bot, reserved)
     }
 
-    async fn source_assistant_profile(
-        &self,
-        source: i64,
-        workspace: Option<i64>,
-    ) -> Result<(AssistantProfile, Option<BotProfile>)> {
-        let bot = self.source_bot_profile(source).await?;
-        let profile = effective_profile(
-            self.companion.profile_scoped(workspace).await?,
-            bot.as_ref(),
-        );
-        Ok((profile, bot))
-    }
-
-    async fn require_companion_owner(&self, source: i64) -> Result<()> {
+    async fn require_companion_owner(&self, source: i64) -> Result<Option<BotProfile>> {
         let manager = self.manager()?;
         let session = manager.get_session(source).await.map_err(runtime_error)?;
         manager
@@ -167,7 +80,7 @@ impl AssistantRuntime {
                 .any(|name| matches!(name.as_str(), "companion.manage" | "agena.companion.manage"))
         {
             return Err(Error::Invalid(
-                "only the foreground conversation can manage assistant identity, memories and contact",
+                "only the foreground conversation can manage memories and contact",
             ));
         }
         let id = agena_storage::kernel::SessionId::try_from(source)
@@ -182,11 +95,10 @@ impl AssistantRuntime {
             .is_some()
         {
             return Err(Error::Invalid(
-                "side conversations cannot change persistent assistant preferences or schedule contact",
+                "manage memory and reminder policy or schedule contact from the foreground conversation",
             ));
         }
-        self.source_bot_profile(source).await?;
-        Ok(())
+        self.source_bot_profile(source).await
     }
     async fn assistant_scope(&self, source: i64) -> Result<(Option<i64>, std::path::PathBuf)> {
         let manager = self.manager()?;
@@ -206,9 +118,9 @@ impl AssistantRuntime {
         ))
     }
     pub(super) async fn assistant_snapshot(&self, source: i64) -> Result<AssistantSnapshot> {
-        self.require_companion_owner(source).await?;
+        let bot = self.require_companion_owner(source).await?;
         let (workspace, root) = self.assistant_scope(source).await?;
-        let (profile, bot) = self.source_assistant_profile(source, workspace).await?;
+        let profile = self.companion.profile_scoped(workspace).await?;
         let reminders = if workspace.is_none() || bot.is_some() {
             self.companion
                 .reminders_for_source(workspace, source)
@@ -278,19 +190,13 @@ impl AssistantRuntime {
         source: i64,
         update: AssistantUpdate,
     ) -> Result<AssistantProfile> {
-        self.require_companion_owner(source).await?;
+        if self.require_companion_owner(source).await?.is_some() {
+            return Err(Error::Invalid(
+                "Bot memory and reminder policy is instance-owned",
+            ));
+        }
         let (workspace, _) = self.assistant_scope(source).await?;
         let _gate = self.companion_gate.lock().await;
-        if let Some(bot) = self.source_bot_profile(source).await? {
-            let workspace_profile = self.companion.profile_scoped(workspace).await?;
-            let update = bot_profile_update(&workspace_profile, &bot, update)?;
-            let saved = self
-                .manager()?
-                .update_bot_profile(bot.id, update)
-                .await
-                .map_err(bot_profile_error)?;
-            return Ok(effective_profile(workspace_profile, Some(&saved)));
-        }
         let profile = self
             .companion
             .update_profile_scoped(workspace, update, Utc::now().timestamp_millis())
@@ -304,13 +210,12 @@ impl AssistantRuntime {
         id: Uuid,
         control: ReminderControl,
     ) -> Result<Reminder> {
-        self.require_companion_owner(source).await?;
+        let bot = self.require_companion_owner(source).await?;
         let (workspace, _) = self.assistant_scope(source).await?;
         let _gate = self.companion_gate.lock().await;
         let old = self.companion.reminder(id).await?;
         if old.workspace_id != workspace
-            || ((workspace.is_none() || self.source_bot_profile(source).await?.is_some())
-                && old.source_session_id != source)
+            || ((workspace.is_none() || bot.is_some()) && old.source_session_id != source)
         {
             return Err(Error::NotFound);
         }
@@ -402,9 +307,9 @@ impl AssistantRuntime {
         .await
         .map_err(runtime_error)?
     }
-    /// Hook-safe preferences: no memory contents are read without the memory
-    /// plugin's permission filter. Subagents can read preferences but not mutate.
+    /// Policy and scope for reminder guidance and memory retrieval.
     pub(crate) async fn companion_context(&self, source: i64) -> Result<Value> {
+        self.source_bot_profile(source).await?;
         let (workspace, memory_root) = self.assistant_scope(source).await?;
         let manager = self.manager()?;
         let memory_instance_id = manager.memory_instance_id().to_owned();
@@ -419,7 +324,7 @@ impl AssistantRuntime {
             .map_err(runtime_error)?
             .checkpoint_entry_id
             .map(|entry| entry.get());
-        let (mut profile, bot) = self.source_assistant_profile(source, workspace).await?;
+        let mut profile = self.companion.profile_scoped(workspace).await?;
         let channel = self
             .manager()?
             .get_session(source)
@@ -433,21 +338,12 @@ impl AssistantRuntime {
 
         let enabled = self.require_companion_owner(source).await.is_ok();
         Ok(json!({"enabled":enabled,"profile":profile,
-            "profile_scope":if bot.is_some() {"bot"} else {"workspace"},
-            "bot":bot.as_ref().map(|bot| json!({"id":bot.id,"name":bot.name,"revision":bot.revision})),
             "memory_workspace_root":memory_root,"memory_global":workspace.is_none(),"memory_instance_id":memory_instance_id,"memory_checkpoint_entry_id":memory_checkpoint_entry_id,"channel_authority":channel,
             "memory_scope":"this private workspace only; never combine direct, group, tenant or user memories",
             "proactive_scope":"only explicit finite schedules; no autonomous creation of new goals"}))
     }
 
-    /// Live clock and source schedules for one conversation.
-    ///
-    /// This is deliberately separate from [`Self::companion_context`], which
-    /// feeds the system prompt on every turn. A provider caches the prompt
-    /// prefix only while it stays byte-identical, so a live clock or a mutating
-    /// reminder row in that text would invalidate the entire cache on each
-    /// request. The model reads this document on demand through
-    /// `companion.manage` action `reminders` instead.
+    /// Current clock and source schedules returned on demand by the reminder tool.
     pub(crate) async fn companion_live_state(&self, source: i64) -> Result<Value> {
         let (workspace, _) = self.assistant_scope(source).await?;
         let enabled = self.require_companion_owner(source).await.is_ok();
@@ -470,16 +366,12 @@ impl AssistantRuntime {
         Ok(json!({"utc_now":Utc::now().to_rfc3339(),"reminders":reminders}))
     }
 
-    /// The live profile document returned by `companion.manage` action
-    /// `profile`.
-    ///
-    /// The system prompt keeps only the presentation preferences, so the
-    /// revision a write must quote, the update time and the Bot identity are
-    /// served here, when the model actually needs them.
+    /// Current clock and policy revision returned on demand by the tool.
     pub(crate) async fn companion_profile_state(&self, source: i64) -> Result<Value> {
+        self.source_bot_profile(source).await?;
         let (workspace, _) = self.assistant_scope(source).await?;
         let enabled = self.require_companion_owner(source).await.is_ok();
-        let (mut profile, bot) = self.source_assistant_profile(source, workspace).await?;
+        let mut profile = self.companion.profile_scoped(workspace).await?;
         // Report the same effective value the reply actually used: a channel
         // without private-memory permission never gets automatic recall, so the
         // model must not quote a stale `memory_enabled` back into a write.
@@ -493,13 +385,10 @@ impl AssistantRuntime {
         if channel.as_ref().is_some_and(|a| !a.allows_private_memory()) {
             profile.preferences.memory_enabled = false;
         }
-        let scope = if bot.is_some() { "bot" } else { "workspace" };
         Ok(json!({
             "utc_now": Utc::now().to_rfc3339(),
             "enabled": enabled,
-            "profile_scope": scope,
             "profile": profile,
-            "bot": bot.as_ref().map(|bot| json!({"id":bot.id,"name":bot.name,"revision":bot.revision})),
         }))
     }
 
@@ -547,9 +436,6 @@ impl AssistantRuntime {
             request.action,
             CompanionAction::Profile | CompanionAction::Reminders
         ) {
-            // The system prompt carries only the stable profile, so the live
-            // clock, current revision and reminder rows are returned here,
-            // when actually asked.
             return if request.action == CompanionAction::Profile {
                 self.companion_profile_state(source).await
             } else {
@@ -562,9 +448,9 @@ impl AssistantRuntime {
             CompanionAction::Configure => {
                 let patch = request
                     .patch
-                    .ok_or(Error::Invalid("configure requires a preference patch"))?;
+                    .ok_or(Error::Invalid("configure requires a policy patch"))?;
                 let expected_revision = request.expected_revision.ok_or(Error::Invalid(
-                    "use the current profile revision from context",
+                    "read the current policy revision with the profile action",
                 ))?;
                 let profile = self
                     .change_assistant_profile(
@@ -576,13 +462,7 @@ impl AssistantRuntime {
                         },
                     )
                     .await?;
-                Ok(
-                    json!({"saved":true,"profile":profile,"scope":if self.source_bot_profile(source).await?.is_some() {
-                        "this Bot's personality only; memory and reminder policy is instance-owned; does not change tool permissions"
-                    } else {
-                        "applies to future model rounds in this workspace; does not change tool permissions"
-                    }}),
-                )
+                Ok(json!({"saved":true,"profile":profile}))
             }
             CompanionAction::Remind => {
                 let spec = request
@@ -756,75 +636,22 @@ impl AssistantRuntime {
 }
 
 #[cfg(test)]
-mod persona_tests {
+mod tests {
     use super::*;
-
-    fn workspace() -> AssistantProfile {
-        AssistantProfile {
-            workspace_id: Some(11),
-            revision: 57,
-            preferences: AssistantPreferences {
-                name: "Project assistant".into(),
-                address_user: "Project owner".into(),
-                tone: AssistantTone::Warm,
-                language: "French".into(),
-                instructions: "Project-only instructions".into(),
-                memory_enabled: false,
-                proactive_enabled: false,
-                timezone: "Asia/Shanghai".into(),
-                quiet_enabled: true,
-                quiet_start_minute: 1200,
-                quiet_end_minute: 600,
-                daily_limit: 7,
-                cooldown_seconds: 600,
-            },
-            updated_at_ms: 99,
-        }
-    }
-
-    fn bot(name: &str, _session: i64, _language: &str, _tone: AssistantTone) -> BotProfile {
-        BotProfile {
-            id: Uuid::new_v4(),
-            name: name.into(),
-            persona: BotPersona {
-                instructions: format!("Instructions for {name} only"),
-                prompts: None,
-            },
-            avatar: None,
-            revision: 3,
-            archived: false,
-            local_session_id: Some(_session),
-            created_at_ms: 100,
-            updated_at_ms: 200,
-        }
-    }
-
-    #[test]
-    fn global_bot_persona_uses_instance_policy_not_project_preferences() {
-        let project = workspace();
-        let global = AssistantProfile::empty(None);
-        let bot = bot("Global", 21, "English", AssistantTone::Warm);
-        let effective = effective_profile(global.clone(), Some(&bot));
-        assert_eq!(effective.workspace_id, None);
-        assert_eq!(effective.preferences.name, bot.name);
-        assert_eq!(
-            effective.preferences.memory_enabled,
-            global.preferences.memory_enabled
-        );
-        assert_eq!(
-            effective.preferences.proactive_enabled,
-            global.preferences.proactive_enabled
-        );
-        assert_ne!(
-            effective.preferences.memory_enabled,
-            project.preferences.memory_enabled
-        );
-        assert_ne!(effective.preferences.timezone, project.preferences.timezone);
-    }
 
     #[test]
     fn inactive_reserved_sources_never_fall_back_to_workspace_preferences_or_delivery() {
-        let active = bot("Orchid", 21, "Chinese", AssistantTone::Warm);
+        let active = BotProfile {
+            id: Uuid::new_v4(),
+            name: "Orchid".into(),
+            persona: Default::default(),
+            avatar: None,
+            revision: 1,
+            archived: false,
+            local_session_id: Some(21),
+            created_at_ms: 100,
+            updated_at_ms: 200,
+        };
         assert_eq!(
             active_bot_source(Some(active.clone()), true).unwrap(),
             Some(active.clone())
@@ -838,205 +665,5 @@ mod persona_tests {
         assert!(error.to_string().contains("archived or replaced"));
         assert!(active_bot_source(None, false).unwrap().is_none());
         assert!(INACTIVE_BOT_REMINDER.contains("archived or replaced"));
-    }
-
-    #[test]
-    fn distinct_bot_presentations_replace_workspace_identity_only() {
-        let workspace = workspace();
-        let a = bot("Orchid", 21, "Chinese", AssistantTone::Warm);
-        let b = bot("Cedar", 22, "English", AssistantTone::Direct);
-        let a_profile = effective_profile(workspace.clone(), Some(&a));
-        let b_profile = effective_profile(workspace.clone(), Some(&b));
-        for (profile, bot) in [(&a_profile, &a), (&b_profile, &b)] {
-            assert_eq!(profile.preferences.name, bot.name);
-            assert_eq!(profile.preferences.address_user, "");
-            assert_eq!(profile.preferences.tone, AssistantTone::Balanced);
-            assert_eq!(profile.preferences.language, "auto");
-            assert_eq!(profile.preferences.instructions, bot.persona.instructions);
-            assert_eq!(profile.revision, bot.revision);
-            assert_eq!(profile.updated_at_ms, bot.updated_at_ms);
-            assert_eq!(profile.workspace_id, workspace.workspace_id);
-            let mut shared = profile.preferences.clone();
-            shared.name = workspace.preferences.name.clone();
-            shared.address_user = workspace.preferences.address_user.clone();
-            shared.tone = workspace.preferences.tone;
-            shared.language = workspace.preferences.language.clone();
-            shared.instructions = workspace.preferences.instructions.clone();
-            assert_eq!(shared, workspace.preferences);
-        }
-        let encoded_a = serde_json::to_string(&a_profile).unwrap();
-        assert!(!encoded_a.contains("Cedar"));
-        assert!(!encoded_a.contains("Project-only"));
-        assert!(
-            !serde_json::to_string(&b_profile)
-                .unwrap()
-                .contains("Orchid")
-        );
-        // None means this exact conversation is ordinary; parent/channel labels
-        // never choose a Bot or import a parent's presentation.
-        assert_eq!(effective_profile(workspace.clone(), None), workspace);
-    }
-
-    #[test]
-    fn bot_patch_preserves_revision_request_key_and_other_profiles() {
-        let workspace = workspace();
-        let a = bot("Orchid", 21, "Chinese", AssistantTone::Warm);
-        let b = bot("Cedar", 22, "English", AssistantTone::Direct);
-        let workspace_before = workspace.clone();
-        let b_before = effective_profile(workspace.clone(), Some(&b));
-        let update = bot_profile_update(
-            &workspace,
-            &a,
-            AssistantUpdate {
-                // Forward the observed revision, never refresh it implicitly.
-                expected_revision: 2,
-                request_key: "chat:21:77:profile".into(),
-                patch: AssistantPatch {
-                    name: Some("Lotus".into()),
-                    instructions: Some("Use short examples".into()),
-                    ..Default::default()
-                },
-            },
-        )
-        .unwrap();
-        assert_eq!(update.expected_revision, 2);
-        assert_eq!(update.request_key, "chat:21:77:profile");
-        assert_eq!(update.name, "Lotus");
-        assert_eq!(update.persona.instructions, "Use short examples");
-        assert_eq!(workspace, workspace_before);
-        assert_eq!(effective_profile(workspace.clone(), Some(&b)), b_before);
-        assert_eq!(a.name, "Orchid");
-    }
-
-    #[test]
-    fn bot_configuration_rejects_every_instance_policy_field_even_at_current_value() {
-        let workspace = AssistantProfile {
-            workspace_id: None,
-            ..workspace()
-        };
-        let bot = bot("Orchid", 21, "Chinese", AssistantTone::Warm);
-        let make_update = |patch| AssistantUpdate {
-            expected_revision: bot.revision,
-            request_key: "bot-name-and-instructions-only".into(),
-            patch: serde_json::from_value(patch).unwrap(),
-        };
-        let minimal = bot_profile_update(
-            &workspace,
-            &bot,
-            make_update(json!({"name":"Lotus","instructions":"Short examples"})),
-        )
-        .unwrap();
-        assert_eq!(minimal.name, "Lotus");
-        assert_eq!(minimal.persona.instructions, "Short examples");
-        let stored = serde_json::to_value(&workspace.preferences).unwrap();
-        for field in [
-            "memory_enabled",
-            "proactive_enabled",
-            "timezone",
-            "quiet_enabled",
-            "quiet_start_minute",
-            "quiet_end_minute",
-            "daily_limit",
-            "cooldown_seconds",
-        ] {
-            // The old full-form compatibility path must not survive, including
-            // when a stale client submits the same value currently in effect.
-            let mut patch = json!({"name":"Lotus"});
-            patch[field] = stored[field].clone();
-            let error = bot_profile_update(&workspace, &bot, make_update(patch)).unwrap_err();
-            assert!(
-                error.to_string().contains("instance settings"),
-                "{field}: {error}"
-            );
-        }
-    }
-
-    #[test]
-    fn minimal_natural_configure_patch_keeps_other_bot_fields_and_validates_bounds() {
-        let workspace = workspace();
-        let a = bot("Orchid", 21, "Chinese", AssistantTone::Warm);
-        let request: CompanionRequest = serde_json::from_value(json!({
-            "action":"configure", "expected_revision":3,
-            "user_quote":"Please use short examples",
-            "patch":{"instructions":"Use short examples"}
-        }))
-        .unwrap();
-        let update = bot_profile_update(
-            &workspace,
-            &a,
-            AssistantUpdate {
-                expected_revision: request.expected_revision.unwrap(),
-                request_key: "chat:21:77:profile".into(),
-                patch: request.patch.unwrap(),
-            },
-        )
-        .unwrap();
-        assert_eq!(update.name, a.name);
-        assert_eq!(update.persona.instructions, "Use short examples");
-        for patch in [
-            AssistantPatch {
-                name: Some(String::new()),
-                ..Default::default()
-            },
-            AssistantPatch {
-                address_user: Some("bad\nname".into()),
-                ..Default::default()
-            },
-            AssistantPatch {
-                instructions: Some("x".repeat(agena_assistant::MAX_BOT_INSTRUCTIONS_BYTES + 1)),
-                ..Default::default()
-            },
-            AssistantPatch {
-                language: Some(String::new()),
-                ..Default::default()
-            },
-        ] {
-            assert!(
-                bot_profile_update(
-                    &workspace,
-                    &a,
-                    AssistantUpdate {
-                        expected_revision: 3,
-                        request_key: "chat:21:77:profile".into(),
-                        patch,
-                    }
-                )
-                .is_err()
-            );
-        }
-    }
-    #[test]
-    fn configure_rejects_each_legacy_presentation_field_even_at_neutral_defaults() {
-        let workspace = workspace();
-        let bot = bot("Orchid", 21, "", AssistantTone::Balanced);
-        for patch in [
-            json!({"address_user":""}),
-            json!({"tone":"balanced"}),
-            json!({"language":"auto"}),
-            json!({"address_user":"Captain"}),
-            json!({"tone":"warm"}),
-            json!({"language":"French"}),
-        ] {
-            let request: CompanionRequest = serde_json::from_value(json!({
-                "action":"configure", "expected_revision": 3,
-                "user_quote":"Please change my settings", "patch": patch
-            }))
-            .unwrap();
-            let error = bot_profile_update(
-                &workspace,
-                &bot,
-                AssistantUpdate {
-                    expected_revision: request.expected_revision.unwrap(),
-                    request_key: "chat:21:77:profile".into(),
-                    patch: request.patch.unwrap(),
-                },
-            )
-            .unwrap_err();
-            assert!(
-                error
-                    .to_string()
-                    .contains("address_user, tone and language")
-            );
-        }
     }
 }

@@ -108,35 +108,25 @@ export type AssistantMemory = {
 }
 
 export type AssistantPatch = {
-  address_user?: string | null
   cooldown_seconds?: number | null
   daily_limit?: number | null
-  instructions?: string | null
-  language?: string | null
   memory_enabled?: boolean | null
-  name?: string | null
   proactive_enabled?: boolean | null
   quiet_enabled?: boolean | null
   quiet_end_minute?: number | null
   quiet_start_minute?: number | null
   timezone?: string | null
-  tone?: AssistantTone
 }
 
 export type AssistantPreferences = {
-  address_user: string
   cooldown_seconds: number
   daily_limit: number
-  instructions: string
-  language: string
   memory_enabled: boolean
-  name: string
   proactive_enabled: boolean
   quiet_enabled: boolean
   quiet_end_minute: number
   quiet_start_minute: number
   timezone: string
-  tone: AssistantTone
 }
 
 export type AssistantProfile = {
@@ -145,8 +135,6 @@ export type AssistantProfile = {
   updated_at_ms: number
   workspace_id?: number | null
 }
-
-export type AssistantTone = 'balanced' | 'warm' | 'direct' | 'playful'
 
 /** The verified identity of a message's sender, and the authority it implies. */
 export type AuthorKind = {

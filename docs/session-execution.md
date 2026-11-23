@@ -10,10 +10,10 @@ Bot 是实例级全局会话，项目关联和默认工作目录都为空；普�
 
 | 组件 | 职责 |
 |---|---|
-| `agena.bot` | `bot.sessions` 操作项目与普通会话；`bot.connections` 管理接入草稿 |
+| `agena.bot` | `bot.profile` 修改当前 Bot 的资料，`bot.sessions` 操作项目与普通会话，`bot.connections` 管理接入草稿 |
 | Session Kernel | 原生执行身份、执行代次、消息队列、幂等回执、取消与恢复 |
 | Subagent | 项目会话内的委派、进度、结果和取消 |
-| `agena-assistant` / `AssistantRuntime` | 人格、提醒、接入授权与渠道收发 |
+| `agena-assistant` / `AssistantRuntime` | 记忆设置、提醒、接入授权与渠道收发 |
 | 现有 SQLite 实例 | 保存会话、助手配置、规则、原生回执和事件审计 |
 
 Bot 投递使用 `bot_instruction`；授权事件使用 `integration_instruction`；提醒和事件通知分别使用 `assistant_notice`、`integration_notice`。这些来源都是有明确身份的系统续接，不伪造新的用户输入。涉及用户授权的修改继续检查真实当前用户消息。
@@ -34,7 +34,7 @@ SQLite 实例在首次启动时创建完整架构。已有数据必须匹配当�
 
 ## 提示词前缀与缓存命中率
 
-提供商只缓存逐字节相同的提示词前缀，因此系统提示必须对整段对话保持稳定。易变内容（实时时钟、提醒的下次触发时间与投递次数等）不得进入系统提示；助手上下文中的这些字段通过 `companion.manage` 的 `profile` / `reminders` 动作按需读取，系统提示只包含稳定的人格配置。此前把 `utc_now` 末尾拼进系统提示，使整段前缀每轮失效，缓存命中率因此停留在工具定义大小附近；该问题已修复并有回归测试固定。
+提供商通过逐字节相同的提示词前缀复用缓存。Companion 提供固定的提醒指引，模型通过 `companion.manage` 的 `profile` 或 `reminders` 动作读取实时钟、策略版本和提醒状态。具名 Bot 的附加系统指令由 Bot 插件加入对应会话的系统提示。
 
 系统提示只承担模型每轮都需要的规则与稳定事实。工具的输入 schema、插件内部标识与路径、以及任何能通过工具重新读到的数据都不写进系统提示：执行契约由 `tools_help` 提供（`tools_call` 本来就必须先读到它），实时状态由返回它的工具提供。Agent roster 同理只保留身份与成员，不写会逐轮变化的执行状态。自动召回的记忆插在当前请求之前，而不是消息列表开头，这样本轮召回变化不会改写此前已缓存的整段对话。
 

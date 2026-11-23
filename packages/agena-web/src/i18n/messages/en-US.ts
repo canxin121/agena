@@ -239,9 +239,7 @@ export default {
   },
   assistant: {
     title: 'Assistant',
-    description:
-      'Talk naturally to set personality, remember or forget, and schedule a reminder. This panel lets you inspect and correct those choices.',
-    profile: 'Personality & contact',
+    profile: 'Settings',
     memory: 'Memory',
     reminders: 'Reminders & check-ins',
     scope: 'Workspace',
@@ -253,15 +251,6 @@ export default {
     save: 'Save',
     saved: 'Saved.',
     saving: 'Saving…',
-    name: 'Assistant name',
-    address: 'How to address you',
-    language: 'Reply language (auto follows you)',
-    tone: 'Tone',
-    tone_balanced: 'Balanced',
-    tone_warm: 'Warm',
-    tone_direct: 'Direct',
-    tone_playful: 'Playful',
-    instructions: 'Additional style preferences',
     memoryRecall: 'Recall saved memories automatically',
     proactive: 'Allow explicitly scheduled contact',
     timezone: 'IANA timezone',
@@ -270,8 +259,7 @@ export default {
     quietEnd: 'Quiet hours end',
     daily: 'Maximum proactive contacts per local day',
     cooldown: 'Minimum contact interval (seconds)',
-    policyHint:
-      'Preferences never grant permissions. Contact is only for explicitly scheduled reminders/check-ins, within these limits. Closing the client is fine; the Agena server must run.',
+    policyHint: 'The Agena server sends scheduled reminders and check-ins according to these settings.',
     retryHint: 'A lost acknowledgement may mean the save succeeded. Retry preserves the same request and revision.',
     reconfirm: 'Read latest and reconfirm',
     memoryHint:

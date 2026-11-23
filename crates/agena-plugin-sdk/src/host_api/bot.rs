@@ -2,6 +2,33 @@
 use agena_domain::{ModelRef, SessionStateKind};
 use serde::{Deserialize, Serialize};
 
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    schemars::JsonSchema,
+    agena_macros::ToolInput,
+)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+pub enum BotProfileRequest {
+    Get {},
+    Update {
+        /// Revision returned by get.
+        expected_revision: i64,
+        /// Exact quote from the current direct user message authorizing this edit.
+        user_quote: String,
+        /// New name. Omit to keep the current name.
+        #[serde(default)]
+        name: Option<String>,
+        /// New additional system instructions. An empty string clears them.
+        #[serde(default)]
+        instructions: Option<String>,
+    },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum BotAction {

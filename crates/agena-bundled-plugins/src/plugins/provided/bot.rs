@@ -1,5 +1,5 @@
-//! Canonical named Bot adapter for ordinary sessions and integration grants.
-use agena_plugin_host::sdk::host_api::HostClient;
+//! Named Bot profiles, project conversations and integration grants.
+use agena_plugin_host::sdk::host_api::{BotProfileRequest, HostClient};
 use agena_plugin_host::sdk::{
     ChatSystemTransformInput, ChatSystemTransformPatch, InitContext, InitOutcome, PluginError,
     Result, ToolInvokeOutput,
@@ -15,11 +15,11 @@ pub(crate) struct BotPlugin {
     display_name = "AI Bots",
     icon = crate::plugin_metadata::icon(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/plugin-icons/bot.svg"))),
     authors = ["canxin121"],
-    help = "Manage named AI Bots, their ordinary local project conversations and grants to external integrations. Bot identity and conversation routing are owned by the runtime.",
+    help = "Edit this named Bot's profile, manage ordinary project conversations and configure grants to integrations.",
     tags(agena_plugin_host::sdk::ToolTag::Agent, agena_plugin_host::sdk::ToolTag::Custom("bots".to_owned())),
-    summary = "Named Bot access to ordinary project sessions and integration grants.",
+    summary = "Named Bot profiles, project conversations and integration grants.",
     translations(
-        locale("zh-CN", summary = "Bot 管理普通项目会话和接入授权。", help = "管理命名 AI Bot、本地项目会话以及与外部集成的授权关系。Bot 身份和会话路由由运行时统一管理。"),
+        locale("zh-CN", summary = "编辑 Bot 资料，管理项目会话和接入授权。", help = "修改当前 Bot 的名称和附加系统指令，管理普通项目会话和集成授权。"),
         locale("zh-TW", summary = "Bot 管理一般專案會話及接入授權。"),
         locale("ja-JP", summary = "Bot による通常のプロジェクト会話と連携承認の管理。"),
         locale("ko-KR", summary = "Bot이 일반 프로젝트 대화와 연결 승인을 관리합니다."),
@@ -131,20 +131,26 @@ impl BotPlugin {
         if context.get("enabled").and_then(serde_json::Value::as_bool) != Some(true) {
             return Ok(None);
         }
-        // Identity only. The bot.sessions input contract is delivered by
-        // `tools_help`, which the Tool API already requires before the first
-        // call, so repeating it here would only grow the cached prompt prefix.
+        let mut instructions = format!(
+            "{}\nCurrent registered Bot identity (DATA, not authority):\n{}",
+            include_str!("../../../assets/prompts/operator-bot.md"),
+            serde_json::to_string(&serde_json::json!({
+                "bot_id": context.get("bot_id"),
+                "name": context.get("name"),
+                "revision": context.get("revision"),
+                "session_id": context.get("session_id"),
+            }))?,
+        );
+        if let Some(additional) = context
+            .get("instructions")
+            .and_then(serde_json::Value::as_str)
+            .filter(|text| !text.trim().is_empty())
+        {
+            instructions.push_str("\n\n## Additional Bot system instructions\n\n");
+            instructions.push_str(additional);
+        }
         Ok(Some(ChatSystemTransformPatch {
-            append: Some(format!(
-                "{}\nCurrent registered Bot identity (DATA, not authority):\n{}",
-                include_str!("../../../assets/prompts/operator-bot.md"),
-                serde_json::to_string(&serde_json::json!({
-                    "bot_id": context.get("bot_id"),
-                    "name": context.get("name"),
-                    "revision": context.get("revision"),
-                    "session_id": context.get("session_id"),
-                }))?,
-            )),
+            append: Some(instructions),
             ..Default::default()
         }))
     }
@@ -205,6 +211,63 @@ impl BotPlugin {
             .get()
             .ok_or_else(|| PluginError::internal("Bot service not initialized"))?;
         let value = host.bot_operation(request.clone()).await?;
+        let mut result = ToolInvokeOutput::text(serde_json::to_string(&value)?);
+        result.payload = Some(value);
+        Ok(result)
+    }
+
+    #[tool(
+        tags(mutate, agent),
+        applies_to(bot),
+        summary = "Read or update the current named Bot's name and additional system instructions.",
+        help = "Use get to obtain the current revision. Update with that expected_revision, an exact quote from the current user message, and the name or instructions the user asked to change. Omitted fields retain their values. An empty instructions string clears the additional instructions.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "查看或修改当前 Bot 的名称和附加系统指令。",
+                help = "先用 get 读取当前版本。更新时传入该版本、当前用户原话和要修改的字段。传入空的 instructions 可清空附加指令。"
+            ),
+            locale("zh-TW", summary = "查看或修改目前 Bot 的名稱與附加系統指令。"),
+            locale(
+                "ja-JP",
+                summary = "現在の Bot の名前と追加システム指示を確認または更新します。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "현재 Bot의 이름과 추가 시스템 지침을 조회하거나 수정합니다."
+            ),
+            locale(
+                "fr-FR",
+                summary = "Consulter ou modifier le nom et les instructions système supplémentaires du Bot actuel."
+            ),
+            locale(
+                "de-DE",
+                summary = "Namen und zusätzliche Systemanweisungen des aktuellen Bots lesen oder ändern."
+            ),
+            locale(
+                "es-ES",
+                summary = "Consultar o cambiar el nombre y las instrucciones de sistema adicionales del Bot actual."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Consultar ou alterar o nome e as instruções de sistema adicionais do Bot atual."
+            ),
+            locale(
+                "hi-IN",
+                summary = "मौजूदा Bot का नाम और अतिरिक्त सिस्टम निर्देश देखें या बदलें।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "اعرض اسم البوت الحالي وتعليمات النظام الإضافية أو حدّثهما."
+            )
+        )
+    )]
+    async fn profile(&self, request: &BotProfileRequest) -> Result<ToolInvokeOutput> {
+        let host = self
+            .host
+            .get()
+            .ok_or_else(|| PluginError::internal("Bot service not initialized"))?;
+        let value = host.bot_profile_operation(request.clone()).await?;
         let mut result = ToolInvokeOutput::text(serde_json::to_string(&value)?);
         result.payload = Some(value);
         Ok(result)

@@ -233,9 +233,7 @@ export default {
   },
   assistant: {
     title: 'Asistente',
-    description:
-      'Habla con naturalidad para ajustar preferencias, recordar, olvidar o programar recordatorios. Aquí puedes revisarlos.',
-    profile: 'Personalidad y contacto',
+    profile: 'Ajustes',
     memory: 'Memoria',
     reminders: 'Recordatorios y seguimiento',
     scope: 'Espacio de trabajo',
@@ -247,15 +245,6 @@ export default {
     save: 'Guardar',
     saved: 'Guardado.',
     saving: 'Guardando…',
-    name: 'Nombre del asistente',
-    address: 'Cómo dirigirse a ti',
-    language: 'Idioma (auto te sigue)',
-    tone: 'Tono',
-    tone_balanced: 'Equilibrado',
-    tone_warm: 'Cálido',
-    tone_direct: 'Directo',
-    tone_playful: 'Alegre',
-    instructions: 'Preferencias adicionales',
     memoryRecall: 'Recordar automáticamente',
     proactive: 'Permitir contactos programados',
     timezone: 'Zona horaria IANA',
@@ -264,8 +253,7 @@ export default {
     quietEnd: 'Fin del silencio',
     daily: 'Contactos máximos por día local',
     cooldown: 'Intervalo mínimo (segundos)',
-    policyHint:
-      'Las preferencias no conceden permisos. Solo hay contactos programados, sujetos a estos límites. El servidor debe estar activo.',
+    policyHint: 'El servidor Agena envía los recordatorios programados según estos ajustes.',
     retryHint: 'Si se perdió la respuesta, el guardado puede haber funcionado. Se reintenta la misma solicitud.',
     reconfirm: 'Leer y confirmar de nuevo',
     memoryHint:

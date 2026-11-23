@@ -404,7 +404,7 @@ async function main() {
         'assistant chat input',
         90000,
       )
-      await chat('以后叫你小鱼，叫我阿林', 'assistant-ui-persona-saved')
+      await chat('设置提醒时区为 Asia/Shanghai', 'assistant-ui-policy-saved')
       await chat('记住我希望报告先给结论', 'assistant-ui-memory-saved')
       await chat('两秒后提醒我核对结果', 'assistant-ui-reminder-scheduled')
       await wait(
@@ -414,7 +414,7 @@ async function main() {
       )
       await chat('一小时后再提醒我一次', 'assistant-ui-later-scheduled')
       let state = await assistant()
-      assert.equal(state.profile.preferences.name, '小鱼')
+      assert.equal(state.profile.preferences.timezone, 'Asia/Shanghai')
       assert.equal(state.memories[0]?.name, 'ui-report-style')
       assert.equal(state.reminders.filter((r) => r.state === 'completed').length, 1)
       const future = state.reminders.find((r) => r.state === 'active')
@@ -429,13 +429,22 @@ async function main() {
       await wait(
         () =>
           cdp.evaluate(`(() => {
-            const name = document.querySelector('[data-testid="assistant-name"]');
+            const timezone = document.querySelector('[data-testid="assistant-timezone"]');
             const refresh = document.querySelector('[data-testid="assistant-refresh"]');
-            return Boolean(name?.getClientRects().length && refresh && !refresh.disabled);
+            return Boolean(timezone?.getClientRects().length && refresh && !refresh.disabled);
           })()`),
         'loaded assistant profile',
       )
-      assert.equal(await cdp.evaluate(`document.querySelector('[data-testid="assistant-name"]').value`), '小鱼')
+      assert.equal(
+        await cdp.evaluate(`document.querySelector('[data-testid="assistant-timezone"]').value`),
+        'Asia/Shanghai',
+      )
+      assert.equal(
+        await cdp.evaluate(
+          `document.querySelector('[data-testid="assistant-name"], [data-testid="assistant-address"]')`,
+        ),
+        null,
+      )
       // Hold a real GET snapshot from before the edit. A late refresh must
       // not roll a successful profile write back to an older revision.
       await cdp.evaluate(`(() => { const original=window.fetch; let hold=true;
@@ -445,24 +454,27 @@ async function main() {
           }return response;};})()`)
       await cdp.click('[data-testid="assistant-refresh"]')
       await wait(() => cdp.evaluate('window.__assistantReadHeld===true'), 'held pre-edit snapshot')
-      await cdp.fill('[data-testid="assistant-name"]', 'Web小鱼')
+      await cdp.fill('[data-testid="assistant-timezone"]', 'America/New_York')
       await cdp.click('[data-testid="assistant-save"]')
-      await wait(async () => (await assistant()).profile.preferences.name === 'Web小鱼', 'saved UI persona')
+      await wait(
+        async () => (await assistant()).profile.preferences.timezone === 'America/New_York',
+        'saved reminder timezone',
+      )
       await cdp.evaluate('window.__releaseAssistantRead()')
       await wait(
-        () => cdp.evaluate(`document.querySelector('[data-testid="assistant-name"]').value==='Web小鱼'`),
+        () => cdp.evaluate(`document.querySelector('[data-testid="assistant-timezone"]').value==='America/New_York'`),
         'late read cannot undo saved profile',
       )
       // Concurrent edits must not be silently rebased by a manual refresh.
-      await cdp.fill('[data-testid="assistant-address"]', '阿林-更新')
+      await cdp.fill('[data-testid="assistant-timezone"]', 'Europe/Paris')
       const currentProfile = (await assistant()).profile
       const externalEdit = await fetch(`${backend}/api/v1/sessions/${source}/assistant`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           expected_revision: currentProfile.revision,
-          request_key: 'ui-external-timezone-change',
-          patch: { timezone: 'Asia/Shanghai' },
+          request_key: 'ui-external-recall-change',
+          patch: { memory_enabled: false },
         }),
       })
       assert(externalEdit.ok, 'fixture concurrent profile edit')
@@ -475,12 +487,12 @@ async function main() {
       await cdp.click('[data-testid="assistant-reconfirm"]')
       await cdp.click('[data-testid="assistant-save"]')
       await wait(
-        async () => (await assistant()).profile.preferences.address_user === '阿林-更新',
+        async () => (await assistant()).profile.preferences.timezone === 'Europe/Paris',
         'reconciled profile edit',
       )
       assert.equal(
-        (await assistant()).profile.preferences.timezone,
-        'Asia/Shanghai',
+        (await assistant()).profile.preferences.memory_enabled,
+        false,
         'reconfirm overwrote an unrelated newer setting',
       )
       await cdp.click('[data-testid="assistant-tab-memory"]')
@@ -514,7 +526,7 @@ async function main() {
       await wait(
         () =>
           cdp.evaluate(
-            `window.__assistantBeforeReload !== true && document.querySelector('[data-testid="assistant-name"]')?.value==='Web小鱼' && document.querySelector('[data-testid="assistant-proactive-enabled"]')?.checked === false`,
+            `window.__assistantBeforeReload !== true && document.querySelector('[data-testid="assistant-timezone"]')?.value==='Europe/Paris' && document.querySelector('[data-testid="assistant-proactive-enabled"]')?.checked === false`,
           ),
         'new document reload persists profile and mute state',
         90000,
@@ -535,7 +547,7 @@ async function main() {
           ok: true,
           source,
           checks: [
-            'natural persona',
+            'workspace reminder policy',
             'natural memory',
             'proactive same-chat reminder',
             'profile editor',

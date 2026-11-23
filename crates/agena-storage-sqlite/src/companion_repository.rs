@@ -88,6 +88,40 @@ fn encode<T: serde::Serialize>(v: &T) -> Result<String> {
     serde_json::to_string(v).map_err(err)
 }
 
+fn profile_update_digest(update: &AssistantUpdate) -> Result<sha2::digest::Output<Sha256>> {
+    // The original receipt digest included nulls for omitted presentation
+    // fields. Keep that encoding so policy writes can be replayed after an upgrade.
+    #[derive(serde::Serialize)]
+    struct ReceiptPatch<'a> {
+        name: (),
+        address_user: (),
+        tone: (),
+        language: (),
+        instructions: (),
+        #[serde(flatten)]
+        policy: &'a AssistantPatch,
+    }
+    #[derive(serde::Serialize)]
+    struct ReceiptInput<'a> {
+        expected_revision: i64,
+        request_key: &'a str,
+        patch: ReceiptPatch<'a>,
+    }
+    let input = ReceiptInput {
+        expected_revision: update.expected_revision,
+        request_key: &update.request_key,
+        patch: ReceiptPatch {
+            name: (),
+            address_user: (),
+            tone: (),
+            language: (),
+            instructions: (),
+            policy: &update.patch,
+        },
+    };
+    Ok(Sha256::digest(encode(&input)?))
+}
+
 async fn profile(db: &impl ConnectionTrait, workspace: Option<i64>) -> Result<AssistantProfile> {
     let row = db
         .query_one(stmt(
@@ -147,7 +181,7 @@ impl CompanionRepository for SqliteCompanionRepository {
                 "invalid assistant profile scope, request key or revision",
             ));
         }
-        let input_digest = Sha256::digest(encode(&update)?);
+        let input_digest = profile_update_digest(&update)?;
         let _permit = crate::acquire_write_permit(&self.database)
             .await
             .map_err(err)?;

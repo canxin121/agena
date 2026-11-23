@@ -6,7 +6,7 @@
 > agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
-This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **27 plugins and 219 tool definitions**.
+This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **27 plugins and 220 tool definitions**.
 
 - Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, the streaming runtime flag, an input parameter table, and the full input / output JSON Schema.
 - This catalog contains plugin execution tools only. The runtime-owned Tool API protocol (`plugins_list`, `tools_list`, `tools_help`, `tools_call`) has its own registry and is excluded from plugin and tool counts.
@@ -15,13 +15,13 @@ This document is deterministically generated from the real `agena-bundled-plugin
 ## Table of Contents
 
 - [`agena.agent`](#agenaagent) — Agent communication and delegation. (5 tools)
-- [`agena.bot`](#agenabot) — Named Bot access to ordinary project sessions and integration grants. (2 tools)
+- [`agena.bot`](#agenabot) — Named Bot profiles, project conversations and integration grants. (3 tools)
 - [`agena.browser`](#agenabrowser) — Interact with managed Chrome pages and workspace previews. (21 tools)
 - [`agena.chatgpt`](#agenachatgpt) — Model-based tools default to the current session model. Use an OpenAI model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. OpenAI cloud inference, files, knowledge stores, images, audio, realtime voice, batches and agent APIs. Inputs leave this computer; no local execution fallback. (27 tools)
 - [`agena.claude`](#agenaclaude) — Model-based tools default to the current session model. Use an Anthropic Claude model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. Anthropic cloud inference, search, code execution, files, Skills, batches and managed-agent APIs. Inputs leave this computer; no local execution fallback. (15 tools)
 - [`agena.code`](#agenacode) — Structured code search and syntax inspection tools. (3 tools)
 - [`agena.commands`](#agenacommands) — Declare the built-in commands every Agena client renders locally, and project skills from other agent ecosystems into the same surface. (6 tools)
-- [`agena.companion`](#agenacompanion) — Assistant personality and consent-based reminders. (1 tools)
+- [`agena.companion`](#agenacompanion) — Memory settings and reminders. (1 tools)
 - [`agena.cron`](#agenacron) — Cron-style and one-shot wakeup scheduling tools. (7 tools)
 - [`agena.fs`](#agenafs) — Filesystem command tools for read/search and explicit edits. (10 tools)
 - [`agena.gemini`](#agenagemini) — Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. Google cloud inference, search, files, knowledge stores, images, audio, video, music, Live voice and agent APIs. Inputs leave this computer; no local execution fallback. (29 tools)
@@ -690,11 +690,11 @@ Agent communication and delegation.
 
 ## agena.bot
 
-**Version** `0.1.0` · **Tools** 2 · **Tags** `agent` `bots`
+**Version** `0.1.0` · **Tools** 3 · **Tags** `agent` `bots`
 
-Named Bot access to ordinary project sessions and integration grants.
+Named Bot profiles, project conversations and integration grants.
 
-> Manage named AI Bots, their ordinary local project conversations and grants to external integrations. Bot identity and conversation routing are owned by the runtime.
+> Edit this named Bot's profile, manage ordinary project conversations and configure grants to integrations.
 
 ### connections
 
@@ -1103,6 +1103,84 @@ Named Bot access to ordinary project sessions and integration grants.
     }
   },
   "additionalProperties": false
+}
+```
+
+### profile
+
+`agena.bot.profile` · **Summary**: Read or update the current named Bot's name and additional system instructions.
+
+**Tags**: `mutate` `agent`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Use get to obtain the current revision. Update with that expected_revision, an exact quote from the current user message, and the name or instructions the user asked to change. Omitted fields retain their values. An empty instructions string clears the additional instructions.
+
+**Input schema**:
+```json
+{
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "const": "get"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "action"
+      ]
+    },
+    {
+      "type": "object",
+      "properties": {
+        "expected_revision": {
+          "description": "Revision returned by get.",
+          "type": "integer",
+          "format": "int64",
+          "x-agena-order": "000000"
+        },
+        "user_quote": {
+          "description": "Exact quote from the current direct user message authorizing this edit.",
+          "type": "string",
+          "x-agena-order": "000001"
+        },
+        "name": {
+          "description": "New name. Omit to keep the current name.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "x-agena-order": "000002"
+        },
+        "instructions": {
+          "description": "New additional system instructions. An empty string clears them.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "x-agena-order": "000003"
+        },
+        "action": {
+          "type": "string",
+          "const": "update"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "expected_revision",
+        "user_quote"
+      ]
+    }
+  ],
+  "type": "object",
+  "properties": {}
 }
 ```
 
@@ -12635,13 +12713,13 @@ Declare the built-in commands every Agena client renders locally, and project sk
 
 **Version** `0.1.0` · **Tools** 1 · **Tags** `interactive` `assistant`
 
-Assistant personality and consent-based reminders.
+Memory settings and reminders.
 
-> Configure the assistant personality and consent-based reminders. The runtime owns reminder timing, user identities and persistent companion state.
+> Manage memory and reminder policy and schedule reminders requested by the user.
 
 ### manage
 
-`agena.companion.manage` · **Summary**: Manage assistant persona and explicit finite reminders/check-ins from natural conversation. Use profile for current settings; configure needs the current revision; remind needs a real time and explicit direct-user quote. Never schedule from a notification.
+`agena.companion.manage` · **Summary**: Manage memory and reminder policy and finite reminders. Use profile to read the current policy, revision and time. In project conversations, configure updates memory and reminder policy. Remind needs an explicit user request and a due time.
 
 **Tags**: `mutate` `agent`
 
@@ -12651,8 +12729,8 @@ Assistant personality and consent-based reminders.
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `action` | `CompanionAction` | ✓ | — |  |
-| `expected_revision` | `integer / null` | — | `null` | Current profile/reminder revision from live context; never guess it. |
-| `patch` | `AssistantPatch / null` | — | `null` |  |
+| `expected_revision` | `integer / null` | — | `null` | Current policy or reminder revision from profile or reminders. |
+| `patch` | `AssistantPatch / null` | — | `null` | Memory and reminder settings to change in the current project. |
 | `reminder` | `ReminderSpec / null` | — | `null` |  |
 | `reminder_id` | `string / null` | — | `null` |  |
 | `user_quote` | `string / null` | — | `null` | Exact quote from the CURRENT direct user message. Required for writes. |
@@ -12677,45 +12755,6 @@ Assistant personality and consent-based reminders.
     "AssistantPatch": {
       "type": "object",
       "properties": {
-        "name": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "address_user": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "tone": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AssistantTone"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "language": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
-        "instructions": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "default": null
-        },
         "memory_enabled": {
           "type": [
             "boolean",
@@ -12785,15 +12824,6 @@ Assistant personality and consent-based reminders.
         }
       },
       "additionalProperties": false
-    },
-    "AssistantTone": {
-      "type": "string",
-      "enum": [
-        "balanced",
-        "warm",
-        "direct",
-        "playful"
-      ]
     },
     "ReminderSpec": {
       "type": "object",
@@ -12872,7 +12902,7 @@ Assistant personality and consent-based reminders.
       "x-agena-order": "000001"
     },
     "expected_revision": {
-      "description": "Current profile/reminder revision from live context; never guess it.",
+      "description": "Current policy or reminder revision from profile or reminders.",
       "type": [
         "integer",
         "null"
@@ -12882,6 +12912,7 @@ Assistant personality and consent-based reminders.
       "x-agena-order": "000002"
     },
     "patch": {
+      "description": "Memory and reminder settings to change in the current project.",
       "anyOf": [
         {
           "$ref": "#/$defs/AssistantPatch"

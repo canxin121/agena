@@ -1,4 +1,4 @@
-//! Personality, durable memory and proactive contact through ordinary chat.
+//! System prompts, durable memory and proactive contact in project conversations.
 use super::fixture;
 use agena_testkit::{ModelHandle, Reply, RequestMatch, SessionOptions, TestResult, UserSession};
 use anyhow::{Context, Result, ensure};
@@ -69,12 +69,13 @@ async fn the_system_prompt_stays_byte_identical_across_turns_and_carries_no_tool
                             "memory_checkpoint_entry_id",
                             "utc_now",
                             "Agent roster",
+                            "Current assistant presentation preferences",
                         ] {
                             ensure!(!prompt.contains(absent), "prompt carries {absent}");
                         }
                         ensure!(
-                            prompt.contains("Current assistant presentation preferences"),
-                            "presentation preferences missing from the prompt"
+                            prompt.contains("## Memory settings and reminders"),
+                            "reminder guidance missing from the prompt"
                         );
                         Ok(())
                     })
@@ -101,23 +102,116 @@ async fn the_system_prompt_stays_byte_identical_across_turns_and_carries_no_tool
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn persona_is_applied_across_conversations_persists_and_does_not_cross_workspaces()
--> TestResult {
-    fixture().case_timeout(Duration::from_secs(120)).seed_file("alternate-workspace/readme.txt",b"alternate".to_vec()).run(|case|async move{
-        let model=case.model();let first=case.user().new_session().await?;
-        ask(&first,&model,"以后叫你小鱼，叫我阿林，用中文直接一点","persona-save","companion.manage",json!({"action":"configure","user_quote":"以后叫你小鱼，叫我阿林，用中文直接一点","expected_revision":0,"patch":{"name":"小鱼-persona-marker","address_user":"阿林","tone":"direct","language":"中文"}}),"saved").await?;
-        let next=case.user().new_session().await?;
-        model.expect(RequestMatch::user_text("早上好-persona-check")).check(|r|{let s=r.body.to_string();ensure!(s.contains("小鱼-persona-marker")&&s.contains("阿林")&&s.contains("direct"));Ok(())}).reply(Reply::text("阿林，早上好。"));
-        next.send("早上好-persona-check").await?.wait_settled().await?.assert_succeeded()?;
-        let other=case.user().new_session_in_with(case.paths().root.join("alternate-workspace"),SessionOptions{title:"Other workspace".into(),..Default::default()}).await?;
-        model.expect(RequestMatch::user_text("另一工作区-persona-check")).check(|r|{ensure!(!r.body.to_string().contains("小鱼-persona-marker"));Ok(())}).reply(Reply::text("使用此工作区自己的设置。"));
-        other.send("另一工作区-persona-check").await?.wait_settled().await?.assert_succeeded()?;
-        case.crash().await?;case.restart().await?;
-        let restored=case.user().attach_session(next.id()).await?;
-        let snapshot=restored.client().assistant_snapshot(restored.id()).await?;
-        ensure!(snapshot.profile.preferences.name=="小鱼-persona-marker"&&snapshot.profile.revision==1);
-        Ok(())
-    }).await
+async fn project_conversations_use_system_prompts_and_only_save_policy() -> TestResult {
+    fixture()
+        .case_timeout(Duration::from_secs(120))
+        .seed_file("alternate-workspace/readme.txt", b"alternate".to_vec())
+        .configure_global(|config| {
+            config["prompts"] = json!({
+                "order": ["presentation"],
+                "inline": [{"id": "presentation", "body": "Use the name ConfiguredAssistant."}]
+            });
+        })
+        .run(|case| async move {
+            let first = case.user().new_session().await?;
+            let http = case.http().await;
+            let path = format!("/api/v1/sessions/{}/assistant", first.id());
+            for (field, value) in [
+                ("name", "Legacy assistant"),
+                ("address_user", "Legacy user"),
+                ("tone", "warm"),
+                ("language", "English"),
+                ("instructions", "RETIRED-PRESENTATION-INSTRUCTIONS"),
+            ] {
+                let mut patch = json!({});
+                patch[field] = json!(value);
+                let response = http
+                    .send_json(
+                        reqwest::Method::PUT,
+                        &path,
+                        &json!({"request_key": field, "expected_revision": 0, "patch": patch}),
+                    )
+                    .await?;
+                ensure!(
+                    response.status == reqwest::StatusCode::UNPROCESSABLE_ENTITY,
+                    "retired field {field} was accepted"
+                );
+            }
+            let model = case.model();
+            ask(
+                &first,
+                &model,
+                "Save a new style for this project",
+                "reject-style",
+                "companion.manage",
+                json!({
+                    "action": "configure",
+                    "user_quote": "Save a new style for this project",
+                    "expected_revision": 0,
+                    "patch": {"instructions": "RETIRED-PRESENTATION-INSTRUCTIONS"},
+                }),
+                "failed",
+            )
+            .await?;
+            ask(
+                &first,
+                &model,
+                "Set the reminder timezone to Europe/Paris",
+                "save-timezone",
+                "companion.manage",
+                json!({
+                    "action": "configure",
+                    "user_quote": "Set the reminder timezone to Europe/Paris",
+                    "expected_revision": 0,
+                    "patch": {"timezone": "Europe/Paris"},
+                }),
+                "saved",
+            )
+            .await?;
+            let next = case.user().new_session().await?;
+            model
+                .expect(RequestMatch::user_text("Check the ordinary system prompt"))
+                .check(|r| {
+                    let prompt = instructions(r)?;
+                    ensure!(prompt.contains("Use the name ConfiguredAssistant."));
+                    ensure!(!prompt.contains("RETIRED-PRESENTATION-INSTRUCTIONS"));
+                    ensure!(!prompt.contains("Europe/Paris"));
+                    Ok(())
+                })
+                .reply(Reply::text("System prompt checked."));
+            next.send("Check the ordinary system prompt")
+                .await?
+                .wait_settled()
+                .await?
+                .assert_succeeded()?;
+            let other = case
+                .user()
+                .new_session_in_with(
+                    case.paths().root.join("alternate-workspace"),
+                    SessionOptions::default(),
+                )
+                .await?;
+            let other_settings = other.client().assistant_snapshot(other.id()).await?;
+            ensure!(other_settings.profile.preferences.timezone == "UTC");
+            case.crash().await?;
+            case.restart().await?;
+            let restored = case.user().attach_session(next.id()).await?;
+            let snapshot = restored.client().assistant_snapshot(restored.id()).await?;
+            ensure!(snapshot.profile.preferences.timezone == "Europe/Paris");
+            ensure!(snapshot.profile.revision == 1);
+            let json: Value = case
+                .http()
+                .await
+                .get(&path)
+                .await?
+                .require_success()?
+                .json()?;
+            for field in ["name", "address_user", "tone", "language", "instructions"] {
+                ensure!(json["profile"]["preferences"].get(field).is_none());
+            }
+            Ok(())
+        })
+        .await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -163,12 +257,13 @@ async fn scheduled_contact_arrives_in_original_chat_and_cannot_authorize_new_act
         let start=model.expect(RequestMatch::user_text("两秒后提醒我喝水"))
             .reply(Reply::tool_call("schedule-water","companion.manage",json!({"action":"remind","user_quote":"两秒后提醒我喝水","reminder":{"text":"water-reminder-proof-392a","after_seconds":2}})));
         model.expect(RequestMatch::tool_output("schedule-water")).after(&start).check_tool_output_contains("schedule-water","scheduled").reply(Reply::text("已经安排，提醒会回到这里。"));
-        let recursive=model.expect(notice("water-reminder-proof-392a")).reply(Reply::tool_call("reminder-cannot-mutate","companion.manage",json!({"action":"configure","user_quote":"两秒后提醒我喝水","expected_revision":0,"patch":{"name":"unauthorized-reminder-change"}})));
+        let recursive=model.expect(notice("water-reminder-proof-392a")).reply(Reply::tool_call("reminder-cannot-mutate","companion.manage",json!({"action":"configure","user_quote":"两秒后提醒我喝水","expected_revision":0,"patch":{"proactive_enabled":false}})));
         let done=model.expect(RequestMatch::tool_output("reminder-cannot-mutate")).after(&recursive).check_tool_output_contains("reminder-cannot-mutate","current direct user").reply(Reply::text("到你安排的时间了，记得喝水。water-reminder-delivered"));
         source.send("两秒后提醒我喝水").await?.wait_settled().await?.assert_succeeded()?;done.finished().await?;
         source.wait_text_contains("water-reminder-delivered").await?;
         let snapshot=source.client().assistant_snapshot(source.id()).await?;
-        ensure!(snapshot.profile.preferences.name=="Agena");ensure!(snapshot.reminders.len()==1&&snapshot.reminders[0].delivered==1);
+        ensure!(snapshot.profile.revision == 0 && snapshot.profile.preferences.proactive_enabled);
+        ensure!(snapshot.reminders.len()==1&&snapshot.reminders[0].delivered==1);
         Ok(())
     }).await
 }

@@ -1,5 +1,5 @@
 //! Optional operator workbench. Natural conversation remains the primary way
-//! to set persona, remember/forget and schedule proactive contact.
+//! to manage stored memories and schedule proactive contact.
 use crate::{App, Route};
 use agena_api::assistant::*;
 use agena_tui::main_focus::Focus;
@@ -77,7 +77,7 @@ impl AssistantState {
     }
     fn count(&self) -> usize {
         match self.tab {
-            0 => 14,
+            0 => FIELDS.len(),
             1 => self.snapshot.as_ref().map_or(0, |s| s.memories.len()),
             _ => self.snapshot.as_ref().map_or(0, |s| s.reminders.len()),
         }
@@ -98,12 +98,7 @@ impl AssistantState {
         }
     }
 }
-const FIELDS: [&str; 14] = [
-    "name",
-    "address",
-    "tone",
-    "language",
-    "instructions",
+const FIELDS: [&str; 9] = [
     "memoryRecall",
     "proactive",
     "timezone",
@@ -119,19 +114,14 @@ fn time_text(minutes: u16) -> String {
 }
 fn field_value(p: &AssistantPreferences, index: usize) -> String {
     match index {
-        0 => p.name.clone(),
-        1 => p.address_user.clone(),
-        2 => format!("{:?}", p.tone),
-        3 => p.language.clone(),
-        4 => p.instructions.clone(),
-        5 => p.memory_enabled.to_string(),
-        6 => p.proactive_enabled.to_string(),
-        7 => p.timezone.clone(),
-        8 => p.quiet_enabled.to_string(),
-        9 => time_text(p.quiet_start_minute),
-        10 => time_text(p.quiet_end_minute),
-        11 => p.daily_limit.to_string(),
-        12 => p.cooldown_seconds.to_string(),
+        0 => p.memory_enabled.to_string(),
+        1 => p.proactive_enabled.to_string(),
+        2 => p.timezone.clone(),
+        3 => p.quiet_enabled.to_string(),
+        4 => time_text(p.quiet_start_minute),
+        5 => time_text(p.quiet_end_minute),
+        6 => p.daily_limit.to_string(),
+        7 => p.cooldown_seconds.to_string(),
         _ => "workspace".into(),
     }
 }
@@ -143,15 +133,11 @@ fn parse_time(text: &str) -> Option<u16> {
 fn set_field(p: &mut AssistantPreferences, index: usize, text: &str) -> Result<(), String> {
     let mut next = p.clone();
     match index {
-        0 => next.name = text.trim().into(),
-        1 => next.address_user = text.trim().into(),
-        3 => next.language = text.trim().into(),
-        4 => next.instructions = text.into(),
-        7 => next.timezone = text.trim().into(),
-        9 => next.quiet_start_minute = parse_time(text).ok_or("HH:MM")?,
-        10 => next.quiet_end_minute = parse_time(text).ok_or("HH:MM")?,
-        11 => next.daily_limit = text.trim().parse().map_err(|_| "1–24")?,
-        12 => next.cooldown_seconds = text.trim().parse().map_err(|_| "60–86400")?,
+        2 => next.timezone = text.trim().into(),
+        4 => next.quiet_start_minute = parse_time(text).ok_or("HH:MM")?,
+        5 => next.quiet_end_minute = parse_time(text).ok_or("HH:MM")?,
+        6 => next.daily_limit = text.trim().parse().map_err(|_| "1–24")?,
+        7 => next.cooldown_seconds = text.trim().parse().map_err(|_| "60–86400")?,
         _ => return Err("not an editable text field".into()),
     }
     next.validate().map_err(|e| e.to_string())?;
@@ -160,11 +146,11 @@ fn set_field(p: &mut AssistantPreferences, index: usize, text: &str) -> Result<(
 }
 fn patch(base: &AssistantPreferences, p: &AssistantPreferences) -> AssistantPatch {
     let mut delta = AssistantPatch::default();
-    macro_rules! strings{($($field:ident),*)=>{$(if base.$field!=p.$field{delta.$field=Some(p.$field.clone());})*};}
     macro_rules! values{($($field:ident),*)=>{$(if base.$field!=p.$field{delta.$field=Some(p.$field);})*};}
-    strings!(name, address_user, language, instructions, timezone);
+    if base.timezone != p.timezone {
+        delta.timezone = Some(p.timezone.clone());
+    }
     values!(
-        tone,
         memory_enabled,
         proactive_enabled,
         quiet_enabled,
@@ -498,18 +484,10 @@ impl App {
                         && let Some(draft) = &mut state.draft
                     {
                         match state.index {
-                            2 => {
-                                draft.tone = match draft.tone {
-                                    AssistantTone::Balanced => AssistantTone::Warm,
-                                    AssistantTone::Warm => AssistantTone::Direct,
-                                    AssistantTone::Direct => AssistantTone::Playful,
-                                    AssistantTone::Playful => AssistantTone::Balanced,
-                                }
-                            }
-                            5 => draft.memory_enabled = !draft.memory_enabled,
-                            6 => draft.proactive_enabled = !draft.proactive_enabled,
-                            8 => draft.quiet_enabled = !draft.quiet_enabled,
-                            13 => {}
+                            0 => draft.memory_enabled = !draft.memory_enabled,
+                            1 => draft.proactive_enabled = !draft.proactive_enabled,
+                            3 => draft.quiet_enabled = !draft.quiet_enabled,
+                            8 => {}
                             index => {
                                 let mut editor = Editor::default();
                                 editor.set_text(field_value(draft, index));
@@ -785,14 +763,14 @@ mod tests {
     fn profile_patch_preserves_unrelated_concurrent_settings() {
         let original = AssistantPreferences::default();
         let mut draft = original.clone();
-        draft.name = "小鱼".into();
+        draft.memory_enabled = false;
         let mut latest = original.clone();
         latest.timezone = "Asia/Shanghai".into();
         latest.daily_limit = 2;
         let change = patch(&original, &draft);
         assert!(change.timezone.is_none());
         change.apply(&mut latest).unwrap();
-        assert_eq!(latest.name, "小鱼");
+        assert!(!latest.memory_enabled);
         assert_eq!(latest.timezone, "Asia/Shanghai");
         assert_eq!(latest.daily_limit, 2);
     }
@@ -800,11 +778,11 @@ mod tests {
     #[test]
     fn profile_fields_validate_without_overwriting_on_error() {
         let mut p = AssistantPreferences::default();
-        set_field(&mut p, 0, "小鱼").unwrap();
-        assert_eq!(p.name, "小鱼");
-        assert!(set_field(&mut p, 9, "25:99").is_err());
+        set_field(&mut p, 2, "Asia/Shanghai").unwrap();
+        assert_eq!(p.timezone, "Asia/Shanghai");
+        assert!(set_field(&mut p, 4, "25:99").is_err());
         assert_eq!(p.quiet_start_minute, 1320);
-        assert!(set_field(&mut p, 11, "0").is_err());
+        assert!(set_field(&mut p, 6, "0").is_err());
     }
     #[test]
     fn native_panel_and_unicode_editor_render_at_small_widths() {
@@ -817,7 +795,7 @@ mod tests {
             let mut editor = Editor::default();
             editor.set_text("保持中文、自然、简洁\n第二行".into());
             s.edit = Some(AssistantEdit {
-                kind: EditKind::Field(4),
+                kind: EditKind::Field(2),
                 editor,
             });
             t.draw(|f| render(f, f.area(), &s, &agena_tui::i18n::I18n::english()))

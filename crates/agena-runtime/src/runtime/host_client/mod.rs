@@ -845,6 +845,16 @@ impl HostClient for RuntimeHostClient {
             .await
             .map_err(bot_plugin_error)
     }
+    async fn bot_profile_operation(
+        &self,
+        request: agena_plugin_sdk::host_api::BotProfileRequest,
+    ) -> Result<serde_json::Value, PluginError> {
+        let (source, call) = self.callback_session_and_call()?;
+        self.session_manager()?
+            .bot_profile_operation(source, call, request)
+            .await
+            .map_err(bot_plugin_error)
+    }
     async fn spawn_agent(&self, req: AgentSpawnRequest) -> Result<AgentHandle, PluginError> {
         let (session, call) = self.agent_callback_scope()?;
         self.session_manager()?

@@ -211,7 +211,6 @@ onBeforeUnmount(() => {
           ><Button size="sm" variant="ghost" @click="emit('openChat', source)">{{ t('assistant.openChat') }}</Button>
         </div>
       </div>
-      <p class="mt-2 text-sm text-muted-foreground">{{ t('assistant.description') }}</p>
       <p v-if="snapshot" class="mt-2 text-xs text-muted-foreground">
         {{ t('assistant.scope') }} #{{ snapshot.profile.workspace_id }} · {{ t('assistant.revision') }}
         {{ snapshot.profile.revision }}
@@ -243,28 +242,6 @@ onBeforeUnmount(() => {
       <p v-if="notice" role="status" class="mt-3 text-sm text-muted-foreground">{{ notice }}</p>
       <form v-if="tab === 'profile' && draft" class="mt-5 space-y-5" @submit.prevent="saveProfile">
         <fieldset :disabled="busy || !!pending" class="grid grid-cols-1 gap-4 sm:grid-cols-2 disabled:opacity-70">
-          <label class="assistant-field"
-            >{{ t('assistant.name') }}<input v-model="draft.name" maxlength="64" data-testid="assistant-name"
-          /></label>
-          <label class="assistant-field"
-            >{{ t('assistant.address')
-            }}<input data-testid="assistant-address" v-model="draft.address_user" maxlength="64"
-          /></label>
-          <label class="assistant-field"
-            >{{ t('assistant.tone')
-            }}<select v-model="draft.tone">
-              <option v-for="tone in ['balanced', 'warm', 'direct', 'playful'] as const" :key="tone" :value="tone">
-                {{ t(`assistant.tone_${tone}`) }}
-              </option>
-            </select></label
-          >
-          <label class="assistant-field"
-            >{{ t('assistant.language')
-            }}<input v-model="draft.language" placeholder="auto / 中文 / English" maxlength="32"
-          /></label>
-          <label class="assistant-field sm:col-span-2"
-            >{{ t('assistant.instructions') }}<textarea v-model="draft.instructions" rows="4" />
-          </label>
           <label class="flex items-center gap-2 text-sm"
             ><input type="checkbox" v-model="draft.memory_enabled" data-testid="assistant-memory-enabled" />{{
               t('assistant.memoryRecall')
@@ -276,7 +253,12 @@ onBeforeUnmount(() => {
             }}</label
           >
           <label class="assistant-field"
-            >{{ t('assistant.timezone') }}<input v-model="draft.timezone" placeholder="Asia/Shanghai" maxlength="64"
+            >{{ t('assistant.timezone')
+            }}<input
+              v-model="draft.timezone"
+              data-testid="assistant-timezone"
+              placeholder="Asia/Shanghai"
+              maxlength="64"
           /></label>
           <label class="flex items-center gap-2 text-sm"
             ><input type="checkbox" v-model="draft.quiet_enabled" />{{ t('assistant.quiet') }}</label

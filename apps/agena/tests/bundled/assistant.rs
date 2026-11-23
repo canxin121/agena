@@ -8,24 +8,22 @@ use serde_json::{Value, json};
 pub(super) const CASES: &[BundledBehaviorCase] = &[
     (
         "agena.companion",
-        companion_changes_workspace_preferences_through_a_real_user_turn,
+        companion_changes_reminder_policy_through_a_real_user_turn,
     ),
     ("agena.bot", bot_creates_a_real_visible_project_session),
 ];
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn companion_changes_workspace_preferences_through_a_real_user_turn() -> TestResult {
+async fn companion_changes_reminder_policy_through_a_real_user_turn() -> TestResult {
     fixture().run(|case|async move{
         let model=case.model();let source=case.user().new_session().await?;
-        let first=model.expect(RequestMatch::user_text("保存这个助手称呼"))
-            .reply(Reply::tool_call("companion-registration","companion.manage",json!({"action":"configure","user_quote":"保存这个助手称呼","expected_revision":0,"patch":{"name":"registered-companion-behavior","tone":"direct"}})));
-        model.expect(RequestMatch::tool_output("companion-registration")).after(&first).check_tool_output_contains("companion-registration","saved").reply(Reply::text("称呼已经保存。"));
-        source.send("保存这个助手称呼").await?.wait_settled().await?.assert_succeeded()?;
-        ensure!(source.client().assistant_snapshot(source.id()).await?.profile.preferences.name=="registered-companion-behavior");
+        let first=model.expect(RequestMatch::user_text("设置提醒时区为 Asia/Shanghai"))
+            .reply(Reply::tool_call("companion-registration","companion.manage",json!({"action":"configure","user_quote":"设置提醒时区为 Asia/Shanghai","expected_revision":0,"patch":{"timezone":"Asia/Shanghai"}})));
+        model.expect(RequestMatch::tool_output("companion-registration")).after(&first).check_tool_output_contains("companion-registration","saved").reply(Reply::text("提醒时区已经保存。"));
+        source.send("设置提醒时区为 Asia/Shanghai").await?.wait_settled().await?.assert_succeeded()?;
+        ensure!(source.client().assistant_snapshot(source.id()).await?.profile.preferences.timezone == "Asia/Shanghai");
         let next=case.user().new_session().await?;
-        model.expect(RequestMatch::user_text("新会话验证人格"))
-            .check(|request|{ensure!(request.body.to_string().contains("registered-companion-behavior"));Ok(())}).reply(Reply::text("已经继承当前工作区的人格。"));
-        next.send("新会话验证人格").await?.wait_settled().await?.assert_succeeded()?;
+        ensure!(next.client().assistant_snapshot(next.id()).await?.profile.preferences.timezone == "Asia/Shanghai");
         Ok(())
     }).await
 }

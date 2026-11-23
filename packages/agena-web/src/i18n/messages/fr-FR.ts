@@ -233,9 +233,7 @@ export default {
   },
   assistant: {
     title: 'Assistant',
-    description:
-      'Parlez naturellement pour régler les préférences, mémoriser, oublier ou prévoir un rappel. Ce panneau permet de les vérifier.',
-    profile: 'Personnalité et contact',
+    profile: 'Paramètres',
     memory: 'Mémoire',
     reminders: 'Rappels et suivis',
     scope: 'Espace de travail',
@@ -247,15 +245,6 @@ export default {
     save: 'Enregistrer',
     saved: 'Enregistré.',
     saving: 'Enregistrement…',
-    name: 'Nom de l’assistant',
-    address: 'Comment vous appeler',
-    language: 'Langue (auto vous suit)',
-    tone: 'Ton',
-    tone_balanced: 'Équilibré',
-    tone_warm: 'Chaleureux',
-    tone_direct: 'Direct',
-    tone_playful: 'Enjoué',
-    instructions: 'Préférences supplémentaires',
     memoryRecall: 'Rappeler automatiquement',
     proactive: 'Autoriser les contacts planifiés',
     timezone: 'Fuseau horaire IANA',
@@ -264,8 +253,7 @@ export default {
     quietEnd: 'Fin des heures calmes',
     daily: 'Contacts maximum par jour local',
     cooldown: 'Intervalle minimum (secondes)',
-    policyHint:
-      'Les préférences n’accordent aucun droit. Seuls les contacts planifiés respectant ces limites sont envoyés. Le serveur doit fonctionner.',
+    policyHint: 'Le serveur Agena envoie les rappels programmés selon ces paramètres.',
     retryHint: 'Une réponse perdue peut cacher un enregistrement réussi. La reprise conserve la demande.',
     reconfirm: 'Relire puis confirmer',
     memoryHint:

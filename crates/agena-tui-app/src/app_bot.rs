@@ -67,7 +67,7 @@ enum BotView {
     /// Confirm deleting one conversation of the highlighted Bot.
     DeleteConversation,
 }
-const BOT_FORM_FIELDS: [&str; 3] = ["assistant-name", "bot-instructions", "bot-avatar"];
+const BOT_FORM_FIELDS: [&str; 3] = ["bot-name", "bot-instructions", "bot-avatar"];
 const BOT_AVATAR_FIELD: usize = 2;
 
 #[derive(Clone, Default)]

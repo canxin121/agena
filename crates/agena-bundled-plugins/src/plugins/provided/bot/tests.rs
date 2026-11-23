@@ -2,7 +2,7 @@ use super::*;
 use agena_plugin_host::sdk::Plugin;
 
 #[test]
-fn bot_manifest_exposes_only_native_session_and_integration_tools() {
+fn bot_manifest_exposes_profiles_sessions_and_connections_to_bots() {
     let manifest = BotPlugin::new().manifest();
     assert_eq!(manifest.namespace, "agena");
     assert_eq!(manifest.name, "bot");
@@ -11,11 +11,10 @@ fn bot_manifest_exposes_only_native_session_and_integration_tools() {
         .iter()
         .map(|tool| tool.name.as_str())
         .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(tools, ["connections", "sessions"].into_iter().collect());
-    assert!(!tools.contains("manage"));
-    // Both tools act on projects and conversations through the instance, so
-    // they are declared for Bot conversations: a project session must not
-    // see or reach them.
+    assert_eq!(
+        tools,
+        ["connections", "profile", "sessions"].into_iter().collect()
+    );
     for tool in &manifest.tools {
         assert_eq!(
             tool.applies_to,
@@ -25,6 +24,7 @@ fn bot_manifest_exposes_only_native_session_and_integration_tools() {
         );
     }
     let prompt = include_str!("../../../../assets/prompts/operator-bot.md");
+    assert!(prompt.contains("bot.profile"));
     assert!(prompt.contains("bot.sessions"));
     for removed in [
         "work.manage",

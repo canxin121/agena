@@ -3,7 +3,7 @@
   "snapshot_date": "2026-07-27",
   "counts": {
     "plugins": 27,
-    "tools": 219,
+    "tools": 220,
     "bundled_commands": 14
   },
   "plugins": [
@@ -81,6 +81,17 @@
           ],
           "definition_identity": "e24af1c9aaeff5f55dec23fa453a941fb5cf8b61f68f9131da3c830ef557a823",
           "input_schema_sha256": "e7685d331c6c90f624b08c02b2f7cc5c1083b0966e79c0097106b034a50e8a87",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+        },
+        {
+          "canonical_name": "agena.bot.profile",
+          "conditional": null,
+          "tags": [
+            "mutate",
+            "agent"
+          ],
+          "definition_identity": "ba6d5a9fb8a4dd39fec235d1db3978468499a2af84d87b9e9b552c296800f56d",
+          "input_schema_sha256": "51a9b80c6da97fa457d6eac9f4cfa3e2b8f79f3e60cf51121649a371b00f7cfa",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
         },
         {
@@ -1018,8 +1029,8 @@
             "mutate",
             "agent"
           ],
-          "definition_identity": "6516541db6a66dff3f12a505a824256ad14baa3dfc107eb7482bc36114c97907",
-          "input_schema_sha256": "4a47007fabcf1f70814f2dc4c4fea3b4b6f956d46927ed024818aae592acad01",
+          "definition_identity": "268115083486969dc09144b175f9f4f862407fd8da28af4ed9a7cd9d55259868",
+          "input_schema_sha256": "d52bcb1b51858399846ae8591925ffcb769609ddd35bd01bcf7a8a9a5f6cfaef",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
         }
       ],

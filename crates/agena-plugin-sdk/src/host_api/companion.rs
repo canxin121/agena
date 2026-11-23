@@ -20,9 +20,10 @@ pub struct CompanionRequest {
     /// Exact quote from the CURRENT direct user message. Required for writes.
     #[serde(default)]
     pub user_quote: Option<String>,
-    /// Current profile/reminder revision from live context; never guess it.
+    /// Current policy or reminder revision from profile or reminders.
     #[serde(default)]
     pub expected_revision: Option<i64>,
+    /// Memory and reminder settings to change in the current project.
     #[serde(default)]
     pub patch: Option<AssistantPatch>,
     #[serde(default)]

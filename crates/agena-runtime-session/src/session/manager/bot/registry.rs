@@ -7,7 +7,9 @@
 use super::*;
 use agena_assistant::bot::*;
 use agena_domain::SessionOwner;
+use agena_plugin_host::sdk::host_api::BotProfileRequest;
 use agena_prompt_layers::{FragmentId, PromptLayer, PromptScope};
+use agena_storage::kernel::SessionConfiguration;
 use agena_storage::{BotRecord, BotRepositoryError};
 use caseless::Caseless;
 use uuid::Uuid;
@@ -117,6 +119,17 @@ fn record(profile: &BotProfile) -> BotRecord {
         created_at_ms: profile.created_at_ms,
         updated_at_ms: profile.updated_at_ms,
     }
+}
+
+fn is_main_bot_conversation(
+    configuration: &SessionConfiguration,
+    owner: &SessionOwner,
+    profile: &BotProfile,
+    source: i64,
+) -> bool {
+    !configuration.relation_kind.is_subagent()
+        && configuration.conversation.is_none()
+        && (!owner.surface.is_local() || profile.local_session_id == Some(source))
 }
 
 fn prompt_layer(ids: &[String]) -> Result<PromptLayer, AppError> {
@@ -335,6 +348,93 @@ impl SessionManager {
 
     pub async fn get_bot_profile(&self, id: Uuid) -> Result<BotProfile, AppError> {
         self.bot_or_not_found(id).await
+    }
+
+    pub async fn bot_context(&self, source: i64) -> Result<Value, AppError> {
+        let configuration = self
+            .kernel()
+            .reader
+            .configuration(session_id(source)?)
+            .await
+            .map_err(kernel_error)?;
+        let Some(owner) = configuration.owner.as_ref() else {
+            return Ok(json!({"enabled":false}));
+        };
+        let profile = self.bot_or_not_found(owner.bot).await?;
+        if profile.archived {
+            return Err(invalid("archived Bot history has no active identity"));
+        }
+        self.verify_channel_session(source).await?;
+        let instructions = is_main_bot_conversation(&configuration, owner, &profile, source)
+            .then_some(&profile.persona.instructions);
+        Ok(json!({
+            "enabled": true,
+            "session_id": source,
+            "role": "instance_operator_bot",
+            "bot_id": profile.id,
+            "id": profile.id,
+            "name": profile.name,
+            "revision": profile.revision,
+            "instructions": instructions,
+        }))
+    }
+
+    pub async fn bot_profile_operation(
+        &self,
+        source: i64,
+        call: i64,
+        request: BotProfileRequest,
+    ) -> Result<Value, AppError> {
+        self.live_tool(source, call)?;
+        let configuration = self
+            .kernel()
+            .reader
+            .configuration(session_id(source)?)
+            .await
+            .map_err(kernel_error)?;
+        let Some(owner) = configuration.owner.as_ref() else {
+            return Err(invalid("Use this tool from an active Bot conversation"));
+        };
+        let mut profile = self.bot_or_not_found(owner.bot).await?;
+        if profile.archived || !is_main_bot_conversation(&configuration, owner, &profile, source) {
+            return Err(invalid(
+                "Use this tool from the active Bot's main conversation",
+            ));
+        }
+        self.verify_channel_session(source).await?;
+        if let BotProfileRequest::Update {
+            expected_revision,
+            user_quote,
+            name,
+            instructions,
+        } = request
+        {
+            let message = self
+                .require_current_user_quote(source, call, &user_quote)
+                .await?;
+            if name.is_none() && instructions.is_none() {
+                return Err(invalid(
+                    "Provide a name or additional system instructions to update",
+                ));
+            }
+            let update = BotUpdate {
+                request_key: format!("chat:{source}:{message}:profile"),
+                expected_revision,
+                name: name.unwrap_or(profile.name),
+                persona: BotPersona {
+                    instructions: instructions.unwrap_or(profile.persona.instructions),
+                    prompts: None,
+                },
+                avatar: None,
+            };
+            profile = self.update_bot_profile(profile.id, update).await?;
+        }
+        Ok(json!({
+            "id": profile.id,
+            "name": profile.name,
+            "instructions": profile.persona.instructions,
+            "revision": profile.revision,
+        }))
     }
 
     pub async fn create_bot_profile(&self, create: BotCreate) -> Result<BotProfile, AppError> {
@@ -562,7 +662,7 @@ impl SessionManager {
 
     async fn create_default_bot(&self) -> Result<BotProfile, AppError> {
         let now = chrono::Utc::now().timestamp_millis();
-        let name = agena_assistant::AssistantPreferences::default().name;
+        let name = "Agena".to_owned();
         let candidate = BotProfile {
             id: Uuid::new_v4(),
             name,

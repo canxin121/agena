@@ -12,14 +12,14 @@ fn repository() -> PathBuf {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "requires local Chrome; natural assistant and real management UI"]
-async fn web_assistant_personality_memory_and_proactive_contact() -> TestResult {
+#[ignore = "requires local Chrome; memory and reminder management UI"]
+async fn web_assistant_memory_and_proactive_contact() -> TestResult {
     assistant_ui(false).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires tmux; natural assistant and native settings workbench"]
-async fn terminal_assistant_personality_memory_and_proactive_contact() -> TestResult {
+async fn terminal_assistant_memory_and_proactive_contact() -> TestResult {
     assistant_ui(true).await
 }
 
@@ -29,10 +29,10 @@ async fn assistant_ui(terminal: bool) -> TestResult {
         .run(move |case| async move {
             use serde_json::json;
             let model = case.model();
-            let persona = model.expect(RequestMatch::user_text("以后叫你小鱼，叫我阿林"))
-                .reply(Reply::tool_call("ui-persona", "companion.manage", json!({"action":"configure","user_quote":"以后叫你小鱼，叫我阿林","expected_revision":0,"patch":{"name":"小鱼","address_user":"阿林","tone":"warm"}})));
-            model.expect(RequestMatch::tool_output("ui-persona")).after(&persona).check_tool_output_contains("ui-persona", "saved")
-                .reply(Reply::text("阿林，已经保存这个称呼。assistant-ui-persona-saved"));
+            let policy = model.expect(RequestMatch::user_text("设置提醒时区为 Asia/Shanghai"))
+                .reply(Reply::tool_call("ui-policy", "companion.manage", json!({"action":"configure","user_quote":"设置提醒时区为 Asia/Shanghai","expected_revision":0,"patch":{"timezone":"Asia/Shanghai"}})));
+            model.expect(RequestMatch::tool_output("ui-policy")).after(&policy).check_tool_output_contains("ui-policy", "saved")
+                .reply(Reply::text("提醒时区已保存。assistant-ui-policy-saved"));
             let memory = model.expect(RequestMatch::user_text("记住我希望报告先给结论"))
                 .reply(Reply::tool_call("ui-memory", "memory.write", json!({"name":"ui-report-style","content":"assistant-ui-memory-original: put the conclusion first","description":"Report preferences","kind":"preference"})));
             model.expect(RequestMatch::tool_output("ui-memory")).after(&memory).check_tool_output_contains("ui-memory", "assistant-ui-memory-original")
@@ -43,7 +43,7 @@ async fn assistant_ui(terminal: bool) -> TestResult {
                 .reply(Reply::text("已经安排提醒。assistant-ui-reminder-scheduled"));
             model.expect(RequestMatch::new("scheduled assistant UI contact", |request| {
                 let text = request.body.to_string(); text.contains("Scheduled assistant contact") && text.contains("assistant-ui-due-contact")
-            })).after(&ack).reply(Reply::text("阿林，到你安排的时间了，请核对结果。assistant-ui-contact-delivered"));
+            })).after(&ack).reply(Reply::text("到你安排的时间了，请核对结果。assistant-ui-contact-delivered"));
             let later = model.expect(RequestMatch::user_text("一小时后再提醒我一次"))
                 .reply(Reply::tool_call("ui-later", "companion.manage", json!({"action":"remind","user_quote":"一小时后再提醒我一次","reminder":{"text":"assistant-ui-future-contact","after_seconds":3600}})));
             model.expect(RequestMatch::tool_output("ui-later")).after(&later).check_tool_output_contains("ui-later", "scheduled")

@@ -1,6 +1,6 @@
 //! Named Bot regressions against an authenticated, disposable real service.
 //! Provider requests and tool calls use the existing scripted model, never a
-//! production provider. Registry mutations are exclusively public HTTP APIs.
+//! production provider. Registry edits use the public HTTP API and Bot tool.
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
@@ -139,21 +139,31 @@ async fn companion(
     mut input: Value,
 ) -> Result<Value> {
     input["user_quote"] = json!(text);
-    let call = format!("companion-{text}");
+    conversation_tool(case, source, text, "companion.manage", input).await
+}
+
+async fn conversation_tool(
+    case: &TestCase,
+    source: &UserSession,
+    text: &str,
+    tool: &str,
+    input: Value,
+) -> Result<Value> {
+    let call = format!("{tool}-{text}");
     let output = Arc::new(Mutex::new(None));
     let capture = output.clone();
     let matched_call = call.clone();
     let model = case.model();
     let start = model
         .expect(RequestMatch::user_text(text))
-        .reply(Reply::tool_call(&call, "companion.manage", input));
+        .reply(Reply::tool_call(&call, tool, input));
     model
         .expect(RequestMatch::tool_output(&call))
         .after(&start)
         .check(move |r| {
             *capture.lock().unwrap() = Some(serde_json::from_str(
                 &r.tool_output_text(&matched_call)
-                    .context("companion result")?,
+                    .context("conversation tool result")?,
             )?);
             Ok(())
         })
@@ -168,7 +178,7 @@ async fn companion(
         .lock()
         .unwrap()
         .take()
-        .context("captured companion result")?;
+        .context("captured conversation tool result")?;
     Ok(result)
 }
 
@@ -301,7 +311,7 @@ async fn bot_profiles_persist_persona_and_history_without_project_overlay() -> T
         ensure!(resource(&case,bot_session).await?["workspace_id"].is_null());
         let ordinary = case.user().new_session().await?;
         let snapshot = ordinary.client().assistant_snapshot(ordinary.id()).await?;
-        case.http().await.send_json(Method::PUT,&format!("/api/v1/sessions/{}/assistant",ordinary.id()),&json!({"request_key":"workspace-after-restart","expected_revision":snapshot.profile.revision,"patch":{"name":"Later workspace name","instructions":"later-workspace-instructions"}})).await?.require_success()?;
+        case.http().await.send_json(Method::PUT,&format!("/api/v1/sessions/{}/assistant",ordinary.id()),&json!({"request_key":"workspace-after-restart","expected_revision":snapshot.profile.revision,"patch":{"timezone":"America/Chicago"}})).await?.require_success()?;
         let fresh = create(&case,"fresh-after-restart","Fresh independent",None).await?;
         ensure!(fresh.persona == BotPersona::default());
         case.restart().await?;
@@ -309,7 +319,7 @@ async fn bot_profiles_persist_persona_and_history_without_project_overlay() -> T
         let restored = case.user().attach_session(bot_session).await?;
         case.model().expect(RequestMatch::user_text("check-persistent-transcript")).check(|r| {
             let body = r.body.to_string();
-            ensure!(body.contains("persistent-history-preserved") && body.contains("persistent-instructions-marker-42") && !body.contains("later-workspace-instructions")); Ok(())
+            ensure!(body.contains("persistent-history-preserved") && body.contains("persistent-instructions-marker-42") && !body.contains("America/Chicago")); Ok(())
         }).reply(Reply::text("persistence checked"));
         restored.send("check-persistent-transcript").await?.wait_settled().await?.assert_succeeded()?;
         Ok(())
@@ -317,11 +327,11 @@ async fn bot_profiles_persist_persona_and_history_without_project_overlay() -> T
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn bot_profiles_personas_replace_workspace_and_natural_edit_is_local() -> TestResult {
+async fn bot_profiles_prompt_edits_are_local_to_one_bot() -> TestResult {
     fixture().case_timeout(Duration::from_secs(150)).run(|case|async move {
         let ordinary = case.user().new_session().await?;
         let workspace_before = ordinary.client().assistant_snapshot(ordinary.id()).await?;
-        case.http().await.send_json(Method::PUT,&format!("/api/v1/sessions/{}/assistant",ordinary.id()),&json!({"request_key":"conflicting-workspace","expected_revision":workspace_before.profile.revision,"patch":{"name":"WorkspaceOnlyPersona","instructions":"WORKSPACE-CONFLICT-427","tone":"direct"}})).await?.require_success()?;
+        case.http().await.send_json(Method::PUT,&format!("/api/v1/sessions/{}/assistant",ordinary.id()),&json!({"request_key":"workspace-only-policy","expected_revision":workspace_before.profile.revision,"patch":{"memory_enabled":false,"timezone":"Asia/Shanghai"}})).await?.require_success()?;
         let workspace = ordinary.client().assistant_snapshot(ordinary.id()).await?.profile;
         let a = create(&case,"persona-a","AuroraPersona",Some(json!({"instructions":"A-PRIVATE-INSTRUCTIONS-431"}))).await?;
         let b = create(&case,"persona-b","BorealisPersona",Some(json!({"instructions":"B-PRIVATE-INSTRUCTIONS-862"}))).await?;
@@ -334,21 +344,31 @@ async fn bot_profiles_personas_replace_workspace_and_natural_edit_is_local() -> 
             (&sb,"persona-check-b","BorealisPersona","B-PRIVATE-INSTRUCTIONS-862","AuroraPersona","A-PRIVATE-INSTRUCTIONS-431","B-PRIVATE-TRANSCRIPT-563"),
         ] {
             case.model().expect(RequestMatch::user_text(marker)).check(move |r| {
-                let body = r.body.to_string();
-                ensure!(body.contains(name) && body.contains(instructions), "own persona absent from real provider request");
-                for absent in [other_name,other_instructions,"WorkspaceOnlyPersona","WORKSPACE-CONFLICT-427"] {ensure!(!body.contains(absent),"foreign persona leaked: {absent}");}
+                let system = r.body["instructions"].as_str().context("system prompt")?;
+                ensure!(system.contains(name) && system.contains(instructions), "Bot instructions missing from provider system prompt");
+                for absent in [other_name,other_instructions,"Asia/Shanghai"] {ensure!(!system.contains(absent),"foreign settings leaked: {absent}");}
                 Ok(())
             }).reply(Reply::text(reply));
             session.send(marker).await?.wait_settled().await?.assert_succeeded()?;
         }
         let permission_before=serde_json::to_value(&sa.snapshot().await?.execution.selected_permission)?;
         let current = profile(&case,a.id).await?;
-        let changed = companion(&case,&sa,"change-only-my-persona",json!({"action":"configure","expected_revision":current.revision,"patch":{"name":"AuroraRenamed","instructions":"A-EDITED-INSTRUCTIONS-519"}})).await?;
+        let read = conversation_tool(&case,&sa,"read-my-bot-profile","bot.profile",json!({"action":"get"})).await?;
+        phase(&read,"succeeded")?;
+        ensure!(field(&read,"revision") == Some(json!(current.revision)));
+        ensure!(field(&read,"instructions") == Some(json!(current.persona.instructions)));
+        let renamed = conversation_tool(&case,&sa,"rename-current-bot","bot.profile",json!({"action":"update","expected_revision":current.revision,"user_quote":"rename-current-bot","name":"AuroraRenamed"})).await?;
+        phase(&renamed,"succeeded")?;
+        let after_rename = profile(&case,a.id).await?;
+        ensure!(after_rename.name == "AuroraRenamed" && after_rename.persona == current.persona);
+        let changed = conversation_tool(&case,&sa,"change-only-my-persona","bot.profile",json!({"action":"update","expected_revision":after_rename.revision,"user_quote":"change-only-my-persona","instructions":"A-EDITED-INSTRUCTIONS-519"})).await?;
         phase(&changed,"succeeded")?;
         let edited = profile(&case,a.id).await?;
         ensure!(edited.name == "AuroraRenamed" && edited.persona.instructions == "A-EDITED-INSTRUCTIONS-519" && edited.revision > current.revision);
         ensure!(profile(&case,b.id).await? == b);
         ensure!(ordinary.client().assistant_snapshot(ordinary.id()).await?.profile == workspace);
+        let legacy = companion(&case,&sa,"reject-legacy-identity-update",json!({"action":"configure","expected_revision":edited.revision,"patch":{"name":"Legacy name"}})).await?;
+        phase(&legacy,"failed")?;
         let forbidden = companion(&case,&sa,"reject-shared-memory-setting",json!({"action":"configure","expected_revision":edited.revision,"patch":{"memory_enabled":!workspace.preferences.memory_enabled}})).await?;
         phase(&forbidden,"failed")?;
         ensure!(
@@ -363,31 +383,31 @@ async fn bot_profiles_personas_replace_workspace_and_natural_edit_is_local() -> 
             }).reply(Reply::text("isolated history checked"));
             session.send(marker).await?.wait_settled().await?.assert_succeeded()?;
         }
-        phase(&companion(&case,&sa,"reject-duplicate-natural-name",json!({"action":"configure","expected_revision":edited.revision,"patch":{"name":" BorealisPersona "}})).await?,"failed")?;
+        phase(&conversation_tool(&case,&sa,"reject-duplicate-natural-name","bot.profile",json!({"action":"update","expected_revision":edited.revision,"user_quote":"reject-duplicate-natural-name","name":" BorealisPersona "})).await?,"failed")?;
+        phase(&conversation_tool(&case,&sa,"reject-stale-bot-revision","bot.profile",json!({"action":"update","expected_revision":current.revision,"user_quote":"reject-stale-bot-revision","name":"Stale name"})).await?,"failed")?;
+        phase(&conversation_tool(&case,&sa,"reject-unquoted-bot-update","bot.profile",json!({"action":"update","expected_revision":edited.revision,"user_quote":"unrelated user instruction","name":"Unauthorized"})).await?,"failed")?;
+        phase(&conversation_tool(&case,&ordinary,"reject-bot-profile-from-project","bot.profile",json!({"action":"get"})).await?,"failed")?;
         ensure!(profile(&case,a.id).await?==edited && profile(&case,b.id).await?==b);
-        // Even neutral or unchanged legacy presentation fields are forbidden on Bots.
-        for (key, value) in [("address_user", json!("")), ("tone", json!("balanced")), ("language", json!("auto"))] {
-            let mut patch = json!({});
-            patch[key] = value;
-            phase(&companion(&case,&sa,&format!("reject-legacy-{key}"),json!({"action":"configure","expected_revision":edited.revision,"patch":patch})).await?,"failed")?;
-            ensure!(profile(&case,a.id).await? == edited, "legacy {key} changed Bot");
-        }
+        phase(&conversation_tool(&case,&sa,"reject-foreign-bot-profile","bot.profile",json!({"action":"update","expected_revision":edited.revision,"user_quote":"reject-foreign-bot-profile","bot_id":b.id,"name":"Foreign Bot"})).await?,"failed")?;
+        ensure!(profile(&case,a.id).await? == edited && profile(&case,b.id).await? == b);
         phase(&companion(&case,&sa,"reject-noop-shared-policy",json!({"action":"configure","expected_revision":edited.revision,"patch":{"memory_enabled":workspace.preferences.memory_enabled}})).await?,"failed")?;
         ensure!(profile(&case,a.id).await? == edited, "rejected instance policy update changed Bot");
         case.model().expect(RequestMatch::user_text("edited-instructions-effective")).check(|r| {
-            let body = r.body.to_string();
-            ensure!(body.contains("AuroraRenamed") && body.contains("A-EDITED-INSTRUCTIONS-519") && !body.contains("B-PRIVATE-INSTRUCTIONS-862"), "edited instructions missing or foreign instructions leaked");
+            let system = r.body["instructions"].as_str().context("system prompt")?;
+            ensure!(system.contains("AuroraRenamed") && system.contains("A-EDITED-INSTRUCTIONS-519") && !system.contains("B-PRIVATE-INSTRUCTIONS-862"), "edited instructions missing or foreign instructions leaked");
             Ok(())
         }).reply(Reply::text("edited instructions checked"));
         sa.send("edited-instructions-effective").await?.wait_settled().await?.assert_succeeded()?;
         ensure!(ordinary.client().assistant_snapshot(ordinary.id()).await?.profile==workspace);
         ensure!(serde_json::to_value(&sa.snapshot().await?.execution.selected_permission)?==permission_before,"persona edits changed tool permissions");
         let snap = sa.client().assistant_snapshot(sa.id()).await?;
-        ensure!(snap.profile.preferences.name == "AuroraRenamed" && snap.profile.revision == edited.revision);
-        case.model().expect(RequestMatch::user_text("ordinary-workspace-still-effective")).check(|r| {
-            let body=r.body.to_string();ensure!(body.contains("WORKSPACE-CONFLICT-427") && !body.contains("A-EDITED-INSTRUCTIONS-519") && !body.contains("B-PRIVATE-INSTRUCTIONS-862"));Ok(())
-        }).reply(Reply::text("ordinary project settings preserved"));
-        ordinary.send("ordinary-workspace-still-effective").await?.wait_settled().await?.assert_succeeded()?;
+        ensure!(snap.profile.workspace_id.is_none() && snap.profile.preferences.timezone == "UTC");
+        case.model().expect(RequestMatch::user_text("ordinary-prompt-has-no-bot-instructions")).check(|r| {
+            let system = r.body["instructions"].as_str().context("system prompt")?;
+            ensure!(!system.contains("A-EDITED-INSTRUCTIONS-519") && !system.contains("B-PRIVATE-INSTRUCTIONS-862"));
+            Ok(())
+        }).reply(Reply::text("ordinary system prompt checked"));
+        ordinary.send("ordinary-prompt-has-no-bot-instructions").await?.wait_settled().await?.assert_succeeded()?;
         Ok(())
     }).await
 }
@@ -569,7 +589,7 @@ async fn bot_profiles_archive_requires_idle_cas_revokes_authority_and_never_resu
         // Archived history rejects model/tool admission before any provider
         // round; the ordinary profile endpoint must reject fallthrough too.
         rejected(case.http().await.send_json(Method::POST,&format!("/api/v1/sessions/{}/messages",sa.id()),&json!({"document":[{"type":"text","text":"archived cannot request bot.sessions or companion.manage"}]})).await?, &["archiv","read-only"])?;
-        rejected(case.http().await.send_json(Method::PUT,&format!("/api/v1/sessions/{}/assistant",sa.id()),&json!({"request_key":"archived-profile-fallthrough","expected_revision":workspace_before.revision,"patch":{"name":"MUST NOT CHANGE WORKSPACE"}})).await?, &["archiv","reserved","bot"])?;
+        rejected(case.http().await.send_json(Method::PUT,&format!("/api/v1/sessions/{}/assistant",sa.id()),&json!({"request_key":"archived-profile-fallthrough","expected_revision":workspace_before.revision,"patch":{"memory_enabled":!workspace_before.preferences.memory_enabled}})).await?, &["archiv","reserved","bot"])?;
         ensure!(ordinary.client().assistant_snapshot(ordinary.id()).await?.profile==workspace_before);
         let sb=case.user().attach_session(b_session).await?;
         phase(&operation(&case,&sb,"deny-archived-target",json!({"action":"read","session_id":a_session})).await?,"failed")?;

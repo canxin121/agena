@@ -124,8 +124,8 @@ pub(crate) struct BrowserPlugin {
     browser_state: Arc<BrowserSessions>,
 }
 
-/// Managed Chrome sessions shared by successive hosts with the same Browser
-/// configuration. Tool permissions still come from each call's own host.
+/// Chrome contexts and tabs shared by the instance's Browser hosts.
+/// Tool permissions come from each call's own host.
 #[derive(Clone, Default)]
 pub struct BrowserSessionPool(Arc<BrowserSessions>);
 
@@ -163,12 +163,12 @@ impl Default for BrowserPlugin {
     icon = crate::plugin_metadata::icon(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/plugin-icons/inline_ui.svg"))),
     authors = ["canxin121"],
     summary = "Interact with managed Chrome pages and workspace previews.",
-    help = "Start with browser.list to discover owned pages and previews, or browser.open for an HTTP(S) URL. Use browser.snapshot for controls, browser.content or browser.inspect for page data, and browser.diagnostics to investigate failures. Pass the browser session_id from browser.open or browser.list. When the page requires human verification, sign-in, or another step the user must perform, request help with browser.request_takeover and continue after handback.",
+    help = "Use browser.contexts to discover browser contexts, browser.create_context to create a separately scoped cookie and storage profile, and browser.open with its context_id to open tabs there. Omitting context_id uses the conversation's private default. browser.list shows available tabs and owned previews. Pass a tab's session_id to browser.snapshot, browser.action, or browser.close. Use browser.request_takeover when the user needs to sign in, verify, or operate the page.",
     tags(agena_plugin_host::sdk::ToolTag::Network, agena_plugin_host::sdk::ToolTag::Interactive),
     translations(locale(
         "zh-CN",
         summary = "操作受管 Chrome 页面和工作区预览。",
-        help = "用 browser.list 查找当前会话的页面和预览，或用 browser.open 打开网页。用页面的 session_id 继续操作。browser.snapshot 查看控件，browser.content 读取页面内容，browser.evaluate 执行 JavaScript，browser.diagnostics 查看网络请求和异常。如果页面需要人工验证、登录或其他必须由用户完成的操作，调用 browser.request_takeover 请求接管，等用户交还浏览器后继续。"
+        help = "用 browser.contexts 列出浏览器上下文，browser.create_context 创建独立的 Cookie 和网站存储，再把 context_id 传给 browser.open 开标签页。省略 context_id 使用当前会话的专属默认上下文。browser.list 列出可用标签页和当前会话的预览。用标签页的 session_id 操作或关闭页面。需要用户登录、验证或操作页面时，调用 browser.request_takeover。"
     )),
     settings = BrowserConfig,
     settings_default = BrowserConfig::default(),
@@ -245,7 +245,7 @@ impl BrowserPlugin {
             config: BrowserConfig::parse(ctx.settings)?,
             workspace_root: ctx.workspace_root,
             host,
-            generation_lease: std::sync::Mutex::new(Some(self.browser_state.attach_plugin())),
+            generation_lease: std::sync::Mutex::new(Some(self.browser_state.attach_plugin().await)),
         };
         self.state
             .set(state)
@@ -333,12 +333,13 @@ impl BrowserPlugin {
                 .lock()
                 .unwrap_or_else(|error| error.into_inner())
                 .take();
-            if lease.and_then(Arc::into_inner).is_some() {
-                return self
-                    .browser_state
-                    .shutdown(self.browser_state.activity_host(&state.host).as_ref())
-                    .await;
-            }
+            return self
+                .browser_state
+                .detach_plugin(
+                    lease,
+                    self.browser_state.activity_host(&state.host).as_ref(),
+                )
+                .await;
         }
         Ok(())
     }
@@ -347,7 +348,7 @@ impl BrowserPlugin {
         tags(network, interactive, mutate),
         name = "open",
         summary = "Open a public page or an owned running preview in a managed interactive browser session.",
-        help = "Supply exactly one of url or preview_id. browser.list discovers owned preview IDs. preview_id grants only the registered run and exact isolated origin and still requires network permission for the real upstream URL; stop/restart revokes it. Managed previews restrict external fetch/WebSocket connections, frames, workers and popups; blocked requests are a browser policy result, not evidence the application is broken.",
+        help = "Supply exactly one of url or preview_id. Set context_id to open a tab in a context from browser.contexts. When omitted, the tab opens in the conversation's private default context. browser.list discovers owned preview IDs. Managed previews require a session-scoped context and network permission to the upstream. The grant covers the registered run and its isolated origin. Stop or restart revokes it. Managed previews restrict external requests, frames, workers and popups. Blocked requests describe the browser's policy.",
         translations(
             locale("ar-SA", summary = "افتح صفحة في جلسة متصفح تفاعلية مُدارة."),
             locale(
@@ -388,6 +389,57 @@ impl BrowserPlugin {
     }
 
     #[tool(
+        tags(interactive, query, discovery, read_only),
+        name = "contexts",
+        summary = "List Chrome contexts available to this Agena conversation.",
+        help = "Each context has independent cookies and website storage and can contain several tabs. The results include context_id, scope, name, and keep_alive. Use browser.list with a context_id to find tabs in that context.",
+        translations(locale("zh-CN", summary = "列出此 Agena 会话可用的 Chrome 上下文。"))
+    )]
+    async fn browser_contexts(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        _input: &BrowserNoInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.list_contexts(context).await
+    }
+
+    #[tool(
+        tags(interactive, mutate),
+        name = "create_context",
+        summary = "Create a named Chrome context with independent cookies and website storage.",
+        help = "Use scope session for this conversation, workspace for conversations in its workspace, bot for conversations owned by the current AI Bot, or global for all conversations in this instance. Eligible conversations can open, use, and close tabs in the context. A repeat with the same name and scope returns the existing context. Set keep_alive to retain the context during idle periods. Contexts last for the current Chrome process.",
+        translations(locale(
+            "zh-CN",
+            summary = "创建一个有独立 Cookie 和网站存储的命名 Chrome 上下文。"
+        ))
+    )]
+    async fn browser_create_context(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &BrowserContextCreateInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.create_browser_context(context, input).await
+    }
+
+    #[tool(
+        tags(interactive, mutate),
+        name = "close_context",
+        summary = "Close a Chrome context, its tabs, and its website storage.",
+        help = "Use the context_id from browser.contexts. Closing a shared context also closes its tabs opened by other conversations. Use browser.close to close one tab and keep the context's cookies and storage.",
+        translations(locale(
+            "zh-CN",
+            summary = "关闭 Chrome 上下文及其全部标签页，并清除该上下文的网站存储。"
+        ))
+    )]
+    async fn browser_close_context(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &BrowserContextInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.close_browser_context(context, &input.context_id).await
+    }
+
+    #[tool(
         tags(interactive),
         name = "request_takeover",
         summary = "Pause the browser task so the user can operate the current page in Agena Web.",
@@ -410,7 +462,8 @@ impl BrowserPlugin {
     #[tool(
         tags(network, interactive, query, discovery, read_only),
         name = "list",
-        summary = "List open page targets in the managed interactive browser.",
+        summary = "List available browser tabs and owned previews, optionally filtered by context.",
+        help = "Pass context_id from browser.contexts to list tabs in one context. Each tab has a session_id for browser actions. Shared contexts can include tabs opened by another conversation.",
         translations(
             locale(
                 "ar-SA",
@@ -451,9 +504,10 @@ impl BrowserPlugin {
     async fn browser_list(
         &self,
         context: &ToolInvokeContext<'_>,
-        _input: &BrowserListInput,
+        input: &BrowserListInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        self.list_browsers(context).await
+        self.list_browsers(context, input.context_id.as_deref())
+            .await
     }
 
     #[tool(
@@ -502,7 +556,7 @@ impl BrowserPlugin {
         tags(network, interactive, mutate),
         name = "shutdown",
         summary = "Close browser pages owned by the current Agena session without affecting other callers.",
-        help = "Caller-scoped shutdown closes owned pages only. The shared Chrome process and other sessions are not stopped. Global browser shutdown is reserved for trusted host lifecycle control.",
+        help = "Close this conversation's tabs and its session-scoped contexts. Use browser.close_context with an explicit ID to discard an entire shared context.",
         translations(
             locale(
                 "ar-SA",
@@ -549,7 +603,7 @@ impl BrowserPlugin {
     async fn browser_shutdown(
         &self,
         context: &ToolInvokeContext<'_>,
-        _input: &BrowserListInput,
+        _input: &BrowserNoInput,
     ) -> SdkResult<ToolInvokeOutput> {
         self.close_owned_browsers(context).await
     }
@@ -1202,7 +1256,10 @@ impl BrowserPlugin {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, agena_plugin_sdk::ToolInput)]
-#[input(trim("url", "preview_id"), non_empty_if_present("url", "preview_id"))]
+#[input(
+    trim("url", "preview_id", "context_id"),
+    non_empty_if_present("url", "preview_id", "context_id")
+)]
 #[serde(deny_unknown_fields)]
 struct BrowserOpenInput {
     /// Public HTTP(S) URL. Supply exactly one of url and preview_id.
@@ -1212,6 +1269,10 @@ struct BrowserOpenInput {
     /// to discover IDs. Private URLs are never accepted through the url field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     preview_id: Option<String>,
+    /// Chrome context from browser.contexts. Defaults to this conversation's private context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(max_chars = 128)]
+    context_id: Option<String>,
     #[serde(default = "default_browser_action_timeout_ms")]
     #[schemars(range(min = 1, max = 120000))]
     timeout_ms: u64,
@@ -1239,8 +1300,51 @@ struct BrowserTakeoverInput {
 #[derive(
     Debug, Clone, Default, Serialize, Deserialize, JsonSchema, agena_plugin_sdk::ToolInput,
 )]
+#[input(trim("context_id"), non_empty_if_present("context_id"))]
 #[serde(deny_unknown_fields)]
-struct BrowserListInput {}
+struct BrowserListInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(max_chars = 128)]
+    context_id: Option<String>,
+}
+
+#[derive(
+    Debug, Clone, Default, Serialize, Deserialize, JsonSchema, agena_plugin_sdk::ToolInput,
+)]
+#[serde(deny_unknown_fields)]
+struct BrowserNoInput {}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum BrowserContextScope {
+    #[default]
+    Session,
+    Workspace,
+    Bot,
+    Global,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, agena_plugin_sdk::ToolInput)]
+#[input(trim("name"), non_empty("name"))]
+#[serde(deny_unknown_fields)]
+struct BrowserContextCreateInput {
+    /// A name unique within the chosen scope. The same name and scope reuse the context.
+    #[arg(max_chars = 128)]
+    name: String,
+    #[serde(default)]
+    scope: BrowserContextScope,
+    /// Keep Chrome running while this context exists, even during inactivity.
+    #[serde(default)]
+    keep_alive: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, agena_plugin_sdk::ToolInput)]
+#[input(trim("context_id"), non_empty("context_id"))]
+#[serde(deny_unknown_fields)]
+struct BrowserContextInput {
+    #[arg(max_chars = 128)]
+    context_id: String,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, agena_plugin_sdk::ToolInput)]
 #[input(

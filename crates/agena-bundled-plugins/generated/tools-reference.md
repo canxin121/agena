@@ -6,7 +6,7 @@
 > agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
-This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **28 plugins and 218 tool definitions**.
+This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **28 plugins and 221 tool definitions**.
 
 - Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, the streaming runtime flag, an input parameter table, and the full input / output JSON Schema.
 - This catalog contains plugin execution tools only. The runtime-owned Tool API protocol (`plugins_list`, `tools_list`, `tools_help`, `tools_call`) has its own registry and is excluded from plugin and tool counts.
@@ -16,7 +16,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 
 - [`agena.agent`](#agenaagent) — Agent communication and delegation. (5 tools)
 - [`agena.bot`](#agenabot) — Named Bot access to ordinary project sessions and integration grants. (2 tools)
-- [`agena.browser`](#agenabrowser) — Interact with managed Chrome pages and workspace previews. (18 tools)
+- [`agena.browser`](#agenabrowser) — Interact with managed Chrome pages and workspace previews. (21 tools)
 - [`agena.chatgpt`](#agenachatgpt) — Model-based tools default to the current session model. Use an OpenAI model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. OpenAI cloud inference, files, knowledge stores, images, audio, realtime voice, batches and agent APIs. Inputs leave this computer; no local execution fallback. (27 tools)
 - [`agena.claude`](#agenaclaude) — Model-based tools default to the current session model. Use an Anthropic Claude model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. Anthropic cloud inference, search, code execution, files, Skills, batches and managed-agent APIs. Inputs leave this computer; no local execution fallback. (15 tools)
 - [`agena.code`](#agenacode) — Structured code search and syntax inspection tools. (3 tools)
@@ -1546,11 +1546,11 @@ Named Bot access to ordinary project sessions and integration grants.
 
 ## agena.browser
 
-**Version** `0.1.0` · **Tools** 18 · **Tags** `network` `interactive`
+**Version** `0.1.0` · **Tools** 21 · **Tags** `network` `interactive`
 
 Interact with managed Chrome pages and workspace previews.
 
-> Start with browser.list to discover owned pages and previews, or browser.open for an HTTP(S) URL. Use browser.snapshot for controls, browser.content or browser.inspect for page data, and browser.diagnostics to investigate failures. Pass the browser session_id from browser.open or browser.list. When the page requires human verification, sign-in, or another step the user must perform, request help with browser.request_takeover and continue after handback.
+> Use browser.contexts to discover browser contexts, browser.create_context to create a separately scoped cookie and storage profile, and browser.open with its context_id to open tabs there. Omitting context_id uses the conversation's private default. browser.list shows available tabs and owned previews. Pass a tab's session_id to browser.snapshot, browser.action, or browser.close. Use browser.request_takeover when the user needs to sign in, verify, or operate the page.
 
 ### action
 
@@ -2232,6 +2232,89 @@ Interact with managed Chrome pages and workspace previews.
 }
 ```
 
+### close_context
+
+`agena.browser.close_context` · **Summary**: Close a Chrome context, its tabs, and its website storage.
+
+**Tags**: `interactive` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Use the context_id from browser.contexts. Closing a shared context also closes its tabs opened by other conversations. Use browser.close to close one tab and keep the context's cookies and storage.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `context_id` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "required": [
+    "context_id"
+  ],
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "context_id": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "maxLength": 128,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    }
+  },
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "context_id": {}
+          },
+          "required": [
+            "context_id"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "context_id": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "context_id"
+        ]
+      }
+    ]
+  }
+}
+```
+
 ### content
 
 `agena.browser.content` · **Summary**: Read visible text, current DOM HTML, or the captured main-document HTTP response.
@@ -2407,6 +2490,134 @@ Interact with managed Chrome pages and workspace previews.
         },
         "required": [
           "session_id"
+        ]
+      }
+    ]
+  }
+}
+```
+
+### contexts
+
+`agena.browser.contexts` · **Summary**: List Chrome contexts available to this Agena conversation.
+
+**Tags**: `interactive` `query` `discovery` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Each context has independent cookies and website storage and can contain several tabs. The results include context_id, scope, name, and keep_alive. Use browser.list with a context_id to find tabs in that context.
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {}
+}
+```
+
+### create_context
+
+`agena.browser.create_context` · **Summary**: Create a named Chrome context with independent cookies and website storage.
+
+**Tags**: `interactive` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Use scope session for this conversation, workspace for conversations in its workspace, bot for conversations owned by the current AI Bot, or global for all conversations in this instance. Eligible conversations can open, use, and close tabs in the context. A repeat with the same name and scope returns the existing context. Set keep_alive to retain the context during idle periods. Contexts last for the current Chrome process.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `keep_alive` | `boolean` | — | `false` | Keep Chrome running while this context exists, even during inactivity. |
+| `name` | `string` | ✓ | — | A name unique within the chosen scope. The same name and scope reuse the context. |
+| `scope` | `BrowserContextScope` | — | `session` |  |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "BrowserContextScope": {
+      "type": "string",
+      "enum": [
+        "session",
+        "workspace",
+        "bot",
+        "global"
+      ],
+      "x-agena-order": "000001"
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "type": "object",
+  "properties": {
+    "name": {
+      "description": "A name unique within the chosen scope. The same name and scope reuse the context.",
+      "type": "string",
+      "x-agena-order": "000000",
+      "maxLength": 128,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "scope": {
+      "$ref": "#/$defs/BrowserContextScope",
+      "default": "session"
+    },
+    "keep_alive": {
+      "description": "Keep Chrome running while this context exists, even during inactivity.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000002"
+    }
+  },
+  "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "name": {}
+          },
+          "required": [
+            "name"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "name"
         ]
       }
     ]
@@ -3170,18 +3381,41 @@ Interact with managed Chrome pages and workspace previews.
 
 ### list
 
-`agena.browser.list` · **Summary**: List open page targets in the managed interactive browser.
+`agena.browser.list` · **Summary**: List available browser tabs and owned previews, optionally filtered by context.
 
 **Tags**: `network` `interactive` `query` `discovery` `read_only`
 
 **Runtime**: streaming `buffered`
 
+**Help**:
+> Pass context_id from browser.contexts to list tabs in one context. Each tab has a session_id for browser actions. Shared contexts can include tabs opened by another conversation.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `context_id` | `string / null` | — | — |  |
+
 **Input schema**:
 ```json
 {
   "additionalProperties": false,
-  "type": "object",
-  "properties": {}
+  "properties": {
+    "context_id": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000",
+      "maxLength": 128,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    }
+  },
+  "type": "object"
 }
 ```
 
@@ -3194,11 +3428,12 @@ Interact with managed Chrome pages and workspace previews.
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Supply exactly one of url or preview_id. browser.list discovers owned preview IDs. preview_id grants only the registered run and exact isolated origin and still requires network permission for the real upstream URL; stop/restart revokes it. Managed previews restrict external fetch/WebSocket connections, frames, workers and popups; blocked requests are a browser policy result, not evidence the application is broken.
+> Supply exactly one of url or preview_id. Set context_id to open a tab in a context from browser.contexts. When omitted, the tab opens in the conversation's private default context. browser.list discovers owned preview IDs. Managed previews require a session-scoped context and network permission to the upstream. The grant covers the registered run and its isolated origin. Stop or restart revokes it. Managed previews restrict external requests, frames, workers and popups. Blocked requests describe the browser's policy.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `context_id` | `string / null` | — | — | Chrome context from browser.contexts. Defaults to this conversation's private context. |
 | `preview_id` | `string / null` | — | — | Running preview owned by this workspace and Agena session. Use browser.list<br>to discover IDs. Private URLs are never accepted through the url field. |
 | `timeout_ms` | `integer` | — | `30000` |  |
 | `url` | `string / null` | — | — | Public HTTP(S) URL. Supply exactly one of url and preview_id. |
@@ -3236,13 +3471,28 @@ Interact with managed Chrome pages and workspace previews.
         "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
       }
     },
+    "context_id": {
+      "description": "Chrome context from browser.contexts. Defaults to this conversation's private context.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000",
+      "maxLength": 128,
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
     "timeout_ms": {
       "type": "integer",
       "format": "uint64",
       "minimum": 1,
       "maximum": 120000,
       "default": 30000,
-      "x-agena-order": "000002"
+      "x-agena-order": "000003"
     }
   },
   "type": "object"
@@ -3492,7 +3742,7 @@ Interact with managed Chrome pages and workspace previews.
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Caller-scoped shutdown closes owned pages only. The shared Chrome process and other sessions are not stopped. Global browser shutdown is reserved for trusted host lifecycle control.
+> Close this conversation's tabs and its session-scoped contexts. Use browser.close_context with an explicit ID to discard an entire shared context.
 
 **Input schema**:
 ```json

@@ -7,7 +7,6 @@ pub(super) async fn watch(
     state: &Arc<BrowserSessions>,
     root: &BrowserDriver,
     host: Arc<dyn HostClient>,
-    capture_console: bool,
 ) -> SdkResult<()> {
     let mut watcher = root.watch_new_pages().await?;
     let weak_state = Arc::downgrade(state);
@@ -47,11 +46,17 @@ pub(super) async fn watch(
                     let session = session.to_owned();
                     let host = host.clone();
                     adoptions.spawn(async move {
-                        if let Err(error) = adopt(state, opening, &session, &info, host, capture_console).await {
+                        if let Err(error) = adopt(state, opening, &session, &info, host).await {
                             log_secondary_plugin_failure("adopt browser popup", &error);
                         }
                     });
                 }
+            }
+        }
+        if let Some(state) = weak_state.upgrade() {
+            let mut root = state.root.lock().await;
+            if root.as_ref().is_some_and(|root| root.driver.is_closed()) {
+                root.take();
             }
         }
     });
@@ -74,7 +79,6 @@ async fn adopt(
     paused_session: &str,
     info: &Value,
     host: Arc<dyn HostClient>,
-    capture_console: bool,
 ) -> SdkResult<()> {
     let Some(opener) = find_opener(&state, info).await else {
         return Ok(());
@@ -90,11 +94,11 @@ async fn adopt(
     let driver = permission_wait::timeout(
         Duration::from_secs(5),
         BrowserDriver::connect_page_with_popup(
-            &opener.endpoint,
+            &opener.context.endpoint,
             &id,
             PageEvents::Activity {
                 sender,
-                capture_console,
+                capture_console: opener.capture_console,
                 allow_popups: true,
             },
             Some(&authority),
@@ -155,12 +159,11 @@ async fn adopt(
         id: id.clone(),
         owner: opener.owner.clone(),
         opener_id: Some(opener.id.clone()),
-        context_id: opener.context_id.clone(),
-        endpoint: opener.endpoint.clone(),
+        context: opener.context.clone(),
         driver,
+        capture_console: opener.capture_console,
         preview: None,
         uploads: Mutex::default(),
-        root: opening.root.clone(),
         gate: Arc::new(Mutex::new(())),
         control: opener.control.clone(),
         activity: Mutex::new(PageActivity {
@@ -193,13 +196,13 @@ async fn find_opener(state: &BrowserSessions, info: &Value) -> Option<Arc<Browse
         let pages = state.pages.lock().await;
         if let Some(page) = pages
             .get(opener_id)
-            .filter(|page| page.context_id == context)
+            .filter(|page| page.context.id == context)
         {
             return Some(page.clone());
         }
         pages
             .values()
-            .filter(|page| page.context_id == context)
+            .filter(|page| page.context.id == context)
             .cloned()
             .collect::<Vec<_>>()
     };

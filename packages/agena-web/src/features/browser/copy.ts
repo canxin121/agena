@@ -6,7 +6,7 @@ const copy = {
   open: ['打开浏览器', 'Open browser'],
   take: ['接管浏览器', 'Take control'],
   giveBack: ['交还给 AI', 'Return to AI'],
-  discard: ['关闭这些页面', 'Close these pages'],
+  discard: ['关闭此浏览器上下文', 'Close this browser context'],
   cancelRequest: ['取消请求', 'Cancel request'],
   tabs: ['浏览器标签页', 'Browser tabs'],
   preview: ['浏览器画面', 'Browser viewport'],

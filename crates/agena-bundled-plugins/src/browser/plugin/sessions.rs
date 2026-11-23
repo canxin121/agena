@@ -2,6 +2,7 @@
 
 #[cfg(all(test, unix))]
 mod chrome_tests;
+mod contexts;
 pub(super) mod handoff;
 mod popups;
 
@@ -12,7 +13,8 @@ use crate::browser::driver::{
 };
 use crate::browser::runtime::ChromeLease;
 use agena_plugin_host::sdk::PluginErrorKind;
-use tokio::sync::{OwnedMutexGuard, mpsc};
+use contexts::{BrowserContext, ContextOwner};
+use tokio::sync::{OwnedMutexGuard, OwnedRwLockReadGuard, mpsc};
 
 type BrowserOwner = agena_runtime_tools::TerminalOwner;
 
@@ -20,7 +22,7 @@ type BrowserOwner = agena_runtime_tools::TerminalOwner;
 pub(super) struct BrowserSessions {
     local: ChromeRuntime,
     activity_host: Option<Arc<dyn HostClient>>,
-    plugin_generations: std::sync::Mutex<std::sync::Weak<()>>,
+    plugin_generations: Mutex<std::sync::Weak<()>>,
     root: Mutex<Option<BrowserRoot>>,
     pages: Mutex<BTreeMap<String, Arc<BrowserPage>>>,
     pub(super) download_gate: Arc<Mutex<()>>,
@@ -31,19 +33,18 @@ pub(super) struct BrowserSessions {
 struct BrowserRoot {
     endpoint: String,
     driver: BrowserDriver,
-    contexts: BTreeMap<(PathBuf, Option<i64>), String>,
+    contexts: BTreeMap<String, Arc<BrowserContext>>,
 }
 
 pub(super) struct BrowserPage {
     pub(super) id: String,
     owner: BrowserOwner,
     opener_id: Option<String>,
-    pub(super) context_id: String,
-    pub(super) endpoint: String,
+    pub(super) context: Arc<BrowserContext>,
     pub(super) driver: BrowserDriver,
+    capture_console: bool,
     pub(super) preview: Option<ManagedPreviewTarget>,
     pub(super) uploads: Mutex<super::uploads::UploadStore>,
-    root: BrowserDriver,
     gate: Arc<Mutex<()>>,
     control: Arc<handoff::Control>,
     activity: Mutex<PageActivity>,
@@ -63,6 +64,7 @@ pub(super) struct BrowserAccess {
     _authorization: BrowserAuthorization,
     _lease: ChromeLease,
     _gate: OwnedMutexGuard<()>,
+    _context: OwnedRwLockReadGuard<bool>,
     _control: handoff::AgentAccess,
 }
 
@@ -84,11 +86,8 @@ impl BrowserSessions {
         self.activity_host.as_ref().unwrap_or(fallback).clone()
     }
 
-    pub(super) fn attach_plugin(&self) -> Arc<()> {
-        let mut generations = self
-            .plugin_generations
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
+    pub(super) async fn attach_plugin(&self) -> Arc<()> {
+        let mut generations = self.plugin_generations.lock().await;
         generations.upgrade().unwrap_or_else(|| {
             let lease = Arc::new(());
             *generations = Arc::downgrade(&lease);
@@ -96,13 +95,20 @@ impl BrowserSessions {
         })
     }
 
-    pub(super) fn lease(&self) -> SdkResult<ChromeLease> {
-        self.local.lease()
+    pub(super) async fn detach_plugin(
+        &self,
+        lease: Option<Arc<()>>,
+        host: &dyn HostClient,
+    ) -> SdkResult<()> {
+        let _generations = self.plugin_generations.lock().await;
+        if lease.and_then(Arc::into_inner).is_some() {
+            self.shutdown(host).await?;
+        }
+        Ok(())
     }
 
-    async fn owned_page(&self, owner: &BrowserOwner, target: &str) -> SdkResult<Arc<BrowserPage>> {
-        self.pages.lock().await.get(target).filter(|page| &page.owner == owner).cloned()
-            .ok_or_else(|| PluginError::invalid_params("Browser page not found in this Agena session. Call browser.open to open a page."))
+    pub(super) fn lease(&self) -> SdkResult<ChromeLease> {
+        self.local.lease()
     }
 
     async fn lock_page(&self, page: &Arc<BrowserPage>) -> SdkResult<OwnedMutexGuard<()>> {
@@ -134,8 +140,9 @@ impl BrowserSessions {
         message: &str,
         host: &dyn HostClient,
     ) -> SdkResult<()> {
-        if !page.root.is_closed() {
+        if !page.context.root.is_closed() {
             match page
+                .context
                 .root
                 .command_with_timeout(
                     "Target.closeTarget",
@@ -149,7 +156,7 @@ impl BrowserSessions {
                     if error
                         .diagnostic_message()
                         .contains("No target with given id") => {}
-                Err(error) if !page.root.is_closed() => return Err(error),
+                Err(error) if !page.context.root.is_closed() => return Err(error),
                 Ok(_) => {
                     return Err(PluginError::internal(
                         "Chrome did not acknowledge closing the page",
@@ -165,10 +172,14 @@ impl BrowserSessions {
         Ok(())
     }
 
-    pub(super) async fn shutdown(&self, host: &dyn HostClient) -> SdkResult<()> {
+    async fn shutdown(&self, host: &dyn HostClient) -> SdkResult<()> {
         let root = self.root.lock().await.take();
+        if let Some(root) = &root {
+            root.driver.disconnect();
+        }
         let pages = std::mem::take(&mut *self.pages.lock().await);
         *self.content.lock().await = Default::default();
+        let stopped = self.local.shutdown().await;
         for page in pages.values() {
             page.publish(
                 BackgroundActivityStatus::Stopped,
@@ -177,9 +188,7 @@ impl BrowserSessions {
             )
             .await;
         }
-        drop(pages);
-        drop(root);
-        self.local.shutdown().await
+        stopped
     }
 }
 
@@ -397,6 +406,31 @@ pub(super) fn browser_owner(context: &ToolInvokeContext<'_>) -> SdkResult<Browse
 }
 
 impl BrowserPlugin {
+    async fn visible_page(
+        &self,
+        owner: &BrowserOwner,
+        target: &str,
+    ) -> SdkResult<Arc<BrowserPage>> {
+        let missing = || {
+            PluginError::invalid_params(
+                "Browser page is unavailable. Use browser.list to find an accessible tab.",
+            )
+        };
+        let page = self
+            .browser_state
+            .pages
+            .lock()
+            .await
+            .get(target)
+            .filter(|page| !page.driver.is_closed())
+            .cloned()
+            .ok_or_else(missing)?;
+        if !self.can_access_context(owner, &page.context).await? {
+            return Err(missing());
+        }
+        Ok(page)
+    }
+
     async fn ensure_browser_controller(&self, control: &handoff::ControlState) -> SdkResult<()> {
         let host = self.state()?.host.clone();
         let fake_ip_ranges = self.config()?.fake_ip_ranges.clone();
@@ -421,17 +455,12 @@ impl BrowserPlugin {
         target: &str,
     ) -> SdkResult<BrowserAccess> {
         let control = handoff::agent_access(self.browser_state.control(context.session_id)).await?;
-        let page = self
-            .browser_state
-            .owned_page(&browser_owner(context)?, target)
-            .await?;
-        let gate = self.browser_state.lock_page(&page).await?;
+        let caller = browser_owner(context)?;
+        let page = self.visible_page(&caller, target).await?;
         let lease = self.browser_state.lease()?;
-        if let Some(preview) = &page.preview {
-            managed_preview::require_upstream_permission(preview, self.state()?.host.as_ref())
-                .await?;
-            page.verify_navigation_scope().await?;
-        }
+        let context_use = page.context.access()?;
+        let gate = self.browser_state.lock_page(&page).await?;
+        self.require_page_access(&page).await?;
         let authorization = page
             .driver
             .authorize(self.browser_request_policy(page.preview.clone())?)?;
@@ -440,8 +469,39 @@ impl BrowserPlugin {
             _authorization: authorization,
             _lease: lease,
             _gate: gate,
+            _context: context_use,
             _control: control,
         })
+    }
+
+    async fn require_page_access(&self, page: &BrowserPage) -> SdkResult<()> {
+        if let Some(preview) = &page.preview {
+            managed_preview::require_upstream_permission(preview, self.state()?.host.as_ref())
+                .await?;
+            page.verify_navigation_scope().await?;
+        } else if !matches!(&page.context.owner, ContextOwner::Session(_)) {
+            // The tab may have navigated under another conversation's network
+            // policy. Check this caller before granting access to its content.
+            let url = page.committed_url().await?;
+            page.verify_url(&url).await?;
+            let address = if url == "about:blank" {
+                // A blank popup can inherit its opener's HTTP origin.
+                let frame = page.driver.main_frame().await?;
+                frame["securityOrigin"]
+                    .as_str()
+                    .filter(|origin| {
+                        origin.starts_with("http://") || origin.starts_with("https://")
+                    })
+                    .map(str::to_owned)
+            } else {
+                Some(url)
+            };
+            if let Some(address) = address {
+                let url = prepare_fetch_url(&address).map_err(PluginError::invalid_params)?;
+                self.validate_browser_destination(None, &url).await?;
+            }
+        }
+        Ok(())
     }
 
     pub(super) async fn validate_browser_destination(
@@ -497,7 +557,21 @@ impl BrowserPlugin {
         let control = self.browser_state.control(context.session_id);
         let agent_access = handoff::agent_access(control.clone()).await?;
         let owner = browser_owner(context)?;
-        let (url, preview) = match managed_preview::open_target(input)? {
+        let target = managed_preview::open_target(input)?;
+        let selected = if let Some(id) = input.context_id.as_deref() {
+            let selected = self.accessible_context(&owner, id).await?;
+            if matches!(&target, managed_preview::OpenTarget::Preview(_))
+                && !matches!(&selected.owner, ContextOwner::Session(_))
+            {
+                return Err(PluginError::invalid_params(
+                    "Managed previews require a session-scoped browser context",
+                ));
+            }
+            Some(selected)
+        } else {
+            None
+        };
+        let (url, preview) = match target {
             managed_preview::OpenTarget::Public(raw) => (
                 prepare_fetch_url(raw).map_err(PluginError::invalid_params)?,
                 None,
@@ -518,62 +592,43 @@ impl BrowserPlugin {
         self.ensure_browser_controller(&agent_access).await?;
         let _lease = self.browser_state.lease()?;
         let host = self.browser_state.activity_host(&self.state()?.host);
-        let capture_console = self.config()?.capture_console_text;
-        let (page, mut opening, event_rx) = {
-            let mut root = self.browser_state.root.lock().await;
-            let endpoint = self
-                .browser_state
-                .local
-                .endpoint(self.config()?.chrome_options())
-                .await?;
-            if root
-                .as_ref()
-                .is_none_or(|root| root.endpoint != endpoint || root.driver.is_closed())
-            {
-                let driver = BrowserDriver::connect_root(&endpoint, None).await?;
-                popups::watch(&self.browser_state, &driver, host.clone(), capture_console).await?;
-                *root = Some(BrowserRoot {
-                    driver,
-                    endpoint,
-                    contexts: BTreeMap::new(),
-                });
-            }
-            let root = root.as_mut().expect("Chrome root initialized");
-            let context_id = root.context_for(&owner).await?;
-            let opening = OpeningTarget::create(&root.driver, &context_id).await?;
-            let id = opening.target.clone().expect("newly opened target");
-            let (events, event_rx) = mpsc::channel(512);
-            let driver = BrowserDriver::connect_page(
-                &root.endpoint,
-                &id,
-                PageEvents::Activity {
-                    sender: events,
-                    capture_console,
-                    allow_popups: preview.is_none(),
-                },
-            )
-            .await?;
-            let page = Arc::new(BrowserPage {
-                id,
-                owner,
-                opener_id: None,
-                context_id,
-                endpoint: root.endpoint.clone(),
-                driver,
-                preview,
-                uploads: Mutex::default(),
-                root: root.driver.clone(),
-                gate: Arc::new(Mutex::new(())),
-                control,
-                activity: Mutex::new(PageActivity {
-                    started_at_ms: chrono::Utc::now().timestamp_millis(),
-                    title: format!("Browser · {}", browser_title_target(&url)),
-                    url: url.to_string(),
-                    status: None,
-                }),
-            });
-            (page, opening, event_rx)
+        let browser_context = match selected {
+            Some(context) => context,
+            None => self.default_context(owner.clone()).await?,
         };
+        let _context = browser_context.access()?;
+        let mut opening = OpeningTarget::create(&browser_context.root, &browser_context.id).await?;
+        let id = opening.target.clone().expect("newly opened target");
+        let (events, event_rx) = mpsc::channel(512);
+        let capture_console = self.config()?.capture_console_text;
+        let driver = BrowserDriver::connect_page(
+            &browser_context.endpoint,
+            &id,
+            PageEvents::Activity {
+                sender: events,
+                capture_console,
+                allow_popups: preview.is_none(),
+            },
+        )
+        .await?;
+        let page = Arc::new(BrowserPage {
+            id,
+            owner,
+            opener_id: None,
+            context: browser_context,
+            driver,
+            capture_console,
+            preview,
+            uploads: Mutex::default(),
+            gate: Arc::new(Mutex::new(())),
+            control,
+            activity: Mutex::new(PageActivity {
+                started_at_ms: chrono::Utc::now().timestamp_millis(),
+                title: format!("Browser · {}", browser_title_target(&url)),
+                url: url.to_string(),
+                status: None,
+            }),
+        });
         let _authorization = page
             .driver
             .authorize(self.browser_request_policy(page.preview.clone())?)?;
@@ -585,31 +640,21 @@ impl BrowserPlugin {
             .await?;
         let snapshot = page.snapshot(&SnapshotOptions::default()).await?;
         let _gate = page.gate.lock().await;
-        {
-            let root = self.browser_state.root.lock().await;
-            let key = (page.owner.workspace.clone(), page.owner.session_id);
-            if page.driver.is_closed()
-                || root.as_ref().is_none_or(|root| {
-                    root.endpoint != page.endpoint
-                        || root.contexts.get(&key) != Some(&page.context_id)
-                })
-            {
-                return Err(PluginError::from_kind(
-                    PluginErrorKind::Disconnected,
-                    "The browser context closed while opening the page",
-                ));
-            }
-            self.browser_state
-                .pages
-                .lock()
-                .await
-                .insert(page.id.clone(), page.clone());
+        let mut pages = self.browser_state.pages.lock().await;
+        if page.driver.is_closed() || page.context.root.is_closed() {
+            return Err(PluginError::from_kind(
+                PluginErrorKind::Disconnected,
+                "The browser context closed while opening the page",
+            ));
         }
+        pages.insert(page.id.clone(), page.clone());
+        drop(pages);
         self.browser_state.observe(&page, event_rx, host.clone());
         page.publish_snapshot(&snapshot, host.as_ref()).await;
         opening.target = None;
         Ok(snapshot.output("Open browser page", serde_json::json!({
             "session_id": page.id,
+            "context_id": page.context.id,
             "preview_id": page.preview.as_ref().map(ManagedPreviewTarget::preview_id),
             "preview_generation": page.preview.as_ref().map(ManagedPreviewTarget::generation),
             "managed_preview_network_policy": page.preview.as_ref().map(|_| managed_preview::POLICY_DESCRIPTION),
@@ -620,6 +665,7 @@ impl BrowserPlugin {
     pub(super) async fn list_browsers(
         &self,
         context: &ToolInvokeContext<'_>,
+        context_id: Option<&str>,
     ) -> SdkResult<ToolInvokeOutput> {
         let control = self.browser_state.control(context.session_id);
         let control = control.read().await;
@@ -637,16 +683,32 @@ impl BrowserPlugin {
         )
         .await
         .map_err(managed_preview::denied)?;
-        let pages = self.owned_browsers(&owner).await;
+        let visible = self.visible_contexts(&owner, context_id).await?;
+        let pages: Vec<_> = self
+            .browser_state
+            .pages
+            .lock()
+            .await
+            .values()
+            .filter(|page| {
+                visible
+                    .iter()
+                    .any(|context| Arc::ptr_eq(context, &page.context))
+            })
+            .cloned()
+            .collect();
         let mut sessions = Vec::new();
         for page in pages {
             if page.driver.is_closed() {
                 continue;
             }
+            let Ok(_context) = page.context.access() else {
+                continue;
+            };
             let meta = page.activity.lock().await;
             sessions.push(serde_json::json!({
                 "session_id": page.id, "opener_session_id": page.opener_id,
-                "title": meta.title, "url": meta.url, "attached": true,
+                "context_id": page.context.id, "title": meta.title, "url": meta.url, "attached": true,
             }));
         }
         let running = self.browser_state.local.running().await?;
@@ -673,15 +735,14 @@ impl BrowserPlugin {
     ) -> SdkResult<ToolInvokeOutput> {
         let _control =
             handoff::agent_access(self.browser_state.control(context.session_id)).await?;
-        let page = self
-            .browser_state
-            .owned_page(&browser_owner(context)?, id)
-            .await?;
+        let page = self.visible_page(&browser_owner(context)?, id).await?;
+        let _lease = self.browser_state.lease()?;
+        let _context = page.context.access()?;
         self.browser_state
             .close(
                 &page,
                 BackgroundActivityStatus::Stopped,
-                "Closed by owning session.",
+                "Browser tab closed.",
                 self.state()?.host.as_ref(),
             )
             .await?;
@@ -710,40 +771,46 @@ impl BrowserPlugin {
         let _control =
             handoff::agent_access(self.browser_state.control(context.session_id)).await?;
         let owner = browser_owner(context)?;
-        let key = (owner.workspace.clone(), owner.session_id);
-        let mut root = self.browser_state.root.lock().await;
-        let host = self.state()?.host.as_ref();
+        let _lease = self.browser_state.lease()?;
+        let host = self.browser_state.activity_host(&self.state()?.host);
         let mut closed = Vec::new();
         let mut failures = Vec::new();
-        for page in self.owned_browsers(&owner).await {
+        for context in self.browser_state.private_contexts(&owner).await {
+            match self
+                .browser_state
+                .close_context(context, host.clone(), "Closed by owning session.")
+                .await
+            {
+                Ok(tabs) => closed.extend(tabs),
+                Err(error) => failures.push(error.failure.user.fallback.clone()),
+            }
+        }
+        for page in self
+            .owned_browsers(&owner)
+            .await
+            .into_iter()
+            .filter(|page| !matches!(&page.context.owner, ContextOwner::Session(_)))
+        {
+            let _context = match page.context.access() {
+                Ok(guard) => guard,
+                Err(error) => {
+                    failures.push(format!("{}: {}", page.id, error.failure.user.fallback));
+                    continue;
+                }
+            };
             match self
                 .browser_state
                 .close(
                     &page,
                     BackgroundActivityStatus::Stopped,
                     "Closed by owning session.",
-                    host,
+                    host.as_ref(),
                 )
                 .await
             {
                 Ok(()) => closed.push(page.id.clone()),
                 Err(error) => {
                     failures.push(format!("{}: {}", page.id, error.failure.user.fallback))
-                }
-            }
-        }
-        if let Some(root) = root.as_mut()
-            && let Some(id) = root.contexts.get(&key)
-            && failures.is_empty()
-        {
-            if root.driver.is_closed() {
-                root.contexts.remove(&key);
-            } else {
-                match root.driver.dispose_context(id).await {
-                    Ok(_) => {
-                        root.contexts.remove(&key);
-                    }
-                    Err(error) => failures.push(error.failure.user.fallback.clone()),
                 }
             }
         }
@@ -852,23 +919,6 @@ impl BrowserPlugin {
     }
 }
 
-impl BrowserRoot {
-    async fn context_for(&mut self, owner: &BrowserOwner) -> SdkResult<String> {
-        let key = (owner.workspace.clone(), owner.session_id);
-        if let Some(context) = self.contexts.get(&key) {
-            return Ok(context.clone());
-        }
-        if self.contexts.len() >= 64 {
-            return Err(PluginError::invalid_params(
-                "Browser context quota reached. Close an owned context with browser.shutdown.",
-            ));
-        }
-        let id = self.driver.create_context().await?;
-        self.contexts.insert(key, id.clone());
-        Ok(id)
-    }
-}
-
 impl BrowserSessions {
     fn observe(
         self: &Arc<Self>,
@@ -884,6 +934,7 @@ impl BrowserSessions {
                 page.record_navigation(event, host.as_ref()).await;
             }
             if let (Some(page), Some(state)) = (page.upgrade(), state.upgrade())
+                && let Some(_context) = page.context.observe_close().await
                 && let Err(error) = state
                     .close(
                         &page,

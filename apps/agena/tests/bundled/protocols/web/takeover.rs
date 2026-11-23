@@ -153,6 +153,7 @@ for flag do
     exit 1
   fi
 done
+printf '%s\n' "$$" >> "$0.launches"
 # Keep screenshot data small enough for the browser.evaluate expression limit.
 exec google-chrome --proxy-server={} "$@" --window-size=800,600 --force-device-scale-factor=1
 "#,
@@ -356,6 +357,45 @@ exec google-chrome --proxy-server={} "$@" --window-size=800,600 --force-device-s
                 } if page_id == &page))
             })));
             assert!(!serde_json::to_string(&parts)?.contains(PASSWORD));
+
+            let shared = global_user.call_tool("browser.create_context", json!({
+                "name": "Shared fixture", "scope": "global", "keep_alive": true,
+            })).await?;
+            shared.assert_succeeded()?;
+            let context_id = shared.data()?["context_id"].as_str().context("global context ID")?.to_owned();
+            let bot_context = global_user.call_tool("browser.create_context", json!({
+                "name": "Bot fixture", "scope": "bot",
+            })).await?;
+            bot_context.assert_succeeded()?;
+            let bot_context = bot_context.data()?["context_id"].clone();
+            let listed = user.call_tool("browser.contexts", json!({})).await?;
+            listed.assert_succeeded()?;
+            let contexts = listed.data()?["contexts"].as_array().context("browser contexts")?;
+            assert!(contexts.iter().any(|context| context["context_id"] == context_id));
+            assert!(!contexts.iter().any(|context| context["context_id"] == bot_context));
+
+            let tab = user.call_tool("browser.open", json!({
+                "url": "http://8.8.8.8/search", "context_id": context_id,
+            })).await?;
+            tab.assert_succeeded()?;
+            let tab = tab.data()?["session_id"].as_str().context("shared tab")?.to_owned();
+            let peer_tab = global_user.call_tool("browser.open", json!({
+                "url": "http://8.8.8.8/search", "context_id": context_id,
+            })).await?;
+            peer_tab.assert_succeeded()?;
+            let peer_tab = peer_tab.data()?["session_id"].as_str().context("peer's shared tab")?.to_owned();
+            let seen = global_user.call_tool("browser.snapshot", json!({"session_id": tab})).await?;
+            seen.assert_succeeded()?;
+            let take_shared = json!({"kind": "take_control", "page_id": tab});
+            let manual: Value = command(take_shared).await?.require_success()?.json()?;
+            let token = manual["control_id"].as_str().context("shared context control")?;
+            let blocked = global_user.call_tool("browser.snapshot", json!({"session_id": peer_tab})).await?;
+            blocked.assert_failure_kind(ModelFeedbackKind::PermissionDenied)?;
+            global_user.call_tool("browser.snapshot", json!({"session_id": global_data["session_id"]})).await?.assert_succeeded()?;
+            command(json!({"kind": "return_control", "control_id": token})).await?.require_success()?;
+            global_user.call_tool("browser.snapshot", json!({"session_id": peer_tab})).await?.assert_succeeded()?;
+            let launches = tokio::fs::read_to_string(case.workspace().join("chrome-takeover-fixture.launches")).await?;
+            assert_eq!(launches.lines().count(), 1);
             Ok(())
         }).await
 }

@@ -61,7 +61,7 @@ fn start_browser(options: &ChromeOptions) -> SdkResult<ChromeProcess> {
         .map_err(|error| PluginError::from_kind(PluginErrorKind::HostUnavailable, error))
 }
 
-/// A lazily started Chrome process owned by one plugin instance.
+/// A lazily started Chrome process owned by the Browser session pool.
 #[derive(Clone, Default)]
 pub(crate) struct ChromeRuntime(Arc<BrowserState>);
 
@@ -159,8 +159,9 @@ impl ChromeRuntime {
         let browser = state.browser.take();
         state.idle_timeout = None;
         lock(&self.0.activity)?.last_used = None;
-        drop(state);
+        // Reap the current Chrome before another endpoint call can spawn one.
         drop(browser);
+        drop(state);
         Ok(())
     }
 
@@ -199,8 +200,8 @@ fn shutdown_if_idle(browser: &BrowserState) -> SdkResult<()> {
     state.idle_timeout = None;
     activity.last_used = None;
     drop(activity);
-    drop(state);
     drop(browser);
+    drop(state);
     Ok(())
 }
 

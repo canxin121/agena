@@ -173,13 +173,15 @@ mod registration_inventory_tests {
             .iter()
             .find(|plugin| plugin.id == crate::tool::browser_plugin_id())
             .unwrap();
-        assert_eq!(browser.tools.len(), 18);
-        assert!(
-            browser
-                .tools
-                .iter()
-                .any(|tool| tool.canonical_name == "agena.browser.open")
-        );
+        assert_eq!(browser.tools.len(), 21);
+        for name in [
+            "agena.browser.open",
+            "agena.browser.contexts",
+            "agena.browser.create_context",
+            "agena.browser.close_context",
+        ] {
+            assert!(browser.tools.iter().any(|tool| tool.canonical_name == name));
+        }
         assert!(browser.tools.iter().all(|tool| {
             tool.canonical_name.starts_with("agena.browser.")
                 && tool.tags.iter().any(|tag| tag == "interactive")

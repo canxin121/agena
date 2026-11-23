@@ -68,11 +68,11 @@ pub(super) async fn transfer(
                     changed_behavior: false,
                     started: false,
                     dir,
-                    browser_context_id: Some(access.page.context_id.clone()),
+                    browser_context_id: Some(access.page.context.id.clone()),
                 };
                 let remaining = timeout.saturating_sub(start.elapsed());
                 let operation = receive(
-                    &access.page.endpoint,
+                    &access.page.context.endpoint,
                     page,
                     &trigger,
                     &mut state,

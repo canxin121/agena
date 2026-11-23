@@ -4,7 +4,7 @@ use agena_plugin_host::sdk::{
     hooks::{EventEnvelope, EventFilter},
     host_api::{
         EventSubscription, HostCallbackContext, LogLevel, PathPermissionQuery, PermissionQuery,
-        run_in_isolated_host_callback_context,
+        current_host_callback_context, run_in_isolated_host_callback_context,
     },
 };
 use serde_json::{Value, json};
@@ -17,6 +17,15 @@ struct FixtureHost;
 
 #[async_trait]
 impl HostClient for FixtureHost {
+    async fn bot_context(&self) -> SdkResult<Value> {
+        Ok(
+            match current_host_callback_context().and_then(|context| context.session_id) {
+                Some(91 | 92) => json!({"enabled": true, "bot_id": uuid::Uuid::from_u128(1)}),
+                Some(93) => json!({"enabled": true, "bot_id": uuid::Uuid::from_u128(2)}),
+                _ => json!({"enabled": false}),
+            },
+        )
+    }
     async fn log(&self, _: LogLevel, _: String, _: Value) {}
     async fn publish_event(&self, _: EventEnvelope) -> SdkResult<()> {
         Ok(())
@@ -41,7 +50,9 @@ impl HostClient for FixtureHost {
     }
     async fn require_network_permission(&self, target: String) -> SdkResult<()> {
         let url = url::Url::parse(&target).unwrap();
-        if matches!(url.host_str(), Some("8.8.8.8" | "1.1.1.1")) {
+        if matches!(url.host_str(), Some("8.8.8.8" | "1.1.1.1"))
+            && current_host_callback_context().and_then(|context| context.session_id) != Some(94)
+        {
             Ok(())
         } else {
             Err(PluginError::from_kind(
@@ -121,6 +132,26 @@ impl Fixture {
         input: Value,
         sandbox_enabled: bool,
     ) -> SdkResult<ToolInvokeOutput> {
+        self.call_in_workspace(
+            plugin,
+            owner,
+            self.workspace.path().to_str().unwrap(),
+            tool,
+            input,
+            sandbox_enabled,
+        )
+        .await
+    }
+
+    async fn call_in_workspace(
+        &self,
+        plugin: &dyn Plugin,
+        owner: i64,
+        workspace: &str,
+        tool: &str,
+        input: Value,
+        sandbox_enabled: bool,
+    ) -> SdkResult<ToolInvokeOutput> {
         let context = HostCallbackContext {
             session_id: Some(owner),
             call_id: Some(1),
@@ -135,7 +166,7 @@ impl Fixture {
                     tool_name: tool.to_owned(),
                     session_id: owner,
                     call_id: 1,
-                    workspace_root: self.workspace.path().to_str().unwrap().to_owned(),
+                    workspace_root: workspace.to_owned(),
                     caller: None,
                     input,
                 },
@@ -151,6 +182,162 @@ impl Fixture {
             .payload
             .unwrap()
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "starts Chrome with sandbox support and a local HTTP fixture"]
+async fn scoped_contexts_share_tabs_and_storage_with_eligible_sessions() {
+    let fixture = Fixture::new().await;
+    let workspace = fixture.workspace.path().to_str().unwrap();
+    let other_workspace = tempfile::tempdir().unwrap();
+    let other_workspace = other_workspace.path().to_str().unwrap();
+    let call = async |owner, workspace, tool, input| {
+        fixture
+            .call_in_workspace(&fixture.plugin, owner, workspace, tool, input, true)
+            .await
+            .map(|result| result.payload.unwrap())
+    };
+    let mut context_ids = BTreeMap::new();
+    for scope in ["session", "workspace", "bot", "global"] {
+        let args = json!({"name": "fixture", "scope": scope, "keep_alive": true});
+        let created = call(91, workspace, "create_context", args.clone())
+            .await
+            .unwrap();
+        let reused = call(91, workspace, "create_context", args).await.unwrap();
+        assert_eq!(created["created"], true);
+        assert_eq!(reused["created"], false);
+        assert_eq!(created["context_id"], reused["context_id"]);
+        assert_eq!(created["scope"], scope);
+        assert_eq!(created["keep_alive"], true);
+        context_ids.insert(scope, created["context_id"].clone());
+    }
+
+    for (owner, path, expected) in [
+        (
+            91,
+            workspace,
+            &["session", "workspace", "bot", "global"][..],
+        ),
+        (92, other_workspace, &["bot", "global"][..]),
+        (93, workspace, &["workspace", "global"][..]),
+        (93, "", &["global"][..]),
+        (19, workspace, &["workspace", "global"][..]),
+    ] {
+        let listed = call(owner, path, "contexts", json!({})).await.unwrap();
+        let contexts = listed["contexts"].as_array().unwrap();
+        assert_eq!(contexts.len(), expected.len());
+        for scope in expected {
+            assert!(
+                contexts
+                    .iter()
+                    .any(|context| context["context_id"] == context_ids[*scope])
+            );
+        }
+    }
+    let private = &context_ids["session"];
+    let denied = call(
+        92,
+        workspace,
+        "open",
+        json!({"url":"http://8.8.8.8/","context_id":private}),
+    )
+    .await;
+    assert!(denied.is_err());
+    assert!(
+        call(
+            93,
+            workspace,
+            "close_context",
+            json!({"context_id": context_ids["bot"]})
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        call(
+            19,
+            workspace,
+            "create_context",
+            json!({"name":"invalid","scope":"bot"})
+        )
+        .await
+        .is_err()
+    );
+
+    let global = &context_ids["global"];
+    let open = async |owner, path, id: &Value| {
+        call(
+            owner,
+            path,
+            "open",
+            json!({"url":"http://8.8.8.8/","context_id":id}),
+        )
+        .await
+        .unwrap()["session_id"]
+            .clone()
+    };
+    let first_tab = open(91, workspace, global).await;
+    let second_tab = open(92, other_workspace, global).await;
+    let isolated_tab = open(91, workspace, private).await;
+    let eval = async |owner, path, tab: &Value, expression| {
+        call(
+            owner,
+            path,
+            "evaluate",
+            json!({"session_id":tab,"expression":expression}),
+        )
+        .await
+    };
+    let write = "document.cookie = 'fixture_context=shared; Path=/'; localStorage.setItem('fixture_context', 'shared')";
+    eval(91, workspace, &first_tab, write).await.unwrap();
+    let read = "[document.cookie, localStorage.getItem('fixture_context')]";
+    for tab in [&first_tab, &second_tab] {
+        let data = eval(92, other_workspace, tab, read).await.unwrap();
+        assert_eq!(data["value"], json!(["fixture_context=shared", "shared"]));
+    }
+    assert_eq!(
+        eval(91, workspace, &isolated_tab, read).await.unwrap()["value"],
+        json!(["", null])
+    );
+    let denied = eval(94, other_workspace, &first_tab, read)
+        .await
+        .unwrap_err();
+    assert_eq!(denied.kind, PluginErrorKind::PolicyDenied);
+    assert_eq!(
+        call(92, other_workspace, "list", json!({"context_id": global}))
+            .await
+            .unwrap()["sessions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    call(
+        92,
+        other_workspace,
+        "close",
+        json!({"session_id":first_tab}),
+    )
+    .await
+    .unwrap();
+    let result = call(91, workspace, "shutdown", json!({})).await.unwrap();
+    assert_eq!(result["closed_sessions"], json!([isolated_tab]));
+    assert_eq!(
+        eval(92, other_workspace, &second_tab, read).await.unwrap()["value"],
+        json!(["fixture_context=shared", "shared"])
+    );
+    let closed = call(
+        92,
+        other_workspace,
+        "close_context",
+        json!({"context_id":global}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(closed["closed_sessions"], json!([second_tab]));
+    assert!(fixture.plugin.browser_state.local.running().await.unwrap());
+    Plugin::shutdown(&fixture.plugin).await.unwrap();
 }
 
 impl Drop for Fixture {

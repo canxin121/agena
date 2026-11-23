@@ -9,8 +9,9 @@ use agena_plugin_sdk::browser::{
     BrowserControlCommand, BrowserControlResult, BrowserHelpRequest, BrowserNetworkAuthority,
     BrowserTab,
 };
-use tokio::sync::{OwnedRwLockReadGuard, RwLock};
+use tokio::sync::{OwnedRwLockReadGuard, OwnedRwLockWriteGuard, RwLock};
 use tokio::time::Instant;
+use tokio_util::sync::{CancellationToken, DropGuard};
 use uuid::Uuid;
 
 use super::*;
@@ -32,8 +33,11 @@ pub(super) struct ControlState {
 struct HumanControl {
     id: Uuid,
     expires: Instant,
+    context: Arc<BrowserContext>,
     _authorizations: Vec<BrowserAuthorization>,
+    exclusive: OwnedRwLockWriteGuard<bool>,
     _chrome: ChromeLease,
+    _deadline: DropGuard,
 }
 
 struct HelpRequest {
@@ -44,6 +48,16 @@ struct HelpRequest {
 }
 
 impl ControlState {
+    fn shows_page(&self, session_id: i64, page: &BrowserPage) -> bool {
+        if let Some(human) = &self.human {
+            return Arc::ptr_eq(&human.context, &page.context);
+        }
+        page.owner.session_id == Some(session_id)
+            || self.help.as_ref().is_some_and(|help| {
+                help.page_id == page.id || help.returned_page.as_ref() == Some(&page.id)
+            })
+    }
+
     pub(super) fn waiting_status(&self) -> Option<&'static str> {
         if self.human.is_some() {
             Some(
@@ -111,22 +125,31 @@ impl BrowserSessions {
         control
     }
 
-    async fn operator_pages(&self, session_id: i64) -> Vec<Arc<BrowserPage>> {
+    async fn operator_pages(
+        &self,
+        session_id: i64,
+        control: &ControlState,
+    ) -> Vec<Arc<BrowserPage>> {
         self.pages
             .lock()
             .await
             .values()
-            .filter(|page| page.owner.session_id == Some(session_id) && !page.driver.is_closed())
+            .filter(|page| control.shows_page(session_id, page) && !page.driver.is_closed())
             .cloned()
             .collect()
     }
 
-    async fn operator_page(&self, session_id: i64, page_id: &str) -> SdkResult<Arc<BrowserPage>> {
+    async fn operator_page(
+        &self,
+        session_id: i64,
+        page_id: &str,
+        control: &ControlState,
+    ) -> SdkResult<Arc<BrowserPage>> {
         self.pages
             .lock()
             .await
             .get(page_id)
-            .filter(|page| page.owner.session_id == Some(session_id) && !page.driver.is_closed())
+            .filter(|page| control.shows_page(session_id, page) && !page.driver.is_closed())
             .cloned()
             .ok_or_else(closed)
     }
@@ -144,10 +167,13 @@ impl BrowserSessions {
             BrowserControlCommand::List => {
                 let control = control.read().await;
                 let mut tabs = Vec::new();
-                for page in self.operator_pages(session_id).await {
+                for page in self.operator_pages(session_id, &control).await {
                     let title = if control.human.is_some() {
                         format!("Tab {}", tabs.len() + 1)
                     } else {
+                        let Ok(_context) = page.context.access() else {
+                            continue;
+                        };
                         page.activity.lock().await.title.clone()
                     };
                     tabs.push(BrowserTab {
@@ -175,25 +201,31 @@ impl BrowserSessions {
                 if control.human.is_some() || control_id.is_some() {
                     control.check_id(control_id.as_deref().unwrap_or_default(), true)?;
                 }
-                let page = self.operator_page(session_id, &page_id).await?;
-                page.verify_preview_lease().await?;
                 let _lease = self.lease()?;
+                let page = self.operator_page(session_id, &page_id, &control).await?;
+                let _context = control
+                    .human
+                    .is_none()
+                    .then(|| page.context.access())
+                    .transpose()?;
+                page.verify_preview_lease().await?;
                 viewport::frame(&page, thumbnail).await
             }
             BrowserControlCommand::TakeControl { page_id } => {
                 let network = network.ok_or_else(control_denied)?;
-                let id = self
+                let (id, ended) = self
                     .take_control(session_id, &page_id, &control, network, fake_ip_ranges)
                     .await?;
                 let state = Arc::downgrade(self);
-                let control = Arc::downgrade(&control);
                 tokio::spawn(async move {
-                    tokio::time::sleep(CONTROL_TIME).await;
-                    if let (Some(state), Some(control)) = (state.upgrade(), control.upgrade()) {
+                    tokio::select! {
+                        _ = ended.cancelled() => return,
+                        _ = tokio::time::sleep(CONTROL_TIME) => {},
+                    }
+                    if let Some(state) = state.upgrade() {
                         let mut guard = control.write().await;
                         if guard.human.as_ref().is_some_and(|human| human.id == id)
-                            && let Err(error) =
-                                state.discard(session_id, &mut guard, host.as_ref()).await
+                            && let Err(error) = state.discard(&mut guard, host.as_ref()).await
                         {
                             log_secondary_plugin_failure("expire browser control", &error);
                         }
@@ -210,7 +242,7 @@ impl BrowserSessions {
             } => {
                 let control = control.read().await;
                 control.check_id(&control_id, true)?;
-                let page = self.operator_page(session_id, &page_id).await?;
+                let page = self.operator_page(session_id, &page_id, &control).await?;
                 let _gate = self.lock_page(&page).await?;
                 page.verify_preview_lease().await?;
                 viewport::input(&page, events).await?;
@@ -222,7 +254,7 @@ impl BrowserSessions {
             } => {
                 let mut control = control.write().await;
                 control.check_id(&control_id, true)?;
-                let pages = self.operator_pages(session_id).await;
+                let pages = self.operator_pages(session_id, &control).await;
                 let returned_page = page_id
                     .as_ref()
                     .or_else(|| control.help.as_ref().map(|help| &help.page_id))
@@ -251,10 +283,12 @@ impl BrowserSessions {
                 Ok(BrowserControlResult::Done)
             }
             BrowserControlCommand::Close { control_id } => {
-                let mut control = control.write().await;
+                let mut control = control.write_owned().await;
                 control.check_id(&control_id, false)?;
-                self.discard(session_id, &mut control, host.as_ref())
-                    .await?;
+                let state = self.clone();
+                tokio::spawn(async move { state.discard(&mut control, host.as_ref()).await })
+                    .await
+                    .map_err(|error| PluginError::internal_error(&error))??;
                 Ok(BrowserControlResult::Done)
             }
         }
@@ -267,7 +301,7 @@ impl BrowserSessions {
         control: &Control,
         network: Arc<dyn BrowserNetworkAuthority>,
         fake_ip_ranges: &[String],
-    ) -> SdkResult<Uuid> {
+    ) -> SdkResult<(Uuid, CancellationToken)> {
         let mut control = tokio::time::timeout(Duration::from_secs(8), control.write())
             .await
             .map_err(|_| {
@@ -279,13 +313,24 @@ impl BrowserSessions {
         if control.human.is_some() {
             return Err(control_denied());
         }
-        self.operator_page(session_id, page_id)
+        let chrome = self.lease()?;
+        let target = self.operator_page(session_id, page_id, &control).await?;
+        let context = target.context.clone();
+        let exclusive = context.take_control(Duration::from_secs(8)).await?;
+        self.operator_page(session_id, page_id, &control)
             .await?
             .verify_preview_lease()
             .await?;
-        let chrome = self.lease()?;
+        let pages = self
+            .pages
+            .lock()
+            .await
+            .values()
+            .filter(|page| Arc::ptr_eq(&page.context, &context) && !page.driver.is_closed())
+            .cloned()
+            .collect::<Vec<_>>();
         let mut authorizations = Vec::new();
-        for page in self.operator_pages(session_id).await {
+        for page in pages {
             // Suppression starts before a single operator input can reach CDP.
             page.driver.make_private()?;
             self.content.lock().await.remove_page(&page.id);
@@ -293,59 +338,31 @@ impl BrowserSessions {
             authorizations.push(page.driver.authorize_human(policy)?);
         }
         let id = Uuid::new_v4();
+        let ended = CancellationToken::new();
         control.human = Some(HumanControl {
             id,
             expires: Instant::now() + CONTROL_TIME,
+            context,
             _authorizations: authorizations,
+            exclusive,
             _chrome: chrome,
+            _deadline: ended.clone().drop_guard(),
         });
         if let Some(help) = &mut control.help {
             help.returned_page = None;
         }
-        Ok(id)
+        Ok((id, ended))
     }
 
-    async fn discard(
-        &self,
-        session_id: i64,
-        control: &mut ControlState,
-        host: &dyn HostClient,
-    ) -> SdkResult<()> {
-        let mut root = self.root.lock().await;
-        if let Some(root) = root.as_mut() {
-            let keys: Vec<_> = root
-                .contexts
-                .keys()
-                .filter(|(_, id)| *id == Some(session_id))
-                .cloned()
-                .collect();
-            for key in keys {
-                if !root.driver.is_closed() {
-                    root.driver.dispose_context(&root.contexts[&key]).await?;
-                }
-                root.contexts.remove(&key);
-            }
-        }
-        let pages = {
-            let mut pages = self.pages.lock().await;
-            let ids: Vec<_> = pages
-                .values()
-                .filter(|page| page.owner.session_id == Some(session_id))
-                .map(|page| page.id.clone())
-                .collect();
-            ids.iter()
-                .filter_map(|id| pages.remove(id))
-                .collect::<Vec<_>>()
-        };
-        for page in pages {
-            page.driver.disconnect();
-            self.content.lock().await.remove_page(&page.id);
-            page.publish(
-                BackgroundActivityStatus::Stopped,
-                Some("Browser control ended."),
+    async fn discard(&self, control: &mut ControlState, host: &dyn HostClient) -> SdkResult<()> {
+        if let Some(human) = &mut control.human {
+            self.dispose_context(
+                &human.context,
+                &mut human.exclusive,
                 host,
+                "Browser control ended.",
             )
-            .await;
+            .await?;
         }
         control.human.take();
         Ok(())
@@ -414,16 +431,17 @@ impl BrowserPlugin {
         let _lease = self.browser_state.lease()?;
         {
             let mut guard = control.write().await;
-            let page = self
-                .browser_state
-                .owned_page(&browser_owner(context)?, page_id)
-                .await?;
-            page.verify_preview_lease().await?;
-            if guard.help.is_some() {
+            if guard.human.is_some() || guard.help.is_some() {
                 return Err(PluginError::invalid_params(
-                    "A browser takeover request is already pending",
+                    "Browser takeover is already active or pending",
                 ));
             }
+            let caller = browser_owner(context)?;
+            let page = self.visible_page(&caller, page_id).await?;
+            let _context = page.context.access()?;
+            let _page = self.browser_state.lock_page(&page).await?;
+            self.require_page_access(&page).await?;
+            self.ensure_browser_controller(&guard).await?;
             guard.help = Some(HelpRequest {
                 id,
                 page_id: page.id.clone(),

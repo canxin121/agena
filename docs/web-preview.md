@@ -192,7 +192,8 @@ isolated preview gateway streams upstream responses.
 The bundled Browser plugin registers the interactive tools under the
 `browser.*` namespace. Configure the Chrome executable, startup timeout,
 idle timeout, console capture, and synthetic DNS ranges under
-`plugins.list.agena.browser.settings`. The `AGENA_CHROME_PATH` environment
+`plugins.list.agena.browser.settings`. The shared process uses the instance
+settings for its executable and timeouts. The `AGENA_CHROME_PATH` environment
 variable can configure the executable for both interactive tools and Web
 rendering.
 
@@ -200,10 +201,43 @@ Web fetch, crawl, and search can still render JavaScript when configured in
 `agena.web`. Rendering uses disposable pages and its own Chrome process.
 Interactive pages and their cookies belong to the Browser plugin.
 
-The Browser plugin starts Chrome on the host with its built-in sandbox and
-controls it over local CDP in either MXC mode. Navigation and intercepted
-requests use the owning conversation's policy. Web's JavaScript rendering
+The Browser plugin starts one Chrome process per Agena instance with its
+built-in sandbox and controls it over local CDP in either MXC mode. Project
+conversations and AI Bots use the same process. Navigation and intercepted
+requests use the calling conversation's policy. Web's JavaScript rendering
 requires direct execution mode.
+
+### Contexts and tabs
+
+Each Chrome context has independent cookies and website storage. Within a
+context, tabs can reuse a website's login state. `browser.open` uses a private
+default context for the current conversation when `context_id` is omitted.
+
+Use `browser.create_context` with a name and an optional scope. The tool returns
+the existing context when the name already exists in the selected scope.
+
+| Scope | Conversations that can access the context and its tabs |
+| --- | --- |
+| `session` (default) | The current Agena conversation |
+| `workspace` | Conversations in the current workspace |
+| `bot` | Conversations owned by the current AI Bot |
+| `global` | All conversations in this Agena instance |
+
+```json
+{"name": "Signed-in dashboard", "scope": "workspace", "keep_alive": true}
+```
+
+`browser.contexts` lists accessible contexts. Pass a returned `context_id` to
+`browser.open` to open a tab there or to `browser.list` to find its open tabs.
+Pass the tab's `session_id` to browser actions. `browser.close` closes one tab
+while preserving the context. `browser.close_context` closes every tab in the
+selected context and discards its storage. `browser.shutdown` closes the
+calling conversation's tabs and session-scoped contexts.
+
+A context with `keep_alive` keeps the shared Chrome process running during idle
+periods. Chrome and Agena restarts clear these contexts and their website storage.
+Use a session-scoped context for a managed preview so its origin stays inside
+the owning conversation.
 
 `browser.list` includes `previews` belonging to the current canonical workspace
 and Agena session even before Chrome starts. Pass the ID in `preview_id`.
@@ -319,13 +353,14 @@ continues to enforce the conversation's network policy.
 
 Returning control checks for text left in recognized sign-in fields. Finish
 the sign-in flow or clear those fields before returning the browser. Runtime
-reloads with the same Browser settings keep the tabs, Chrome context, and
-control grant, including across changes to the MXC setting.
+reloads keep the current Chrome process and its contexts while the Browser
+plugin remains enabled. During takeover, all tabs in the selected context are
+reserved for the user, including when multiple conversations share the context.
 
 Closing the panel leaves the browser in human control. The original Web tab
-can reopen the panel and return control. **Close these pages** discards the
-conversation's browser context. A control grant lasts ten minutes. The server
-closes the context if the grant expires before control is returned.
+can reopen the panel and return control. **Close this browser context** discards
+the selected context. A control grant lasts ten minutes. The server closes the
+context if the grant expires before control is returned.
 
 ### Preview authorization
 

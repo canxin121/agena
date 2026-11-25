@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { apiJson } from '@/lib/api'
+import { handleOptionKeydown, isPlainNavigationKey } from '@/lib/keyboardNavigation'
 import { normalizeFsPath, trimTrailingFsSlashes } from '@/lib/path'
 import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
@@ -86,6 +87,8 @@ const value = computed<string>({
 })
 
 const browserOpen = ref(false)
+const browseButton = ref<InstanceType<typeof Button> | null>(null)
+const browserEl = ref<HTMLElement | null>(null)
 const browserPath = ref('')
 const browserQuery = ref('')
 const browserFoldersOnly = ref(false)
@@ -312,11 +315,31 @@ async function openBrowser() {
   } else {
     start = ctx.base || ''
   }
+  if (props.view === 'compact') {
+    void nextTick(() => {
+      if (browserOpen.value) browserEl.value?.focus({ preventScroll: true })
+    })
+  }
   await loadBrowser(start)
 }
 
 function closeBrowser() {
   browserOpen.value = false
+  browserLoadSequence++
+  const trigger = browseButton.value?.$el
+  if (trigger instanceof HTMLElement) trigger.focus({ preventScroll: true })
+}
+
+function onBrowserKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && props.view === 'compact' && isPlainNavigationKey(event) && !event.shiftKey) {
+    event.preventDefault()
+    event.stopPropagation()
+    closeBrowser()
+    return
+  }
+  const target = event.target
+  const entry = target instanceof HTMLElement && target.hasAttribute('data-path-picker-entry') ? target : null
+  handleOptionKeydown(event, browserEl.value, entry)
 }
 
 function applyBrowserPath(path: string) {
@@ -335,6 +358,7 @@ function goToBrowserDraft() {
 
 function selectBrowserEntry(entry: ListEntry) {
   if (entry.isDirectory) {
+    browserEl.value?.focus({ preventScroll: true })
     void loadBrowser(entry.path)
     return
   }
@@ -392,12 +416,14 @@ watch(
     <div v-if="props.view === 'compact'" class="flex items-center gap-2">
       <Input v-model="value" :placeholder="placeholder" :disabled="disabled" class="min-w-0" :class="inputClass" />
       <Button
+        ref="browseButton"
         variant="outline"
         size="sm"
         type="button"
         @click="browserOpen ? closeBrowser() : openBrowser()"
         :disabled="disabled"
         :class="buttonClass"
+        :aria-expanded="browserOpen"
       >
         {{ browserOpen ? t('common.hide') : effectiveButtonLabel }}
       </Button>
@@ -409,9 +435,19 @@ watch(
         <div v-if="browserDescription" class="typography-micro text-muted-foreground">{{ browserDescription }}</div>
       </div>
 
-      <div class="flex min-h-0 flex-col gap-3" :class="browserViewportClass">
+      <div
+        ref="browserEl"
+        data-path-picker-browser
+        tabindex="-1"
+        role="group"
+        :aria-label="browserTitle || effectiveButtonLabel"
+        class="flex min-h-0 flex-col gap-3 focus-visible:outline-2 focus-visible:outline-ring"
+        :class="browserViewportClass"
+        @keydown="onBrowserKeydown"
+      >
         <div class="flex items-center gap-2 flex-wrap">
           <Input
+            data-path-picker-entry
             v-model="value"
             :placeholder="placeholder || t('ui.pathPicker.placeholders.path')"
             class="min-w-0 flex-1 font-mono"
@@ -444,7 +480,12 @@ watch(
         </div>
 
         <div class="flex items-center justify-between gap-2 flex-wrap">
-          <Input v-model="browserQuery" :placeholder="t('ui.pathPicker.placeholders.filter')" class="min-w-0 flex-1" />
+          <Input
+            data-path-picker-entry
+            v-model="browserQuery"
+            :placeholder="t('ui.pathPicker.placeholders.filter')"
+            class="min-w-0 flex-1"
+          />
 
           <div class="flex items-center gap-1">
             <template v-if="showOptions">
@@ -546,7 +587,8 @@ watch(
               v-for="entry in filteredBrowserEntries"
               :key="entry.path"
               type="button"
-              class="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-accent"
+              data-keyboard-option
+              class="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-accent focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
               @click="selectBrowserEntry(entry)"
             >
               <div class="flex min-w-0 items-center gap-2">

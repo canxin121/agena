@@ -9,6 +9,7 @@
 import FormDialog from '@/components/ui/FormDialog.vue'
 import Button from '@/components/ui/Button.vue'
 import type { ChoiceDialogOption } from '@/components/ui/choiceDialog.types'
+import { handleOptionKeydown } from '@/lib/keyboardNavigation'
 
 const props = withDefaults(
   defineProps<{
@@ -38,13 +39,15 @@ function choose(id: string) {
     :title="props.title"
     :description="props.description"
     max-width="max-w-md"
+    initial-focus="[data-keyboard-option]"
     @update:open="(value) => emit('update:open', value)"
   >
-    <div class="grid gap-2">
+    <div class="grid gap-2" @keydown="handleOptionKeydown($event, $event.currentTarget as HTMLElement)">
       <button
         v-for="option in props.options"
         :key="option.id"
         type="button"
+        data-keyboard-option
         class="flex w-full flex-col gap-1 rounded-lg border border-border/60 px-3 py-2.5 text-left transition-colors hover:border-primary/50 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         @click="choose(option.id)"
       >

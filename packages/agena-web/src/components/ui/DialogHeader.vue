@@ -12,7 +12,20 @@ const ui = useUiStore()
 </script>
 
 <template>
-  <header class="flex shrink-0 items-start gap-2 border-b border-border/50 px-3 py-2 sm:px-4">
+  <header class="flex min-h-12 shrink-0 items-start justify-between gap-3 border-b border-border/50 px-3 py-2 sm:px-4">
+    <div class="min-w-0 flex-1 py-1.5">
+      <DialogTitle
+        :class="title ? 'text-sm font-semibold leading-5 text-foreground [overflow-wrap:anywhere]' : 'sr-only'"
+      >
+        {{ title || t('common.options') }}
+      </DialogTitle>
+      <DialogDescription
+        v-if="description"
+        class="mt-0.5 text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]"
+      >
+        {{ description }}
+      </DialogDescription>
+    </div>
     <IconButton
       variant="ghost"
       size="sm"
@@ -25,16 +38,5 @@ const ui = useUiStore()
     >
       <RiCloseLine class="h-4 w-4" />
     </IconButton>
-    <div class="min-w-0 flex-1 py-1.5">
-      <DialogTitle v-if="title" class="text-sm font-semibold leading-5 text-foreground [overflow-wrap:anywhere]">
-        {{ title }}
-      </DialogTitle>
-      <DialogDescription
-        v-if="description"
-        class="mt-0.5 text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]"
-      >
-        {{ description }}
-      </DialogDescription>
-    </div>
   </header>
 </template>

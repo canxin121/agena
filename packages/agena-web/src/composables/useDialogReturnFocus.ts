@@ -20,8 +20,8 @@ function sourceOutsideClosingMenus(element: HTMLElement | null): HTMLElement | n
 
 /** Radix restores the original control; retain a nearby destination if that control is deleted. */
 export function useDialogReturnFocus(isOpen: () => boolean): (event: Event) => void {
+  let openingControl: HTMLElement | null = null
   let source: HTMLElement | null = null
-  let sourceWasRedirected = false
   let collection: HTMLElement | null = null
   let region: HTMLElement | null = null
   let index = 0
@@ -29,9 +29,8 @@ export function useDialogReturnFocus(isOpen: () => boolean): (event: Event) => v
     isOpen,
     (open) => {
       if (!open || typeof document === 'undefined') return
-      const active = document.activeElement instanceof HTMLElement ? document.activeElement : null
-      source = sourceOutsideClosingMenus(active)
-      sourceWasRedirected = source !== active
+      openingControl = document.activeElement instanceof HTMLElement ? document.activeElement : null
+      source = sourceOutsideClosingMenus(openingControl)
       collection = source?.closest<HTMLElement>('[data-keyboard-collection]') || null
       region = source?.closest<HTMLElement>('[data-keyboard-region]') || null
       index = collection
@@ -45,11 +44,11 @@ export function useDialogReturnFocus(isOpen: () => boolean): (event: Event) => v
     // That marker must not make a surviving source look deleted or collapsed.
     if (
       !source ||
-      (!sourceWasRedirected &&
-        source.isConnected &&
-        source.getClientRects().length > 0 &&
-        getComputedStyle(source).visibility !== 'hidden' &&
-        !source.closest('[inert]'))
+      (openingControl?.isConnected &&
+        openingControl.getClientRects().length > 0 &&
+        getComputedStyle(openingControl).visibility !== 'hidden' &&
+        !openingControl.matches(':disabled') &&
+        !openingControl.closest('[inert], [data-state="closed"][data-keyboard-overlay]'))
     )
       return
     event.preventDefault()

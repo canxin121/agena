@@ -12,8 +12,7 @@ import { usePolling } from './composables/usePolling'
 
 import LoginPage from './pages/LoginPage.vue'
 import MainLayout from './layout/MainLayout.vue'
-import AppConfirmHost from './components/AppConfirmHost.vue'
-import AppTextPromptHost from './components/AppTextPromptHost.vue'
+import AppDialogHost from './components/AppDialogHost.vue'
 import ToastHost from './components/ToastHost.vue'
 
 const auth = useAuthStore()
@@ -86,8 +85,7 @@ watchEffect(() => {
 <template>
   <div class="app-root">
     <ToastHost />
-    <AppConfirmHost />
-    <AppTextPromptHost />
+    <AppDialogHost />
     <div
       v-if="showLoading"
       role="status"

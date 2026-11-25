@@ -11,6 +11,7 @@
 import { computed, ref, watch, type Component } from 'vue'
 
 import OptionMenu from '@/components/ui/OptionMenu.vue'
+import PickerTrigger from '@/components/ui/PickerTrigger.vue'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import { cn } from '@/lib/utils'
 import { useUiStore } from '@/stores/ui'
@@ -83,25 +84,14 @@ const emit = defineEmits<{
 }>()
 
 const ui = useUiStore()
+const trigger = ref<InstanceType<typeof PickerTrigger> | null>(null)
 const open = ref(false)
+const openAt = ref<'first' | 'last'>()
 const localQuery = ref('')
 const query = computed(() => props.query ?? localQuery.value)
 const isCompactTouch = computed(() => props.isCompactTouch ?? ui.isCompactTouch)
-const filteredGroups = computed(() => {
-  const search = query.value.trim().toLowerCase()
-  if (props.filterMode === 'external' || !props.searchable || !search) return props.groups
-  return props.groups
-    .map((group) => ({
-      ...group,
-      items: group.items.filter((item) =>
-        [item.id, item.label, item.description, item.keywords].join(' ').toLowerCase().includes(search),
-      ),
-    }))
-    .filter((group) => group.items.length > 0)
-})
-
 const resolvedGroups = computed<OptionMenuGroup[]>(() =>
-  filteredGroups.value.map((group) => ({
+  props.groups.map((group) => ({
     ...group,
     items: group.items.map((item) => ({
       ...item,
@@ -110,13 +100,6 @@ const resolvedGroups = computed<OptionMenuGroup[]>(() =>
   })),
 )
 
-const triggerClasses = computed(() => {
-  const base =
-    'inline-flex min-w-0 items-center justify-between gap-2 rounded-md border border-input bg-transparent text-left shadow-sm transition-colors hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50'
-  const size = props.size === 'sm' ? 'h-8 px-2 text-xs' : 'h-9 px-3 text-sm'
-  return cn(base, size, props.block ? 'w-full' : 'max-w-full', props.triggerClass)
-})
-
 function select(item: OptionMenuItem) {
   if (props.disabled || item.disabled) return
   emit('select', item.id)
@@ -124,9 +107,14 @@ function select(item: OptionMenuItem) {
   setOpen(false)
 }
 function setOpen(value: boolean) {
-  if (value && props.disabled) return
+  if (value === open.value || (value && props.disabled)) return
   open.value = value
+  if (!value) openAt.value = undefined
   emit('update:open', value)
+}
+function openFrom(edge: 'first' | 'last') {
+  openAt.value = edge
+  setOpen(true)
 }
 function setQuery(value: string) {
   localQuery.value = value
@@ -142,28 +130,26 @@ watch(
 
 <template>
   <div class="relative min-w-0" :class="block ? 'w-full' : ''">
-    <button
-      type="button"
+    <PickerTrigger
+      ref="trigger"
+      :open="open"
+      :block="block"
       :disabled="disabled"
-      :class="triggerClasses"
+      :size="size"
+      :class="triggerClass"
+      :label="label || placeholder"
       :aria-label="title || placeholder || label"
-      aria-haspopup="dialog"
-      :aria-expanded="open"
-      @click.stop="setOpen(!open)"
-      @keydown.down.prevent="setOpen(true)"
-      @keydown.up.prevent="setOpen(true)"
+      :icon="icon"
+      :muted="!label"
+      @toggle="setOpen(!open)"
+      @open-at="openFrom"
     >
-      <span class="flex min-w-0 items-center gap-2">
-        <component v-if="icon" :is="icon" class="h-4 w-4 shrink-0 text-muted-foreground" />
-        <span class="min-w-0 truncate font-medium" :class="label ? '' : 'text-muted-foreground'">
-          {{ label || placeholder }}
-        </span>
-      </span>
       <slot name="trailing" />
-    </button>
+    </PickerTrigger>
 
     <OptionMenu
       :open="open"
+      :open-at="openAt"
       :query="query"
       :groups="resolvedGroups"
       :title="title"
@@ -173,7 +159,6 @@ watch(
       :helper-text="helperText"
       :is-compact-touch="isCompactTouch"
       :collapsible-groups="collapsibleGroups"
-      :paginated="false"
       :external-page="page"
       :external-page-count="pageCount"
       :external-pager-loading="pageLoading"
@@ -182,9 +167,10 @@ watch(
       :refreshing="refreshing"
       :refresh-label="refreshLabel"
       :desktop-fixed="true"
+      :desktop-anchor-el="trigger?.triggerEl"
       desktop-placement="bottom-start"
       :desktop-class="cn('w-[min(26rem,calc(100vw-2rem))]', menuClass)"
-      filter-mode="external"
+      :filter-mode="filterMode"
       @update:open="setOpen"
       @update:query="setQuery"
       @select="select"

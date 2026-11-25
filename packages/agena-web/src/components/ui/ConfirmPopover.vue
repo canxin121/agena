@@ -1,26 +1,17 @@
 <script setup lang="ts">
 import { readViewportRect, useViewportObserver } from '@/composables/useViewportObserver'
+import { useMobileSheetLayout } from '@/composables/useMobileSheetLayout'
+import { createReusableTemplate } from '@vueuse/core'
 import { computed, onBeforeUnmount, ref, useId, useSlots, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import {
-  DialogContent,
-  DialogDescription,
-  DialogOverlay,
-  DialogPortal,
-  DialogRoot,
-  DialogTitle,
-  DialogTrigger,
-  PopoverAnchor,
-  PopoverContent,
-  PopoverPortal,
-  PopoverRoot,
-  PopoverTrigger,
-} from 'radix-vue'
-import { RiCheckLine, RiCloseLine, RiDeleteBinLine, RiLoader4Line } from '@remixicon/vue'
+import { DialogDescription, DialogTitle, DialogTrigger, PopoverTrigger } from 'radix-vue'
+import { RiLoader4Line } from '@remixicon/vue'
 
 import Button from '@/components/ui/Button.vue'
+import ModalSurface from '@/components/ui/ModalSurface.vue'
+import PopoverSurface from '@/components/ui/PopoverSurface.vue'
 import { lockListItemActionsForAnchor } from '@/components/ui/listItemActionVisibilityLock'
-import { tooltipMotionClass } from '@/components/ui/tooltip.variants'
+import { handleOptionKeydown } from '@/lib/keyboardNavigation'
 import { cn } from '@/lib/utils'
 import { useUiStore } from '@/stores/ui'
 import { useDialogReturnFocus } from '@/composables/useDialogReturnFocus'
@@ -41,7 +32,7 @@ const props = withDefaults(
     confirmDisabled?: boolean
     cancelDisabled?: boolean
     busy?: boolean
-    /** Render only the `actions` slot instead of confirm/cancel. */
+    /** Set to false when the actions slot supplies the confirmation controls. */
     showDefaultActions?: boolean
   }>(),
   {
@@ -57,6 +48,7 @@ const props = withDefaults(
     confirmDisabled: false,
     cancelDisabled: false,
     busy: false,
+    showDefaultActions: true,
   },
 )
 
@@ -69,6 +61,7 @@ const emit = defineEmits<{
 const ui = useUiStore()
 const slots = useSlots()
 const { t } = useI18n()
+const [DefineConfirmBody, ConfirmBody] = createReusableTemplate()
 const contentId = useId()
 const titleId = `confirmation-${contentId}-title`
 const descriptionId = `confirmation-${contentId}-description`
@@ -89,12 +82,14 @@ const onCloseAutoFocus = useDialogReturnFocus(() => openModel.value)
 
 const confirmButtonVariant = computed(() => (props.variant === 'destructive' ? 'destructive' : 'default'))
 const confirmButtonDisabled = computed(() => props.confirmDisabled || props.busy)
+const dialogStyle = useMobileSheetLayout(() => openModel.value && useDialog.value && ui.isCompactTouch)
+const initialAction = computed(() =>
+  props.variant === 'destructive' ? '[data-confirm-cancel]:not(:disabled)' : '[data-confirm-submit]:not(:disabled)',
+)
 const dialogContentClass = computed(() =>
   cn(
-    'fixed z-[81] pointer-events-auto grid min-w-0 -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl border border-border/70 bg-background/95 p-6 shadow-2xl backdrop-blur duration-200 overflow-y-auto overflow-x-hidden data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] outline-none',
-    ui.isCompactTouch
-      ? 'left-[calc(var(--oc-safe-area-left,0px)+(100vw-var(--oc-safe-area-left,0px)-var(--oc-safe-area-right,0px))/2)] top-[calc(var(--oc-safe-area-top,0px)+(100dvh-var(--oc-safe-area-top,0px)-var(--oc-safe-area-bottom,0px))/2)] w-[calc(100vw-var(--oc-safe-area-left,0px)-var(--oc-safe-area-right,0px)-2rem)] max-h-[calc(100dvh-var(--oc-safe-area-top,0px)-var(--oc-safe-area-bottom,0px)-2rem)]'
-      : 'left-[50%] top-[50%] w-[calc(100vw-2rem)] max-h-[calc(100dvh-3rem)]',
+    'oc-overlay-panel fixed min-w-0 -translate-x-1/2 -translate-y-1/2 overflow-y-auto overscroll-contain',
+    !ui.isCompactTouch && 'left-1/2 top-1/2 max-h-[calc(100dvh-3rem)] w-[calc(100vw-2rem)]',
     props.maxWidth,
   ),
 )
@@ -112,9 +107,10 @@ const effectiveCancelText = computed(() => {
 const anchorRect = ref<DOMRect | null>(null)
 const triggerEl = ref<HTMLElement | null>(null)
 const virtualRef = computed(() => {
-  if (!anchorRect.value) return undefined
+  // Keep the custom anchor mounted when focus supplies the first rectangle.
+  const rect = anchorRect.value
   return {
-    getBoundingClientRect: () => anchorRect.value!,
+    getBoundingClientRect: () => rect ?? new DOMRect(),
   }
 })
 
@@ -168,35 +164,6 @@ const popoverSide = computed<'top' | 'bottom'>(() => {
   return 'bottom'
 })
 
-function pointRect(clientX: number, clientY: number): DOMRect {
-  return {
-    width: 0,
-    height: 0,
-    top: clientY,
-    left: clientX,
-    bottom: clientY,
-    right: clientX,
-    x: clientX,
-    y: clientY,
-    toJSON: () => {},
-  } as DOMRect
-}
-
-function elementRect(el: HTMLElement): DOMRect {
-  const rect = el.getBoundingClientRect()
-  return {
-    width: rect.width,
-    height: rect.height,
-    top: rect.top,
-    left: rect.left,
-    bottom: rect.bottom,
-    right: rect.right,
-    x: rect.x,
-    y: rect.y,
-    toJSON: () => {},
-  } as DOMRect
-}
-
 function rememberTriggerEl(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return
   triggerEl.value = target
@@ -205,7 +172,7 @@ function rememberTriggerEl(target: EventTarget | null) {
 function setAnchorFromTrigger(target: EventTarget | null) {
   if (!props.anchorToCursor || useDialog.value) return
   if (!(target instanceof HTMLElement)) return
-  anchorRect.value = elementRect(target)
+  anchorRect.value = target.getBoundingClientRect()
 }
 
 function setOpen(next: boolean) {
@@ -227,7 +194,7 @@ function onTriggerPointerDown(event: PointerEvent) {
   if (!props.anchorToCursor || useDialog.value) return
   // Anchor the desktop popover to cursor coordinates so it stays stable even
   // if the trigger element shifts due to hover state changes.
-  anchorRect.value = pointRect(event.clientX, event.clientY)
+  anchorRect.value = new DOMRect(event.clientX, event.clientY)
 }
 
 watch(
@@ -255,131 +222,111 @@ function onConfirm() {
 </script>
 
 <template>
-  <DialogRoot v-if="useDialog" :open="openModel" @update:open="setOpen">
-    <DialogTrigger v-if="hasTrigger" as-child>
-      <slot />
-    </DialogTrigger>
+  <DefineConfirmBody>
+    <div class="min-w-0 space-y-3" :class="useDialog ? 'p-4 sm:p-5' : 'p-3'">
+      <div v-if="useDialog || title || description" class="space-y-1">
+        <component
+          :is="useDialog ? DialogTitle : 'h2'"
+          v-if="useDialog || title"
+          v-bind="useDialog ? {} : { id: titleId }"
+          class="font-semibold [overflow-wrap:anywhere]"
+          :class="title ? 'text-sm leading-5' : 'sr-only'"
+        >
+          {{ title || effectiveConfirmText }}
+        </component>
+        <component
+          :is="useDialog ? DialogDescription : 'p'"
+          v-if="description"
+          v-bind="useDialog ? {} : { id: descriptionId }"
+          class="text-xs leading-5 whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]"
+        >
+          {{ description }}
+        </component>
+      </div>
 
-    <DialogPortal>
-      <DialogOverlay
-        class="fixed inset-0 z-[80] pointer-events-auto bg-black/60 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
-      />
-      <DialogContent :class="dialogContentClass" @close-auto-focus="onCloseAutoFocus">
-        <div v-if="title || description" class="flex flex-col space-y-1.5 text-center sm:text-left min-w-0">
-          <DialogTitle v-if="title" class="text-lg font-semibold leading-none tracking-tight break-words">{{
-            title
-          }}</DialogTitle>
-          <DialogDescription v-if="description" class="text-sm text-muted-foreground break-all">{{
-            description
-          }}</DialogDescription>
-        </div>
+      <slot name="content" />
+      <div v-if="$slots.actions" class="grid gap-2">
+        <slot name="actions" />
+      </div>
+      <div v-if="showDefaultActions" class="flex flex-wrap items-center justify-end gap-2">
+        <Button
+          data-keyboard-option
+          data-confirm-cancel
+          type="button"
+          variant="secondary"
+          :size="useDialog ? 'sm' : 'xs'"
+          :class="ui.isCompactTouch && 'min-h-10'"
+          :disabled="cancelDisabled"
+          @click="onCancel"
+        >
+          {{ effectiveCancelText }}
+        </Button>
+        <Button
+          data-keyboard-option
+          data-confirm-submit
+          type="button"
+          :size="useDialog ? 'sm' : 'xs'"
+          :class="ui.isCompactTouch && 'min-h-10'"
+          :variant="confirmButtonVariant"
+          :disabled="confirmButtonDisabled"
+          @click="onConfirm"
+        >
+          <RiLoader4Line v-if="busy" class="h-4 w-4 animate-spin" aria-hidden="true" />
+          {{ effectiveConfirmText }}
+        </Button>
+      </div>
+    </div>
+  </DefineConfirmBody>
 
-        <div v-if="$slots.content" class="space-y-3">
-          <slot name="content" />
-        </div>
+  <ModalSurface
+    v-if="useDialog"
+    :open="openModel"
+    :layer="80"
+    :class="dialogContentClass"
+    :style="ui.isCompactTouch ? dialogStyle : undefined"
+    :initial-focus="initialAction"
+    v-bind="description ? {} : { 'aria-describedby': undefined }"
+    @update:open="setOpen"
+    @keydown="handleOptionKeydown($event, $event.currentTarget as HTMLElement)"
+  >
+    <template v-if="hasTrigger" #trigger>
+      <DialogTrigger as-child>
+        <slot />
+      </DialogTrigger>
+    </template>
+    <ConfirmBody />
+  </ModalSurface>
 
-        <div v-if="$slots.actions" class="grid gap-2">
-          <slot name="actions" />
-        </div>
-
-        <div v-if="showDefaultActions" class="grid gap-2">
-          <Button variant="secondary" class="w-full" :disabled="cancelDisabled" @click="onCancel">
-            <RiCloseLine class="h-4 w-4 mr-2" />
-            {{ effectiveCancelText }}
-          </Button>
-          <Button :variant="confirmButtonVariant" class="w-full" :disabled="confirmButtonDisabled" @click="onConfirm">
-            <RiLoader4Line v-if="busy" class="h-4 w-4 mr-2 animate-spin" />
-            <RiDeleteBinLine v-else-if="variant === 'destructive'" class="h-4 w-4 mr-2" />
-            <RiCheckLine v-else class="h-4 w-4 mr-2" />
-            {{ effectiveConfirmText }}
-          </Button>
-        </div>
-      </DialogContent>
-    </DialogPortal>
-  </DialogRoot>
-
-  <PopoverRoot v-else :open="openModel" @update:open="setOpen">
-    <PopoverTrigger
-      as-child
-      @pointerenter="onTriggerPointerEnter"
-      @focus="onTriggerFocus"
-      @pointerdown="onTriggerPointerDown"
-    >
-      <slot />
-    </PopoverTrigger>
-
-    <PopoverAnchor
-      v-if="anchorToCursor"
-      :element="virtualRef"
-      class="absolute w-0 h-0 overflow-hidden"
-      aria-hidden="true"
-    />
-
-    <PopoverPortal>
-      <PopoverContent
-        :aria-labelledby="title ? titleId : undefined"
-        :aria-label="title ? undefined : effectiveConfirmText"
-        :aria-describedby="description ? descriptionId : undefined"
-        @close-auto-focus="onCloseAutoFocus"
-        :class="
-          cn(
-            'z-[80] w-64 rounded-xl border border-border bg-background/95 shadow-lg backdrop-blur outline-none overflow-hidden',
-            tooltipMotionClass,
-          )
-        "
-        :side="popoverSide"
-        align="start"
-        :side-offset="5"
-        :avoid-collisions="true"
-        :collision-padding="10"
-        sticky="always"
-        update-position-strategy="always"
-        :prioritize-position="true"
+  <PopoverSurface
+    v-else
+    :open="openModel"
+    :anchor="anchorToCursor ? virtualRef : undefined"
+    :initial-focus="initialAction"
+    :aria-labelledby="title ? titleId : undefined"
+    :aria-label="title ? undefined : effectiveConfirmText"
+    :aria-describedby="description ? descriptionId : undefined"
+    class="oc-overlay-fade w-64 max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain"
+    :side="popoverSide"
+    align="start"
+    :side-offset="POPOVER_SIDE_OFFSET_PX"
+    :collision-padding="POPOVER_EDGE_MARGIN_PX"
+    sticky="always"
+    update-position-strategy="always"
+    :prioritize-position="true"
+    @update:open="setOpen"
+    @close-auto-focus="onCloseAutoFocus"
+    @keydown="handleOptionKeydown($event, $event.currentTarget as HTMLElement)"
+  >
+    <template #trigger>
+      <PopoverTrigger
+        as-child
+        @pointerenter="onTriggerPointerEnter"
+        @focus="onTriggerFocus"
+        @pointerdown="onTriggerPointerDown"
       >
-        <div v-if="title || description" class="p-2 border-b border-border/60">
-          <div v-if="title" :id="titleId" class="text-xs font-semibold text-foreground px-1 mb-0.5">{{ title }}</div>
-          <p v-if="description" :id="descriptionId" class="text-[11px] leading-snug text-muted-foreground px-1">
-            {{ description }}
-          </p>
-        </div>
-
-        <div v-if="$slots.content" class="p-2 border-b border-border/60">
-          <slot name="content" />
-        </div>
-
-        <div v-if="$slots.actions" class="p-1 space-y-0.5 border-b border-border/60">
-          <slot name="actions" />
-        </div>
-
-        <div v-if="showDefaultActions" class="p-1 space-y-0.5">
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            class="h-auto w-full justify-start gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium shadow-none"
-            :class="variant === 'destructive' ? 'text-destructive hover:bg-destructive/10 hover:text-destructive' : ''"
-            :disabled="confirmButtonDisabled"
-            @click="onConfirm"
-          >
-            <RiLoader4Line v-if="busy" class="h-4 w-4 animate-spin" />
-            <RiDeleteBinLine v-else-if="variant === 'destructive'" class="h-4 w-4" />
-            <RiCheckLine v-else class="h-4 w-4" />
-            {{ effectiveConfirmText }}
-          </Button>
-
-          <Button
-            type="button"
-            variant="ghost"
-            size="xs"
-            class="h-auto w-full justify-start gap-2 rounded-lg px-3 py-2 text-left text-xs font-medium text-muted-foreground shadow-none"
-            :disabled="cancelDisabled"
-            @click="onCancel"
-          >
-            <RiCloseLine class="h-4 w-4" />
-            {{ effectiveCancelText }}
-          </Button>
-        </div>
-      </PopoverContent>
-    </PopoverPortal>
-  </PopoverRoot>
+        <slot />
+      </PopoverTrigger>
+    </template>
+    <ConfirmBody />
+  </PopoverSurface>
 </template>

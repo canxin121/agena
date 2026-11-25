@@ -1,46 +1,35 @@
 <script setup lang="ts">
-import { readViewportRect, useViewportObserver } from '@/composables/useViewportObserver'
-import { computed, isRef, nextTick, onBeforeUnmount, ref, watch, type CSSProperties } from 'vue'
+import { useMobileSheetLayout } from '@/composables/useMobileSheetLayout'
+import { createReusableTemplate } from '@vueuse/core'
+import { computed, nextTick, onBeforeUnmount, ref, watch, type CSSProperties } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { RiArrowDownSLine, RiCheckLine, RiCloseLine, RiMore2Line, RiRefreshLine } from '@remixicon/vue'
-import {
-  DialogContent,
-  DialogOverlay,
-  DialogPortal,
-  DialogRoot,
-  DialogTitle,
-  PopoverAnchor,
-  PopoverContent,
-  PopoverPortal,
-  PopoverRoot,
-} from 'radix-vue'
+import { RiArrowDownSLine, RiCloseLine, RiRefreshLine } from '@remixicon/vue'
+import { DialogTitle } from 'radix-vue'
 
 import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import Input from '@/components/ui/Input.vue'
-import ListRowButton from '@/components/ui/ListRowButton.vue'
+import ModalSurface from '@/components/ui/ModalSurface.vue'
+import OptionMenuRow from '@/components/ui/OptionMenuRow.vue'
 import PaginationControls from '@/components/ui/PaginationControls.vue'
+import PopoverSurface from '@/components/ui/PopoverSurface.vue'
 import { lockListItemActionsForAnchor } from '@/components/ui/listItemActionVisibilityLock'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
+import { normalizeOptionSearch, optionSearchText } from '@/components/ui/optionSearch'
 import { cn } from '@/lib/utils'
-import { isPlainNavigationKey, isVisibleKeyboardTarget, navigationIndex } from '@/lib/keyboardNavigation'
+import { resolveOverlayAnchor, resolveOverlayAnchorElement, type OverlayAnchor } from '@/lib/overlayAnchor'
+import {
+  enabledKeyboardItems,
+  focusKeyboardItem,
+  handleOptionKeydown,
+  isPlainNavigationKey,
+  isVisibleKeyboardTarget,
+} from '@/lib/keyboardNavigation'
 import { rememberKeyboardOverlaySource, useDialogReturnFocus } from '@/composables/useDialogReturnFocus'
 
 type ResolvedGroup = OptionMenuGroup & {
   _key: string
-  _sourceIndex: number
 }
-
-type DesktopAnchorLike =
-  | HTMLElement
-  | {
-      triggerEl?: unknown
-      $el?: unknown
-      getBoundingClientRect?: () => DOMRect | undefined
-    }
-  | null
-
-type DesktopMeasurable = HTMLElement | { getBoundingClientRect: () => DOMRect }
 
 const props = withDefaults(
   defineProps<{
@@ -59,13 +48,14 @@ const props = withDefaults(
     desktopClass?: string
     desktopStyle?: CSSProperties
     desktopFixed?: boolean
-    desktopAnchorEl?: DesktopAnchorLike
+    desktopAnchorEl?: OverlayAnchor
     desktopContentMaxHeightClass?: string
     desktopGapPx?: number
     desktopViewportMarginPx?: number
     filterMode?: 'internal' | 'external'
     closeOnSelect?: boolean
     autoFocusSearch?: boolean
+    openAt?: 'first' | 'last'
     paginated?: boolean
     pageSize?: number
     paginationMode?: 'group' | 'item'
@@ -129,6 +119,7 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+const [DefineMenuBody, MenuBody] = createReusableTemplate()
 const restoreMissingTrigger = useDialogReturnFocus(() => props.open)
 
 const effectiveSearchPlaceholder = computed(() =>
@@ -152,14 +143,8 @@ const currentPage = ref(1)
 const localRefreshing = ref(false)
 
 const isMobileSheet = computed(() => Boolean(props.isCompactTouch))
-const normalizedQuery = computed(() =>
-  String(props.query || '')
-    .trim()
-    .toLowerCase(),
-)
+const normalizedQuery = computed(() => normalizeOptionSearch(props.query))
 const effectivePageSize = computed(() => Math.max(1, Math.floor(Number(props.pageSize) || 80)))
-
-const MOBILE_SHEET_MARGIN_PX = 8
 
 function toNonNegativePx(value: unknown, fallback: number): number {
   const n = Number(value)
@@ -174,81 +159,16 @@ const desktopPopoverSide = computed<'top' | 'bottom'>(() =>
 )
 const desktopPopoverAlign = computed<'start' | 'end'>(() => (props.desktopPlacement.endsWith('end') ? 'end' : 'start'))
 
-const mobileSheetStyle = ref<CSSProperties>({
-  top: `${MOBILE_SHEET_MARGIN_PX}px`,
-  left: '50%',
-  width: `calc(100% - ${MOBILE_SHEET_MARGIN_PX * 2}px)`,
-  maxHeight: `calc(100dvh - ${MOBILE_SHEET_MARGIN_PX * 2}px)`,
-})
+const mobileSheetStyle = useMobileSheetLayout(() => props.open && isMobileSheet.value)
 
 let releaseActionLock: (() => void) | null = null
 let returnFocusEl: HTMLElement | null = null
+let lastPanelFocus: HTMLElement | null = null
 
-function unwrapAnchorCandidate(value: unknown): unknown {
-  let current = value
-  for (let i = 0; i < 4; i += 1) {
-    if (!isRef(current)) return current
-    current = current.value
-  }
-  return current
-}
-
-function resolveAnchorElCandidate(value: unknown): HTMLElement | null {
-  const raw = unwrapAnchorCandidate(value)
-  if (raw instanceof HTMLElement) return raw
-  if (!raw || typeof raw !== 'object') return null
-
-  const triggerEl = unwrapAnchorCandidate((raw as { triggerEl?: unknown }).triggerEl)
-  if (triggerEl instanceof HTMLElement) return triggerEl
-
-  if (triggerEl && typeof triggerEl === 'object') {
-    const triggerHostEl = unwrapAnchorCandidate((triggerEl as { $el?: unknown }).$el)
-    if (triggerHostEl instanceof HTMLElement) return triggerHostEl
-  }
-
-  const hostEl = unwrapAnchorCandidate((raw as { $el?: unknown }).$el)
-  if (hostEl instanceof HTMLElement) return hostEl
-
-  return null
-}
-
-function resolveDesktopAnchor(): HTMLElement | null {
-  const anchor = resolveAnchorElCandidate(props.desktopAnchorEl as unknown)
-  if (anchor) return anchor
-  const root = rootEl.value
-  if (!root) return null
-  if (root.parentElement instanceof HTMLElement) return root.parentElement
-  return root
-}
-
-function resolveDesktopMeasurable(): DesktopMeasurable | undefined {
-  const anchorEl = resolveAnchorElCandidate(props.desktopAnchorEl as unknown)
-  if (anchorEl) return anchorEl
-
-  const raw = unwrapAnchorCandidate(props.desktopAnchorEl as unknown)
-  if (raw && typeof raw === 'object') {
-    const getRect = (raw as { getBoundingClientRect?: () => DOMRect | undefined }).getBoundingClientRect
-    if (typeof getRect === 'function') {
-      return {
-        getBoundingClientRect: () => getRect.call(raw) || new DOMRect(),
-      }
-    }
-
-    const triggerEl = unwrapAnchorCandidate((raw as { triggerEl?: unknown }).triggerEl)
-    if (triggerEl && typeof triggerEl === 'object') {
-      const triggerGetRect = (triggerEl as { getBoundingClientRect?: () => DOMRect | undefined }).getBoundingClientRect
-      if (typeof triggerGetRect === 'function') {
-        return {
-          getBoundingClientRect: () => triggerGetRect.call(triggerEl) || new DOMRect(),
-        }
-      }
-    }
-  }
-
-  return resolveDesktopAnchor() || undefined
-}
-
-const desktopPopoverAnchor = computed<DesktopMeasurable | undefined>(() => resolveDesktopMeasurable())
+const anchorElement = computed(
+  () => resolveOverlayAnchorElement(props.desktopAnchorEl) || rootEl.value?.parentElement || rootEl.value,
+)
+const desktopPopoverAnchor = computed(() => resolveOverlayAnchor(props.desktopAnchorEl) ?? anchorElement.value)
 
 function clearActionLock() {
   if (!releaseActionLock) return
@@ -259,66 +179,11 @@ function clearActionLock() {
 function syncActionLock() {
   clearActionLock()
   if (!props.open || isMobileSheet.value) return
-  const anchor = resolveDesktopAnchor()
-  releaseActionLock = lockListItemActionsForAnchor(anchor)
-}
-
-function cssVarPx(name: string, fallback: number): number {
-  if (typeof window === 'undefined' || typeof document === 'undefined') return fallback
-  const raw = getComputedStyle(document.documentElement).getPropertyValue(name)
-  const parsed = Number.parseFloat(String(raw || '').trim())
-  return Number.isFinite(parsed) ? parsed : fallback
-}
-
-async function syncMobileSheetPosition() {
-  if (!props.open || !isMobileSheet.value) return
-  if (typeof window === 'undefined' || typeof document === 'undefined') return
-
-  await nextTick()
-
-  const panel = panelEl.value
-  if (!panel) return
-
-  const { height: viewportHeight, top: viewportTop, width: viewportWidth, left: viewportLeft } = readViewportRect()
-  if (!viewportHeight) return
-
-  const safeTop = cssVarPx('--oc-safe-area-top', 0)
-  const safeBottom = cssVarPx('--oc-safe-area-bottom', 0)
-  const safeLeft = cssVarPx('--oc-safe-area-left', 0)
-  const safeRight = cssVarPx('--oc-safe-area-right', 0)
-
-  const topInset = viewportTop + safeTop + MOBILE_SHEET_MARGIN_PX
-  const bottomEdge = viewportTop + viewportHeight - safeBottom - MOBILE_SHEET_MARGIN_PX
-  const maxHeight = Math.max(0, bottomEdge - topInset)
-  const usableWidth = Math.max(0, viewportWidth - safeLeft - safeRight)
-  const panelWidth = Math.max(0, usableWidth - MOBILE_SHEET_MARGIN_PX * 2)
-  const panelCenter = viewportLeft + safeLeft + usableWidth / 2
-  const dimensions = {
-    left: `${Math.round(panelCenter)}px`,
-    width: `${Math.round(panelWidth)}px`,
-    maxHeight: `${Math.round(maxHeight)}px`,
-  }
-  // A closed sheet retains its previous constraints. Apply the new viewport
-  // dimensions before measuring: a scrolling child can otherwise make the
-  // old, shorter height look like the content's natural height on reopening.
-  mobileSheetStyle.value = { ...mobileSheetStyle.value, ...dimensions }
-  await nextTick()
-  if (!props.open || !isMobileSheet.value || panelEl.value !== panel) return
-  const panelHeight = Math.min(maxHeight, Math.max(0, panel.getBoundingClientRect().height))
-
-  const centeredOffset = Math.max(0, Math.round((maxHeight - panelHeight) / 2))
-  const centeredTop = topInset + centeredOffset
-  const maxTop = Math.max(topInset, bottomEdge - panelHeight)
-  const top = Math.min(maxTop, Math.max(topInset, centeredTop))
-
-  mobileSheetStyle.value = {
-    top: `${Math.round(top)}px`,
-    ...dimensions,
-  }
+  releaseActionLock = lockListItemActionsForAnchor(anchorElement.value)
 }
 
 function itemHaystack(item: OptionMenuItem): string {
-  return `${item.id} ${item.label || ''} ${item.description || ''} ${item.keywords || ''}`.toLowerCase()
+  return optionSearchText(item.id, item.label, item.description, item.keywords)
 }
 
 const allGroups = computed<ResolvedGroup[]>(() => {
@@ -327,7 +192,6 @@ const allGroups = computed<ResolvedGroup[]>(() => {
     ...group,
     items: Array.isArray(group.items) ? group.items : [],
     _key: String(group.id || `group-${index}`),
-    _sourceIndex: index,
   }))
 })
 
@@ -469,7 +333,7 @@ const externalPagerCurrentPage = computed(() => {
   const page = Math.floor(Number(props.externalPage) || 1)
   return Math.max(1, Math.min(externalPagerTotalPages.value, page))
 })
-const useExternalPager = computed(() => props.filterMode === 'external' && externalPagerTotalPages.value > 1)
+const useExternalPager = computed(() => externalPagerTotalPages.value > 1)
 const effectiveShowPager = computed(() =>
   useExternalPager.value ? externalPagerTotalPages.value > 1 : showPager.value,
 )
@@ -494,26 +358,6 @@ watch(
   },
 )
 
-watch(
-  () =>
-    [
-      props.query,
-      totalVisibleItemCount.value,
-      effectiveShowPager.value,
-      pagerCurrentPage.value,
-      pagerTotalPages.value,
-    ] as const,
-  () => {
-    if (!props.open) return
-    if (isMobileSheet.value) {
-      void syncMobileSheetPosition()
-    }
-  },
-)
-
-const desktopInputClass = computed(() => 'h-8 text-xs')
-const mobileInputClass = computed(() => 'h-9 text-sm')
-
 function closeMenu() {
   emit('update:open', false)
   emit('close')
@@ -526,7 +370,13 @@ function onRadixSurfaceOpenChange(next: boolean) {
 function captureReturnFocus() {
   if (typeof document === 'undefined') return
   const active = document.activeElement
-  returnFocusEl = active instanceof HTMLElement ? active : null
+  const anchor = resolveOverlayAnchorElement(props.desktopAnchorEl)
+  returnFocusEl =
+    active instanceof HTMLElement && active !== document.body
+      ? active
+      : anchor?.matches('button, a[href], [tabindex]')
+        ? anchor
+        : anchor?.querySelector<HTMLElement>('button, a[href], [tabindex]') || null
 }
 
 watch(
@@ -545,8 +395,7 @@ async function restoreReturnFocus() {
   await nextTick()
   if (props.open && !unmounting) return
   const target = props.returnFocusTarget?.() || source
-  if (!target) return
-  if (!target.isConnected) return
+  if (!target || !isVisibleKeyboardTarget(target) || target.matches(':disabled')) return
 
   const active = document.activeElement
   if (
@@ -565,6 +414,12 @@ function onCloseAutoFocus(event: Event) {
   event.preventDefault()
   if (!props.returnFocusTarget) restoreMissingTrigger(event)
   void restoreReturnFocus()
+}
+
+function onInteractOutside(event: CustomEvent<{ originalEvent: Event }>) {
+  const target = event.detail.originalEvent.target
+  const anchor = resolveOverlayAnchorElement(props.desktopAnchorEl)
+  if (target instanceof Node && anchor?.contains(target)) event.preventDefault()
 }
 
 function selectItem(item: OptionMenuItem) {
@@ -603,62 +458,67 @@ async function triggerRefresh() {
   emit('refresh')
 }
 
-async function focusSearch() {
-  await nextTick()
-  const root = panelEl.value
-  if (!root || !props.searchable) return
-  const input = root.querySelector('input') as HTMLInputElement | null
-  input?.focus()
-}
-
-function enabledItemButtons(): HTMLElement[] {
-  return Array.from(
-    panelEl.value?.querySelectorAll<HTMLElement>('[data-option-menu-item]:not(:disabled)') || [],
-  ).filter(isVisibleKeyboardTarget)
-}
-
-function focusItem(edge: 'first' | 'last' = 'first') {
-  const items = enabledItemButtons()
-  const target = edge === 'last' ? items.at(-1) : items.find((item) => item.dataset.checked === 'true') || items[0]
-  target?.focus({ preventScroll: true })
-  target?.scrollIntoView({ block: 'nearest' })
+function searchField(panel = panelEl.value): HTMLInputElement | null {
+  return panel?.querySelector<HTMLInputElement>('[data-option-menu-search]') || null
 }
 
 function onPanelKeydown(event: KeyboardEvent) {
-  if (!isPlainNavigationKey(event) || event.shiftKey) return
-  const input = event.target instanceof Element && Boolean(event.target.closest('input, textarea'))
-  if (input && (event.key === 'Home' || event.key === 'End')) return
-  const items = enabledItemButtons()
-  const current = items.findIndex((item) => item === document.activeElement)
-  const index = ['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)
-    ? navigationIndex(event.key, current, items.length)
-    : null
-  if (index !== null) {
-    event.preventDefault()
-    event.stopPropagation()
-    const target = items[index]!
-    target.focus({ preventScroll: true })
-    target.scrollIntoView({ block: 'nearest' })
-  } else if (input && event.key === 'Enter' && items[0]) {
-    event.preventDefault()
-    event.stopPropagation()
-    items[0].click()
-  }
-}
+  const search = searchField()
+  if (handleOptionKeydown(event, panelEl.value, search)) return
+  if (!search || event.target !== search || event.key !== 'Enter' || event.shiftKey || !isPlainNavigationKey(event))
+    return
 
-async function onDesktopOpenAutoFocus(event: Event) {
+  const [first] = enabledKeyboardItems(panelEl.value, '[data-option-menu-item]')
   event.preventDefault()
-  await nextTick()
-  if (!props.open) return
-  if (props.searchable && props.autoFocusSearch) await focusSearch()
-  else focusItem()
+  event.stopPropagation()
+  first?.click()
 }
 
-async function focusMobilePanel() {
-  await nextTick()
-  if (!props.open || !isMobileSheet.value) return
-  panelEl.value?.focus({ preventScroll: true })
+function onOpenAutoFocus(event: Event) {
+  const panel = panelEl.value
+  if (!panel || !props.open) return
+  event.preventDefault()
+  const search = !isMobileSheet.value && props.autoFocusSearch ? searchField(panel) : null
+  if (!props.openAt && search) {
+    search.focus({ preventScroll: true })
+    return
+  }
+  const items = enabledKeyboardItems(panel)
+  const target =
+    props.openAt === 'last'
+      ? items.at(-1)
+      : props.openAt === 'first'
+        ? items[0]
+        : items.find((item) => item.getAttribute('aria-current') === 'true') || items[0]
+  if (isMobileSheet.value && props.searchable && !props.openAt) panel.focus({ preventScroll: true })
+  else if (!focusKeyboardItem(target)) (search || panel).focus({ preventScroll: true })
 }
+
+function onPanelFocusin(event: FocusEvent) {
+  if (event.target instanceof HTMLElement) lastPanelFocus = event.target
+}
+
+watch(
+  [
+    pagedGroups,
+    collapsedGroupByKey,
+    () => props.loading,
+    refreshDisabled,
+    effectiveShowPager,
+    pagerCurrentPage,
+    pagerBusy,
+  ],
+  () => {
+    if (!props.open || !lastPanelFocus || !panelEl.value) return
+    const active = document.activeElement
+    if (active !== document.body && active !== lastPanelFocus) return
+    if (isVisibleKeyboardTarget(lastPanelFocus) && !lastPanelFocus.matches(':disabled')) return
+    const [first] = enabledKeyboardItems(panelEl.value)
+    if (!focusKeyboardItem(first))
+      (isMobileSheet.value ? panelEl.value : searchField() || panelEl.value).focus({ preventScroll: true })
+  },
+  { flush: 'post' },
+)
 
 function containsTarget(target: Node | null): boolean {
   if (!target) return false
@@ -668,456 +528,219 @@ function containsTarget(target: Node | null): boolean {
 watch(
   () => props.open,
   (open) => {
-    syncActionLock()
-
     if (open) {
       captureReturnFocus()
-      if (isMobileSheet.value) {
-        void syncMobileSheetPosition()
-        void focusMobilePanel()
-      }
       if (props.paginated) currentPage.value = 1
-      if (props.autoFocusSearch && props.searchable && !isMobileSheet.value) {
-        void focusSearch()
-      }
       return
     }
+    lastPanelFocus = null
   },
   { immediate: true },
 )
 
-watch(
-  () => isMobileSheet.value,
-  (mobile) => {
-    syncActionLock()
-
-    if (!props.open) return
-    if (mobile) {
-      void syncMobileSheetPosition()
-      void focusMobilePanel()
-    }
-  },
-)
-
-watch(
-  () =>
-    [
-      props.desktopFixed,
-      props.desktopPlacement,
-      props.desktopAnchorEl,
-      props.desktopStyle,
-      props.desktopGapPx,
-      props.desktopViewportMarginPx,
-      props.open,
-      isMobileSheet.value,
-    ] as const,
-  ([_fixed, _placement, _anchor, _style, _gap, _margin, _open, _mobile]) => {
-    syncActionLock()
-  },
-)
+watch([() => props.open, isMobileSheet, anchorElement], syncActionLock, { immediate: true })
 
 onBeforeUnmount(() => {
   unmounting = true
   clearActionLock()
 })
 
-defineExpose({ containsTarget, focusSearch })
-
-useViewportObserver(() => props.open && isMobileSheet.value, syncMobileSheetPosition)
+defineExpose({ containsTarget })
 </script>
 
 <template>
-  <div ref="rootEl" class="contents">
-    <PopoverRoot :open="open && !isMobileSheet" @update:open="onRadixSurfaceOpenChange">
-      <PopoverAnchor :element="desktopPopoverAnchor" />
-      <PopoverPortal :disabled="!desktopFixed">
-        <PopoverContent
-          as-child
-          :side="desktopPopoverSide"
-          :align="desktopPopoverAlign"
-          :side-offset="panelGapPx"
-          :collision-padding="panelViewportMarginPx"
-          update-position-strategy="always"
-          :prioritize-position="true"
-          @open-auto-focus="onDesktopOpenAutoFocus"
-          @close-auto-focus="onCloseAutoFocus"
+  <DefineMenuBody>
+    <div
+      v-if="isMobileSheet || title || showRefreshButton"
+      class="flex shrink-0 items-center gap-2 border-b border-border/50 px-3 py-2"
+    >
+      <DialogTitle v-if="isMobileSheet" class="min-w-0 flex-1 truncate text-sm font-semibold">
+        {{ mobileTitle || title || t('common.options') }}
+      </DialogTitle>
+      <div v-else class="min-w-0 flex-1 truncate text-xs font-semibold">{{ title }}</div>
+      <IconButton
+        v-if="showRefreshButton"
+        size="sm"
+        class="text-muted-foreground"
+        :aria-label="effectiveRefreshLabel"
+        :title="effectiveRefreshLabel"
+        :disabled="refreshDisabled"
+        @click="void triggerRefresh()"
+      >
+        <RiRefreshLine class="h-4 w-4" :class="refreshBusy ? 'animate-spin' : ''" aria-hidden="true" />
+      </IconButton>
+      <IconButton
+        v-if="isMobileSheet"
+        size="sm"
+        class="size-10"
+        is-touch-pointer
+        :aria-label="effectiveCloseLabel"
+        :title="effectiveCloseLabel"
+        @click="closeMenu"
+      >
+        <RiCloseLine class="h-4 w-4" aria-hidden="true" />
+      </IconButton>
+    </div>
+
+    <div v-if="searchable" class="shrink-0 border-b border-border/50" :class="isMobileSheet ? 'p-3' : 'p-2'">
+      <Input
+        data-option-menu-search
+        :aria-label="effectiveSearchPlaceholder"
+        :model-value="query"
+        :placeholder="effectiveSearchPlaceholder"
+        :class="isMobileSheet ? 'h-10 text-sm' : 'h-8 text-xs'"
+        @update:model-value="updateQuery"
+      />
+    </div>
+
+    <div
+      class="min-h-0 flex-1 overflow-auto overscroll-contain"
+      :class="isMobileSheet ? 'p-2' : ['p-1', desktopContentMaxHeightClass]"
+      :aria-busy="loading"
+    >
+      <div v-if="loading" class="space-y-1.5 p-1" aria-hidden="true">
+        <div
+          v-for="index in loadingSkeletonRows"
+          :key="index"
+          class="flex animate-pulse gap-2 rounded-lg border border-border/35 bg-secondary/20 p-2"
+          :class="isMobileSheet ? 'min-h-11 items-center' : 'min-h-9'"
         >
-          <div
-            ref="panelEl"
-            data-oc-keyboard-tap="keep"
-            data-keyboard-overlay="true"
-            :class="
-              cn(
-                'pointer-events-auto z-[75] rounded-xl border border-border/70 bg-background/95 shadow-xl backdrop-blur overflow-hidden',
-                desktopClass,
-              )
-            "
-            :style="desktopStyle"
-            @pointerdown.stop
-            @click.stop
-            @keydown="onPanelKeydown"
-          >
-            <div v-if="title || showRefreshButton" class="flex items-center gap-2 px-3 py-2 border-b border-border/40">
-              <div v-if="title" class="min-w-0 flex-1 text-xs font-semibold text-foreground truncate">{{ title }}</div>
-              <div v-else class="flex-1" />
-              <IconButton
-                v-if="showRefreshButton"
-                size="sm"
-                class="h-6 w-6 text-muted-foreground hover:text-foreground"
-                :title="effectiveRefreshLabel"
-                :aria-label="effectiveRefreshLabel"
-                :disabled="refreshDisabled"
-                @click="void triggerRefresh()"
-              >
-                <RiRefreshLine class="h-3.5 w-3.5" :class="refreshBusy ? 'animate-spin' : ''" />
-              </IconButton>
-            </div>
-
-            <div v-if="searchable" class="p-2 border-b border-border/40">
-              <Input
-                :model-value="query"
-                :placeholder="effectiveSearchPlaceholder"
-                :class="desktopInputClass"
-                @update:model-value="updateQuery"
-              />
-            </div>
-
-            <div class="p-1 overflow-auto" :class="desktopContentMaxHeightClass">
-              <template v-if="loading">
-                <div class="space-y-1 px-1 py-1">
-                  <div
-                    v-for="idx in loadingSkeletonRows"
-                    :key="`desktop-loading-${idx}`"
-                    class="rounded-md border border-border/35 bg-secondary/20 px-2 py-2 animate-pulse"
-                  >
-                    <div class="flex items-start gap-2">
-                      <div class="h-4 w-4 rounded bg-muted-foreground/25" />
-                      <div class="min-w-0 flex-1 space-y-1.5">
-                        <div class="h-2.5 w-2/3 rounded bg-muted-foreground/25" />
-                        <div class="h-2 w-1/2 rounded bg-muted-foreground/20" />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </template>
-
-              <template v-else-if="hasVisibleItems">
-                <div
-                  v-for="(group, groupIndex) in pagedGroups"
-                  :key="group._key || `group-${groupIndex}`"
-                  :class="groupIndex > 0 ? 'mt-1 pt-1 border-t border-border/40' : ''"
-                >
-                  <div v-if="group.title || group.subtitle" class="px-2 py-1">
-                    <button
-                      v-if="canCollapseGroup(group)"
-                      type="button"
-                      class="w-full flex items-start gap-1.5 rounded px-1 py-1 text-left hover:bg-secondary/40"
-                      @click="toggleGroupCollapsed(group)"
-                    >
-                      <RiArrowDownSLine
-                        class="h-3.5 w-3.5 mt-0.5 text-muted-foreground transition-transform"
-                        :class="isGroupCollapsed(group) ? '-rotate-90' : ''"
-                      />
-                      <div class="min-w-0 flex-1">
-                        <div
-                          v-if="group.title"
-                          class="text-[10px] font-semibold tracking-wider uppercase text-muted-foreground"
-                        >
-                          {{ group.title }}
-                        </div>
-                        <div v-if="group.subtitle" class="text-[10px] text-muted-foreground/70">
-                          {{ group.subtitle }}
-                        </div>
-                      </div>
-                      <span class="text-[10px] text-muted-foreground/70 tabular-nums">{{ group.items.length }}</span>
-                    </button>
-
-                    <div v-else>
-                      <div
-                        v-if="group.title"
-                        class="text-[10px] font-semibold tracking-wider uppercase text-muted-foreground"
-                      >
-                        {{ group.title }}
-                      </div>
-                      <div v-if="group.subtitle" class="text-[10px] text-muted-foreground/70">{{ group.subtitle }}</div>
-                    </div>
-                  </div>
-
-                  <template v-if="!isGroupCollapsed(group)">
-                    <template v-for="item in group.items" :key="item.id">
-                      <ConfirmPopover
-                        v-if="item.confirmTitle"
-                        :title="item.confirmTitle"
-                        :description="item.confirmDescription || ''"
-                        :confirm-text="item.confirmText || t('common.confirm')"
-                        :cancel-text="item.cancelText || t('common.cancel')"
-                        :variant="item.variant === 'destructive' ? 'destructive' : 'default'"
-                        @confirm="selectItem(item)"
-                      >
-                        <ListRowButton
-                          data-option-menu-item
-                          :data-checked="item.checked"
-                          size="sm"
-                          class="text-xs"
-                          :disabled="item.disabled"
-                          :destructive="item.variant === 'destructive'"
-                          @click.stop
-                        >
-                          <component :is="item.icon || RiMore2Line" class="h-4 w-4 mt-0.5 text-muted-foreground" />
-                          <div class="min-w-0 flex-1">
-                            <div class="text-xs font-medium truncate" :class="item.monospace ? 'font-mono' : ''">
-                              {{ item.label }}
-                            </div>
-                            <div v-if="item.description" class="text-[11px] text-muted-foreground truncate">
-                              {{ item.description }}
-                            </div>
-                          </div>
-                          <RiCheckLine v-if="item.checked" class="h-4 w-4 text-primary flex-shrink-0" />
-                        </ListRowButton>
-                      </ConfirmPopover>
-
-                      <ListRowButton
-                        v-else
-                        data-option-menu-item
-                        :data-checked="item.checked"
-                        size="sm"
-                        class="text-xs"
-                        :disabled="item.disabled"
-                        :destructive="item.variant === 'destructive'"
-                        @click="selectItem(item)"
-                      >
-                        <component :is="item.icon || RiMore2Line" class="h-4 w-4 mt-0.5 text-muted-foreground" />
-                        <div class="min-w-0 flex-1">
-                          <div class="text-xs font-medium truncate" :class="item.monospace ? 'font-mono' : ''">
-                            {{ item.label }}
-                          </div>
-                          <div v-if="item.description" class="text-[11px] text-muted-foreground truncate">
-                            {{ item.description }}
-                          </div>
-                        </div>
-                        <RiCheckLine v-if="item.checked" class="h-4 w-4 text-primary flex-shrink-0" />
-                      </ListRowButton>
-                    </template>
-                  </template>
-                </div>
-
-                <div v-if="helperText" class="px-3 py-2 text-[11px] text-muted-foreground">{{ helperText }}</div>
-              </template>
-
-              <div v-else class="px-3 py-3 text-xs text-muted-foreground">{{ effectiveEmptyText }}</div>
-            </div>
-
-            <div
-              v-if="effectiveShowPager"
-              class="border-t border-border/40 px-2 py-1.5 flex items-center justify-between gap-2 bg-background/80"
-            >
-              <PaginationControls
-                class="w-full justify-center"
-                :page="pagerCurrentPage"
-                :total-pages="pagerTotalPages"
-                :disabled="pagerBusy"
-                :prev-label="t('common.previousPage')"
-                :next-label="t('common.nextPage')"
-                :page-input-label="t('common.currentPage')"
-                @update:page="setPagerPage"
-              />
-            </div>
+          <div class="h-4 w-4 shrink-0 rounded bg-muted-foreground/25" />
+          <div class="min-w-0 flex-1 space-y-1">
+            <div class="h-2.5 w-2/3 rounded bg-muted-foreground/25" />
+            <div class="h-2 w-1/2 rounded bg-muted-foreground/25" />
           </div>
-        </PopoverContent>
-      </PopoverPortal>
-    </PopoverRoot>
+        </div>
+      </div>
 
-    <DialogRoot :open="open && isMobileSheet" @update:open="onRadixSurfaceOpenChange">
-      <DialogPortal>
-        <DialogOverlay class="fixed inset-0 z-[74] bg-black/55 backdrop-blur-sm" />
-        <DialogContent as-child @close-auto-focus="onCloseAutoFocus">
-          <div
-            ref="panelEl"
-            data-oc-keyboard-tap="keep"
-            data-keyboard-overlay="true"
-            tabindex="-1"
-            class="fixed z-[75] max-w-[21rem] -translate-x-1/2 rounded-xl border border-border/70 bg-background/95 shadow-xl backdrop-blur overflow-hidden flex flex-col outline-none"
-            :style="mobileSheetStyle"
-            @pointerdown.stop
-            @click.stop
-            @keydown="onPanelKeydown"
-          >
-            <div class="flex items-center justify-between gap-3 px-3 py-2 border-b border-border/40">
-              <DialogTitle class="text-sm font-semibold">{{ mobileTitle || title || t('common.options') }}</DialogTitle>
-              <div class="flex items-center gap-1">
-                <IconButton
-                  v-if="showRefreshButton"
-                  size="sm"
-                  :title="effectiveRefreshLabel"
-                  :aria-label="effectiveRefreshLabel"
-                  :disabled="refreshDisabled"
-                  @click="void triggerRefresh()"
-                >
-                  <RiRefreshLine class="h-4 w-4" :class="refreshBusy ? 'animate-spin' : ''" />
-                </IconButton>
-                <IconButton size="sm" :title="effectiveCloseLabel" :aria-label="effectiveCloseLabel" @click="closeMenu">
-                  <RiCloseLine class="h-4 w-4" />
-                </IconButton>
+      <template v-else-if="hasVisibleItems">
+        <div
+          v-for="(group, groupIndex) in pagedGroups"
+          :key="group._key"
+          :class="groupIndex > 0 && 'mt-1 border-t border-border/40 pt-1'"
+        >
+          <div v-if="group.title || group.subtitle" class="px-2 py-1">
+            <component
+              :is="canCollapseGroup(group) ? 'button' : 'div'"
+              :type="canCollapseGroup(group) ? 'button' : undefined"
+              :data-keyboard-option="canCollapseGroup(group) ? '' : undefined"
+              :aria-expanded="canCollapseGroup(group) ? !isGroupCollapsed(group) : undefined"
+              class="flex w-full items-start gap-1.5 rounded px-1 py-1 text-start text-muted-foreground"
+              :class="
+                canCollapseGroup(group) && 'hover:bg-secondary/40 focus-visible:outline-2 focus-visible:outline-ring'
+              "
+              @click="canCollapseGroup(group) && toggleGroupCollapsed(group)"
+            >
+              <RiArrowDownSLine
+                v-if="canCollapseGroup(group)"
+                class="h-4 w-4 shrink-0 transition-transform"
+                :class="isGroupCollapsed(group) && '-rotate-90 rtl:rotate-90'"
+                aria-hidden="true"
+              />
+              <div class="min-w-0 flex-1">
+                <div v-if="group.title" class="text-[11px] font-semibold">{{ group.title }}</div>
+                <div v-if="group.subtitle" class="text-[11px]">{{ group.subtitle }}</div>
               </div>
-            </div>
-
-            <div v-if="searchable" class="p-3 border-b border-border/40">
-              <Input
-                :model-value="query"
-                :placeholder="effectiveSearchPlaceholder"
-                :class="mobileInputClass"
-                @update:model-value="updateQuery"
-              />
-            </div>
-
-            <div class="flex-1 min-h-0 overflow-auto px-2 py-1.5">
-              <template v-if="loading">
-                <div class="space-y-2 px-1 py-1.5">
-                  <div
-                    v-for="idx in loadingSkeletonRows"
-                    :key="`mobile-loading-${idx}`"
-                    class="rounded-md border border-border/35 bg-secondary/20 px-3 py-3 animate-pulse"
-                  >
-                    <div class="mx-auto flex w-full max-w-[18rem] items-center gap-3">
-                      <div class="h-5 w-5 shrink-0 rounded bg-muted-foreground/25" />
-                      <div class="min-w-0 flex-1 space-y-1.5">
-                        <div class="h-3 w-3/4 rounded bg-muted-foreground/25" />
-                        <div class="h-2.5 w-1/2 rounded bg-muted-foreground/20" />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </template>
-
-              <template v-else-if="hasVisibleItems">
-                <div
-                  v-for="(group, groupIndex) in pagedGroups"
-                  :key="group._key || `mobile-group-${groupIndex}`"
-                  :class="groupIndex > 0 ? 'mt-1 pt-1 border-t border-border/40' : ''"
-                >
-                  <div v-if="group.title || group.subtitle" class="px-2 py-1">
-                    <button
-                      v-if="canCollapseGroup(group)"
-                      type="button"
-                      class="w-full flex items-start gap-2 rounded px-1 py-1 text-left hover:bg-secondary/40"
-                      @click="toggleGroupCollapsed(group)"
-                    >
-                      <RiArrowDownSLine
-                        class="h-4 w-4 mt-0.5 text-muted-foreground transition-transform"
-                        :class="isGroupCollapsed(group) ? '-rotate-90' : ''"
-                      />
-                      <div class="min-w-0 flex-1">
-                        <div
-                          v-if="group.title"
-                          class="text-[11px] font-semibold tracking-wider uppercase text-muted-foreground"
-                        >
-                          {{ group.title }}
-                        </div>
-                        <div v-if="group.subtitle" class="text-[11px] text-muted-foreground/70">
-                          {{ group.subtitle }}
-                        </div>
-                      </div>
-                      <span class="text-[11px] text-muted-foreground/70 tabular-nums">{{ group.items.length }}</span>
-                    </button>
-
-                    <div v-else>
-                      <div
-                        v-if="group.title"
-                        class="text-[11px] font-semibold tracking-wider uppercase text-muted-foreground"
-                      >
-                        {{ group.title }}
-                      </div>
-                      <div v-if="group.subtitle" class="text-[11px] text-muted-foreground/70">{{ group.subtitle }}</div>
-                    </div>
-                  </div>
-
-                  <template v-if="!isGroupCollapsed(group)">
-                    <template v-for="item in group.items" :key="item.id">
-                      <ConfirmPopover
-                        v-if="item.confirmTitle"
-                        :title="item.confirmTitle"
-                        :description="item.confirmDescription || ''"
-                        :confirm-text="item.confirmText || t('common.confirm')"
-                        :cancel-text="item.cancelText || t('common.cancel')"
-                        :variant="item.variant === 'destructive' ? 'destructive' : 'default'"
-                        @confirm="selectItem(item)"
-                      >
-                        <ListRowButton
-                          data-option-menu-item
-                          :data-checked="item.checked"
-                          size="md"
-                          class="px-4"
-                          :disabled="item.disabled"
-                          :destructive="item.variant === 'destructive'"
-                          @click.stop
-                        >
-                          <div class="mx-auto flex w-full max-w-[18rem] items-center gap-3">
-                            <component :is="item.icon || RiMore2Line" class="h-5 w-5 shrink-0 text-muted-foreground" />
-                            <div class="min-w-0 flex-1">
-                              <div class="text-sm font-medium truncate" :class="item.monospace ? 'font-mono' : ''">
-                                {{ item.label }}
-                              </div>
-                              <div v-if="item.description" class="text-[13px] text-muted-foreground truncate">
-                                {{ item.description }}
-                              </div>
-                            </div>
-                            <RiCheckLine v-if="item.checked" class="h-4 w-4 text-primary flex-shrink-0" />
-                          </div>
-                        </ListRowButton>
-                      </ConfirmPopover>
-
-                      <ListRowButton
-                        v-else
-                        data-option-menu-item
-                        :data-checked="item.checked"
-                        size="md"
-                        class="px-4"
-                        :disabled="item.disabled"
-                        :destructive="item.variant === 'destructive'"
-                        @click="selectItem(item)"
-                      >
-                        <div class="mx-auto flex w-full max-w-[18rem] items-center gap-3">
-                          <component :is="item.icon || RiMore2Line" class="h-5 w-5 shrink-0 text-muted-foreground" />
-                          <div class="min-w-0 flex-1">
-                            <div class="text-sm font-medium truncate" :class="item.monospace ? 'font-mono' : ''">
-                              {{ item.label }}
-                            </div>
-                            <div v-if="item.description" class="text-[13px] text-muted-foreground truncate">
-                              {{ item.description }}
-                            </div>
-                          </div>
-                          <RiCheckLine v-if="item.checked" class="h-4 w-4 text-primary flex-shrink-0" />
-                        </div>
-                      </ListRowButton>
-                    </template>
-                  </template>
-                </div>
-
-                <div v-if="helperText" class="px-3 py-2 text-[13px] text-muted-foreground">{{ helperText }}</div>
-              </template>
-
-              <div v-else class="px-3 py-3 text-sm text-muted-foreground">{{ effectiveEmptyText }}</div>
-            </div>
-
-            <div
-              v-if="effectiveShowPager"
-              class="border-t border-border/40 px-3 py-2 flex items-center justify-between gap-2 bg-background/80"
-            >
-              <PaginationControls
-                class="w-full justify-center"
-                size="md"
-                :page="pagerCurrentPage"
-                :total-pages="pagerTotalPages"
-                :disabled="pagerBusy"
-                :prev-label="t('common.previousPage')"
-                :next-label="t('common.nextPage')"
-                :page-input-label="t('common.currentPage')"
-                @update:page="setPagerPage"
-              />
-            </div>
+              <span v-if="canCollapseGroup(group)" class="text-[11px] tabular-nums">{{ group.items.length }}</span>
+            </component>
           </div>
-        </DialogContent>
-      </DialogPortal>
-    </DialogRoot>
+
+          <template v-if="!isGroupCollapsed(group)">
+            <template v-for="item in group.items" :key="item.id">
+              <ConfirmPopover
+                v-if="item.confirmTitle"
+                :title="item.confirmTitle"
+                :description="item.confirmDescription || ''"
+                :confirm-text="item.confirmText || t('common.confirm')"
+                :cancel-text="item.cancelText || t('common.cancel')"
+                :variant="item.variant"
+                @confirm="selectItem(item)"
+              >
+                <OptionMenuRow :item="item" :compact="isMobileSheet" @click.stop />
+              </ConfirmPopover>
+              <OptionMenuRow v-else :item="item" :compact="isMobileSheet" @click="selectItem(item)" />
+            </template>
+          </template>
+        </div>
+      </template>
+
+      <div v-else class="px-3 py-3 text-muted-foreground" :class="isMobileSheet ? 'text-sm' : 'text-xs'">
+        {{ effectiveEmptyText }}
+      </div>
+      <p v-if="helperText && !loading" class="px-3 py-2 text-xs text-muted-foreground">{{ helperText }}</p>
+    </div>
+
+    <div v-if="effectiveShowPager" class="shrink-0 border-t border-border/50 px-2 py-1.5">
+      <PaginationControls
+        class="w-full justify-center"
+        :size="isMobileSheet ? 'md' : 'sm'"
+        :page="pagerCurrentPage"
+        :total-pages="pagerTotalPages"
+        :disabled="pagerBusy"
+        :prev-label="t('common.previousPage')"
+        :next-label="t('common.nextPage')"
+        :page-input-label="t('common.currentPage')"
+        @update:page="setPagerPage"
+      />
+    </div>
+  </DefineMenuBody>
+
+  <div ref="rootEl" class="contents">
+    <PopoverSurface
+      :open="open && !isMobileSheet"
+      :anchor="desktopPopoverAnchor"
+      :portalled="desktopFixed"
+      :layer="75"
+      as-child
+      :side="desktopPopoverSide"
+      :align="desktopPopoverAlign"
+      :side-offset="panelGapPx"
+      :collision-padding="panelViewportMarginPx"
+      update-position-strategy="always"
+      :prioritize-position="true"
+      @update:open="onRadixSurfaceOpenChange"
+      @open-auto-focus="onOpenAutoFocus"
+      @close-auto-focus="onCloseAutoFocus"
+      @interact-outside="onInteractOutside"
+    >
+      <div
+        ref="panelEl"
+        data-oc-keyboard-tap="keep"
+        :aria-label="title || t('common.options')"
+        :class="cn('pointer-events-auto flex flex-col overflow-hidden', desktopClass)"
+        :style="desktopStyle"
+        @pointerdown.stop
+        @click.stop
+        @keydown="onPanelKeydown"
+        @focusin="onPanelFocusin"
+      >
+        <MenuBody />
+      </div>
+    </PopoverSurface>
+
+    <ModalSurface
+      :open="open && isMobileSheet"
+      :layer="74"
+      as-child
+      :aria-describedby="undefined"
+      @update:open="onRadixSurfaceOpenChange"
+      @open-auto-focus="onOpenAutoFocus"
+      @close-auto-focus="onCloseAutoFocus"
+    >
+      <div
+        ref="panelEl"
+        data-oc-keyboard-tap="keep"
+        data-keyboard-overlay="true"
+        tabindex="-1"
+        class="oc-overlay-panel fixed flex max-w-[24rem] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden"
+        :style="mobileSheetStyle"
+        @pointerdown.stop
+        @click.stop
+        @keydown="onPanelKeydown"
+        @focusin="onPanelFocusin"
+      >
+        <MenuBody />
+      </div>
+    </ModalSurface>
   </div>
 </template>

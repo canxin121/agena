@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue'
-import { DialogContent, DialogDescription, DialogPortal, DialogRoot, DialogTitle } from 'radix-vue'
-
+import { useI18n } from 'vue-i18n'
 import Button from '@/components/ui/Button.vue'
+import FormDialog from '@/components/ui/FormDialog.vue'
 import Input from '@/components/ui/Input.vue'
+import { isImeComposing } from '@/lib/imeKeyboard'
+import { isPlainNavigationKey, isVisibleKeyboardTarget } from '@/lib/keyboardNavigation'
 import { useUiStore } from '@/stores/ui'
 
 const props = withDefaults(
@@ -17,35 +19,39 @@ const props = withDefaults(
     cancelLabel?: string
     busy?: boolean
     isCompactTouch?: boolean
+    dialog?: boolean
   }>(),
-  {
-    title: '',
-    description: '',
-    placeholder: '',
-    confirmLabel: 'Create',
-    cancelLabel: 'Cancel',
-    busy: false,
-  },
+  { isCompactTouch: undefined },
 )
-
 const emit = defineEmits<{
-  (e: 'update:open', value: boolean): void
-  (e: 'update:modelValue', value: string): void
-  (e: 'submit'): void
-  (e: 'cancel'): void
+  'update:open': [value: boolean]
+  'update:modelValue': [value: string]
+  submit: []
+  cancel: []
 }>()
 
 const ui = useUiStore()
-
-const inputEl = ref<HTMLInputElement | null>(null)
-
-const isMobileSheet = computed(() => (props.isCompactTouch === undefined ? ui.isCompactTouch : props.isCompactTouch))
+const { t } = useI18n()
+const form = ref<HTMLFormElement | null>(null)
+const compact = computed(() => props.isCompactTouch ?? ui.isCompactTouch)
+const modal = computed(() => props.dialog || compact.value)
+const containerProps = computed(() =>
+  modal.value
+    ? {
+        open: props.open,
+        title: props.title,
+        description: props.description,
+        maxWidth: 'max-w-md',
+        isCompactTouch: compact.value,
+        initialFocus: '[data-name-input]',
+      }
+    : { class: 'rounded-lg border border-border/70 bg-background/95 p-2' },
+)
 
 const draft = computed({
-  get: () => String(props.modelValue || ''),
-  set: (value: string) => emit('update:modelValue', value),
+  get: () => props.modelValue,
+  set: (value: string | number) => emit('update:modelValue', String(value)),
 })
-
 const canSubmit = computed(() => !props.busy && Boolean(draft.value.trim()))
 
 function close() {
@@ -54,72 +60,81 @@ function close() {
 }
 
 function submit() {
-  if (!canSubmit.value) return
-  emit('submit')
+  if (canSubmit.value) emit('submit')
 }
 
-function onMobileOpenChange(open: boolean) {
-  if (!open && props.open) close()
+function onKeydown(event: KeyboardEvent) {
+  const plain = isPlainNavigationKey(event) && !event.shiftKey
+  if (!modal.value && event.key === 'Escape' && plain) {
+    event.preventDefault()
+    event.stopPropagation()
+    close()
+  }
+  if (event.key === 'Enter' && event.target instanceof HTMLInputElement && !isImeComposing(event)) {
+    event.preventDefault()
+    if (plain) submit()
+  }
 }
 
 watch(
+  form,
+  (element) => {
+    const input = element?.querySelector('input')
+    if (!input) return
+    input.focus({ preventScroll: true })
+    input.select()
+  },
+  { flush: 'post' },
+)
+
+let inlineTrigger: HTMLElement | null = null
+watch(
   () => props.open,
-  async (open) => {
-    if (!open) return
-    await nextTick()
-    window.requestAnimationFrame(() => {
-      inputEl.value?.focus()
-      inputEl.value?.select()
+  (open) => {
+    if (typeof document === 'undefined') return
+    if (open) {
+      const active = document.activeElement
+      inlineTrigger = !modal.value && active instanceof HTMLElement ? active : null
+      return
+    }
+    const trigger = inlineTrigger
+    inlineTrigger = null
+    if (!trigger) return
+    void nextTick(() => {
+      if (!props.open && document.activeElement === document.body && isVisibleKeyboardTarget(trigger)) {
+        trigger.focus({ preventScroll: true })
+      }
     })
   },
+  { immediate: true, flush: 'sync' },
 )
 </script>
 
 <template>
-  <DialogRoot v-if="isMobileSheet" :open="open" @update:open="onMobileOpenChange">
-    <DialogPortal>
-      <DialogContent as-child>
-        <div
-          class="fixed inset-0 z-[72] flex flex-col bg-background outline-none"
-          :style="{
-            paddingTop: 'var(--oc-safe-area-top, 0px)',
-            paddingRight: 'var(--oc-safe-area-right, 0px)',
-            paddingBottom: 'var(--oc-safe-area-bottom, 0px)',
-            paddingLeft: 'var(--oc-safe-area-left, 0px)',
-          }"
-        >
-      <div class="flex items-center justify-between gap-2 border-b border-border/50 px-4 py-3">
-        <Button variant="ghost" size="sm" :disabled="busy" @click="close">{{ cancelLabel }}</Button>
-        <DialogTitle class="min-w-0 text-center text-sm font-medium text-foreground">{{ title }}</DialogTitle>
-        <Button size="sm" :disabled="!canSubmit" @click="submit">{{ confirmLabel }}</Button>
+  <component :is="modal ? FormDialog : 'div'" v-if="open" v-bind="containerProps" @update:open="!$event && close()">
+    <form
+      ref="form"
+      class="flex gap-2"
+      :class="modal ? 'flex-col gap-4' : 'items-center'"
+      @submit.prevent="submit"
+      @keydown="onKeydown"
+    >
+      <Input
+        v-model="draft"
+        data-name-input
+        class="min-w-0"
+        :class="modal ? 'h-10 text-sm' : 'h-8 flex-1 text-xs'"
+        :aria-label="title || placeholder"
+        :placeholder="placeholder"
+      />
+      <div class="flex shrink-0 flex-wrap items-center justify-end gap-2">
+        <Button type="button" variant="ghost" :size="modal ? 'sm' : 'xs'" :disabled="busy" @click="close">
+          {{ cancelLabel || t('common.cancel') }}
+        </Button>
+        <Button type="submit" :size="modal ? 'sm' : 'xs'" :disabled="!canSubmit">
+          {{ confirmLabel || t('common.confirm') }}
+        </Button>
       </div>
-      <div class="flex-1 overflow-auto px-4 py-4">
-        <DialogDescription v-if="description" class="text-xs text-muted-foreground">{{ description }}</DialogDescription>
-        <Input
-          ref="inputEl"
-          v-model="draft"
-          class="mt-3 h-10 text-sm"
-          :placeholder="placeholder"
-          @keydown.enter.prevent="submit"
-        />
-      </div>
-        </div>
-      </DialogContent>
-    </DialogPortal>
-  </DialogRoot>
-
-  <div v-else-if="open" class="rounded-md border border-sidebar-border/70 bg-sidebar/95 p-2">
-      <div class="flex items-center gap-2">
-        <Input
-          ref="inputEl"
-          v-model="draft"
-          class="h-8 min-w-0 flex-1 text-xs"
-          :placeholder="placeholder"
-          @keydown.enter.prevent="submit"
-          @keydown.esc.prevent="close"
-        />
-        <Button variant="ghost" size="xs" :disabled="busy" @click="close">{{ cancelLabel }}</Button>
-        <Button size="xs" :disabled="!canSubmit" @click="submit">{{ confirmLabel }}</Button>
-      </div>
-  </div>
+    </form>
+  </component>
 </template>

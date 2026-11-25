@@ -644,6 +644,25 @@
 }
 
 @layer components {
+  .oc-overlay-panel {
+    @apply rounded-xl border border-border/70 bg-background shadow-xl outline-none;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .oc-overlay-fade[data-state='open'] {
+      animation: oc-overlay-fade-in 150ms ease-out;
+    }
+  }
+
+  @keyframes oc-overlay-fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
   /* Shared form controls (used by settings panels). */
   .btn {
     @apply inline-flex items-center justify-center gap-2 rounded-md border border-border bg-background/60 px-3 py-2 text-sm font-medium text-foreground shadow-sm transition-all;

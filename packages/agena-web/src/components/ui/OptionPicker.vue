@@ -1,17 +1,14 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch, type Component } from 'vue'
+import { computed, ref, watch, type Component } from 'vue'
 import { RiArrowDownSLine } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
 import OptionMenu from '@/components/ui/OptionMenu.vue'
+import PickerTrigger from '@/components/ui/PickerTrigger.vue'
+import { normalizeOptionSearch, optionSearchText } from '@/components/ui/optionSearch'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import type { PickerOption } from '@/components/ui/pickerOption.types'
-import { cn } from '@/lib/utils'
 import { useUiStore } from '@/stores/ui'
-
-type OptionMenuExpose = {
-  containsTarget?: (target: Node | null) => boolean
-}
 
 const props = withDefaults(
   defineProps<{
@@ -33,6 +30,7 @@ const props = withDefaults(
     maxInitialOptions?: number
     desktopFixed?: boolean
     isCompactTouch?: boolean
+    returnFocusTarget?: () => HTMLElement | null
   }>(),
   {
     emptyLabel: 'Select...',
@@ -57,14 +55,14 @@ const emit = defineEmits<{
 const { t } = useI18n()
 const ui = useUiStore()
 
-const triggerEl = ref<HTMLElement | null>(null)
-const menuRef = ref<OptionMenuExpose | null>(null)
+const trigger = ref<InstanceType<typeof PickerTrigger> | null>(null)
 const open = ref(false)
+const openAt = ref<'first' | 'last'>()
 const query = ref('')
 const effectiveIsMobilePointer = computed(() => props.isCompactTouch ?? ui.isCompactTouch)
 
 const selected = computed(() => String(props.modelValue || '').trim())
-const q = computed(() => query.value.trim().toLowerCase())
+const q = computed(() => normalizeOptionSearch(query.value))
 
 const effectiveSearchPlaceholder = computed(() => {
   const raw = String(props.searchPlaceholder || '').trim()
@@ -74,7 +72,7 @@ const effectiveSearchPlaceholder = computed(() => {
 const triggerAriaLabel = computed(() => {
   const pickerTitle = String(props.title || '').trim()
   const value = String(selectedDisplayLabel.value || '').trim()
-  return pickerTitle && value ? `${pickerTitle}: ${value}` : pickerTitle || value
+  return pickerTitle && value && pickerTitle !== value ? `${pickerTitle}: ${value}` : pickerTitle || value
 })
 
 const selectedDisplayLabel = computed(() => {
@@ -97,10 +95,7 @@ const selectedDisplayLabel = computed(() => {
 const filteredOptions = computed(() => {
   const qq = q.value
   if (!qq) return props.options
-  return props.options.filter((opt) => {
-    const hay = `${opt.value} ${opt.label || ''} ${opt.description || ''}`.toLowerCase()
-    return hay.includes(qq)
-  })
+  return props.options.filter((opt) => optionKeywords(opt).includes(qq))
 })
 
 const showOptions = computed(() => {
@@ -167,54 +162,46 @@ const menuGroups = computed<OptionMenuGroup[]>(() => {
     })
   }
 
-  groups.push({
-    id: 'options',
-    items: showOptions.value.map((opt) => ({
+  const byGroup = new Map<string, OptionMenuGroup>()
+  for (const opt of showOptions.value) {
+    const title = opt.group || ''
+    let group = byGroup.get(title)
+    if (!group) {
+      group = { id: title ? `options:${title}` : 'options', title, items: [] }
+      byGroup.set(title, group)
+    }
+    group.items.push({
       id: `opt:${opt.value}`,
       label: optionLabel(opt),
       description: opt.description,
       checked: opt.value === selected.value,
       disabled: opt.disabled,
-      keywords: `${opt.value} ${opt.label || ''} ${opt.description || ''}`,
+      keywords: optionKeywords(opt),
       monospace: props.monospace,
-    })),
-  })
+    })
+  }
+  groups.push(...byGroup.values())
 
   return groups
 })
 
-let pointerHandler: ((event: MouseEvent | TouchEvent) => void) | null = null
-
-function handleOutsidePointer(event: MouseEvent | TouchEvent) {
-  const target = event.target as Node | null
-  if (!target) return
-  if (menuRef.value?.containsTarget?.(target)) return
-  if (triggerEl.value && triggerEl.value.contains(target)) return
-  open.value = false
+function optionKeywords(opt: PickerOption): string {
+  return optionSearchText(opt.value, opt.label, opt.description, opt.group, opt.keywords)
 }
 
 watch(open, (isOpen) => {
   if (!isOpen) {
     query.value = ''
-    if (pointerHandler) {
-      document.removeEventListener('pointerdown', pointerHandler, true)
-      pointerHandler = null
-    }
-    return
-  }
-
-  if (!pointerHandler) {
-    pointerHandler = (event) => handleOutsidePointer(event)
-    document.addEventListener('pointerdown', pointerHandler, true)
+    openAt.value = undefined
   }
 })
 
-onBeforeUnmount(() => {
-  if (pointerHandler) {
-    document.removeEventListener('pointerdown', pointerHandler, true)
-    pointerHandler = null
-  }
-})
+watch(
+  () => props.disabled,
+  (disabled) => {
+    if (disabled) open.value = false
+  },
+)
 
 function choose(value: string) {
   emit('update:modelValue', value)
@@ -241,29 +228,19 @@ function handleSelect(item: OptionMenuItem) {
   }
 }
 
-function toggleOpen() {
-  if (props.disabled) return
-  open.value = !open.value
+function setOpen(value: boolean) {
+  if (value && props.disabled) return
+  open.value = value
 }
 
-function setOpen(value: boolean) {
-  open.value = value
+function openFrom(edge: 'first' | 'last') {
+  openAt.value = edge
+  setOpen(true)
 }
 
 function setQuery(value: string) {
   query.value = String(value || '')
 }
-
-const triggerClasses = computed(() => {
-  const base =
-    'w-full inline-flex items-center justify-between gap-2 rounded-md border border-input bg-transparent shadow-sm transition-colors hover:bg-secondary/40 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50 active:scale-[0.99]'
-  const size = props.size === 'sm' ? 'h-8 px-2 text-xs' : 'h-9 px-3 text-sm'
-  return cn(base, size, props.triggerClass)
-})
-
-const triggerValueClasses = computed(() =>
-  cn('min-w-0 truncate', props.monospace ? 'font-mono font-medium' : 'font-medium'),
-)
 
 function optionLabel(opt: PickerOption): string {
   return (opt.label || opt.value || '').trim()
@@ -272,30 +249,26 @@ function optionLabel(opt: PickerOption): string {
 
 <template>
   <div class="relative min-w-0">
-    <button
-      ref="triggerEl"
-      type="button"
+    <PickerTrigger
+      ref="trigger"
+      block
+      :open="open"
       :disabled="disabled"
-      :class="triggerClasses"
+      :size="size"
+      :class="triggerClass"
+      :label="selectedDisplayLabel"
       :aria-label="triggerAriaLabel"
-      aria-haspopup="dialog"
-      :aria-expanded="open"
-      @click.stop="toggleOpen"
-      @keydown.down.prevent="setOpen(true)"
-      @keydown.up.prevent="setOpen(true)"
+      :icon="icon"
+      :monospace="monospace"
+      @toggle="setOpen(!open)"
+      @open-at="openFrom"
     >
-      <span class="min-w-0 flex items-center gap-2">
-        <component v-if="icon" :is="icon" class="h-4 w-4 text-muted-foreground flex-shrink-0" />
-        <span :class="triggerValueClasses">
-          {{ selectedDisplayLabel }}
-        </span>
-      </span>
-      <RiArrowDownSLine class="h-4 w-4 text-muted-foreground/70 flex-shrink-0" />
-    </button>
+      <RiArrowDownSLine class="h-4 w-4 shrink-0 text-muted-foreground/70" aria-hidden="true" />
+    </PickerTrigger>
 
     <OptionMenu
-      ref="menuRef"
       :open="open"
+      :open-at="openAt"
       :query="query"
       :groups="menuGroups"
       :title="title"
@@ -305,7 +278,8 @@ function optionLabel(opt: PickerOption): string {
       :helper-text="helperText"
       :is-compact-touch="effectiveIsMobilePointer"
       :desktop-fixed="desktopFixed"
-      :desktop-anchor-el="desktopFixed ? triggerEl : null"
+      :desktop-anchor-el="trigger?.triggerEl"
+      :return-focus-target="returnFocusTarget"
       desktop-placement="bottom-start"
       desktop-class="w-[min(420px,calc(100vw-2rem))]"
       filter-mode="external"

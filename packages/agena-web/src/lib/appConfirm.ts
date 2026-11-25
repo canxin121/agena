@@ -1,58 +1,15 @@
-import { readonly, shallowRef } from 'vue'
+import { clearAppDialogs, enqueueAppDialog, type AppDialogOptions } from './appDialogQueue'
 
-export type AppConfirmOptions = {
-  title: string
-  description?: string
-  confirmText?: string
-  cancelText?: string
+export type AppConfirmOptions = AppDialogOptions & {
   variant?: 'default' | 'destructive'
-}
-
-type AppConfirmRequest = AppConfirmOptions & {
-  id: number
-  resolve: (accepted: boolean) => void
-}
-
-const currentRequest = shallowRef<AppConfirmRequest | null>(null)
-const queue: AppConfirmRequest[] = []
-let serial = 0
-
-export const appConfirmRequest = readonly(currentRequest)
-
-function pumpConfirmQueue() {
-  if (currentRequest.value || queue.length === 0) return
-  currentRequest.value = queue.shift() || null
 }
 
 export function confirmAction(input: string | AppConfirmOptions): Promise<boolean> {
   const options: AppConfirmOptions =
-    typeof input === 'string'
-      ? { title: input, variant: 'destructive' }
-      : { variant: 'destructive', ...input }
-
-  return new Promise<boolean>((resolve) => {
-    queue.push({
-      ...options,
-      id: ++serial,
-      resolve,
-    })
-    pumpConfirmQueue()
-  })
-}
-
-export function resolveAppConfirm(accepted: boolean) {
-  const request = currentRequest.value
-  if (!request) return
-  currentRequest.value = null
-  request.resolve(Boolean(accepted))
-  queueMicrotask(pumpConfirmQueue)
+    typeof input === 'string' ? { title: input, variant: 'destructive' } : { variant: 'destructive', ...input }
+  return new Promise((resolve) => enqueueAppDialog({ kind: 'confirm', options, resolve }))
 }
 
 export function clearAppConfirmQueue() {
-  const active = currentRequest.value
-  currentRequest.value = null
-  active?.resolve(false)
-  while (queue.length > 0) {
-    queue.shift()?.resolve(false)
-  }
+  clearAppDialogs('confirm')
 }

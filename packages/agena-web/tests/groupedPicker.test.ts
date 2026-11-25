@@ -21,6 +21,7 @@ function picker(overrides: Record<string, unknown> = {}) {
   const modules: Record<string, unknown> = {
     vue: { ...vue, renderSlot: () => vue.createCommentVNode('empty trailing slot') },
     '@/components/ui/OptionMenu.vue': menu,
+    '@/components/ui/PickerTrigger.vue': { name: 'PickerTrigger' },
     '@/lib/utils': { cn: (...values: unknown[]) => values.filter(Boolean).join(' ') },
     '@/stores/ui': { useUiStore: () => ({ isCompactTouch: true }) },
   }
@@ -100,15 +101,16 @@ function picker(overrides: Record<string, unknown> = {}) {
 }
 
 describe('shared grouped picker', () => {
-  test('legacy project consumers retain local search and external pagination together', () => {
+  test('legacy project consumers delegate local search and retain external pagination', () => {
     const wrapper = picker()
     let menu = wrapper.menu()
-    expect(menu.props.filterMode).toBe('external')
+    expect(menu.props.filterMode).toBe('internal')
     expect(menu.props.externalPage).toBe(2)
     expect(menu.props.externalPageCount).toBe(4)
     menu.props['onUpdate:query']('beta')
     menu = wrapper.menu()
-    expect(menu.props.groups[0].items.map((item: any) => item.id)).toEqual(['2'])
+    expect(menu.props.query).toBe('beta')
+    expect(menu.props.groups[0].items).toHaveLength(2)
     expect(menu.props.externalPageCount).toBe(4)
     expect(menu.props.isCompactTouch).toBe(true)
   })

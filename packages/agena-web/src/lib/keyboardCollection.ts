@@ -2,16 +2,17 @@ import { nextTick, type ObjectDirective } from 'vue'
 import { isImeComposing } from '@/lib/imeKeyboard'
 import { isTextEditingTarget, isVisibleKeyboardTarget, navigationIndex } from '@/lib/keyboardNavigation'
 
-export type KeyboardCollectionOptions = { tree?: boolean }
+export type KeyboardCollectionOptions = { tree?: boolean; fallbackFocus?: string }
 
 /** Delegated navigation keeps secondary row actions reachable with Tab. */
 export function installKeyboardCollection(root: HTMLElement, options: KeyboardCollectionOptions = {}): () => void {
   let currentKey = ''
   let currentIndex = 0
-  let lastPrimary: HTMLElement | null = null
+  let lastFocused: HTMLElement | null = null
   let query = ''
   let queryTime = 0
   const secondaryTabStops = new WeakMap<HTMLElement, number>()
+  const fallbackFocus = options.fallbackFocus ? root.querySelector<HTMLElement>(options.fallbackFocus) || root : root
   const primaryFor = (row: HTMLElement): HTMLElement | null =>
     row.matches('button, a[href], [role="treeitem"]')
       ? row
@@ -40,7 +41,7 @@ export function installKeyboardCollection(root: HTMLElement, options: KeyboardCo
       activeRow && items.includes(activeRow) ? activeRow : items.find((row) => row.dataset.keyboardItem === currentKey)
     if (!currentKey) selected ||= items.find((row) => row.dataset.keyboardSelected === 'true')
     selected ||= items[Math.min(currentIndex, items.length - 1)]
-    root.tabIndex = items.length ? -1 : 0
+    root.tabIndex = items.length || fallbackFocus !== root ? -1 : 0
     for (const row of items) {
       const primary = primaryFor(row)!
       primary.tabIndex = row === selected ? 0 : -1
@@ -49,7 +50,7 @@ export function installKeyboardCollection(root: HTMLElement, options: KeyboardCo
         if (!secondaryTabStops.has(control)) secondaryTabStops.set(control, control.tabIndex)
         control.tabIndex = row === selected ? secondaryTabStops.get(control)! : -1
       }
-      if (options.tree) {
+      if (options.tree && !isTextEditingTarget(primary)) {
         primary.setAttribute('role', 'treeitem')
         primary.setAttribute('aria-level', String(level(row) - baseLevel + 1))
         if (row.dataset.keyboardSelected !== undefined)
@@ -61,23 +62,29 @@ export function installKeyboardCollection(root: HTMLElement, options: KeyboardCo
     }
     // Removing the focused row must not strand focus on body. A new surface or
     // a user-selected control always takes precedence over this fallback.
-    if (lastPrimary && !lastPrimary.isConnected && document.activeElement === document.body) {
-      if (selected) focus(selected)
-      else root.focus({ preventScroll: true })
+    if (lastFocused && !lastFocused.isConnected) {
+      lastFocused = null
+      if (document.activeElement === document.body) {
+        if (selected) focus(selected)
+        else fallbackFocus.focus({ preventScroll: true })
+      }
     }
     if (selected) {
       currentKey = selected.dataset.keyboardItem || ''
       currentIndex = items.indexOf(selected)
-      lastPrimary = primaryFor(selected)
     }
   }
   function onFocus(event: FocusEvent) {
     const row = rowFor(event.target)
     if (!row || !root.contains(row)) return
+    lastFocused = event.target instanceof HTMLElement ? event.target : null
     currentKey = row.dataset.keyboardItem || ''
     currentIndex = rows().indexOf(row)
-    lastPrimary = primaryFor(row)
     sync()
+  }
+  function onBlur(event: FocusEvent) {
+    const next = event.relatedTarget
+    if (next instanceof HTMLElement && (!root.contains(next) || !rowFor(next))) lastFocused = null
   }
   function onKey(event: KeyboardEvent) {
     if (event.defaultPrevented || isImeComposing(event) || isTextEditingTarget(event.target)) return
@@ -105,6 +112,8 @@ export function installKeyboardCollection(root: HTMLElement, options: KeyboardCo
       if (rename) {
         rename.click()
         handled = true
+      } else {
+        handled = !row.dispatchEvent(new Event('keyboard-rename', { cancelable: true }))
       }
     } else if (plain && ['ArrowDown', 'ArrowUp', 'Home', 'End', 'PageDown', 'PageUp'].includes(event.key)) {
       const next =
@@ -159,6 +168,7 @@ export function installKeyboardCollection(root: HTMLElement, options: KeyboardCo
   root.setAttribute('data-keyboard-collection', '')
   root.addEventListener('keydown', onKey)
   root.addEventListener('focusin', onFocus)
+  root.addEventListener('focusout', onBlur)
   const observer = new MutationObserver(sync)
   observer.observe(root, {
     childList: true,
@@ -171,6 +181,7 @@ export function installKeyboardCollection(root: HTMLElement, options: KeyboardCo
     observer.disconnect()
     root.removeEventListener('keydown', onKey)
     root.removeEventListener('focusin', onFocus)
+    root.removeEventListener('focusout', onBlur)
   }
 }
 

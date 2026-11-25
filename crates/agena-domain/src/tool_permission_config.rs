@@ -98,8 +98,7 @@ impl ToolPermissionConfig {
         fn check<T: PartialEq>(values: &BTreeMap<String, T>, section: &str) -> Result<(), String> {
             let mut seen = BTreeMap::<&str, (&str, &T)>::new();
             for (name, value) in values {
-                let canonical =
-                    ToolPermissionConfig::canonical_command_policy_tool_name(name).unwrap_or(name);
+                let canonical = canonical_policy_tool_name(name).unwrap_or(name);
                 if let Some((previous_name, previous)) = seen.insert(canonical, (name, value))
                     && previous != value
                 {
@@ -115,8 +114,8 @@ impl ToolPermissionConfig {
     }
 
     pub fn with_canonical_tool_names(mut self) -> Self {
-        normalize_shell_keys(&mut self.names);
-        normalize_shell_keys(&mut self.rules);
+        normalize_tool_keys(&mut self.names);
+        normalize_tool_keys(&mut self.rules);
         self
     }
 
@@ -216,11 +215,20 @@ fn restrictiveness(mode: PermissionMode) -> u8 {
     }
 }
 
-fn normalize_shell_keys<T>(map: &mut BTreeMap<String, T>) {
+fn canonical_policy_tool_name(name: &str) -> Option<&'static str> {
+    match name {
+        "agena.code_mode.execute" | "code_mode.execute" | "tool_script.run" => {
+            Some("agena.tool_script.run")
+        }
+        _ => ToolPermissionConfig::canonical_command_policy_tool_name(name),
+    }
+}
+
+fn normalize_tool_keys<T>(map: &mut BTreeMap<String, T>) {
     let aliases = map
         .keys()
         .filter_map(|name| {
-            let canonical = ToolPermissionConfig::canonical_command_policy_tool_name(name)?;
+            let canonical = canonical_policy_tool_name(name)?;
             (name != canonical).then(|| (name.clone(), canonical))
         })
         .collect::<Vec<_>>();

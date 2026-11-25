@@ -452,6 +452,9 @@ pub fn normalize_execution_settings_document(document: &mut Value) -> Result<(),
 pub fn normalize_settings_document(document: &mut Value) -> Result<(), String> {
     normalize_execution_settings_document(document)?;
     crate::network_config_migration::normalize_network_settings_document(document);
+    if let Some(plugins) = document.get_mut("plugins") {
+        normalize_tool_script_config(plugins);
+    }
     if let Some(tools) = document.pointer_mut("/permission/tools")
         && let Ok(config) =
             serde_json::from_value::<agena_domain::ToolPermissionConfig>(tools.clone())
@@ -464,6 +467,32 @@ pub fn normalize_settings_document(document: &mut Value) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn normalize_tool_script_config(plugins: &mut Value) {
+    fn rename_entry(entries: Option<&mut Value>) {
+        if let Some(entries) = entries.and_then(Value::as_object_mut)
+            && let Some(entry) = entries.remove("agena.code_mode")
+        {
+            entries.entry("agena.tool_script").or_insert(entry);
+        }
+    }
+
+    // The former ID can also identify an explicitly configured external plugin.
+    if plugins
+        .pointer("/list/agena.code_mode/package/kind")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| kind != "static")
+    {
+        return;
+    }
+    rename_entry(plugins.get_mut("list"));
+    rename_entry(plugins.pointer_mut("/host/quotas"));
+    if let Some(profiles) = plugins.get_mut("profiles").and_then(Value::as_object_mut) {
+        for profile in profiles.values_mut() {
+            rename_entry(profile.get_mut("plugins"));
+        }
+    }
 }
 
 impl<'de> Deserialize<'de> for RawConfig {

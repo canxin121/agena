@@ -23,7 +23,7 @@ use serde_json::{Value, json};
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
-pub(crate) const CODE_MODE_PLUGIN_ID: &str = "agena.code_mode";
+pub(crate) const TOOL_SCRIPT_PLUGIN_ID: &str = "agena.tool_script";
 const MAX_SOURCE_BYTES: usize = 64 * 1024;
 const MAX_REQUESTS: usize = 50;
 const MAX_INTERMEDIATE_BYTES: usize = 256 * 1024;
@@ -31,13 +31,13 @@ const MAX_RESULT_BYTES: usize = 16 * 1024;
 static WORKERS: Semaphore = Semaphore::const_new(8);
 
 #[derive(Default)]
-pub(crate) struct CodeModePlugin {
+pub(crate) struct ToolScriptPlugin {
     host: OnceLock<Arc<dyn HostClient>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
-struct ExecuteInput {
+struct RunInput {
     /// JavaScript function body. Use an explicit return to emit JSON.
     #[arg(non_empty, max_chars = 65536)]
     code: String,
@@ -45,14 +45,14 @@ struct ExecuteInput {
 
 #[agena_plugin_host::sdk::agena_plugin(
     namespace = "agena",
-    name = "code_mode",
+    name = "tool_script",
     version = env!("CARGO_PKG_VERSION"),
-    display_name = "Code Mode",
+    display_name = "Tool Scripting",
     summary = "Compose session tools in a JavaScript program.",
     help = "Use JavaScript to chain tool calls, loop over results, and summarize the outcome in one model turn.",
-    translations(locale("zh-CN", summary = "用 JavaScript 编排会话工具。"))
+    translations(locale("zh-CN", summary = "用工具脚本串联当前会话的工具调用。"))
 )]
-impl CodeModePlugin {
+impl ToolScriptPlugin {
     #[hook(
         init,
         summary = "Connect the session tool host",
@@ -113,21 +113,24 @@ impl CodeModePlugin {
     async fn init(&self, _ctx: InitContext, host: Arc<dyn HostClient>) -> SdkResult<InitOutcome> {
         self.host
             .set(host)
-            .map_err(|_| PluginError::internal("Code Mode host is already initialized"))?;
+            .map_err(|_| PluginError::internal("Tool script host is already initialized"))?;
         Ok(InitOutcome::ack(self.manifest()))
     }
 
     #[tool(
-        name = "execute",
+        name = "run",
         tags(execute),
         summary = "Run JavaScript that chains tools through the current session.",
         help = "Supply a JavaScript function body. `tools.search(query, limit = 5)` returns `{tools, truncated}` with matching names and input schemas. `tools.call(name, args = {})` calls a tool serially with the session's usual permissions and returns `{payload, text, truncated, attachment_count}`. Errors throw with a `code` property. For example, `const f = tools.call('fs.stat', {path: 'README.md'}); return f.payload;`. Host I/O goes through the tool interface. Interactive, streaming and background-launch tools require direct calls. Each program can perform up to 50 calls or searches and return up to 16 KiB of JSON. The result reports completed calls even when the script throws.",
-        translations(locale("zh-CN", summary = "执行 JavaScript，串联当前会话的工具调用。"))
+        translations(locale(
+            "zh-CN",
+            summary = "运行工具脚本，用 JavaScript 串联当前会话的工具调用。"
+        ))
     )]
-    async fn execute(
+    async fn run(
         &self,
         ctx: &ToolInvokeContext<'_>,
-        input: ExecuteInput,
+        input: RunInput,
     ) -> SdkResult<ToolInvokeOutput> {
         if input.code.len() > MAX_SOURCE_BYTES {
             return Err(PluginError::invalid_params(
@@ -137,19 +140,22 @@ impl CodeModePlugin {
         let host = self.host.get().ok_or_else(|| {
             PluginError::from_kind(
                 PluginErrorKind::HostUnavailable,
-                "Code Mode host is unavailable",
+                "Tool script host is unavailable",
             )
         })?;
         let report = run_program(host.as_ref(), input.code, &ctx.cancellation).await?;
         let summary = if report.error.is_some() {
-            format!("Code Mode stopped after {} tool calls", report.calls.len())
+            format!(
+                "Tool script stopped after {} tool calls",
+                report.calls.len()
+            )
         } else {
-            format!("Code Mode completed {} tool calls", report.calls.len())
+            format!("Tool script completed {} tool calls", report.calls.len())
         };
         let payload =
             serde_json::to_value(report).map_err(|error| PluginError::internal_error(&error))?;
         Ok(ToolInvokeOutput::from_parts(
-            "Code Mode",
+            "Run Tool Script",
             summary,
             payload.to_string(),
             Some(payload),
@@ -203,7 +209,7 @@ async fn run_program(
 fn cancelled() -> PluginError {
     PluginError::from_kind(
         PluginErrorKind::Cancelled,
-        "Code Mode invocation was cancelled",
+        "Tool script invocation was cancelled",
     )
 }
 
@@ -265,7 +271,7 @@ fn encode_tool_output(output: ToolInvokeOutput) -> String {
     }
     result.payload = None;
     result.truncated = true;
-    serde_json::to_string(&result).expect("bounded Code Mode tool response serializes")
+    serde_json::to_string(&result).expect("bounded Tool script tool response serializes")
 }
 
 fn encode_search_results(tools: Vec<ToolDescriptor>, query: &str, limit: usize) -> String {
@@ -328,7 +334,7 @@ fn bounded_json(value: &impl Serialize, limit: usize) -> Option<String> {
     impl Write for Buffer {
         fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
             if bytes.len() > self.1.saturating_sub(self.0.len()) {
-                return Err(io::Error::other("Code Mode JSON exceeds its size limit"));
+                return Err(io::Error::other("Tool script JSON exceeds its size limit"));
             }
             self.0.extend_from_slice(bytes);
             Ok(bytes.len())

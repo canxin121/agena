@@ -17,7 +17,7 @@ const HIDDEN_STATELESS_MCP_PLUGIN_IDS: &[&str] = &[
     // effects, subagents, or session notifications that stateless MCP cannot
     // deliver correctly.
     "agena.interaction",
-    "agena.code_mode",
+    "agena.tool_script",
     "agena.browser",
     "agena.session",
     "agena.plan",
@@ -131,7 +131,7 @@ mod tests {
             "agena.chatgpt",
             "agena.session",
             "agena.interaction",
-            "agena.code_mode",
+            "agena.tool_script",
             "agena.browser",
             "agena.settings",
             "agena.mcp",

@@ -1,6 +1,6 @@
 use agena_runtime_config::{
     ConfigSettingsGetInput, ConfigSettingsLayer, ConfigSettingsReadResponse,
-    read_runtime_layer_setting,
+    normalize_settings_document, read_runtime_layer_setting,
 };
 use serde_json::{Value, json};
 use std::{fs, path::Path};
@@ -61,6 +61,26 @@ fn scalar_sources_describe_the_edited_layer_before_later_overrides() {
     );
     assert_eq!(locale.value, "en-US");
     assert_eq!(locale.inherited_value, Some(json!("zh-CN")));
+}
+
+#[test]
+fn code_mode_settings_are_read_under_the_tool_script_id() {
+    let mut document = json!({
+        "plugins": {
+            "list": {"agena.code_mode": {"package": {"kind": "static"}, "enabled": false}},
+            "profiles": {"restricted": {"plugins": {"agena.code_mode": {"action": "disable"}}}},
+            "host": {"quotas": {"agena.code_mode": {"max_concurrent": 1}}}
+        }
+    });
+    normalize_settings_document(&mut document).unwrap();
+    assert_eq!(
+        document["plugins"],
+        json!({
+            "list": {"agena.tool_script": {"package": {"kind": "static"}, "enabled": false}},
+            "profiles": {"restricted": {"plugins": {"agena.tool_script": {"action": "disable"}}}},
+            "host": {"quotas": {"agena.tool_script": {"max_concurrent": 1}}}
+        })
+    );
 }
 
 #[test]

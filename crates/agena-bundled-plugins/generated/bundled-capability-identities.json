@@ -937,27 +937,6 @@
       "conditional": null
     },
     {
-      "id": "agena.code_mode",
-      "version": "0.1.0",
-      "tools": [
-        {
-          "canonical_name": "agena.code_mode.execute",
-          "conditional": null,
-          "tags": [
-            "execute"
-          ],
-          "definition_identity": "138db78b324aca2732b97f250bb128caf783c3c16b1997d1cf8fc3ac5650a3db",
-          "input_schema_sha256": "7a585a75d6cea3e96e1b386abdc0aebcb6243f8317fe874eeb3799edbf15e7b1",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
-        }
-      ],
-      "hooks": [
-        "init",
-        "tool.invoke"
-      ],
-      "conditional": null
-    },
-    {
       "id": "agena.commands",
       "version": "0.1.0",
       "tools": [],
@@ -2832,6 +2811,27 @@
         "init",
         "application.ready",
         "shutdown"
+      ],
+      "conditional": null
+    },
+    {
+      "id": "agena.tool_script",
+      "version": "0.1.0",
+      "tools": [
+        {
+          "canonical_name": "agena.tool_script.run",
+          "conditional": null,
+          "tags": [
+            "execute"
+          ],
+          "definition_identity": "07fab2b0351c303ab08e641ddf603b71724e46711d71a3b2531755db84925793",
+          "input_schema_sha256": "7a585a75d6cea3e96e1b386abdc0aebcb6243f8317fe874eeb3799edbf15e7b1",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+        }
+      ],
+      "hooks": [
+        "init",
+        "tool.invoke"
       ],
       "conditional": null
     },

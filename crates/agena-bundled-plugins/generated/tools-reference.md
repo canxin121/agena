@@ -20,7 +20,6 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.chatgpt`](#agenachatgpt) — Model-based tools default to the current session model. Use an OpenAI model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. OpenAI cloud inference, files, knowledge stores, images, audio, realtime voice, batches and agent APIs. Inputs leave this computer; no local execution fallback. (27 tools)
 - [`agena.claude`](#agenaclaude) — Model-based tools default to the current session model. Use an Anthropic Claude model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. Anthropic cloud inference, search, code execution, files, Skills, batches and managed-agent APIs. Inputs leave this computer; no local execution fallback. (15 tools)
 - [`agena.code`](#agenacode) — Structured code search and syntax inspection tools. (3 tools)
-- [`agena.code_mode`](#agenacode_mode) — Compose session tools in a JavaScript program. (1 tools)
 - [`agena.commands`](#agenacommands) — Declare the built-in slash commands shared by Agena clients. (0 tools)
 - [`agena.companion`](#agenacompanion) — Memory settings and reminders. (1 tools)
 - [`agena.cron`](#agenacron) — Cron-style and one-shot wakeup scheduling tools. (7 tools)
@@ -45,6 +44,7 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.skills`](#agenaskills) — Discover, install, author, and manage complete Agent Skills packages. (12 tools)
 - [`agena.slack`](#agenaslack) — Receive signed Slack message events and reply using the Slack Bot API. (0 tools)
 - [`agena.telegram`](#agenatelegram) — Telegram channel adapter: direct chats, groups and channels over the official Bot API. (0 tools)
+- [`agena.tool_script`](#agenatool_script) — Compose session tools in a JavaScript program. (1 tools)
 - [`agena.web`](#agenaweb) — Web search, fetch and crawl with a local index and optional page rendering. (6 tools)
 - [`agena.whatsapp`](#agenawhatsapp) — Receive signed WhatsApp Cloud text messages and reply using the Meta Graph API. (0 tools)
 
@@ -12512,98 +12512,6 @@ Structured code search and syntax inspection tools.
         },
         "required": [
           "path"
-        ]
-      }
-    ]
-  }
-}
-```
-
-## agena.code_mode
-
-**Version** `0.1.0` · **Tools** 1
-
-Compose session tools in a JavaScript program.
-
-> Use JavaScript to chain tool calls, loop over results, and summarize the outcome in one model turn.
-
-### execute
-
-`agena.code_mode.execute` · **Summary**: Run JavaScript that chains tools through the current session.
-
-**Tags**: `execute`
-
-**Runtime**: streaming `buffered`
-
-**Help**:
-> Supply a JavaScript function body. `tools.search(query, limit = 5)` returns `{tools, truncated}` with matching names and input schemas. `tools.call(name, args = {})` calls a tool serially with the session's usual permissions and returns `{payload, text, truncated, attachment_count}`. Errors throw with a `code` property. For example, `const f = tools.call('fs.stat', {path: 'README.md'}); return f.payload;`. Host I/O goes through the tool interface. Interactive, streaming and background-launch tools require direct calls. Each program can perform up to 50 calls or searches and return up to 16 KiB of JSON. The result reports completed calls even when the script throws.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `code` | `string` | ✓ | — | JavaScript function body. Use an explicit return to emit JSON. |
-
-**Input schema**:
-```json
-{
-  "required": [
-    "code"
-  ],
-  "additionalProperties": false,
-  "type": "object",
-  "properties": {
-    "code": {
-      "description": "JavaScript function body. Use an explicit return to emit JSON.",
-      "type": "string",
-      "x-agena-order": "000000",
-      "x-agena-non-empty": true,
-      "minLength": 1,
-      "not": {
-        "type": "string",
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
-      },
-      "maxLength": 65536
-    }
-  },
-  "not": {
-    "anyOf": [
-      {
-        "not": {
-          "type": "object",
-          "properties": {
-            "code": {}
-          },
-          "required": [
-            "code"
-          ]
-        }
-      },
-      {
-        "type": "object",
-        "properties": {
-          "code": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "type": "string",
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
-              },
-              {
-                "type": "array",
-                "maxItems": 0
-              },
-              {
-                "type": "object",
-                "maxProperties": 0,
-                "properties": {}
-              }
-            ]
-          }
-        },
-        "required": [
-          "code"
         ]
       }
     ]
@@ -28731,6 +28639,98 @@ Receive signed Slack message events and reply using the Slack Bot API.
 Telegram channel adapter: direct chats, groups and channels over the official Bot API.
 
 > Connect multiple BotFather tokens to local AI Bots. The Telegram manager discovers chats through one durable collector per token and applies private/group/channel switches plus chat allow or deny lists. Per-room tool grants remain available in advanced channel settings.
+
+## agena.tool_script
+
+**Version** `0.1.0` · **Tools** 1
+
+Compose session tools in a JavaScript program.
+
+> Use JavaScript to chain tool calls, loop over results, and summarize the outcome in one model turn.
+
+### run
+
+`agena.tool_script.run` · **Summary**: Run JavaScript that chains tools through the current session.
+
+**Tags**: `execute`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Supply a JavaScript function body. `tools.search(query, limit = 5)` returns `{tools, truncated}` with matching names and input schemas. `tools.call(name, args = {})` calls a tool serially with the session's usual permissions and returns `{payload, text, truncated, attachment_count}`. Errors throw with a `code` property. For example, `const f = tools.call('fs.stat', {path: 'README.md'}); return f.payload;`. Host I/O goes through the tool interface. Interactive, streaming and background-launch tools require direct calls. Each program can perform up to 50 calls or searches and return up to 16 KiB of JSON. The result reports completed calls even when the script throws.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `code` | `string` | ✓ | — | JavaScript function body. Use an explicit return to emit JSON. |
+
+**Input schema**:
+```json
+{
+  "required": [
+    "code"
+  ],
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "code": {
+      "description": "JavaScript function body. Use an explicit return to emit JSON.",
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      },
+      "maxLength": 65536
+    }
+  },
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "code": {}
+          },
+          "required": [
+            "code"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "code"
+        ]
+      }
+    ]
+  }
+}
+```
 
 ## agena.web
 

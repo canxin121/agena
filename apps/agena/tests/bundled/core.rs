@@ -14,22 +14,22 @@ use serde_json::{Value, json};
 
 use super::{allow_permissions, fixture};
 
-#[path = "core_code_mode.rs"]
-mod core_code_mode;
 #[path = "core_contracts.rs"]
 mod core_contracts;
 #[path = "core_memory.rs"]
 mod core_memory;
 #[path = "core_permissions.rs"]
 mod core_permissions;
+#[path = "core_tool_script.rs"]
+mod core_tool_script;
 
 pub(super) const CASES: &[(&str, fn() -> TestResult)] = &[
     ("agena.fs", fs_edits_files_with_revision_checks),
     ("agena.shell", shell_runs_commands_and_owns_background_jobs),
     ("agena.code", code_previews_and_applies_structural_edits),
     (
-        "agena.code_mode",
-        core_code_mode::composes_session_tools_and_preserves_permissions,
+        "agena.tool_script",
+        core_tool_script::composes_session_tools_and_preserves_permissions,
     ),
     (
         "agena.commands",

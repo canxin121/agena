@@ -24,10 +24,10 @@ use super::{
     vm::{self, Operation},
 };
 
-const ARGUMENT: &str = "--agena-code-mode-worker";
+const ARGUMENT: &str = "--agena-tool-script-worker";
 const COMPUTE_BUDGET: Duration = Duration::from_secs(2);
-const TIMEOUT_MESSAGE: &str = "Code Mode JavaScript exceeded its compute budget.";
-const REQUEST_LIMIT_MESSAGE: &str = "Code Mode reached its limit of 50 tool calls and searches.";
+const TIMEOUT_MESSAGE: &str = "Tool script JavaScript exceeded its compute budget.";
+const REQUEST_LIMIT_MESSAGE: &str = "Tool script reached its limit of 50 tool calls and searches.";
 
 type ProgramResult = Result<(Value, bool), String>;
 
@@ -61,11 +61,11 @@ pub(super) async fn execute(
     let mut input = child
         .stdin()
         .take()
-        .ok_or_else(|| PluginError::internal("Code Mode worker stdin is unavailable"))?;
+        .ok_or_else(|| PluginError::internal("Tool script worker stdin is unavailable"))?;
     let mut output = child
         .stdout()
         .take()
-        .ok_or_else(|| PluginError::internal("Code Mode worker stdout is unavailable"))?;
+        .ok_or_else(|| PluginError::internal("Tool script worker stdout is unavailable"))?;
     let outcome = tokio::select! {
         biased;
         _ = cancellation.cancelled() => Err(cancelled()),
@@ -74,14 +74,14 @@ pub(super) async fn execute(
     drop(input);
     drop(output);
     if let Err(error) = child.terminate(Duration::ZERO).await {
-        tracing::warn!(%error, "Code Mode worker cleanup failed");
+        tracing::warn!(%error, "Tool script worker cleanup failed");
     }
     if cancellation.is_cancelled() {
         return Err(cancelled());
     }
     Ok(match outcome? {
         Ok(result) => result,
-        Err(error) => Err(format!("Code Mode JavaScript worker stopped: {error}")),
+        Err(error) => Err(format!("Tool script JavaScript worker stopped: {error}")),
     })
 }
 
@@ -140,7 +140,7 @@ pub(crate) fn try_run_worker() -> Option<i32> {
     Some(match run() {
         Ok(()) => 0,
         Err(error) => {
-            eprintln!("Code Mode worker failed: {error}");
+            eprintln!("Tool script worker failed: {error}");
             1
         }
     })
@@ -157,7 +157,7 @@ fn run() -> io::Result<()> {
     let result = vm::run(&source, move |operation| {
         if remaining_requests == 0 {
             return Ok(encode_error(
-                "code_mode.request_limit",
+                "tool_script.request_limit",
                 REQUEST_LIMIT_MESSAGE,
             ));
         }
@@ -172,7 +172,7 @@ fn check_length(length: usize, limit: usize) -> io::Result<()> {
     if length > limit {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "Code Mode worker frame is too large",
+            "Tool script worker frame is too large",
         ));
     }
     Ok(())

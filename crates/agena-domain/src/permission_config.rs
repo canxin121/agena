@@ -31,13 +31,30 @@ pub struct PermissionConfig {
     )]
     pub tools: Option<ToolPermissionConfig>,
     /// Exact plugin IDs. Omitted entries follow the enclosing permission policy.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "BTreeMap::is_empty",
+        deserialize_with = "deserialize_plugin_permissions"
+    )]
     pub plugins: BTreeMap<String, bool>,
     /// Model used to make an automatic permission decision. The runtime must
     /// fail closed to an interactive `ask` when this reference is absent or
     /// cannot be resolved.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval_model: Option<ApprovalModelSelection>,
+}
+
+fn deserialize_plugin_permissions<'de, D>(
+    deserializer: D,
+) -> Result<BTreeMap<String, bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut plugins = BTreeMap::<String, bool>::deserialize(deserializer)?;
+    if let Some(enabled) = plugins.remove("agena.code_mode") {
+        plugins.entry("agena.tool_script".into()).or_insert(enabled);
+    }
+    Ok(plugins)
 }
 
 fn deserialize_tools<'de, D>(deserializer: D) -> Result<Option<ToolPermissionConfig>, D::Error>
@@ -316,5 +333,28 @@ mod tests {
                 assert_eq!(config.network.unwrap(), NetworkPermissionConfig::offline());
             }
         }
+    }
+
+    #[test]
+    fn code_mode_permissions_follow_the_renamed_tool_script() {
+        let config: PermissionConfig = serde_json::from_value(json!({
+            "plugins": {"agena.code_mode": false},
+            "tools": {
+                "names": {"code_mode.execute": "deny"},
+                "rules": {"agena.code_mode.execute": "ask"}
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(
+            serde_json::to_value(config).unwrap(),
+            json!({
+                "plugins": {"agena.tool_script": false},
+                "tools": {
+                    "names": {"agena.tool_script.run": "deny"},
+                    "rules": {"agena.tool_script.run": "ask"}
+                }
+            })
+        );
     }
 }

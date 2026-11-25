@@ -169,7 +169,7 @@ async fn dispatch(operation: &str, input: Value) -> SdkResult<Value> {
 }
 
 pub fn try_run_worker() -> Option<i32> {
-    if let Some(code) = crate::plugins::provided::code_mode::try_run_worker() {
+    if let Some(code) = crate::plugins::provided::tool_script::try_run_worker() {
         return Some(code);
     }
     if std::env::args_os().nth(1).as_deref() != Some(std::ffi::OsStr::new(ARGUMENT)) {

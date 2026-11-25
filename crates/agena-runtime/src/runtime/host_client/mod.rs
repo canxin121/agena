@@ -762,15 +762,15 @@ impl HostClient for RuntimeHostClient {
 
         let caller = self.callback_context()?;
         let plugin_id = resolution.plugin_full_name();
-        let code_mode_id = agena_bundled_plugins::tool::code_mode_plugin_id();
-        if plugin_id == code_mode_id
-            || (caller.plugin_id.as_deref() == Some(code_mode_id)
-                && !code_mode_can_invoke(&resolution))
+        let tool_script_id = agena_bundled_plugins::tool::tool_script_plugin_id();
+        if plugin_id == tool_script_id
+            || (caller.plugin_id.as_deref() == Some(tool_script_id)
+                && !tool_script_can_invoke(&resolution))
         {
             return Err(PluginError::from_kind_with_public_detail(
                 agena_plugin_sdk::PluginErrorKind::CapabilityUnavailable,
                 format!(
-                    "Code Mode cannot delegate to {}",
+                    "Tool script cannot delegate to {}",
                     resolution.canonical_name()
                 ),
                 "This tool needs its own invocation. Call it directly.",
@@ -965,14 +965,14 @@ impl HostClient for RuntimeHostClient {
         let (executor, _) = self.callback_scoped_tool_executor().await?;
         let tools = executor.detailed_execution_tools_async().await;
         let names = crate::tool::execution_tool_names(&tools);
-        let code_mode = current_host_callback_context()
+        let tool_script = current_host_callback_context()
             .and_then(|context| context.plugin_id)
             .as_deref()
-            == Some(agena_bundled_plugins::tool::code_mode_plugin_id());
+            == Some(agena_bundled_plugins::tool::tool_script_plugin_id());
         Ok(tools
             .into_iter()
             .zip(names)
-            .filter(|(tool, _)| !code_mode || code_mode_can_invoke(tool))
+            .filter(|(tool, _)| !tool_script || tool_script_can_invoke(tool))
             .map(|(tool, name)| {
                 let mut descriptor = render_tool_descriptor(tool.into_registered());
                 descriptor.name = name;

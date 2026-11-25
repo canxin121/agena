@@ -97,24 +97,24 @@ pub(super) fn run(
         engine.eval(RUN_PROGRAM)
     };
     if engine.footprint() > MEMORY_LIMIT {
-        return Err("Code Mode JavaScript exceeded its 16 MiB heap budget.".to_owned());
+        return Err("Tool script JavaScript exceeded its 16 MiB heap budget.".to_owned());
     }
     let JsValue::Object(id) = program.map_err(engine_error)? else {
-        return Err("Code Mode program did not return a promise.".to_owned());
+        return Err("Tool script program did not return a promise.".to_owned());
     };
     let promise = engine
         .heap_mut()
         .promise(id)
-        .ok_or("Code Mode program did not return a promise.")?;
+        .ok_or("Tool script program did not return a promise.")?;
     let value = promise.result;
     match promise.state {
         PromiseState::Pending => {
-            Err("Code Mode program is waiting on an unresolved promise.".to_owned())
+            Err("Tool script program is waiting on an unresolved promise.".to_owned())
         }
         PromiseState::Rejected => Err(engine
             .text(value)
             .map(|error| prefix(&error, 1024).to_owned())
-            .unwrap_or_else(|_| "Code Mode program threw an exception.".to_owned())),
+            .unwrap_or_else(|_| "Tool script program threw an exception.".to_owned())),
         PromiseState::Fulfilled => serialize_result(engine.heap_mut(), value),
     }
 }
@@ -122,7 +122,7 @@ pub(super) fn run(
 fn engine_error(error: Error) -> String {
     match error {
         Error::Thrown(message) | Error::Syntax { message, .. } => prefix(&message, 1024).to_owned(),
-        other => format!("Code Mode JavaScript engine failed: {other:?}"),
+        other => format!("Tool script JavaScript engine failed: {other:?}"),
     }
 }
 
@@ -130,7 +130,7 @@ fn serialize_result(heap: &Heap, value: JsValue) -> Result<(Value, bool), String
     if matches!(value, JsValue::Undefined) {
         return Ok((Value::Null, false));
     }
-    let units = units(heap, value).ok_or("Code Mode result was not serialized to JSON.")?;
+    let units = units(heap, value).ok_or("Tool script result was not serialized to JSON.")?;
     // UTF-8 uses at least as many bytes as there are UTF-16 units. Decode
     // enough to detect truncation without copying the entire result.
     let serialized = String::from_utf16_lossy(&units[..units.len().min(MAX_RESULT_BYTES + 1)]);
@@ -182,7 +182,7 @@ fn read_call(heap: &Heap, call: &NativeCall<'_>) -> Result<Operation, &'static s
 fn call_tool(vm: &mut Vm, heap: &mut Heap, call: &NativeCall<'_>) -> Completion<JsValue> {
     let response = match read_call(heap, call) {
         Ok(operation) => exchange(operation),
-        Err(message) => encode_error("code_mode.invalid_call", message),
+        Err(message) => encode_error("tool_script.invalid_call", message),
     };
     Ok(Host::new(vm, heap).string(&response))
 }
@@ -198,7 +198,7 @@ fn search_tools(vm: &mut Vm, heap: &mut Heap, call: &NativeCall<'_>) -> Completi
             })
         }
         _ => encode_error(
-            "code_mode.invalid_search",
+            "tool_script.invalid_search",
             "Supply a query up to 512 bytes and an integer limit from 1 to 10.",
         ),
     };
@@ -214,8 +214,8 @@ fn exchange(operation: Operation) -> String {
         })
         .unwrap_or_else(|| {
             encode_error(
-                "code_mode.interrupted",
-                "Code Mode host stopped the invocation.",
+                "tool_script.interrupted",
+                "Tool script host stopped the invocation.",
             )
         })
 }

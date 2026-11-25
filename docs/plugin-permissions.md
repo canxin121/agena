@@ -17,6 +17,8 @@
 }
 ```
 
+工具脚本（Tool Scripting）的插件 ID 是 `agena.tool_script`，工具的完整 ID 是 `agena.tool_script.run`。读取已有配置时，旧 `agena.code_mode` 插件设置与旧 `code_mode.execute` 工具权限按新 ID 生效。外部调用请使用 `tool_script.run` 或完整 ID。
+
 ## 模型协议与插件执行的边界
 
 `agena-tool-api` 独立声明和分发 `plugins_list`、`tools_list`、`tools_help`、`tools_call`。这些是运行时协议函数，拥有独立的注册表、请求、响应和错误类型，不是插件工具，也不计入插件工具目录。插件宿主拒绝将 `agena.tools` 注册为插件或插件工具。

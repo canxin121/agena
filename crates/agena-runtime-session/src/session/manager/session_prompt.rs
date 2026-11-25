@@ -295,6 +295,12 @@ fn capability_sections(role: SessionRelationKind, tools: &AvailableTools) -> Vec
     let has = |name: &str| tools.contains_key(name);
     let mut paragraphs = Vec::new();
 
+    if let Some(script) = tools.get("agena.tool_script.run") {
+        paragraphs.push(format!(
+            "Prefer `{script}` for repeated or dependent tool calls when JavaScript can loop, branch, filter, or combine results. Read its contract with `tools_help`, then run the script with `tools_call`. In the script, use `tools.search` to discover names and inputs, `tools.call` to invoke tools with the session's permissions, and `return` to send back the relevant result. Call tools directly for simple single operations, user interaction, streaming, or background launches."
+        ));
+    }
+
     // Inspect-then-answer guidance for the model's own identity and runtime
     // state. Only tools advertised to this session are named.
     let session_roles: &[(&str, &str)] = &[
@@ -834,6 +840,7 @@ mod tests {
     use agena_domain::{ConversationMode, SessionConversation};
 
     const ALL_WORKFLOW_TOOLS: &[&str] = &[
+        "tool_script.run",
         "session.get",
         "session.model",
         "session.tokens",
@@ -1162,6 +1169,18 @@ mod tests {
             "agena.provider",
         ] {
             assert!(!prompt.contains(&format!("`{plugin}`")), "{plugin}");
+        }
+    }
+
+    #[test]
+    fn tool_script_guidance_uses_the_advertised_name() {
+        for role in [SessionRelationKind::Root, SessionRelationKind::Subagent] {
+            let prompt = prompt(role, true, &["tool_script.run"]);
+            assert!(
+                prompt.contains("Prefer `tool_script.run` for repeated or dependent tool calls")
+            );
+            assert!(prompt.contains("`tools.search` to discover names and inputs"));
+            assert!(prompt.contains("`tools.call` to invoke tools with the session's permissions"));
         }
     }
 

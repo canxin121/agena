@@ -355,7 +355,7 @@ ast-grep-language = { version = "0.44.1", default-features = false, features = [
 ] }
 tree-sitter = "0.26.12"
 rmcp = "3.1.3"
-# Code Mode relies on the embedding and Promise APIs of this pre-1.0 release.
+# Tool script relies on the embedding and Promise APIs of this pre-1.0 release.
 viperjs = "=0.3.0"
 wasmtime = { version = "48.0.6", default-features = false, features = ["cranelift", "runtime", "std"] }
 wasmtime-wasi = { version = "48.0.6", default-features = false, features = ["p1"] }

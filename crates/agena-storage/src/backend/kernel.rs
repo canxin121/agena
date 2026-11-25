@@ -847,6 +847,12 @@ pub trait KernelBackend: Send + Sync {
         execution: ExecutionId,
         generation: Option<AttemptGeneration>,
     ) -> Result<ReadView<Vec<ContentId>>>;
+    async fn transcript_page(
+        &self,
+        session: SessionId,
+        position: TranscriptPosition,
+        limit: usize,
+    ) -> Result<ReadView<TranscriptPage>>;
     async fn history_window(
         &self,
         session: SessionId,

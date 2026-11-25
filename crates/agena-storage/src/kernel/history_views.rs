@@ -38,7 +38,37 @@ pub struct MessageHistoryPage {
     pub next: Option<HistoryCursor>,
     pub has_more: bool,
 }
+
+/// A keyset position in the plain-text transcript. An anchor is resolved
+/// against the session's current membership on every read.
+#[derive(Debug, Clone, Copy)]
+pub enum TranscriptPosition {
+    Latest,
+    Before(EntryId),
+    AtOrBefore(EntryId),
+    After(EntryId),
+}
+
+#[derive(Debug, Serialize)]
+pub struct TranscriptPage {
+    /// User messages and assistant text in chronological order.
+    pub entries: Vec<EntryView>,
+    pub has_more: bool,
+}
+
 impl KernelReader {
+    pub async fn transcript_page(
+        &self,
+        session: SessionId,
+        position: TranscriptPosition,
+        limit: usize,
+    ) -> Result<ReadView<TranscriptPage>> {
+        self.0
+            .backend
+            .transcript_page(session, position, limit)
+            .await
+    }
+
     /// Read only origin-owned tool entries still in the live membership.
     /// Identity/size preflight excludes ordinary transcript and provider replay.
     pub async fn owned_tool_entries(

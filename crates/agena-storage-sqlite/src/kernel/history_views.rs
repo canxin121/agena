@@ -252,6 +252,76 @@ async fn bodies(
     Ok(entries)
 }
 
+pub(super) async fn transcript_page(
+    backend: &Backend,
+    session: SessionId,
+    position: TranscriptPosition,
+    limit: usize,
+) -> Result<ReadView<TranscriptPage>> {
+    backend.cache.ensure_open()?;
+    let _read = backend
+        .content_reads
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| KernelError::Busy)?;
+    let mut tx = backend
+        .reader
+        .get_sqlite_connection_pool()
+        .begin()
+        .await
+        .map_err(storage)?;
+    reads::metadata(&mut tx, session).await?;
+    let (anchor, comparison, order) = match position {
+        TranscriptPosition::Latest => (None, "<", "DESC"),
+        TranscriptPosition::Before(entry) => (Some(entry), "<", "DESC"),
+        TranscriptPosition::AtOrBefore(entry) => (Some(entry), "<=", "DESC"),
+        TranscriptPosition::After(entry) => (Some(entry), ">", "ASC"),
+    };
+    let (sequence, ordinal) = match anchor {
+        Some(entry) => lifecycle::boundary(&mut tx, session, entry).await?,
+        None => (i64::MAX, i64::MAX),
+    };
+    let limit = limit.clamp(1, 64);
+    let query = format!(
+        "SELECT e.id,e.body_bytes {MEMBERSHIP}
+         AND e.kind IN ('user','text') AND NOT EXISTS (
+             SELECT 1 FROM agena_execution_purposes p
+             WHERE p.execution_id=e.execution_id AND p.purpose='compaction'
+         )
+         AND (s.sequence,m.ordinal){comparison}(?,?)
+         ORDER BY s.sequence {order},m.ordinal {order} LIMIT ?"
+    );
+    let rows: Vec<(i64, i64)> = sqlx::query_as(&query)
+        .bind(session.get())
+        .bind(sequence)
+        .bind(ordinal)
+        .bind((limit + 1) as i64)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(sql_error)?;
+    let diagnostics = backend.live.diagnostics();
+    metrics::add(&diagnostics.0.history_queries, 1);
+    metrics::add(&diagnostics.0.history_candidate_rows, rows.len());
+    let mut ids = Vec::with_capacity(limit);
+    let mut bytes = 0usize;
+    for &(id, body_bytes) in &rows {
+        let charge = usize::try_from(body_bytes)
+            .map_err(storage)?
+            .saturating_add(512);
+        if ids.len() == limit || (!ids.is_empty() && bytes.saturating_add(charge) > 1024 * 1024) {
+            break;
+        }
+        bytes = bytes.saturating_add(charge);
+        ids.push(id);
+    }
+    let value = TranscriptPage {
+        has_more: rows.len() > ids.len(),
+        entries: bodies(&mut tx, session, &ids, diagnostics).await?,
+    };
+    let bytes = modeled_read_bytes(&value)?;
+    backend.wrap_read(session, value, bytes)
+}
+
 pub(super) async fn history_by_ids(
     pool: &SqlitePool,
     session: SessionId,

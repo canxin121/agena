@@ -1503,6 +1503,14 @@ impl KernelBackend for Backend {
         let bytes = modeled_read_bytes(&value)?;
         self.wrap_read(session, value, bytes)
     }
+    async fn transcript_page(
+        &self,
+        session: SessionId,
+        position: TranscriptPosition,
+        limit: usize,
+    ) -> Result<ReadView<TranscriptPage>> {
+        history_views::transcript_page(self, session, position, limit).await
+    }
     async fn history_by_ids(
         &self,
         session: SessionId,

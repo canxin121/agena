@@ -29,7 +29,8 @@ mod history_views;
 mod prompt;
 mod read;
 pub use history_views::{
-    MessageHistoryPage, MessageHistorySummary, OwnedToolCursor, OwnedToolPage,
+    MessageHistoryPage, MessageHistorySummary, OwnedToolCursor, OwnedToolPage, TranscriptPage,
+    TranscriptPosition,
 };
 mod snapshot;
 pub use prompt::{PromptEntry, PromptReplay, PromptTool, PromptView};

@@ -30,6 +30,7 @@ pub struct BotPersona {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BotPromptSelection {
+    /// Ordered global library IDs, with optional built-in positions and the Bot instruction body.
     pub ids: Vec<String>,
     #[serde(default)]
     pub publish_to_channels: bool,
@@ -48,7 +49,8 @@ impl BotPersona {
             )));
         }
         if let Some(prompts) = &self.prompts {
-            if prompts.ids.len() > 256 || prompts.ids.iter().any(|id| id.len() > 64) {
+            // Leave room to order the built-ins around a full legacy set of 256 saved prompts.
+            if prompts.ids.len() > 320 || prompts.ids.iter().any(|id| id.len() > 64) {
                 return Err(Error::Invalid(
                     "Bot prompt selection exceeds its size limit",
                 ));
@@ -63,6 +65,8 @@ pub struct BotProfile {
     pub id: Uuid,
     pub name: String,
     pub persona: BotPersona,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_profile: Option<String>,
     /// Instance-owned PNG thumbnail, encoded as a data URL.
     #[serde(default)]
     pub avatar: Option<String>,
@@ -88,6 +92,8 @@ pub struct BotCreate {
     pub name: String,
     pub persona: Option<BotPersona>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avatar: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -97,6 +103,9 @@ pub struct BotUpdate {
     pub expected_revision: i64,
     pub name: String,
     pub persona: BotPersona,
+    /// Omit to keep the current selection. An empty value restores the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_profile: Option<String>,
     /// Missing preserves the current avatar; null removes it; a string replaces it.
     #[serde(
         default,

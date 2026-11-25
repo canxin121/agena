@@ -72,6 +72,227 @@ async fn send(manager: &SessionManager, session: SessionId) -> ExecutionView {
         .value
 }
 
+#[tokio::test]
+async fn transcript_search_includes_inherited_text_and_crosses_content_chunks() {
+    use agena_plugin_host::sdk::host_api::{HostSessionReadRequest, HostSessionSearchRequest};
+
+    let (manager, root) = fixture().await;
+    let kernel = manager.kernel();
+    let queued = send(&manager, root).await;
+    let attempt = kernel
+        .executor
+        .claim_next(RequestId::new(), root, queued.id)
+        .await
+        .unwrap()
+        .value;
+    let round = attempt
+        .begin_current_round(RequestId::new())
+        .await
+        .unwrap()
+        .value;
+    let reasoning = round
+        .begin_text(RequestId::new(), true)
+        .await
+        .unwrap()
+        .value;
+    reasoning.append("hidden needle").await.unwrap();
+    reasoning.finish(RequestId::new()).await.unwrap();
+    let output = round
+        .begin_text(RequestId::new(), false)
+        .await
+        .unwrap()
+        .value;
+    let assistant_id = output.entry_id();
+    // The match starts before the first scan chunk ends and finishes in the next.
+    let prefix = "x".repeat(32 * 1024 - 2);
+    output
+        .append(&format!("{prefix}中 Straße needle"))
+        .await
+        .unwrap();
+    output.finish(RequestId::new()).await.unwrap();
+    round.finish(RequestId::new(), None, true).await.unwrap();
+    attempt
+        .finish(RequestId::new(), ExecutionPhase::Succeeded)
+        .await
+        .unwrap();
+    let fork = kernel
+        .sessions
+        .fork(RequestId::new(), root, assistant_id)
+        .await
+        .unwrap()
+        .value
+        .id;
+    kernel
+        .sessions
+        .clear(RequestId::new(), root, ClearMode::History)
+        .await
+        .unwrap();
+
+    let search = |target, query: &str| HostSessionSearchRequest {
+        query: query.into(),
+        session_id: Some(target),
+        limit: None,
+        cursor: None,
+    };
+    let result = manager
+        .search_session_transcript(root.get(), search(fork.get(), "中 STRAẞE NEEDLE"))
+        .await
+        .unwrap();
+    assert_eq!(result["hits"].as_array().unwrap().len(), 1);
+    let hit = &result["hits"][0];
+    assert_eq!(hit["entry_id"], assistant_id.get());
+    assert_eq!(hit["role"], "assistant");
+    assert_eq!(hit["match_byte_offset"], prefix.len());
+    let read = manager
+        .read_session_transcript(
+            root.get(),
+            HostSessionReadRequest {
+                session_id: Some(fork.get()),
+                entry_id: Some(assistant_id.get()),
+                direction: Default::default(),
+                byte_offset: hit["match_byte_offset"].as_u64(),
+                limit: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(read["entries"][0]["text"], "中 Straße needle");
+
+    let private = manager
+        .search_session_transcript(root.get(), search(fork.get(), "hidden needle"))
+        .await
+        .unwrap();
+    assert_eq!(private["hits"].as_array().unwrap().len(), 0);
+    let retired = manager
+        .search_session_transcript(root.get(), search(root.get(), "needle"))
+        .await
+        .unwrap();
+    assert_eq!(retired["hits"].as_array().unwrap().len(), 0);
+    assert!(
+        manager
+            .read_session_transcript(
+                root.get(),
+                HostSessionReadRequest {
+                    session_id: Some(root.get()),
+                    entry_id: Some(assistant_id.get()),
+                    direction: Default::default(),
+                    byte_offset: None,
+                    limit: None,
+                }
+            )
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn transcript_search_keeps_bot_and_subagent_history_in_its_source_scope() {
+    use agena_domain::{SessionOwner, SessionSurface};
+    use agena_plugin_host::sdk::host_api::{HostSessionReadRequest, HostSessionSearchRequest};
+
+    let (manager, root) = fixture().await;
+    let kernel = manager.kernel();
+    let workspace = kernel
+        .reader
+        .metadata(root)
+        .await
+        .unwrap()
+        .workspace_id
+        .unwrap();
+    let bot = kernel
+        .sessions
+        .create_configured(
+            RequestId::new(),
+            workspace,
+            "Channel".into(),
+            SessionConfiguration {
+                owner: Some(SessionOwner {
+                    bot: uuid::Uuid::new_v4(),
+                    surface: SessionSurface::Direct,
+                    scope_key: Some("private-channel".into()),
+                }),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .value
+        .id;
+    let nested = kernel
+        .sessions
+        .create_configured(
+            RequestId::new(),
+            workspace,
+            "Channel child".into(),
+            SessionConfiguration {
+                parent_session_id: Some(bot),
+                relation_kind: SessionRelationKind::Child,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .value
+        .id;
+    let subagent = kernel
+        .sessions
+        .create_configured(
+            RequestId::new(),
+            workspace,
+            "Agent".into(),
+            SessionConfiguration {
+                parent_session_id: Some(root),
+                relation_kind: SessionRelationKind::Subagent,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .value
+        .id;
+    for session in [root, bot, nested, subagent] {
+        send(&manager, session).await;
+    }
+    let search = |session_id| HostSessionSearchRequest {
+        query: "hi".into(),
+        session_id,
+        limit: None,
+        cursor: None,
+    };
+    let read = |session_id| HostSessionReadRequest {
+        session_id: Some(session_id),
+        entry_id: None,
+        direction: Default::default(),
+        byte_offset: None,
+        limit: None,
+    };
+    for source in [root, bot, nested, subagent] {
+        let result = manager
+            .search_session_transcript(source.get(), search(None))
+            .await
+            .unwrap();
+        assert_eq!(result["hits"].as_array().unwrap().len(), 1);
+        assert_eq!(result["hits"][0]["session_id"], source.get());
+        for target in [root, bot, nested, subagent]
+            .into_iter()
+            .filter(|target| *target != source)
+        {
+            assert!(
+                manager
+                    .search_session_transcript(source.get(), search(Some(target.get())))
+                    .await
+                    .is_err()
+            );
+            assert!(
+                manager
+                    .read_session_transcript(source.get(), read(target.get()))
+                    .await
+                    .is_err()
+            );
+        }
+    }
+}
+
 async fn assert_workflow(manager: &SessionManager, session: SessionId, expected: WorkflowState) {
     assert_eq!(
         manager.get_session(session.get()).await.unwrap().workflow,
@@ -87,6 +308,7 @@ async fn assert_workflow(manager: &SessionManager, session: SessionId, expected:
         .unwrap();
     assert_eq!(
         SessionQueryService::execution_context(manager, &snapshot)
+            .await
             .unwrap()
             .workflow_state,
         expected,
@@ -114,7 +336,9 @@ async fn execution_projection_keeps_selected_and_inherited_model_modes_separate(
         .control_snapshot(session, 1)
         .await
         .unwrap();
-    let context = SessionQueryService::execution_context(&manager, &snapshot).unwrap();
+    let context = SessionQueryService::execution_context(&manager, &snapshot)
+        .await
+        .unwrap();
     assert_eq!(
         context.selected_selection.thinking_mode.as_deref(),
         Some("high")
@@ -139,7 +363,9 @@ async fn execution_projection_keeps_selected_and_inherited_model_modes_separate(
         .control_snapshot(session, 1)
         .await
         .unwrap();
-    let context = SessionQueryService::execution_context(&manager, &snapshot).unwrap();
+    let context = SessionQueryService::execution_context(&manager, &snapshot)
+        .await
+        .unwrap();
     assert_eq!(context.selected_selection.thinking_mode, None);
     assert_eq!(context.inherited_selection.thinking_mode, None);
 }
@@ -194,6 +420,7 @@ async fn related_sessions_project_their_own_tool_and_interaction_workflow() {
                         agent: relation_kind
                             .is_subagent()
                             .then(|| SessionAgentConfiguration {
+                                assignment: Default::default(),
                                 origin_message_id: None,
                                 name: "workflow_probe".into(),
                                 status: AgentStatus::Created,
@@ -313,6 +540,7 @@ async fn related_sessions_project_their_own_tool_and_interaction_workflow() {
         assert_workflow(&manager, *session, WorkflowState::Quiescent).await;
         assert_eq!(
             SessionQueryService::execution_context(&manager, &snapshot)
+                .await
                 .unwrap()
                 .workflow_state,
             WorkflowState::ToolPending,

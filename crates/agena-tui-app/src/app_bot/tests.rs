@@ -624,6 +624,7 @@ fn profile(id: u128, name: &str) -> BotProfile {
         id: Uuid::from_u128(id),
         name: name.into(),
         persona: BotPersona::default(),
+        agent_profile: None,
         avatar: None,
         revision: 1,
         archived: false,
@@ -1270,8 +1271,11 @@ async fn list_create_editor_confirm_and_error_layouts_keep_hints_in_all_eight_lo
             assert!(rendered.contains("Planner"), "{locale} {rendered}");
             app.new_bot_form();
             form_field(&mut app, 0, "小鱼");
-            app.bot.form.as_mut().unwrap().index = 1;
+            let form = app.bot.form.as_mut().unwrap();
+            form.index = BOT_PROMPTS_FIELD;
+            form.prompts.catalog = Some(BotPromptCatalog::default());
             app.handle_key_event(key(KeyCode::Enter));
+            app.handle_key_event(key(KeyCode::Char('a')));
             assert!(app.has_active_text_input());
             app.handle_paste("第一行\nsecond line".into());
             let rendered = screen(&mut app, width, height);
@@ -1282,6 +1286,7 @@ async fn list_create_editor_confirm_and_error_layouts_keep_hints_in_all_eight_lo
                 app.bot.form.as_ref().unwrap().persona.instructions,
                 "第一行\nsecond line"
             );
+            app.handle_key_event(key(KeyCode::Esc));
             app.bot.form.as_mut().unwrap().index = BOT_AVATAR_FIELD;
             let rendered = screen(&mut app, width, height);
             let compact = |text: &str| {
@@ -1467,7 +1472,7 @@ async fn mismatched_named_session_reply_cannot_bind_another_bot_or_consume_draft
 }
 
 #[tokio::test]
-async fn three_fields_cycle_and_enforce_utf8_byte_limit() {
+async fn form_fields_cycle_and_enforce_utf8_byte_limit() {
     let server = Server::start().await;
     let (_temp, mut app) = app(Some(&server.endpoint));
     app.execute_bot_command("create");
@@ -1477,16 +1482,17 @@ async fn three_fields_cycle_and_enforce_utf8_byte_limit() {
     app.handle_key_event(key(KeyCode::Down));
     assert_eq!(app.bot.form.as_ref().unwrap().index, 2);
     app.handle_key_event(key(KeyCode::Tab));
+    assert_eq!(app.bot.form.as_ref().unwrap().index, BOT_PROFILE_FIELD);
+    app.handle_key_event(key(KeyCode::Tab));
     assert_eq!(app.bot.form.as_ref().unwrap().index, 0);
+    app.handle_key_event(key(KeyCode::Up));
+    assert_eq!(app.bot.form.as_ref().unwrap().index, BOT_PROFILE_FIELD);
     app.handle_key_event(key(KeyCode::Up));
     assert_eq!(app.bot.form.as_ref().unwrap().index, 2);
     app.handle_key_event(key(KeyCode::Up));
     assert_eq!(app.bot.form.as_ref().unwrap().index, 1);
     let rendered = screen(&mut app, 42, 18);
-    assert!(
-        rendered.contains("Additional system instructions"),
-        "{rendered}"
-    );
+    assert!(rendered.contains("System prompt"), "{rendered}");
     assert!(!rendered.contains("Tone"), "{rendered}");
     form_field(&mut app, 0, "Bytes");
     // Only the storage ceiling is refused; the save keeps the form open.

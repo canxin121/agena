@@ -171,6 +171,18 @@ impl SessionManager {
         .await
     }
 
+    pub async fn require_host_instance_config_read(
+        &self,
+        session: i64,
+        call: i64,
+        path: std::path::PathBuf,
+    ) -> Result<(), AppError> {
+        self.require_host_permission(session, call, move |executor| async move {
+            Ok(executor.instance_config_read_permission_check(&path))
+        })
+        .await
+    }
+
     pub async fn require_host_pinned_http_permission(
         &self,
         session: i64,
@@ -446,9 +458,15 @@ impl SessionManager {
             .prepare_shell_invocation(&prepared.invocation, session, call)
             .await
             .map_err(tool_error)?;
-        self.authorize_tool(&tool, &invocation, &executor, &control, &state)
-            .await
-            .map_err(tool_error)?;
+        agena_async::permission_wait::waiting(self.authorize_tool(
+            &tool,
+            &invocation,
+            &executor,
+            &control,
+            &state,
+        ))
+        .await
+        .map_err(tool_error)?;
         let executor = self
             .sandbox_executor_for_session(&executor, session)
             .await
@@ -521,6 +539,17 @@ pub(super) fn input_execution(response: AskUserResponse) -> ToolInvocationExecut
 }
 #[async_trait::async_trait]
 impl crate::SessionToolExecutionService for SessionManager {
+    async fn execute_authorized_session_tool(
+        &self,
+        id: i64,
+        invocation: ToolInvocation,
+    ) -> Result<agena_tool::ToolExecutionSummary, crate::SessionToolExecutionError> {
+        self.execute_session_scoped_tool(id, invocation)
+            .await
+            .map(|execution| execution.summary())
+            .map_err(|error| crate::SessionToolExecutionError::Execution(error.to_string()))
+    }
+
     async fn execute_session_tool(
         &self,
         id: i64,

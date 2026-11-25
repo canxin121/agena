@@ -47,6 +47,518 @@ fn instructions(request: &agena_testkit::ModelRequest) -> Result<String> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn delegated_sessions_discover_profiles_and_load_readonly_research_context() -> TestResult {
+    fixture()
+        .case_timeout(Duration::from_secs(120))
+        .configure_global(|config| {
+            config["sandbox"] = json!(false);
+            config["profiles"] = json!({
+                "research-check": {
+                    "extends": "explore",
+                    "description": "Trace the research fixture",
+                    "context": {"preload_skills":["research-fixture"]}
+                },
+                "private-check": {"extends":"explore","hidden":true},
+                "primary-check": {"extends":"main"}
+            });
+        })
+        .seed_file("workspace/AGENTS.md", b"PROJECT_GUIDANCE_PROBE".to_vec())
+        .seed_file("workspace/research.txt", b"READ_ONLY_RESEARCH_PROBE".to_vec())
+        .seed_file(
+            "workspace/.agena/skills/research-fixture/SKILL.md",
+            b"---\nname: research-fixture\ndescription: Inspect the research fixture\n---\n\nRESEARCH_SKILL_PRELOAD_PROBE\n".to_vec(),
+        )
+        .run(|case| async move {
+            let model = case.model();
+            let parent = case.user().new_session().await?;
+            let research_spawn = model
+                .expect(RequestMatch::user_text("coordinate-research-probe"))
+                .check(|request| {
+                    let prompt = instructions(request)?;
+                    ensure!(prompt.contains("- `research-check` (read-only)"));
+                    ensure!(!prompt.contains("- `private-check`") && !prompt.contains("- `primary-check`"));
+                    ensure!(prompt.contains("PROJECT_GUIDANCE_PROBE"));
+                    Ok(())
+                })
+                .reply(Reply::tool_call("readonly-spawn", "agent.spawn", json!({
+                    "name":"research_probe", "profile":"research-check",
+                    "prompt":"nested-research-probe"
+                })));
+            let wait_help = model
+                .expect(RequestMatch::tool_output("readonly-spawn"))
+                .after(&research_spawn)
+                .check_tool_output_contains("readonly-spawn", "research-check")
+                .reply(Reply::function_call("wait-research-help", "tools_help", json!({"tool":"agent.wait"})));
+            let wait = model
+                .expect(RequestMatch::tool_output("wait-research-help"))
+                .after(&wait_help)
+                .reply(Reply::function_call(
+                    "wait-research", "tools_call", json!({"tool":"agent.wait","input":{"timeout_ms":30000}})
+                ));
+            let read = model
+                .expect(RequestMatch::user_text("nested-research-probe"))
+                .check(|request| {
+                    let prompt = instructions(request)?;
+                    ensure!(prompt.contains("Selected profile: `research-check`"));
+                    ensure!(prompt.contains("RESEARCH_SKILL_PRELOAD_PROBE"));
+                    ensure!(!prompt.contains("PROJECT_GUIDANCE_PROBE"));
+                    ensure!(!prompt.contains("# Available subagent profiles"));
+                    Ok(())
+                })
+                .reply(Reply::tool_call("nested-read", "fs.read", json!({"file_path":"research.txt"})));
+            let blocked_write = model
+                .expect(RequestMatch::tool_output("nested-read"))
+                .after(&read)
+                .check_tool_output_contains("nested-read", "READ_ONLY_RESEARCH_PROBE")
+                .reply(Reply::tool_call("nested-write", "fs.write", json!({
+                    "path":"unexpected-research.txt", "content":"unexpected"
+                })));
+            let research_result = model
+                .expect(RequestMatch::tool_output("nested-write"))
+                .after(&blocked_write)
+                .check_tool_output_contains("nested-write", "\"phase\":\"failed\"")
+                .reply(Reply::text("nested-research-finished").held());
+            let coordinator_result = model
+                .expect(RequestMatch::tool_output("wait-research"))
+                .after(&wait)
+                .check(|request| {
+                    ensure!(request.body.to_string().contains("nested-research-finished"));
+                    Ok(())
+                })
+                .reply(Reply::text("research-coordinator-finished"));
+            model
+                .expect(RequestMatch::new("coordinator delivery", |request| {
+                    request.body.to_string().contains("research-coordinator-finished")
+                }))
+                .after(&coordinator_result)
+                .reply(Reply::text("received-nested-research"));
+            parent.call_tool("agent.spawn", json!({
+                "name":"research_coordinator", "profile":"worker", "prompt":"coordinate-research-probe"
+            })).await?.assert_succeeded()?;
+            wait.observed().await?;
+            research_result.observed().await?;
+            research_result.release();
+            parent.wait_text_contains("received-nested-research").await?;
+            ensure!(!case.workspace().join("unexpected-research.txt").exists());
+            Ok(())
+        })
+        .await
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agent_verification_uses_shell_exits_and_reports_missing_evidence() -> TestResult {
+    fixture()
+        .case_timeout(Duration::from_secs(120))
+        .configure_global(|config| {
+            config["sandbox"] = json!(false);
+        })
+        .run(|case| async move {
+            let parent = case.user().new_session().await?;
+            let model = case.model();
+            let early_reply = model
+                .expect(RequestMatch::user_text("verify-recorded-outcomes"))
+                .check(|request| {
+                    ensure!(instructions(request)?.contains("echo verification-proof"));
+                    Ok(())
+                })
+                .reply(Reply::text("I claim all checks passed"));
+            let pass = model
+                .expect(RequestMatch::new("missing check reminder", |request| {
+                    request
+                        .body
+                        .to_string()
+                        .contains("no recorded shell.exec results")
+                }))
+                .after(&early_reply)
+                .reply(Reply::tool_call(
+                    "verify-pass",
+                    "shell.exec",
+                    json!({
+                        "command":"echo verification-proof"
+                    }),
+                ));
+            let fail = model
+                .expect(RequestMatch::tool_output("verify-pass"))
+                .after(&pass)
+                .check_tool_output_contains("verify-pass", "verification-proof")
+                .reply(Reply::tool_call(
+                    "verify-fail",
+                    "shell.exec",
+                    json!({"command":"false"}),
+                ));
+            let finish = model
+                .expect(RequestMatch::tool_output("verify-fail"))
+                .after(&fail)
+                .check_tool_output_contains("verify-fail", "exit_code")
+                .reply(Reply::text("recorded-checks-finished").held());
+            model
+                .expect(RequestMatch::new("verification delivery", |request| {
+                    request
+                        .body
+                        .to_string()
+                        .contains("recorded-checks-finished")
+                }))
+                .after(&finish)
+                .check(|request| {
+                    let prompt = request.body.to_string();
+                    for expected in [
+                        "PASS `echo verification-proof` (exit 0, output resource",
+                        "FAIL `false` (exit 1, output resource",
+                        "BLOCKED `echo missing-proof` (no matching shell.exec result)",
+                    ] {
+                        ensure!(
+                            prompt.contains(expected),
+                            "missing {expected:?} in delivered output"
+                        );
+                    }
+                    Ok(())
+                })
+                .reply(Reply::text("received-recorded-verification"));
+            parent.call_tool("agent.spawn", json!({
+                "name":"recorded_checks", "profile":"verifier", "prompt":"verify-recorded-outcomes",
+                "verification_commands":["echo verification-proof","false","echo missing-proof"]
+            })).await?.assert_succeeded()?;
+            finish.observed().await?;
+            finish.release();
+            parent
+                .wait_text_contains("received-recorded-verification")
+                .await?;
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn agent_worktree_uses_a_pinned_git_base_and_is_reused_for_followup() -> TestResult {
+    fixture()
+        .case_timeout(Duration::from_secs(120))
+        .configure_global(|config| {
+            config["sandbox"] = json!(false);
+            config["profiles"] = json!({
+                "isolated-worker":{"extends":"worker","isolation":"worktree"}
+            });
+        })
+        .seed_file("workspace/isolation.txt", b"committed-isolation-probe".to_vec())
+        .run(|case| async move {
+            let git = |args: &[&str]| -> Result<String> {
+                let result = std::process::Command::new("git")
+                    .current_dir(case.workspace()).args(args).output()?;
+                ensure!(result.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&result.stderr));
+                Ok(String::from_utf8(result.stdout)?.trim().to_owned())
+            };
+            git(&["init", "-q"])?;
+            git(&["add", "isolation.txt"])?;
+            git(&["-c", "user.name=Agena Test", "-c", "user.email=agena-test@example.invalid",
+                "-c", "commit.gpgsign=false", "commit", "-qm", "Base checkout"])?;
+            let initial = git(&["rev-parse", "HEAD"])?;
+            let original = case.workspace().join("isolation.txt");
+            tokio::fs::write(&original, "uncommitted-parent-probe").await?;
+            let parent = case.user().new_session().await?;
+            let model = case.model();
+            let read = model
+                .expect(RequestMatch::user_text("worktree-initial-probe"))
+                .check(|request| {
+                    ensure!(instructions(request)?.contains("Use the assigned Git worktree"));
+                    Ok(())
+                })
+                .reply(Reply::tool_call("worktree-read", "fs.read", json!({"file_path":"isolation.txt"})));
+            let write = model
+                .expect(RequestMatch::tool_output("worktree-read"))
+                .after(&read)
+                .check_tool_output_contains("worktree-read", "committed-isolation-probe")
+                .reply(Reply::tool_call("worktree-write", "fs.write", json!({
+                    "path":"child-result.txt", "content":"isolated-child-probe"
+                })));
+            let finished = model
+                .expect(RequestMatch::tool_output("worktree-write"))
+                .after(&write)
+                .check_tool_output_contains("worktree-write", "\"phase\":\"succeeded\"")
+                .reply(Reply::text("worktree-probe-finished").held());
+            model
+                .expect(RequestMatch::new("worktree delivery", |request| {
+                    request.body.to_string().contains("worktree-probe-finished")
+                }))
+                .after(&finished)
+                .check(|request| {
+                    ensure!(request.body.to_string().contains("1 changed paths"));
+                    Ok(())
+                })
+                .reply(Reply::text("received-worktree-result"));
+            let spawned = parent.call_tool("agent.spawn", json!({
+                "name":"isolated_probe", "profile":"isolated-worker", "prompt":"worktree-initial-probe"
+            })).await?;
+            spawned.assert_succeeded()?;
+            let chosen = &spawned.data()?["worktree"];
+            ensure!(chosen["base_commit"] == initial);
+            let checkout = std::path::PathBuf::from(chosen["path"].as_str().context("missing checkout path")?);
+            ensure!(checkout.starts_with(case.data_dir()));
+            finished.observed().await?;
+            finished.release();
+            parent.wait_text_contains("received-worktree-result").await?;
+            ensure!(tokio::fs::read_to_string(checkout.join("child-result.txt")).await? == "isolated-child-probe");
+            ensure!(tokio::fs::read_to_string(&original).await? == "uncommitted-parent-probe");
+            ensure!(!case.workspace().join("child-result.txt").exists());
+
+            let followup = model
+                .expect(RequestMatch::user_text("worktree-followup-probe"))
+                .reply(Reply::tool_call("followup-read", "fs.read", json!({"file_path":"child-result.txt"})));
+            let followup_done = model
+                .expect(RequestMatch::tool_output("followup-read"))
+                .after(&followup)
+                .check_tool_output_contains("followup-read", "isolated-child-probe")
+                .reply(Reply::text("worktree-followup-finished").held());
+            model
+                .expect(RequestMatch::new("followup delivery", |request| {
+                    request.body.to_string().contains("worktree-followup-finished")
+                }))
+                .after(&followup_done)
+                .reply(Reply::text("received-worktree-followup"));
+            let reused = parent.call_tool("agent.followup", json!({
+                "target":"isolated_probe", "message":"worktree-followup-probe"
+            })).await?;
+            reused.assert_succeeded()?;
+            ensure!(reused.data()?["worktree"] == *chosen);
+            ensure!(reused.data()?["agent_id"] == spawned.data()?["agent_id"]);
+            followup_done.observed().await?;
+            followup_done.release();
+            parent.wait_text_contains("received-worktree-followup").await?;
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn delegated_planner_and_verifier_use_their_prompt_fragments_and_permissions() -> TestResult {
+    fixture()
+        .case_timeout(Duration::from_secs(120))
+        .configure_global(|config| {
+            config["sandbox"] = json!(false);
+            config["resource_guard"] = json!(true);
+        })
+        .seed_file("workspace/role-check.txt", b"role-check-evidence\n".to_vec())
+        .run(|case| async move {
+            let parent = case.user().new_session().await?;
+            parent
+                .client()
+                .set_session_permission(
+                    parent.id(),
+                    serde_json::from_value(json!({
+                        "path": {"workspace": "readwrite"},
+                        "tools": {
+                            "names": {"agena.shell.exec": "allow"},
+                            "rules": {"shell.*": {"*parent-blocked-check*": "deny"}}
+                        }
+                    }))?,
+                )
+                .await?;
+
+            let (shell, read_command, write_command) = if cfg!(windows) {
+                (
+                    "powershell",
+                    "Get-Content role-check.txt",
+                    "Set-Content role-check.txt unexpected-write",
+                )
+            } else {
+                (
+                    "bash",
+                    "cat role-check.txt",
+                    "printf unexpected-write > role-check.txt",
+                )
+            };
+            let read = json!({
+                "shell": shell, "command": read_command, "reads": ["role-check.txt"], "writes": [], "network": []
+            });
+            let write = json!({
+                "shell": shell, "command": write_command, "reads": [], "writes": ["role-check.txt"], "network": []
+            });
+            let blocked = json!({
+                "shell": shell, "command": "echo parent-blocked-check", "reads": [], "writes": [], "network": []
+            });
+            let model = case.model();
+            for (role, heading, method, method_heading, checks) in [
+                (
+                    "planner",
+                    "# Planner role",
+                    "agena.profile.planning",
+                    "# Planning and acceptance criteria",
+                    vec![
+                        ("fs.read", json!({"file_path": "role-check.txt"}), "succeeded", "role-check-evidence"),
+                        ("shell.exec", read.clone(), "failed", "denied"),
+                    ],
+                ),
+                (
+                    "verifier",
+                    "# Verifier role",
+                    "agena.profile.verification",
+                    "# Verification and evidence",
+                    vec![
+                        ("shell.exec", read, "succeeded", "role-check-evidence"),
+                        ("shell.exec", write, "failed", "denied"),
+                        ("shell.exec", blocked, "failed", "denied"),
+                    ],
+                ),
+            ] {
+                let assignment = format!("start-{role}-probe");
+                let report = format!("{role}-probe-completed");
+                let delivered = format!("received-{role}-probe");
+                let mut next = model.expect(RequestMatch::user_text(&assignment)).check(move |r| {
+                    let prompt = instructions(r)?;
+                    ensure!(prompt.contains(heading) && prompt.contains(method_heading));
+                    ensure!(prompt.contains("# Delegated session"));
+                    Ok(())
+                });
+                for (index, (tool, input, phase, evidence)) in checks.into_iter().enumerate() {
+                    let call_id = format!("{role}-check-{index}");
+                    let check = next.reply(Reply::tool_call(&call_id, tool, input));
+                    next = model.expect(RequestMatch::tool_output(&call_id)).after(&check).check(move |r| {
+                        let output = r.tool_output_text(&call_id).context("missing check output")?;
+                        let envelope: Value = serde_json::from_str(&output)?;
+                        ensure!(envelope["phase"] == phase && output.contains(evidence), "{output}");
+                        Ok(())
+                    });
+                }
+                let reply = next.reply(Reply::text(&report).held());
+                let parent_report = model
+                    .expect(RequestMatch::new("delegated check completion", move |r| r.body.to_string().contains(&report)))
+                    .after(&reply)
+                    .reply(Reply::text(&delivered));
+
+                let spawned = parent.call_tool("agent.spawn", json!({
+                    "name": role, "profile": role, "prompt": assignment
+                })).await?;
+                spawned.assert_succeeded()?;
+                ensure!(spawned.data()?["profile"] == role);
+                let child = spawned.data()?["agent_id"].as_i64().context("missing child session ID")?;
+                let preview = parent.client().session_prompt_preview(child).await?;
+                ensure!(preview.fragments.iter().any(|item| item.id.as_str() == method));
+                reply.observed().await?;
+                reply.release();
+                parent_report.finished().await?;
+                parent.wait_text_contains(&delivered).await?;
+            }
+            ensure!(tokio::fs::read_to_string(case.workspace().join("role-check.txt")).await? == "role-check-evidence\n");
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn system_prompt_preview_and_provider_apply_the_same_required_order() -> TestResult {
+    fixture()
+        .configure_global_with(|config, _, model| {
+            config["providers"]["testkit"]["adapters"]["openai_responses"]["models"][model.model_id()]
+                ["agena_tools"]["mode"] = json!("disabled");
+            config["prompts"] = json!({
+                "order": ["inherited", "agena.system.markdown"],
+                "library": [
+                    {"id": "inherited", "body": "INHERITED PROMPT MARKER"},
+                    {"id": "selected", "body": "SELECTED PROMPT MARKER"}
+                ]
+            });
+        })
+        .run(|case| async move {
+            let user = case.user().new_session().await?;
+            let client = user.client();
+            let builtins = client.builtin_prompts().await?;
+            ensure!(builtins.len() == 3 && builtins.iter().all(|item| !item.reusable));
+            let identity = builtins
+                .iter()
+                .find(|item| item.id.as_str() == "agena.system.identity")
+                .context("missing shared identity instructions")?;
+            ensure!(!identity.body.contains("# User-facing session"));
+            ensure!(!identity.body.contains("# Delegated session"));
+            let protocol = builtins.iter()
+                .find(|item| item.id.as_str() == "agena.system.tools")
+                .context("missing tool protocol")?;
+            ensure!(serde_json::to_value(protocol.when)? == json!("always"));
+            let catalog = client.builtin_prompt_catalog().await?;
+            let reusable: Vec<_> = catalog
+                .iter()
+                .filter(|item| item.reusable)
+                .map(|item| item.id.as_str())
+                .collect();
+            ensure!(reusable == [
+                "agena.profile.investigation",
+                "agena.profile.implementation",
+                "agena.profile.read-only",
+                "agena.profile.planning",
+                "agena.profile.verification",
+            ]);
+            for invalid in [
+                json!({"disabled": ["agena.system.identity"]}),
+                json!({"inline": [{"id": "agena.system.identity", "body": "Override"}]}),
+                json!({"order": ["agena.system.unknown"]}),
+            ] {
+                ensure!(
+                    client
+                        .set_session_prompts(user.id(), Some(serde_json::from_value(invalid)?))
+                        .await
+                        .is_err()
+                );
+            }
+            client
+                .set_session_prompts(
+                    user.id(),
+                    Some(serde_json::from_value(json!({
+                        "mode": "replace",
+                        "order": ["agena.system.markdown", "selected", "agena.system.rich-output", "agena.system.identity"]
+                    }))?),
+                )
+                .await?;
+            let preview = client.session_prompt_preview(user.id()).await?;
+            ensure!(!preview.text.contains("INHERITED PROMPT MARKER"));
+            ensure!(preview.text.contains(&protocol.body));
+            ensure!(!preview.text.contains("# Available capabilities"));
+            let relationship = preview.fragments.iter()
+                .find(|part| part.id.as_str() == "agena.runtime.session-relation")
+                .context("missing runtime session relationship")?;
+            ensure!(relationship.scope.as_str() == "runtime");
+            ensure!(relationship.text.starts_with("# User-facing session"));
+            ensure!(!preview.text.contains("# Delegated session"));
+            for item in &builtins {
+                ensure!(
+                    preview
+                        .fragments
+                        .iter()
+                        .any(|fragment| fragment.id == item.id),
+                    "missing built-in {}",
+                    item.id
+                );
+            }
+            let position = |id| {
+                preview
+                    .fragments
+                    .iter()
+                    .filter(|fragment| !fragment.id.as_str().starts_with("agena.runtime."))
+                    .position(|fragment| fragment.id.as_str() == id)
+            };
+            let delivery = position("agena.system.communication").context("missing delivery instructions")?;
+            ensure!(position("selected").map(|index| index + 1) == Some(delivery));
+            ensure!(position("agena.system.identity") == Some(delivery + 1));
+
+            case.model()
+                .expect(RequestMatch::user_text("Check prompt order"))
+                .check(move |request| {
+                    ensure!(request.body.get("tools").and_then(Value::as_array).is_none_or(Vec::is_empty));
+                    ensure!(
+                        instructions(request)?.starts_with(&preview.text),
+                        "provider prompt diverged from preview"
+                    );
+                    Ok(())
+                })
+                .reply(Reply::text("Prompt order checked."));
+            user.send("Check prompt order")
+                .await?
+                .wait_settled()
+                .await?
+                .assert_succeeded()?;
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_system_prompt_stays_byte_identical_across_turns_and_carries_no_tool_contracts()
 -> TestResult {
     fixture()

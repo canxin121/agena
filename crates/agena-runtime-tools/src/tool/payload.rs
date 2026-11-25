@@ -170,8 +170,8 @@ impl ToolPayloadInput {
             (
                 "agena",
                 "shell",
-                action @ ("exec" | "spawn" | "watch" | "open" | "list" | "logs" | "read" | "stop"
-                | "write" | "resize" | "signal"),
+                action @ ("exec" | "spawn" | "watch" | "open" | "list" | "read" | "stop" | "write"
+                | "resize" | "signal"),
             ) => ("shell", Some(action)),
             ("agena", "cron", "create") => ("cron_create", None),
             ("agena", "cron", "list") => ("cron_list", None),
@@ -858,8 +858,7 @@ mod output_tests {
     #[test]
     fn shell_payload_aliases_keep_exact_protocol_matching_and_action_ownership() {
         for action in [
-            "exec", "spawn", "watch", "open", "list", "logs", "read", "write", "stop", "resize",
-            "signal",
+            "exec", "spawn", "watch", "open", "list", "read", "write", "stop", "resize", "signal",
         ] {
             for name in [
                 format!("shell.{action}"),

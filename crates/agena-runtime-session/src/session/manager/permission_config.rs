@@ -38,10 +38,17 @@ impl SessionManager {
             (Some(id), None) => Some(self.workspace_root_by_id(id).await?),
             (None, _) => None,
         };
-        let effective = state
-            .config
-            .effective_permission(configuration)
-            .map_err(AppError::Config)?;
+        let effective = if configuration.permission_profile.is_some() {
+            state
+                .config
+                .effective_permission(configuration)
+                .map_err(AppError::Config)?
+        } else {
+            let profile = self.conversation_profile(configuration, state).await?;
+            state
+                .config
+                .permission_with_profile(configuration, &profile.definition)
+        };
         validate_configuration_permissions(
             &effective,
             configuration,

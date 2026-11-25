@@ -70,8 +70,16 @@ pub struct SessionExecutionContext {
     /// The effective role comes from the relation-specific fallback.
     #[serde(default)]
     pub profile_is_default: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub profile_from_bot: bool,
     #[serde(default)]
     pub profile_prompts: Vec<agena_prompt_layers::PromptLayer>,
+    #[serde(skip)]
+    pub project_instructions_on_demand: bool,
+    #[serde(skip)]
+    pub preload_skills: Vec<String>,
+    #[serde(skip)]
+    pub agent_assignment: agena_domain::AgentAssignment,
     #[serde(default)]
     pub max_turns: Option<usize>,
     pub selection: ExecutionSelection,
@@ -129,8 +137,5 @@ impl agena_runtime_contracts::ToolSessionContext for SessionExecutionContext {
         &self,
     ) -> Option<std::sync::Arc<dyn agena_runtime_contracts::ChannelAccessVerifier>> {
         self.channel_verifier.clone()
-    }
-    fn selected_model(&self) -> Option<&str> {
-        self.selection.model.as_deref()
     }
 }

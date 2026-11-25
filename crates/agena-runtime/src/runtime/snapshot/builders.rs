@@ -281,11 +281,13 @@ pub(super) async fn build_plugin_services(
     >,
     notification_source: Option<agena_bundled_plugins::tool::NotificationSource>,
     browser: agena_bundled_plugins::tool::BrowserSessionPool,
+    desktop: agena_bundled_plugins::tool::DesktopWindowPool,
 ) -> Result<Arc<PluginHost>, crate::AppError> {
     let static_plugins = agena_bundled_plugins::plugins::sources::static_plugin_registrations(
         inputs.mcp_manager.clone(),
         notification_source,
         browser,
+        desktop,
     );
     let plugins =
         agena_runtime::compose_plugin_host(static_plugins, inputs, env!("CARGO_PKG_VERSION"))

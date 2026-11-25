@@ -469,6 +469,26 @@ impl ExecutionPrincipal {
         workspace_root: &Path,
         target_path: &Path,
     ) -> PermissionDecision {
+        self.authorize_path_access_with(access, workspace_root, target_path, false)
+    }
+
+    /// Apply configured read policy to the instance config for a host-owned
+    /// management operation. The ordinary file tool boundary still applies.
+    pub fn authorize_instance_config_read(
+        &self,
+        workspace_root: &Path,
+        target_path: &Path,
+    ) -> PermissionDecision {
+        self.authorize_path_access_with(AccessKind::Read, workspace_root, target_path, true)
+    }
+
+    fn authorize_path_access_with(
+        &self,
+        access: AccessKind,
+        workspace_root: &Path,
+        target_path: &Path,
+        allow_instance_config_read: bool,
+    ) -> PermissionDecision {
         if self.blocked {
             return PermissionDecision::Deny {
                 reason: "execution principal is blocked".to_owned(),
@@ -479,11 +499,19 @@ impl ExecutionPrincipal {
         } else {
             workspace_root.join(target_path)
         };
-        let protected = ProtectedPaths::for_workspace(
-            workspace_root,
-            &agena_storage_layout::StorageLayout::current(),
-            Some(&self.permission_policy),
-        );
+        let layout = agena_storage_layout::StorageLayout::current();
+        let protected = if allow_instance_config_read
+            && canonical_resource_path(&layout.config_path())
+                .is_ok_and(|path| crate::permission::path_identity::equal(&path, &target))
+        {
+            ProtectedPaths::for_instance_config_read(
+                workspace_root,
+                &layout,
+                &self.permission_policy,
+            )
+        } else {
+            ProtectedPaths::for_workspace(workspace_root, &layout, Some(&self.permission_policy))
+        };
         if let Some(denial) = protected.check(access, &target) {
             return denial;
         }

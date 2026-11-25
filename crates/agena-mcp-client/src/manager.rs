@@ -648,6 +648,7 @@ pub struct McpConnectionManager {
     inner: Arc<RwLock<Inner>>,
     client_name: String,
     client_version: String,
+    apps_enabled: bool,
     token_store: Option<Arc<dyn TokenStore>>,
     http_network_authorizer: Option<Arc<dyn crate::McpHttpNetworkAuthorizer>>,
     connect_timeout: Duration,
@@ -718,6 +719,7 @@ impl McpConnectionManager {
             inner: Default::default(),
             client_name: client_name.into(),
             client_version: client_version.into(),
+            apps_enabled: false,
             token_store: None,
             http_network_authorizer: None,
             connect_timeout: Duration::from_secs(20),
@@ -735,6 +737,11 @@ impl McpConnectionManager {
     pub fn with_timeouts(mut self, connect_timeout: Duration, request_timeout: Duration) -> Self {
         self.connect_timeout = connect_timeout.max(Duration::from_millis(1));
         self.request_timeout = request_timeout.max(Duration::from_millis(1));
+        self
+    }
+
+    pub fn with_apps(mut self, enabled: bool) -> Self {
+        self.apps_enabled = enabled;
         self
     }
 
@@ -1158,6 +1165,16 @@ impl McpConnectionManager {
             })
     }
 
+    pub async fn tool_descriptor(
+        &self,
+        server: &str,
+        name: &str,
+    ) -> McpResult<Option<ToolDescriptor>> {
+        let server = self.get(server).await?;
+        let tools = server.events.tools.read().await;
+        Ok(tools.iter().find(|tool| tool.name == name).cloned())
+    }
+
     /// Non-blocking risk lookup for the execution permission path. A cache
     /// miss is deliberately conservative (`Medium`); callers may convert
     /// high-risk values into an additional approval without trusting input.
@@ -1525,6 +1542,15 @@ impl McpConnectionManager {
         roots.list_changed = Some(true);
         let mut capabilities = ClientCapabilities::default();
         capabilities.roots = Some(roots);
+        if self.apps_enabled {
+            capabilities.extensions = Some(BTreeMap::from([(
+                "io.modelcontextprotocol/ui".into(),
+                serde_json::Map::from_iter([(
+                    "mimeTypes".into(),
+                    serde_json::json!([crate::apps::APP_MIME_TYPE]),
+                )]),
+            )]));
+        }
         AgenaMcpClientHandler {
             info: ClientInfo::new(
                 capabilities,

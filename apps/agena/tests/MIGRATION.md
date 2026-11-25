@@ -75,7 +75,7 @@ cargo test --offline -p agena-runtime-session --lib queue_tests
 | `default_core_is_complete_bounded_and_small_without_optional_references`、`topic_schema_does_not_advertise_unrequested_kinds` | `core_contracts::inline_ui_guide_is_complete_bounded_and_serves_only_requested_schemas`：真实 guide 的完整持久文本、24 KiB 上限、章节去重和数量/未知项拒绝；请求 steps 后通过 jsonschema 验证 steps 有效而 chart 无效。 |
 | `prepare_update_and_inline_error_flow_needs_no_extra_validate_or_read` | `core_contracts::inline_ui_live_panel_repairs_errors_without_corrupting_the_published_head`：实际 prepare/update/read 与 HTTP/SSE live；revision、slider 状态、过期更新和错误修复、失败不污染 head。 |
 | `independent_block_errors_are_bounded_with_explicit_truncation` | `core_contracts::inline_ui_invalid_blocks_return_bounded_safe_model_feedback`：12 个错误只向模型给出 8 个唯一、正确定位的修复字段；不泄漏正文或私有错误报告。私有的 truncated 字段不穿透正式投影去断言。 |
-| `builtin_command_manifest_has_valid_unique_declarations`、`command_projection_reads_standard_yaml_and_keeps_legacy_names`、`disabled_packages_and_temporary_install_trees_are_not_advertised` | `core_contracts::command_catalog_and_discovery_preserve_public_authoring_contracts`：运行服务的 command catalog、参数和 client action；真实 CRLF/YAML/legacy/alias 发现；禁用和 staging 包不可列出或获取。 |
+| `builtin_command_manifest_has_valid_unique_declarations`、`command_projection_reads_standard_yaml_and_keeps_legacy_names`、`disabled_packages_and_temporary_install_trees_are_not_advertised` | `core_contracts::commands_and_skills_use_independent_catalogs`：客户端命令目录、参数和 client action。技能目录覆盖 CRLF/YAML、内置技能、额外根目录和禁用设置。 |
 
 ## Provider：协议、文件、计费和错误
 

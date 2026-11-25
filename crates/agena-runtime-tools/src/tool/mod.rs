@@ -3,7 +3,6 @@
 pub(crate) mod apply_patch;
 pub mod ask_user;
 pub(crate) mod bash;
-pub(crate) mod builtin_tools;
 pub(crate) mod cron;
 pub mod definition;
 mod discovery;
@@ -63,7 +62,6 @@ use self::output_helpers::*;
 pub use self::tool_registry::*;
 
 pub use crate::{MonitorError, MonitorRead, MonitorReadParams, MonitorService, MonitorStartParams};
-pub use builtin_tools::BuiltinToolSet;
 pub use output_helpers::{bounded_model_output_preview, line_count, model_output_exceeds_boundary};
 pub use output_streams::ToolOutputStreams;
 pub use payload::{ToolPayloadInput, ToolPayloadOutput};

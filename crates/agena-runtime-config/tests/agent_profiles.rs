@@ -84,7 +84,7 @@ fn old_configuration_and_unselected_catalog_preserve_global_defaults() {
     assert_eq!(with_catalog.default_selection, baseline.default_selection);
     assert_eq!(with_catalog.session.max_turns, baseline.session.max_turns);
     assert_eq!(with_catalog.default_profile.as_deref(), Some("main"));
-    assert_eq!(baseline.profiles.len(), 4);
+    assert_eq!(baseline.profiles.len(), 6);
 }
 
 #[test]

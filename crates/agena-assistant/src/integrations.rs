@@ -29,6 +29,54 @@ pub struct AdapterDescribeRequest {}
 pub const INTEGRATION_SERVICE: &str = "agena.integration";
 pub const INTEGRATION_API_VERSION: u32 = 1;
 
+pub const CHANNEL_WEBHOOK_MAX_BYTES: usize = 256 * 1024;
+
+/// The HTTP edge passes the original bytes, before parsing or re-serialization.
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChannelWebhookRequest {
+    #[schemars(length(min = 1, max = 48))]
+    pub connection: String,
+    pub envelope: ChannelWebhookEnvelope,
+}
+
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ChannelWebhookEnvelope {
+    Event {
+        #[schemars(length(max = 262144))]
+        body: String,
+        #[serde(default)]
+        #[schemars(length(max = 64))]
+        timestamp: Option<String>,
+        #[serde(default)]
+        #[schemars(length(max = 128))]
+        nonce: Option<String>,
+        #[serde(default)]
+        #[schemars(length(max = 128))]
+        signature: Option<String>,
+    },
+    Verification {
+        #[schemars(length(max = 32))]
+        mode: String,
+        #[schemars(length(max = 256))]
+        token: String,
+        #[schemars(length(max = 256))]
+        challenge: String,
+    },
+}
+
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ChannelWebhookResponse {
+    Accepted,
+    JsonChallenge { challenge: String },
+    TextChallenge { challenge: String },
+    Unauthenticated,
+    Invalid,
+    NotFound,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AdapterKind {

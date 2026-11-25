@@ -298,16 +298,16 @@ pub(crate) fn part_headline(part: &TranscriptEntryPart, i18n: &I18n) -> Transcri
                     .collect::<Vec<_>>()
                     .join(", "),
             ),
-            Activity::CommandReference(reference) => (
+            Activity::SkillReference(reference) => (
                 ui_text::t(i18n, "message-input-activity-skill"),
                 reference
-                    .commands
+                    .skills
                     .iter()
-                    .map(|command| {
+                    .map(|skill| {
                         first_literal([
-                            command.name.as_str(),
-                            command.description.as_str(),
-                            command.source.as_str(),
+                            skill.name.as_str(),
+                            skill.description.as_str(),
+                            skill.source.as_str(),
                         ])
                     })
                     .filter(|label| !label.is_empty())
@@ -435,7 +435,7 @@ pub(crate) fn part_headline(part: &TranscriptEntryPart, i18n: &I18n) -> Transcri
     };
     let literal_summary = matches!(
         part.content,
-        TranscriptPartContent::Activity(Activity::Attachment(_) | Activity::CommandReference(_))
+        TranscriptPartContent::Activity(Activity::Attachment(_) | Activity::SkillReference(_))
     );
     let summary = if image_generation {
         // The image presentation deliberately uses an empty summary when
@@ -465,9 +465,7 @@ pub(crate) fn part_headline(part: &TranscriptEntryPart, i18n: &I18n) -> Transcri
             && matches!(
                 part.content,
                 TranscriptPartContent::Activity(
-                    Activity::Operation(_)
-                        | Activity::Attachment(_)
-                        | Activity::CommandReference(_)
+                    Activity::Operation(_) | Activity::Attachment(_) | Activity::SkillReference(_)
                 )
             )
         {

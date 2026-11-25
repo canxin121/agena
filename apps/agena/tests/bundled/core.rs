@@ -14,6 +14,8 @@ use serde_json::{Value, json};
 
 use super::{allow_permissions, fixture};
 
+#[path = "core_code_mode.rs"]
+mod core_code_mode;
 #[path = "core_contracts.rs"]
 mod core_contracts;
 #[path = "core_memory.rs"]
@@ -25,7 +27,14 @@ pub(super) const CASES: &[(&str, fn() -> TestResult)] = &[
     ("agena.fs", fs_edits_files_with_revision_checks),
     ("agena.shell", shell_runs_commands_and_owns_background_jobs),
     ("agena.code", code_previews_and_applies_structural_edits),
-    ("agena.commands", commands_manage_workspace_packages),
+    (
+        "agena.code_mode",
+        core_code_mode::composes_session_tools_and_preserves_permissions,
+    ),
+    (
+        "agena.commands",
+        core_contracts::commands_and_skills_use_independent_catalogs,
+    ),
     (
         "agena.skills",
         skills_manage_resources_revisions_and_availability,
@@ -246,8 +255,8 @@ async fn shell_runs_commands_and_owns_background_jobs() -> TestResult {
             assert_eq!(background.data()?["background"], true);
             call(
                 &user,
-                "shell.logs",
-                json!({"process_id":process_id,"wait_ms":1000,"max_output_bytes":4096}),
+                "shell.read",
+                json!({"process_id":process_id,"since_seq":0,"wait_ms":1000,"max_output_bytes":4096}),
             )
             .await?
             .assert_text_contains("background-ready-marker")?;
@@ -381,70 +390,6 @@ async fn code_previews_and_applies_structural_edits() -> TestResult {
             .await?
             .assert_failed()?;
             assert_eq!(tokio::fs::read_to_string(case.workspace().join("example.js")).await?, AFTER);
-            Ok(())
-        })
-        .await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn commands_manage_workspace_packages() -> TestResult {
-    const DOCUMENT: &str = "---\nname: testkit-command\ndescription: A local command package regression.\naliases: [tk-command]\n---\n# Instructions\ncommand-instructions-marker\n";
-    fixture()
-        .expect_plugin("agena.commands")
-        .seed_file(
-            "workspace/.agena/skills/testkit-command/reference.txt",
-            b"command-resource-marker\n".to_vec(),
-        )
-        .seed_file(
-            "workspace/outside.txt",
-            b"outside-resource-secret\n".to_vec(),
-        )
-        .run(|case| async move {
-            let user = user(&case).await?;
-            call(&user, "commands.install", json!({"document":DOCUMENT})).await?;
-            let package = case.workspace().join(".agena/skills/testkit-command");
-            assert_eq!(
-                tokio::fs::read_to_string(package.join("SKILL.md")).await?,
-                DOCUMENT
-            );
-            let entry = call(&user, "commands.get", json!({"name":"tk-command"})).await?;
-            entry.assert_text_contains("command-instructions-marker")?;
-            assert_eq!(entry.data()?["name"], "testkit-command");
-            assert_eq!(entry.data()?["editable"], true);
-            let catalog = call(&user, "commands.list", json!({"verbose":true})).await?;
-            ensure!(
-                catalog.data()?["packages"]
-                    .as_array()
-                    .context("commands.list omitted packages")?
-                    .iter()
-                    .any(|entry| entry["name"] == "testkit-command")
-            );
-            call(
-                &user,
-                "commands.read_resource",
-                json!({"name":"testkit-command","path":"reference.txt"}),
-            )
-            .await?
-            .assert_text_contains("command-resource-marker")?;
-            let escape = user
-                .call_tool(
-                    "commands.read_resource",
-                    json!({"name":"testkit-command","path":"../../../outside.txt"}),
-                )
-                .await?;
-            escape.assert_failed()?;
-            ensure!(!escape.text().contains("outside-resource-secret"));
-
-            call(&user, "commands.remove", json!({"name":"testkit-command"})).await?;
-            ensure!(!package.join("SKILL.md").exists());
-            // Legacy commands.remove removes only the document; resources stay.
-            assert_eq!(
-                tokio::fs::read_to_string(package.join("reference.txt")).await?,
-                "command-resource-marker\n"
-            );
-            user.call_tool("commands.get", json!({"name":"testkit-command"}))
-                .await?
-                .assert_failed()?;
             Ok(())
         })
         .await

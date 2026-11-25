@@ -147,7 +147,7 @@ pub trait SessionQueryService: Send + Sync {
 
     /// Apply the current runtime defaults to one immutable kernel control
     /// snapshot. This projection must not reload persisted session facts.
-    fn execution_context(
+    async fn execution_context(
         &self,
         snapshot: &agena_storage::kernel::SessionControlSnapshot,
     ) -> Result<SessionExecutionContext, SessionQueryError>;

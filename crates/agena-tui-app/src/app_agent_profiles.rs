@@ -2,7 +2,7 @@
 
 use crate::{App, ChoiceItem, ChoiceOverlayAction, I18n, Overlay, choice_item_with_value};
 
-fn profile_catalog(
+pub(crate) fn profile_catalog(
     sources: &agena_api::resource::ConfigJsonSources,
     global: bool,
 ) -> serde_json::Value {
@@ -76,10 +76,35 @@ fn merge_builtin_profile(
             result.insert(key.into(), serde_json::Value::String(value.into()));
         }
     }
-    for key in ["mode", "hidden", "extends", "model", "max_turns"] {
+    for key in [
+        "mode",
+        "hidden",
+        "read_only",
+        "extends",
+        "model",
+        "max_turns",
+        "isolation",
+    ] {
         if let Some(value) = overlay.get(key).filter(|value| !value.is_null()) {
             result.insert(key.into(), value.clone());
         }
+    }
+    if let Some(overlay) = overlay
+        .get("context")
+        .and_then(serde_json::Value::as_object)
+    {
+        let mut context = base
+            .get("context")
+            .and_then(serde_json::Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        context.extend(
+            overlay
+                .iter()
+                .filter(|(_, value)| !value.is_null())
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
+        result.insert("context".into(), serde_json::Value::Object(context));
     }
     if let Some(value) = overlay.get("permission") {
         if let (Ok(previous), Ok(patch)) = (
@@ -107,6 +132,13 @@ fn merge_builtin_profile(
             if patch.mode == LayerMode::Replace {
                 previous = patch;
             } else {
+                if previous
+                    .inline
+                    .iter()
+                    .any(|fragment| patch.disabled.contains(&fragment.id))
+                {
+                    previous.order.retain(|id| !id.is_reusable_builtin());
+                }
                 previous.order.retain(|id| !patch.disabled.contains(id));
                 previous
                     .inline
@@ -133,31 +165,32 @@ fn merge_builtin_profile(
     serde_json::Value::Object(result)
 }
 
-fn profile_mode<'a>(
+fn profile_lineage<'a>(
     profiles: &'a serde_json::Map<String, serde_json::Value>,
     name: &str,
-) -> Option<&'a str> {
-    let mut current = name.to_owned();
+) -> Option<Vec<&'a serde_json::Value>> {
+    let mut current = name;
     let mut seen = std::collections::BTreeSet::new();
+    let mut lineage = Vec::new();
     for _ in 0..64 {
-        if !seen.insert(current.clone()) {
+        if !seen.insert(current) {
             return None;
         }
-        let profile = profiles.get(&current)?;
-        if let Some(mode) = profile.get("mode").filter(|value| !value.is_null()) {
-            return mode
-                .as_str()
-                .filter(|mode| matches!(*mode, "primary" | "subagent" | "all"));
-        }
+        let profile = profiles.get(current)?;
+        lineage.push(profile);
         match profile.get("extends").and_then(serde_json::Value::as_str) {
-            Some(parent) => current = parent.to_owned(),
-            None => return Some("all"),
+            Some(parent) => current = parent,
+            None => return Some(lineage),
         }
     }
     None
 }
 
-fn profile_choices(i18n: &I18n, effective: &serde_json::Value, subagent: bool) -> Vec<ChoiceItem> {
+pub(crate) fn profile_choices(
+    i18n: &I18n,
+    effective: &serde_json::Value,
+    subagent: bool,
+) -> Vec<ChoiceItem> {
     let mut choices = vec![choice_item_with_value(
         i18n.text("settings-agent-profile-none"),
         "",
@@ -168,9 +201,13 @@ fn profile_choices(i18n: &I18n, effective: &serde_json::Value, subagent: bool) -
         .and_then(serde_json::Value::as_object)
     {
         for (name, profile) in profiles {
-            let Some(mode) = profile_mode(profiles, name) else {
+            let Some(lineage) = profile_lineage(profiles, name) else {
                 continue;
             };
+            let mode = lineage
+                .iter()
+                .find_map(|profile| profile["mode"].as_str())
+                .unwrap_or("all");
             if mode != "all" && mode != if subagent { "subagent" } else { "primary" } {
                 continue;
             }
@@ -200,10 +237,50 @@ fn profile_choices(i18n: &I18n, effective: &serde_json::Value, subagent: bool) -
                     _ => "settings-agent-profile-source-builtin",
                 })
             });
-            let detail = match source_label {
-                Some(source) => format!("{source} · {mode_label} — {description}"),
-                None => format!("{mode_label} — {description}"),
-            };
+            let mut details = Vec::new();
+            let read_only = lineage
+                .iter()
+                .find_map(|profile| profile["read_only"].as_bool())
+                .unwrap_or(false);
+            if read_only {
+                details.push(i18n.text("permission-studio-path-readonly"));
+            } else if subagent
+                && lineage
+                    .iter()
+                    .find_map(|profile| profile["isolation"].as_str())
+                    == Some("worktree")
+            {
+                details.push(i18n.text("settings-agent-profile-worktree"));
+            }
+            if lineage
+                .iter()
+                .find_map(|profile| profile["context"]["project_instructions"].as_str())
+                == Some("on_demand")
+            {
+                details.push(i18n.text("settings-agent-profile-project-instructions-on-demand"));
+            }
+            if let Some(skills) = lineage
+                .iter()
+                .find_map(|profile| profile["context"]["preload_skills"].as_array())
+                .filter(|skills| !skills.is_empty())
+            {
+                let skills = skills
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                details.push(i18n.text_args(
+                    "settings-agent-profile-preloaded-skills",
+                    &agena_tui::fl_args!("skills" => skills),
+                ));
+            }
+            details.extend(source_label);
+            details.push(mode_label);
+            let mut detail = details.join(" · ");
+            if !description.is_empty() {
+                detail.push_str(" — ");
+                detail.push_str(description);
+            }
             choices.push(choice_item_with_value(label, name.clone(), detail));
         }
     }
@@ -307,7 +384,7 @@ mod tests {
     fn modes_follow_inheritance_and_hidden_roles_remain_manually_selectable() {
         let catalog = serde_json::json!({"profiles":{
             "main":{"mode":"primary"},
-            "explore":{"mode":"subagent"},
+            "explore":{"mode":"subagent","read_only":true},
             "private-explore":{"extends":"explore","hidden":true},
             "reviewer":{"mode":"all"},
             "legacy":{}
@@ -320,6 +397,37 @@ mod tests {
         for name in ["explore", "private-explore", "reviewer", "legacy"] {
             assert!(children.iter().any(|choice| choice.value == name));
         }
+        let inherited = children
+            .iter()
+            .find(|choice| choice.value == "private-explore")
+            .unwrap();
+        assert!(inherited.detail.contains("Read-only"));
+    }
+
+    #[test]
+    fn subagent_choices_display_the_inherited_workspace_and_startup_context() {
+        let catalog = serde_json::json!({"profiles":{
+            "base": {
+                "mode":"subagent",
+                "isolation":"worktree",
+                "context":{"project_instructions":"on_demand","preload_skills":["review-work","run-checks"]}
+            },
+            "custom": {"extends":"base","context":{"preload_skills":[]}}
+        }});
+        let choices = profile_choices(&I18n::english(), &catalog, true);
+        let base = choices
+            .iter()
+            .find(|choice| choice.value == "base")
+            .unwrap();
+        assert!(base.detail.contains("Git worktree"));
+        assert!(base.detail.contains("Project instructions on demand"));
+        assert!(base.detail.contains("review-work, run-checks"));
+        let custom = choices
+            .iter()
+            .find(|choice| choice.value == "custom")
+            .unwrap();
+        assert!(custom.detail.contains("Git worktree"));
+        assert!(!custom.detail.contains("review-work"));
     }
 
     #[test]
@@ -379,10 +487,11 @@ impl App {
                     current,
                     session.workspace_id.is_none(),
                     session.relation_kind.is_subagent(),
+                    session.owner_bot_id.is_some(),
                 ))
             },
             move |app, result| match result {
-                Ok((sources, current, global, subagent)) => {
+                Ok((sources, current, global, subagent, bot_owned)) => {
                     let mut prompt = app.i18n.text_args(
                         "settings-agent-profile-prompt",
                         &agena_tui::fl_args!("session" => session_id),
@@ -411,8 +520,12 @@ impl App {
                             String::new()
                         }
                     };
-                    let choices =
+                    let mut choices =
                         profile_choices(&app.i18n, &profile_catalog(&sources, global), subagent);
+                    if bot_owned && !subagent {
+                        choices[0].detail =
+                            app.i18n.text("settings-agent-profile-bot-default-detail");
+                    }
                     app.overlay = Some(Overlay::Choice(app.build_choice_overlay(
                         app.i18n.text("settings-agent-profile-label"),
                         prompt,

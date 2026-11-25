@@ -3516,66 +3516,51 @@ impl BuiltinHumanRenderer {
                     ));
                 }
             }
-            "mcp.servers.status" => {
-                if let Some(block) = Self::details_block_if_nonempty(
-                    "mcp-status-meta",
-                    "MCP server check",
-                    &[("Checked at", Self::object_text(object, "checked_at"))],
-                ) {
-                    blocks.push(block);
-                }
-                if let Some(servers) = Self::object_array(object, "servers")
-                    && let Some(table) = Self::scalar_table(
-                        "mcp-servers",
-                        "MCP servers",
-                        servers,
+            "mcp.connections.list" => {
+                if let Some(connections) = Self::object_array(object, "connections") {
+                    if let Some(table) = Self::scalar_table(
+                        "mcp-connections",
+                        "MCP connections",
+                        connections,
                         &[
-                            ("name", "Server"),
-                            ("status", "Status"),
-                            ("connected", "Connected"),
+                            ("id", "ID"),
+                            ("name", "Name"),
+                            ("scope", "Scope"),
+                            ("state", "Status"),
                             ("tool_count", "Tools"),
-                            ("resource_count", "Resources"),
-                            ("prompt_count", "Prompts"),
-                            ("auth_mode", "Auth"),
-                            ("network_target", "Network"),
+                            ("error", "Error"),
                         ],
-                    )
-                {
-                    blocks.push(table);
-                    blocks.extend(Self::generic_array_nested_blocks(
-                        "mcp-server-details",
-                        servers,
-                        0,
-                    ));
-                } else if object
-                    .get("servers")
-                    .and_then(Value::as_array)
-                    .is_some_and(Vec::is_empty)
-                {
-                    blocks.push(Self::markdown_block(
-                        "mcp-servers",
-                        "### MCP servers\nNo MCP servers configured.",
-                    ));
+                    ) {
+                        blocks.push(table);
+                    } else if connections.is_empty() {
+                        blocks.push(Self::markdown_block(
+                            "mcp-connections",
+                            "### MCP connections\nNo MCP connections configured.",
+                        ));
+                    }
                 }
             }
-            "mcp.servers.reconnect" => {
+            "mcp.connections.get" | "mcp.connections.reconnect" => {
                 let fields = [
-                    ("Connected", Self::object_text(object, "connected")),
-                    ("Reconnected", Self::object_text(object, "reconnected")),
-                    ("Status", Self::object_text(object, "status")),
+                    ("Connection", Self::object_text(object, "id")),
+                    ("Status", Self::object_text(object, "state")),
                     ("Tools", Self::object_text(object, "tool_count")),
-                    ("Attempt", Self::object_text(object, "attempt")),
-                    ("Message", Self::object_text(object, "message")),
+                    ("Protocol", Self::object_text(object, "protocol_version")),
+                    ("Error", Self::object_text(object, "error")),
                 ];
                 if let Some(block) =
-                    Self::details_block_if_nonempty("mcp-reconnect", "Reconnect", &fields)
+                    Self::details_block_if_nonempty("mcp-connection", "MCP connection", &fields)
                 {
                     blocks.push(block);
-                } else {
-                    blocks.push(Self::markdown_block(
-                        "mcp-reconnect",
-                        "### Reconnect\nNo reconnect details returned.",
-                    ));
+                }
+                for (key, title) in [
+                    ("oauth_health", "OAuth health"),
+                    ("server_info", "Server"),
+                    ("capabilities", "Capabilities"),
+                ] {
+                    if let Some(value) = object.get(key).filter(|value| !value.is_null()) {
+                        blocks.extend(Self::generic_value_blocks(key, title, value, 0));
+                    }
                 }
             }
             _ => {}
@@ -4335,192 +4320,6 @@ impl BuiltinHumanRenderer {
             .collect()
     }
 
-    fn specific_command_blocks(
-        key: &str,
-        object: &serde_json::Map<String, Value>,
-    ) -> Vec<ViewBlock> {
-        let mut blocks = Vec::new();
-        match key {
-            "commands.list" => {
-                if let Some(packages) = Self::object_array(object, "packages") {
-                    if !packages.is_empty()
-                        && let Some(table) = Self::scalar_table(
-                            "commands",
-                            "Discovered commands",
-                            packages,
-                            &[
-                                ("name", "Name"),
-                                ("summary", "Summary"),
-                                ("source", "Source"),
-                                ("editable", "Editable"),
-                                ("content_hash", "Hash"),
-                            ],
-                        )
-                    {
-                        blocks.push(table);
-                    } else if !packages.is_empty() {
-                        blocks.extend(Self::generic_value_blocks(
-                            "commands",
-                            "Discovered commands",
-                            &Value::Array(packages.clone()),
-                            0,
-                        ));
-                    } else if packages.is_empty() {
-                        blocks.push(Self::markdown_block(
-                            "commands",
-                            "### Discovered commands\nNo commands found.",
-                        ));
-                    }
-                }
-                let fields = [
-                    ("Returned", Self::object_text(object, "returned")),
-                    ("Total", Self::object_text(object, "total")),
-                    ("Offset", Self::object_text(object, "offset")),
-                ];
-                if let Some(block) =
-                    Self::details_block_if_nonempty("commands-page", "Catalog page", &fields)
-                {
-                    blocks.push(block);
-                }
-                if let Some(diagnostics) = Self::object_array(object, "diagnostics") {
-                    if !diagnostics.is_empty()
-                        && let Some(table) = Self::scalar_table(
-                            "commands-diagnostics",
-                            "Discovery diagnostics",
-                            diagnostics,
-                            &[("problem", "Problem")],
-                        )
-                    {
-                        blocks.push(table);
-                    } else if !diagnostics.is_empty() {
-                        blocks.extend(Self::generic_value_blocks(
-                            "commands-diagnostics",
-                            "Discovery diagnostics",
-                            &Value::Array(diagnostics.clone()),
-                            0,
-                        ));
-                    } else if diagnostics.is_empty() {
-                        blocks.push(Self::markdown_block(
-                            "commands-diagnostics",
-                            "### Discovery diagnostics\nNo discovery diagnostics.",
-                        ));
-                    }
-                }
-            }
-            "commands.get" => {
-                let fields = [
-                    ("Name", Self::object_text(object, "name")),
-                    ("Source", Self::object_text(object, "source")),
-                    ("Source path", Self::object_text(object, "source_path")),
-                    ("Editable", Self::object_text(object, "editable")),
-                    ("Hash", Self::object_text(object, "content_hash")),
-                    ("Revision", Self::object_text(object, "revision")),
-                ];
-                if let Some(block) =
-                    Self::details_block_if_nonempty("command-meta", "Command", &fields)
-                {
-                    blocks.push(block);
-                }
-                if let Some(body) = Self::object_string(object, "body") {
-                    blocks.push(Self::markdown_block(
-                        "command-body",
-                        format!("### Body\n{}", Self::bounded_human_text(&body)),
-                    ));
-                }
-            }
-            "commands.install" | "commands.remove" => {
-                let fields = [
-                    ("Operation", Self::object_text(object, "operation")),
-                    ("Name", Self::object_text(object, "name")),
-                    ("Path", Self::object_text(object, "path")),
-                    (
-                        "Catalog generation",
-                        Self::object_text(object, "catalog_generation"),
-                    ),
-                    (
-                        "Catalog changed",
-                        Self::object_text(object, "catalog_changed"),
-                    ),
-                    ("Editable", Self::object_text(object, "editable")),
-                ];
-                if let Some(block) =
-                    Self::details_block_if_nonempty("command-write", "Command change", &fields)
-                {
-                    blocks.push(block);
-                }
-            }
-            "commands.read_resource" => {
-                let fields = [
-                    ("Command", Self::object_text(object, "name")),
-                    ("Path", Self::object_text(object, "path")),
-                    ("Source", Self::object_text(object, "source")),
-                    ("Source path", Self::object_text(object, "source_path")),
-                    ("Bytes", Self::object_text(object, "bytes")),
-                    ("Hash", Self::object_text(object, "content_hash")),
-                ];
-                if let Some(block) = Self::details_block_if_nonempty(
-                    "command-resource-meta",
-                    "Command resource",
-                    &fields,
-                ) {
-                    blocks.push(block);
-                }
-                if let Some(content) = object
-                    .get("content")
-                    .or_else(|| object.get("body"))
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                {
-                    blocks.push(Self::markdown_block(
-                        "command-resource-content",
-                        format!("### Content\n{}", Self::bounded_human_text(content)),
-                    ));
-                }
-            }
-            "commands.refresh" => {
-                let fields = [
-                    ("Changed", Self::object_text(object, "changed")),
-                    ("Generation", Self::object_text(object, "generation")),
-                    ("Declared", Self::object_text(object, "declared")),
-                    ("External", Self::object_text(object, "external")),
-                ];
-                if let Some(block) =
-                    Self::details_block_if_nonempty("commands-refresh", "Command catalog", &fields)
-                {
-                    blocks.push(block);
-                }
-                if let Some(watcher) = object.get("watcher") {
-                    blocks.extend(Self::generic_value_blocks(
-                        "commands-watcher",
-                        "Watcher",
-                        watcher,
-                        0,
-                    ));
-                }
-                if let Some(diagnostics) = Self::object_array(object, "diagnostics") {
-                    if let Some(table) = Self::scalar_table(
-                        "commands-refresh-diagnostics",
-                        "Discovery diagnostics",
-                        diagnostics,
-                        &[("problem", "Problem")],
-                    ) {
-                        blocks.push(table);
-                    } else if !diagnostics.is_empty() {
-                        blocks.extend(Self::generic_value_blocks(
-                            "commands-refresh-diagnostics",
-                            "Discovery diagnostics",
-                            &Value::Array(diagnostics.clone()),
-                            0,
-                        ));
-                    }
-                }
-            }
-            _ => {}
-        }
-        blocks
-    }
-
     fn specific_settings_blocks(
         key: &str,
         object: &serde_json::Map<String, Value>,
@@ -5207,9 +5006,6 @@ impl BuiltinHumanRenderer {
             }
             value if value.starts_with("agent.") => {
                 blocks.extend(Self::specific_agent_blocks(&object));
-            }
-            value if value.starts_with("commands.") => {
-                blocks.extend(Self::specific_command_blocks(value, &object));
             }
             value if value.starts_with("settings.") => {
                 blocks.extend(Self::specific_settings_blocks(value, &object));

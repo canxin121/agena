@@ -79,7 +79,9 @@ async fn a_session_links_a_live_permission_profile_without_overwriting_saved_cus
         .control_snapshot(session, 1)
         .await
         .unwrap();
-    let context = crate::SessionQueryService::execution_context(&manager, &snapshot).unwrap();
+    let context = crate::SessionQueryService::execution_context(&manager, &snapshot)
+        .await
+        .unwrap();
     assert_eq!(context.permission_profile.as_deref(), Some("reader"));
     assert_eq!(context.selected_permission, custom);
     assert!(context.effective_permission.path.unwrap().rules.is_empty());
@@ -107,7 +109,9 @@ async fn a_session_links_a_live_permission_profile_without_overwriting_saved_cus
         state.executor.clone(),
         config,
     );
-    let context = crate::SessionQueryService::execution_context(&manager, &snapshot).unwrap();
+    let context = crate::SessionQueryService::execution_context(&manager, &snapshot)
+        .await
+        .unwrap();
     assert_eq!(
         context.effective_permission.tools.unwrap().default,
         Some(agena_domain::PermissionMode::Deny)
@@ -155,7 +159,9 @@ async fn network_editor_context_keeps_parent_distinct_from_selected_offline_poli
         .control_snapshot(session, 1)
         .await
         .unwrap();
-    let context = crate::SessionQueryService::execution_context(&manager, &snapshot).unwrap();
+    let context = crate::SessionQueryService::execution_context(&manager, &snapshot)
+        .await
+        .unwrap();
     assert_eq!(context.inherited_permission.network, parent.network);
     assert_eq!(context.selected_permission.network, offline.network);
     assert_eq!(context.effective_permission.network, offline.network);

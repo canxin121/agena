@@ -259,6 +259,8 @@ async fn lifecycle_macro_manifest_and_pipelines_fire_all_eight_hooks() {
         session_id: 41,
         child_session_id: 42,
         name: "child".into(),
+        profile: Some("explore".into()),
+        profile_read_only: true,
     })
     .await
     .unwrap();
@@ -312,6 +314,8 @@ async fn guards_can_only_deny_and_model_error_recovery_is_explicit() {
             session_id: 41,
             child_session_id: 42,
             name: "child".into(),
+            profile: None,
+            profile_read_only: false,
         })
         .await
         .is_err()

@@ -8,9 +8,9 @@ mod executor_process_sandbox;
 mod executor_sandbox;
 mod executor_sandbox_help;
 use super::{
-    AccessKind, Arc, BuiltinToolSet, ExecutionPrincipal, FilesystemEffects, MonitorService,
-    NetworkTarget, Path, PathBuf, PermissionDecision, PluginHost, PluginShellEnvInput,
-    PluginToolAfterInput, PluginToolBeforeInput, PluginToolDefinitionInput, PluginToolFailureInput,
+    AccessKind, Arc, ExecutionPrincipal, FilesystemEffects, MonitorService, NetworkTarget, Path,
+    PathBuf, PermissionDecision, PluginHost, PluginShellEnvInput, PluginToolAfterInput,
+    PluginToolBeforeInput, PluginToolDefinitionInput, PluginToolFailureInput,
     PluginToolInvokeInput, PreparedShellCommand, PreparedToolInvocation, RegisteredTool,
     SdkToolStreamingMode, ShellOutput, ShellRequest, ToolError, ToolExecutionView, ToolExecutor,
     ToolInvocation, ToolInvocationExecution, ToolOutput, ToolPayloadInput, ToolPermissionCheck,

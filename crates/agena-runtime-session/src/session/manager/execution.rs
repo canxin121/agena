@@ -488,6 +488,7 @@ impl SessionManager {
             let mut model_error_retries = 0u32;
             let mut follow_ups=0usize;let mut stop_follow_ups=0usize;let mut compactions=0usize;let mut proactive_suppressed=false;
             let mut stop_hook_active = false;
+            let mut verification_reminded = false;
             let mut recent_tools=std::collections::VecDeque::<String>::new();
             let max_turns=match self.execution_context_with_state(control.session, &state).await?.max_turns{Some(0)=>usize::MAX,Some(max)=>max,None=>DEFAULT_MAX_MODEL_TURNS};let mut provider_calls=0usize;
             'turns: loop {
@@ -517,15 +518,15 @@ impl SessionManager {
                 let mut prompt=self.prompt_hydrator.hydrate_with_executor(&self.kernel().reader,facts,&options.model,native,&executor,context.conversation.as_ref()).await.map_err(kernel_error)?;
                 let bindings=if state.providers.agena_tool_mode(&options.model)?.is_disabled(){Vec::new()}else{agena_tool_api::ToolApiRegistry.definitions()};
                 let request_layer=super::session_prompt::request_system_layer(options.system.as_deref());
-                let bot_prompt=self.bot_prompt_layer(context.owner.as_ref(),context.relation_kind).await?;
-                let prompt_inputs=super::session_prompt::PromptInputs{profile:&context.profile_prompts,session:&context.prompts,bot:bot_prompt.as_ref(),request_layer:request_layer.as_ref(),model:&options.model,session_id:control.session.get(),workspace:context.effective_workspace_root.as_ref().map(|path|path.to_string_lossy().into_owned()).unwrap_or_default(),global:context.global,tools_enabled:!bindings.is_empty()};
-                let additional_system=super::session_prompt::resolve_configured_prompts(&state,&prompt_inputs);
-                let mut system_text=self.assemble_session_system_prompt_with_executor(&executor,(!additional_system.is_empty()).then_some(additional_system.as_str()),!bindings.is_empty(),context.profile.as_deref(),&state.config);
-                system_text.push_str(&self.agent_roster(control.session).await?);
+                let bot_prompt=self.bot_prompt_layer(&context).await?;
+                let prompt_inputs=super::session_prompt::PromptInputs{profile:&context.profile_prompts,project_instructions_on_demand:context.project_instructions_on_demand,preload_skills:&context.preload_skills,assignment:&context.agent_assignment,profile_from_bot:context.profile_from_bot,session:&context.prompts,bot:bot_prompt.as_ref(),request_layer:request_layer.as_ref(),model:&options.model,session_id:control.session.get(),workspace:context.effective_workspace_root.as_ref().map(|path|path.to_string_lossy().into_owned()).unwrap_or_default(),global:context.global,tools_enabled:!bindings.is_empty()};
+                let resolution=self.session_system_prompt(&executor,&state,&prompt_inputs,context.profile.as_deref()).await?;
+                let mut system_text=resolution.text;
                 state.processor.transform_model_input(
                     control.session.get(),
                     context.effective_workspace_root.as_deref(),
                     &mut system_text,
+                    &resolution.fragments,
                     prompt.turns_mut(),
                 ).await?;
                 let system=Some(system_text);
@@ -535,7 +536,7 @@ impl SessionManager {
                 if let Some(limit)=hard_limit{
                     let layer_tokens=system.as_deref().map(|text|crate::estimate_prompt_tokens_from_chars(text.chars().count())).unwrap_or(0);
                     if layer_tokens>limit{
-                        let contributors=super::session_prompt::prompt_layer_contributors(&state,&prompt_inputs);
+                        let contributors=super::session_prompt::prompt_layer_contributors(&resolution.fragments);
                         let detail=if contributors.is_empty(){String::new()}else{format!("; largest fragments: {}",contributors.join(", "))};
                         return Err(AppError::Config(format!("additional system instructions alone need about {layer_tokens} tokens, but this model's prompt budget is {limit} tokens. Shorten the Bot's instructions, disable some prompt fragments, or choose a model with a larger context window{detail}")));
                     }
@@ -642,6 +643,12 @@ impl SessionManager {
                         agena_storage::kernel::StopDecision::Continue=>continue,
                         agena_storage::kernel::StopDecision::AwaitingBackground=>{},
                         agena_storage::kernel::StopDecision::Ready=>{
+                            if !verification_reminded && prompt_inputs.tools_enabled && !context.agent_assignment.verification_commands.is_empty() {
+                                verification_reminded = true;
+                                let can_run_checks = executor.available_execution_tools_async().await
+                                    .iter().any(|tool| tool.canonical_name() == "agena.shell.exec");
+                                if can_run_checks && self.remind_agent_verification(&attempt,&control,&context.agent_assignment).await? {continue;}
+                            }
                             if self.stop_hook_followup(&attempt,&control,&state,&mut stop_follow_ups,&mut stop_hook_active,None).await?{continue;}
                             self.flush_hook_runs(&attempt,control.session,&state).await?;
                         },
@@ -1393,10 +1400,11 @@ impl SessionManager {
             self.kernel().reader.configuration(session)
         })
         .await?;
-        let selection = state
-            .config
-            .session_selection(&configuration, selection)
-            .map_err(AppError::Config)?;
+        let profile = self.conversation_profile(&configuration, &state).await?;
+        let selection =
+            state
+                .config
+                .selection_with_profile(&configuration, selection, &profile.definition);
         self.options_for_selection_with_state(&selection, &state)
     }
 
@@ -1737,11 +1745,13 @@ impl SessionManager {
         let executor = state.executor.for_session_context_async(&context).await;
         let native = state.providers.native_compaction_enabled(&options.model)?;
         let request_layer = super::session_prompt::request_system_layer(options.system.as_deref());
-        let bot_prompt = self
-            .bot_prompt_layer(context.owner.as_ref(), context.relation_kind)
-            .await?;
+        let bot_prompt = self.bot_prompt_layer(&context).await?;
         let prompt_inputs = super::session_prompt::PromptInputs {
             profile: &context.profile_prompts,
+            project_instructions_on_demand: context.project_instructions_on_demand,
+            preload_skills: &context.preload_skills,
+            assignment: &context.agent_assignment,
+            profile_from_bot: context.profile_from_bot,
             session: &context.prompts,
             bot: bot_prompt.as_ref(),
             request_layer: request_layer.as_ref(),
@@ -1755,16 +1765,10 @@ impl SessionManager {
                 .unwrap_or_default(),
             tools_enabled: false,
         };
-        let additional_system =
-            super::session_prompt::resolve_configured_prompts(state, &prompt_inputs);
-        let mut system = self.assemble_session_system_prompt_with_executor(
-            &executor,
-            (!additional_system.is_empty()).then_some(additional_system.as_str()),
-            false,
-            context.profile.as_deref(),
-            &state.config,
-        );
-        system.push_str(&self.agent_roster(control.session).await?);
+        let system = self
+            .session_system_prompt(&executor, state, &prompt_inputs, context.profile.as_deref())
+            .await?
+            .text;
         let mut completion = completion_request(options, Some(system), Vec::new(), Vec::new());
         let metadata = state
             .providers

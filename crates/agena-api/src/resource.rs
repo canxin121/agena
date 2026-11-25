@@ -11,7 +11,7 @@ use uuid::Uuid;
 pub use agena_session_api::resource::{
     ActiveExecutionResource, ApprovalModelSelectionResource, DecisionTraceStep,
     ExecutionAttemptResource, HealthResponse, ModelRef, NetworkPermissionConfigResource,
-    PartAttachment, PartAttachmentKind, PartAttachmentSource, PartCommandReference, PartLoadMode,
+    PartAttachment, PartAttachmentKind, PartAttachmentSource, PartLoadMode, PartSkillReference,
     PathAccessModesResource, PathPermissionConfigResource, PendingInteractiveRequestResource,
     PermissionActionResource, PermissionConfigResource, PermissionMode, PermissionReply,
     PermissionReplyKind, PermissionRequest, PermissionRuleResource, PermissionScope,

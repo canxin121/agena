@@ -5,6 +5,7 @@ use anyhow::ensure;
 use serde_json::{Value, json};
 
 mod assistant;
+mod channels;
 mod core;
 mod notifications;
 mod protocols;
@@ -99,6 +100,7 @@ type BundledBehaviorCase = (&'static str, fn() -> TestResult);
 fn every_registered_builtin_has_a_behavior_test() -> TestResult {
     let groups: &[&[BundledBehaviorCase]] = &[
         assistant::CASES,
+        channels::CASES,
         core::CASES,
         runtime::CASES,
         protocols::CASES,

@@ -233,8 +233,8 @@ pub(crate) fn is_activity_node(part: &TranscriptEntryPart) -> bool {
 fn activity_kind_id_for_payload(payload: &agena_domain::ActivityPayload) -> Option<&'static str> {
     match payload {
         agena_domain::ActivityPayload::Resource(_) => Some(agena_domain::ACTIVITY_KIND_RESOURCE),
-        agena_domain::ActivityPayload::CommandReference(_) => {
-            Some(agena_domain::ACTIVITY_KIND_COMMAND_REFERENCE)
+        agena_domain::ActivityPayload::SkillReference(_) => {
+            Some(agena_domain::ACTIVITY_KIND_SKILL_REFERENCE)
         }
         agena_domain::ActivityPayload::TextArtifact(_) => Some(agena_domain::ACTIVITY_KIND_TEXT),
         agena_domain::ActivityPayload::Reasoning(_) => Some(agena_domain::ACTIVITY_KIND_REASONING),
@@ -325,7 +325,7 @@ fn operation_tool_activity_category(tool_id: &str) -> Option<&'static str> {
         "webfetch" | "web.read" | "web.fetch" => Some("webfetch"),
         "websearch" | "web.search" => Some("websearch"),
         "codesearch" | "code.search" => Some("codesearch"),
-        "command" | "commands.run" => Some("command"),
+        "command" => Some("command"),
         "lsp" | "lsp.hover" | "lsp.definition" | "lsp.references" => Some("lsp"),
         "todowrite" | "todo.write" => Some("todowrite"),
         "todoread" | "todo.read" => Some("todoread"),
@@ -388,10 +388,10 @@ fn canonical_activity_details(
     _summary: &str,
 ) -> Vec<CanonicalActivityDetail> {
     match payload {
-        agena_domain::ActivityPayload::CommandReference(command) => {
+        agena_domain::ActivityPayload::SkillReference(skill) => {
             vec![CanonicalActivityDetail::section(
                 ui_text::t(i18n, "activity-detail-source").as_str(),
-                format!("{} · {}", command.source, command.content_hash),
+                format!("{} · {}", skill.source, skill.content_hash),
                 CanonicalActivityDetailFormat::Plain,
             )]
         }
@@ -1719,17 +1719,17 @@ pub(crate) fn render_part_node(
                 children: Vec::new(),
             }
         }
-        TranscriptPartContent::Activity(TranscriptActivityContent::CommandReference(reference)) => {
+        TranscriptPartContent::Activity(TranscriptActivityContent::SkillReference(reference)) => {
             let key = TranscriptNodeKey::Activity {
                 entry_id: message.id,
                 content_id: part.id,
             };
             let expanded = expansions.get(&key).copied().unwrap_or_else(|| {
-                defaults.default_expanded(Some(agena_domain::ACTIVITY_KIND_COMMAND_REFERENCE))
+                defaults.default_expanded(Some(agena_domain::ACTIVITY_KIND_SKILL_REFERENCE))
             });
             let mut labels = Vec::new();
-            for command in &reference.commands {
-                labels.push(command.name.clone());
+            for skill in &reference.skills {
+                labels.push(skill.name.clone());
             }
             let headline = part_headline(part, i18n);
             push_literal_activity_headline(
@@ -1743,12 +1743,12 @@ pub(crate) fn render_part_node(
                 i18n,
             );
             if expanded {
-                for command in &reference.commands {
+                for skill in &reference.skills {
                     render_canonical_activity_detail(
                         out,
                         &CanonicalActivityDetail::section(
-                            command.name.as_str(),
-                            command.description.as_str(),
+                            skill.name.as_str(),
+                            skill.description.as_str(),
                             CanonicalActivityDetailFormat::Auto,
                         ),
                         width,
@@ -1760,7 +1760,7 @@ pub(crate) fn render_part_node(
                         out,
                         &CanonicalActivityDetail::section(
                             ui_text::t(i18n, "activity-detail-source").as_str(),
-                            format!("{} · {}", command.source, command.content_hash),
+                            format!("{} · {}", skill.source, skill.content_hash),
                             CanonicalActivityDetailFormat::Plain,
                         ),
                         width,
@@ -2921,7 +2921,7 @@ fn render_user_document(
                         crate::TranscriptUserActivityStyle::Resource => Style::default()
                             .fg(agena_tui_components::theme::info_color())
                             .add_modifier(Modifier::BOLD),
-                        crate::TranscriptUserActivityStyle::Command => Style::default()
+                        crate::TranscriptUserActivityStyle::Skill => Style::default()
                             .fg(agena_tui_components::theme::accent_color())
                             .add_modifier(Modifier::BOLD),
                         crate::TranscriptUserActivityStyle::TextArtifact => Style::default()

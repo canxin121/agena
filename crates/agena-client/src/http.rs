@@ -1353,6 +1353,19 @@ impl AgenaClient {
             .await
     }
 
+    pub async fn builtin_prompts(
+        &self,
+    ) -> Result<Vec<agena_prompt_layers::BuiltinPrompt>, ClientError> {
+        self.get_json("/api/v1/prompts/builtins").await
+    }
+
+    pub async fn builtin_prompt_catalog(
+        &self,
+    ) -> Result<Vec<agena_prompt_layers::BuiltinPrompt>, ClientError> {
+        self.get_json("/api/v1/prompts/builtins?include_reusable=true")
+            .await
+    }
+
     /// Update the independent durable navigation pin.
     pub async fn set_session_pinned(
         &self,

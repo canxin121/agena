@@ -159,6 +159,10 @@ async fn profile_prompt_reaches_final_system_assembly_and_request_override_keeps
     let model = ModelRef::new("test", "test");
     let mut inputs = super::super::session_prompt::PromptInputs {
         profile: &context.profile_prompts,
+        project_instructions_on_demand: context.project_instructions_on_demand,
+        preload_skills: &context.preload_skills,
+        assignment: &context.agent_assignment,
+        profile_from_bot: context.profile_from_bot,
         session: &context.prompts,
         bot: None,
         request_layer: None,
@@ -168,7 +172,10 @@ async fn profile_prompt_reaches_final_system_assembly_and_request_override_keeps
         global: false,
         tools_enabled: false,
     };
-    let resolution = super::super::session_prompt::prompt_preview(&state, &inputs).unwrap();
+    let resolution = manager
+        .session_system_prompt(&executor, &state, &inputs, context.profile.as_deref())
+        .await
+        .unwrap();
     assert_eq!(
         resolution
             .fragments
@@ -189,34 +196,20 @@ async fn profile_prompt_reaches_final_system_assembly_and_request_override_keeps
         resolution.text.find("PROFILE_REVIEW_INSTRUCTION").unwrap()
             < resolution.text.find("SESSION_INSTRUCTION").unwrap()
     );
-    let builtin = manager.assemble_session_system_prompt_with_executor(
-        &executor,
-        None,
-        false,
-        context.profile.as_deref(),
-        &state.config,
-    );
-    let final_system = manager.assemble_session_system_prompt_with_executor(
-        &executor,
-        Some(&resolution.text),
-        false,
-        context.profile.as_deref(),
-        &state.config,
-    );
-    assert!(!builtin.is_empty());
-    assert!(final_system.starts_with(&builtin));
-    assert!(final_system.contains("PROFILE_REVIEW_INSTRUCTION"));
+    let builtin = resolution
+        .fragments
+        .iter()
+        .find(|fragment| fragment.scope == PromptScope::Builtin)
+        .unwrap();
+    assert!(resolution.text.starts_with(&builtin.text));
     let request = super::super::session_prompt::request_system_layer(Some("REQUEST_INSTRUCTION"));
     inputs.request_layer = request.as_ref();
-    let replacement = super::super::session_prompt::resolve_configured_prompts(&state, &inputs);
-    let final_system = manager.assemble_session_system_prompt_with_executor(
-        &executor,
-        Some(&replacement),
-        false,
-        context.profile.as_deref(),
-        &state.config,
-    );
-    assert!(final_system.starts_with(&builtin));
+    let final_system = manager
+        .session_system_prompt(&executor, &state, &inputs, context.profile.as_deref())
+        .await
+        .unwrap()
+        .text;
+    assert!(final_system.starts_with(&builtin.text));
     assert!(final_system.contains("REQUEST_INSTRUCTION"));
     assert!(!final_system.contains("PROFILE_REVIEW_INSTRUCTION"));
     manager

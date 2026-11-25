@@ -630,31 +630,6 @@ pub enum ShellToolInput {
     /// List every active or recently-finished background process in this session.
     #[input(default_when_empty = true)]
     List {},
-    /// Read buffered logs from a background process; optionally block waiting for new events.
-    #[input(
-        non_empty("process_id"),
-        maximum("wait_ms", 30000),
-        minimum("limit", 1),
-        maximum("limit", 2000),
-        minimum("max_output_bytes", 1024),
-        maximum("max_output_bytes", 16384)
-    )]
-    Logs {
-        process_id: String,
-        /// Return only events with `seq > since_seq`. Default 0.
-        #[serde(default)]
-        since_seq: u64,
-        #[serde(default)]
-        event_offset: u32,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        max_output_bytes: Option<u32>,
-        /// Max events to return. Default 200, max 2000.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        limit: Option<u32>,
-        /// If positive, block up to this many ms waiting for new events when none are available.
-        #[serde(default)]
-        wait_ms: u64,
-    },
     /// Terminate a running background process.
     #[input(non_empty("process_id"))]
     Stop { process_id: String },
@@ -710,7 +685,6 @@ impl ShellToolInput {
             Self::Watch { .. } => "watch",
             Self::Open { .. } => "open",
             Self::List {} => "list",
-            Self::Logs { .. } => "logs",
             Self::Stop { .. } => "stop",
             Self::Read { .. } => "read",
             Self::Write { .. } => "write",

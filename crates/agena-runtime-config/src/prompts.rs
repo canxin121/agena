@@ -9,9 +9,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use agena_prompt_layers::{
-    FragmentId, LayerMode, MAX_FRAGMENT_BYTES, PromptFragment, PromptLayer, PromptScope,
-    validate_compositions,
+    BOT_INSTRUCTIONS_ID, FragmentId, LayerMode, MAX_FRAGMENT_BYTES, PromptFragment, PromptLayer,
+    PromptScope, validate_compositions,
 };
+use agena_runtime_contracts::identity::{is_builtin_prompt, reusable_prompt_fragments};
 
 use crate::ConfigError;
 
@@ -135,9 +136,12 @@ impl PromptLayersConfig {
         let (dir, saved) = match scope {
             PromptScope::Global => (&self.global_dir, &self.global.library),
             PromptScope::Workspace => (&self.workspace_dir, &self.workspace.library),
-            PromptScope::Model
+            PromptScope::Builtin
+            | PromptScope::Runtime
+            | PromptScope::Model
             | PromptScope::Profile
             | PromptScope::Session
+            | PromptScope::Bot
             | PromptScope::Request => {
                 return Ok(FragmentLibrary::default());
             }
@@ -146,6 +150,11 @@ impl PromptLayersConfig {
         // Explicitly saved entries take precedence over legacy Markdown files.
         for fragment in saved {
             library.insert(fragment.id.clone(), fragment.clone());
+        }
+        if scope == PromptScope::Global {
+            library.extend(
+                reusable_prompt_fragments().map(|fragment| (fragment.id.clone(), fragment)),
+            );
         }
         Ok(library)
     }
@@ -200,7 +209,7 @@ impl PromptLayersConfig {
                 &self.workspace_dir
             };
             for id in &config.order {
-                if !library.contains_key(id) {
+                if !is_builtin_prompt(id) && !library.contains_key(id) {
                     return Err(ConfigError::Validation(format!(
                         "{} prompts reference `{id}`, but {} does not exist",
                         scope.as_str(),
@@ -211,7 +220,7 @@ impl PromptLayersConfig {
             for model in &config.models {
                 for id in &model.order {
                     let inline = model.inline.iter().any(|fragment| &fragment.id == id);
-                    if !inline && !library.contains_key(id) {
+                    if !is_builtin_prompt(id) && !inline && !library.contains_key(id) {
                         return Err(ConfigError::Validation(format!(
                             "{} prompts for `{}` reference `{id}`, but no fragment file or inline fragment provides it",
                             scope.as_str(),
@@ -288,6 +297,18 @@ pub fn parse_fragment(
     text: &str,
     path: &Path,
 ) -> Result<PromptFragment, ConfigError> {
+    if id.as_str() == BOT_INSTRUCTIONS_ID {
+        return Err(ConfigError::Validation(format!(
+            "{}: this prompt ID is reserved for Bot instructions",
+            path.display()
+        )));
+    }
+    if id.is_builtin() || id.is_reusable_builtin() {
+        return Err(ConfigError::Validation(format!(
+            "{}: built-in prompt IDs are reserved",
+            path.display()
+        )));
+    }
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let (front_matter, body) = if let Some(rest) = text.strip_prefix("---\n") {
         let Some((front, body)) = rest.split_once("\n---") else {
@@ -347,6 +368,17 @@ pub fn render_fragment(fragment: &PromptFragment) -> String {
 
 /// Create or replace one fragment file. Callers own path permissions.
 pub fn write_fragment(dir: &Path, fragment: &PromptFragment) -> Result<PathBuf, ConfigError> {
+    if fragment.id.as_str() == BOT_INSTRUCTIONS_ID {
+        return Err(ConfigError::Validation(format!(
+            "`{BOT_INSTRUCTIONS_ID}` is reserved for Bot instructions"
+        )));
+    }
+    if fragment.id.is_builtin() || fragment.id.is_reusable_builtin() {
+        return Err(ConfigError::Validation(format!(
+            "`{}` is a built-in prompt ID",
+            fragment.id
+        )));
+    }
     std::fs::create_dir_all(dir).map_err(|source| ConfigError::ReadFile {
         path: dir.to_path_buf(),
         source,

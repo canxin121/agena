@@ -1,4 +1,4 @@
-//! Composable additional system-prompt fragments.
+//! Ordered system-prompt fragments and optional instruction layers.
 //!
 //! A session prompt is assembled from ordered *layers*: global, workspace,
 //! matched model routes, session, and the request. Each layer contributes an
@@ -21,6 +21,8 @@ pub use composition::validate_compositions;
 pub const MAX_FRAGMENT_BYTES: usize = 16 * 1024;
 /// Largest accepted assembled prompt contributed by all layers together.
 pub const MAX_TOTAL_BYTES: usize = 128 * 1024;
+/// The Bot-owned instruction body can be positioned alongside library prompts.
+pub const BOT_INSTRUCTIONS_ID: &str = "agena.bot.instructions";
 
 const MAX_ID_LEN: usize = 64;
 
@@ -30,6 +32,8 @@ pub enum PromptError {
     InvalidId(String),
     DuplicateOrder(String),
     DuplicateInline(String),
+    BuiltinFragment(String),
+    ReservedFragment(String),
     UnknownFragment { scope: PromptScope, id: String },
     InvalidComposition { id: String, reason: String },
     FragmentTooLarge { id: String, bytes: usize },
@@ -54,6 +58,19 @@ impl fmt::Display for PromptError {
                     formatter,
                     "inline fragment `{id}` is defined more than once in this layer"
                 )
+            }
+            Self::BuiltinFragment(id) => {
+                write!(
+                    formatter,
+                    "built-in prompt `{id}` can only be used in the system prompt order"
+                )
+            }
+            Self::ReservedFragment(id) => {
+                if id == BOT_INSTRUCTIONS_ID {
+                    write!(formatter, "prompt `{id}` is reserved for Bot instructions")
+                } else {
+                    write!(formatter, "built-in prompt `{id}` is read-only")
+                }
             }
             Self::UnknownFragment { scope, id } => write!(
                 formatter,
@@ -97,6 +114,14 @@ impl FragmentId {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    pub fn is_builtin(&self) -> bool {
+        self.0.starts_with("agena.system.")
+    }
+
+    pub fn is_reusable_builtin(&self) -> bool {
+        self.0.starts_with("agena.profile.")
     }
 }
 
@@ -169,6 +194,42 @@ pub struct PromptFragment {
     pub when: PromptCondition,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BuiltinPromptWhen {
+    Always,
+    UserFacing,
+    Subagent,
+    Tools,
+    UserFacingTools,
+}
+
+/// An instruction published by the server's built-in prompt catalog.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuiltinPrompt {
+    pub id: FragmentId,
+    pub title: String,
+    pub body: String,
+    pub when: BuiltinPromptWhen,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<FragmentId>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reusable: bool,
+}
+
+impl BuiltinPrompt {
+    pub fn matches_id(&self, id: &str) -> bool {
+        self.id.as_str() == id || self.aliases.iter().any(|alias| alias.as_str() == id)
+    }
+
+    pub fn reusable_fragment(&self) -> Option<PromptFragment> {
+        self.reusable.then(|| PromptFragment {
+            title: self.title.clone(),
+            ..PromptFragment::new(self.id.clone(), self.body.clone())
+        })
+    }
+}
+
 impl PromptFragment {
     pub fn new(id: FragmentId, body: impl Into<String>) -> Self {
         Self {
@@ -186,6 +247,22 @@ impl PromptFragment {
     }
 
     fn validate(&self) -> Result<(), PromptError> {
+        if self.id.is_builtin() {
+            return Err(PromptError::BuiltinFragment(self.id.to_string()));
+        }
+        if let Some(id) = self.parts.iter().find(|id| id.is_builtin()) {
+            return Err(PromptError::BuiltinFragment(id.to_string()));
+        }
+        if self.id.as_str() == BOT_INSTRUCTIONS_ID
+            || self
+                .parts
+                .iter()
+                .any(|id| id.as_str() == BOT_INSTRUCTIONS_ID)
+        {
+            return Err(PromptError::ReservedFragment(
+                BOT_INSTRUCTIONS_ID.to_owned(),
+            ));
+        }
         if self.body.len() > MAX_FRAGMENT_BYTES {
             return Err(PromptError::FragmentTooLarge {
                 id: self.id.to_string(),
@@ -246,12 +323,21 @@ impl PromptLayer {
         }
         let mut inline = BTreeSet::new();
         for fragment in &self.inline {
+            if fragment.id.is_reusable_builtin() {
+                return Err(PromptError::ReservedFragment(fragment.id.to_string()));
+            }
             if !inline.insert(fragment.id.clone()) {
                 return Err(PromptError::DuplicateInline(fragment.id.to_string()));
             }
             fragment.validate()?;
         }
         for id in &self.disabled {
+            if id.is_builtin() {
+                return Err(PromptError::BuiltinFragment(id.to_string()));
+            }
+            if id.as_str() == BOT_INSTRUCTIONS_ID {
+                return Err(PromptError::ReservedFragment(id.to_string()));
+            }
             if self.order.contains(id) || inline.contains(id) {
                 return Err(PromptError::DuplicateOrder(id.to_string()));
             }
@@ -268,22 +354,28 @@ impl PromptLayer {
 #[serde(rename_all = "snake_case")]
 /// Where a layer's instructions came from.
 pub enum PromptScope {
+    Builtin,
+    Runtime,
     Global,
     Workspace,
     Model,
     Profile,
     Session,
+    Bot,
     Request,
 }
 
 impl PromptScope {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Builtin => "builtin",
+            Self::Runtime => "runtime",
             Self::Global => "global",
             Self::Workspace => "workspace",
             Self::Model => "model",
             Self::Profile => "profile",
             Self::Session => "session",
+            Self::Bot => "bot",
             Self::Request => "request",
         }
     }
@@ -359,8 +451,22 @@ pub struct ResolvedFragment {
     pub text: String,
 }
 
+impl ResolvedFragment {
+    pub fn new(id: FragmentId, title: impl Into<String>, scope: PromptScope, text: String) -> Self {
+        Self {
+            id,
+            title: title.into(),
+            scope,
+            position: 0,
+            bytes: text.len(),
+            sha256: sha256_hex(text.as_bytes()),
+            text,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-/// The assembled additional instructions plus provenance.
+/// The assembled instructions plus provenance.
 pub struct PromptResolution {
     pub text: String,
     pub fragments: Vec<ResolvedFragment>,
@@ -369,11 +475,37 @@ pub struct PromptResolution {
     pub over_budget: bool,
 }
 
+impl PromptResolution {
+    pub fn from_fragments(
+        mut fragments: Vec<ResolvedFragment>,
+        warnings: Vec<PromptWarning>,
+    ) -> Self {
+        for (position, fragment) in fragments.iter_mut().enumerate() {
+            fragment.position = position;
+        }
+        let text = fragments
+            .iter()
+            .map(|fragment| fragment.text.trim())
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let total_bytes = text.len();
+        Self {
+            text,
+            fragments,
+            warnings,
+            total_bytes,
+            over_budget: total_bytes > MAX_TOTAL_BYTES,
+        }
+    }
+}
+
 /// One layer and the fragment bodies it can reference.
 pub struct LayerSource<'a> {
     pub scope: PromptScope,
     pub layer: &'a PromptLayer,
     pub library: &'a BTreeMap<FragmentId, PromptFragment>,
+    literal: Option<&'a ResolvedFragment>,
 }
 
 impl<'a> LayerSource<'a> {
@@ -386,7 +518,14 @@ impl<'a> LayerSource<'a> {
             scope,
             layer,
             library,
+            literal: None,
         }
+    }
+
+    /// Attach a body already validated by its owner and rendered as literal text.
+    pub fn with_literal(mut self, literal: Option<&'a ResolvedFragment>) -> Self {
+        self.literal = literal;
+        self
     }
 }
 
@@ -395,21 +534,68 @@ pub fn resolve(
     layers: &[LayerSource<'_>],
     context: &PromptContext,
 ) -> Result<PromptResolution, PromptError> {
-    let mut resolved: Vec<(FragmentId, ResolvedFragment)> = Vec::new();
+    resolve_with_builtins(layers, context, &[])
+}
+
+/// Built-ins begin in their default order. A layer can position a built-in by
+/// listing its ID. Replacing a layer only drops optional fragments.
+/// Built-ins with empty text are known to the order but inactive for this run.
+pub fn resolve_with_builtins(
+    layers: &[LayerSource<'_>],
+    context: &PromptContext,
+    builtins: &[ResolvedFragment],
+) -> Result<PromptResolution, PromptError> {
+    resolve_with_builtin_aliases(layers, context, builtins, |_| None)
+}
+
+/// Resolve historical built-in names to the same ordered entry as the current name.
+pub fn resolve_with_builtin_aliases(
+    layers: &[LayerSource<'_>],
+    context: &PromptContext,
+    builtins: &[ResolvedFragment],
+    canonical_id: impl Fn(&FragmentId) -> Option<&'static str>,
+) -> Result<PromptResolution, PromptError> {
+    let mut resolved: Vec<_> = builtins
+        .iter()
+        .filter(|fragment| !fragment.text.is_empty())
+        .cloned()
+        .collect();
     let mut warnings = Vec::new();
     let mut suppressed = BTreeSet::new();
 
     for source in layers {
         source.layer.validate()?;
         if source.layer.mode == LayerMode::Replace {
-            resolved.clear();
+            resolved.retain(|fragment| fragment.scope == PromptScope::Builtin);
         }
         for id in &source.layer.disabled {
             suppressed.insert(id.clone());
-            resolved.retain(|(existing, _)| existing != id);
+            resolved.retain(|fragment| &fragment.id != id);
         }
         for id in &source.layer.order {
+            if id.is_builtin() {
+                let name = canonical_id(id).unwrap_or(id.as_str());
+                if !builtins.iter().any(|fragment| fragment.id.as_str() == name) {
+                    return Err(PromptError::UnknownFragment {
+                        scope: source.scope,
+                        id: id.to_string(),
+                    });
+                }
+                if let Some(position) = resolved
+                    .iter()
+                    .position(|fragment| fragment.id.as_str() == name)
+                {
+                    let fragment = resolved.remove(position);
+                    resolved.push(fragment);
+                }
+                continue;
+            }
             if suppressed.contains(id) {
+                continue;
+            }
+            if let Some(literal) = source.literal.filter(|fragment| &fragment.id == id) {
+                resolved.retain(|existing| &existing.id != id);
+                resolved.push(literal.clone());
                 continue;
             }
             let fragment = source
@@ -425,41 +611,17 @@ pub fn resolve(
             else {
                 continue;
             };
-            resolved.retain(|(existing, _)| existing != id);
-            resolved.push((
+            resolved.retain(|existing| &existing.id != id);
+            resolved.push(ResolvedFragment::new(
                 id.clone(),
-                ResolvedFragment {
-                    id: id.clone(),
-                    title: fragment.title.clone(),
-                    scope: source.scope,
-                    position: 0,
-                    bytes: text.len(),
-                    sha256: sha256_hex(text.as_bytes()),
-                    text,
-                },
+                fragment.title.clone(),
+                source.scope,
+                text,
             ));
         }
     }
 
-    let mut fragments = Vec::with_capacity(resolved.len());
-    for (position, (_, mut fragment)) in resolved.into_iter().enumerate() {
-        fragment.position = position;
-        fragments.push(fragment);
-    }
-    let text = fragments
-        .iter()
-        .map(|fragment| fragment.text.trim())
-        .filter(|text| !text.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n");
-    let total_bytes = text.len();
-    Ok(PromptResolution {
-        text,
-        fragments,
-        warnings,
-        total_bytes,
-        over_budget: total_bytes > MAX_TOTAL_BYTES,
-    })
+    Ok(PromptResolution::from_fragments(resolved, warnings))
 }
 
 fn empty_route() -> PromptRoute {
@@ -604,6 +766,82 @@ mod tests {
             platform: "darwin".to_owned(),
             session_id: 7,
             tools_enabled: true,
+        }
+    }
+
+    #[test]
+    fn replace_keeps_applicable_builtins_and_orders_selected_fragments_between_them() {
+        let builtins = [
+            ResolvedFragment::new(
+                id("agena.system.one"),
+                "One",
+                PromptScope::Builtin,
+                "first".into(),
+            ),
+            ResolvedFragment::new(
+                id("agena.system.two"),
+                "Two",
+                PromptScope::Builtin,
+                "second".into(),
+            ),
+            ResolvedFragment::new(
+                id("agena.system.inactive"),
+                "Inactive",
+                PromptScope::Builtin,
+                String::new(),
+            ),
+        ];
+        let library = library(&[
+            fragment("broader", "discarded"),
+            fragment("chosen", "custom"),
+        ]);
+        let global = layer(&["broader"]);
+        let session = PromptLayer {
+            mode: LayerMode::Replace,
+            ..layer(&["chosen", "agena.system.one", "agena.system.inactive"])
+        };
+        let resolution = resolve_with_builtins(
+            &[
+                LayerSource::new(PromptScope::Global, &global, &library),
+                LayerSource::new(PromptScope::Session, &session, &library),
+            ],
+            &context(),
+            &builtins,
+        )
+        .unwrap();
+        assert_eq!(resolution.text, "second\n\ncustom\n\nfirst");
+        assert_eq!(
+            resolution
+                .fragments
+                .iter()
+                .map(|part| part.position)
+                .collect::<Vec<_>>(),
+            [0, 1, 2]
+        );
+    }
+
+    #[test]
+    fn builtins_cannot_be_disabled_redefined_or_embedded_in_compositions() {
+        let required = id("agena.system.identity");
+        let hidden = PromptLayer {
+            disabled: vec![required.clone()],
+            ..PromptLayer::default()
+        };
+        let redefined = PromptLayer {
+            inline: vec![PromptFragment::new(required.clone(), "replacement")],
+            ..PromptLayer::default()
+        };
+        let mut composition = fragment("wrapper", "");
+        composition.parts.push(required.clone());
+        let wrapped = PromptLayer {
+            inline: vec![composition],
+            ..PromptLayer::default()
+        };
+        for layer in [hidden, redefined, wrapped] {
+            assert_eq!(
+                layer.validate(),
+                Err(PromptError::BuiltinFragment(required.to_string()))
+            );
         }
     }
 

@@ -33,8 +33,8 @@ def main() -> None:
     a = api(f"/api/v1/bots/{a['id']}")
     b = api(f"/api/v1/bots/{b['id']}")
     for profile in (a, b):
-        resource = api(f"/api/v1/sessions/{profile['session_id']}")
-        state = api(f"/api/v1/sessions/{profile['session_id']}/state")
+        resource = api(f"/api/v1/sessions/{profile['local_session_id']}")
+        state = api(f"/api/v1/sessions/{profile['local_session_id']}/state")
         assert resource["workspace_id"] is None and state["session"]["workspace_id"] is None
         assert state["execution"].get("effective_workspace_root") is None
     with tempfile.TemporaryDirectory(prefix="agena-multi-bot-tui-") as temporary:
@@ -128,7 +128,7 @@ def main() -> None:
             command("/bot edit")
             wait(lambda: "s save" in capture(), "selected Bot persona form")
             form = capture()
-            assert "Additional system instructions" in form, form
+            assert "System prompt" in form, form
             assert "A UI persona" not in form, form  # Editing B, never A.
             for removed in ("Address user", "Tone", "Language"):
                 assert removed not in form, form
@@ -137,14 +137,18 @@ def main() -> None:
             keys("C-a", "C-k"); text("Borealis TUI edited"); keys("M-Enter")
             wait(lambda: "s save" in capture() and "Borealis TUI edited" in capture(), "name draft applied")
             keys("Down", "Enter")
-            wait(lambda: "Alt+Enter" in capture(), "instructions editor")
+            wait(lambda: "Prompt order" in capture() and "Assistant identity and shared rules" in capture(), "Bot prompt order")
+            keys("a")
+            wait(lambda: "Alt+Enter" in capture(), "instructions fragment editor")
             keys("C-a", "C-k"); text("TUI edited B personality persisted"); keys("M-Enter")
-            wait(lambda: "s save" in capture(), "persona draft applied")
+            wait(lambda: "Prompt order" in capture(), "persona draft applied")
+            keys("[")
             (evidence / "multi-tui-editor-wide.txt").write_text(capture())
             keys("s")
             wait(lambda: api(f"/api/v1/bots/{b['id']}")["name"] == "Borealis TUI edited", "TUI saved profile through real Web API")
             saved_b = api(f"/api/v1/bots/{b['id']}")
             assert saved_b["persona"]["instructions"] == "TUI edited B personality persisted"
+            assert saved_b["persona"]["prompts"]["ids"][-2] == "agena.bot.instructions"
             saved_a = api(f"/api/v1/bots/{a['id']}")
             assert saved_a["name"] == "Aurora Web edited"
             assert saved_a["persona"]["instructions"] == "Web edited A personality persisted"

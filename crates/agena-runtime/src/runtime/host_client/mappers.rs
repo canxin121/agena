@@ -67,6 +67,22 @@ pub(super) fn render_tool_descriptor(
     }
 }
 
+pub(super) fn code_mode_can_invoke(tool: &agena_plugin_host::registry::RegisteredTool) -> bool {
+    use agena_plugin_sdk::{ToolStreamingMode, ToolTag};
+
+    // Delegations share the originating transcript call. Interactive and
+    // streamed results, UI cards, and long-lived processes need to own theirs.
+    let plugin = tool.plugin_full_name();
+    plugin != agena_bundled_plugins::tool::code_mode_plugin_id()
+        && plugin != agena_bundled_plugins::tool::inline_ui_plugin_id()
+        && tool.definition().runtime.streaming == ToolStreamingMode::Buffered
+        && !tool.effective_tags().iter().any(|tag| match tag {
+            ToolTag::Interactive | ToolTag::Agent => true,
+            ToolTag::Custom(tag) => tag == "background",
+            _ => false,
+        })
+}
+
 pub(super) fn join_monitor_command(command: &[String]) -> Result<String, PluginError> {
     if command.is_empty() {
         return Err(PluginError::invalid_params(

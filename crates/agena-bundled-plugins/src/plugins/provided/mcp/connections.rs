@@ -228,10 +228,7 @@ impl McpPlugin {
             .ok_or_else(|| PluginError::internal("MCP plugin invoked before initialization."))
     }
 
-    async fn connection_store(
-        &self,
-        write: Option<McpConnectionScope>,
-    ) -> SdkResult<McpConnectionStore> {
+    async fn connection_store_metadata(&self) -> SdkResult<McpConnectionStore> {
         let host = self.connection_host()?;
         let meta = host.read_config(Some("meta".into())).await?;
         let path = |key: &str| -> SdkResult<PathBuf> {
@@ -247,31 +244,44 @@ impl McpPlugin {
             .and_then(Path::parent)
             .ok_or_else(|| PluginError::internal("MCP workspace path is unavailable."))?
             .to_path_buf();
-        for path in [&global, &workspace] {
-            crate::permissions::require_path(
-                host.as_ref(),
-                PathKind::Read,
-                &path.to_string_lossy(),
-            )
-            .await?;
-        }
-        if let Some(scope) = write {
-            let path = if scope == McpConnectionScope::Global {
-                &global
-            } else {
-                &workspace
-            };
-            crate::permissions::require_path(
-                host.as_ref(),
-                PathKind::Write,
-                &path.to_string_lossy(),
-            )
-            .await?;
-        }
         let active = host
             .read_config(Some("config.plugins.list.\"agena.mcp\".settings".into()))
             .await?;
         Ok(McpConnectionStore::new(global, workspace, root).with_active_settings(active))
+    }
+
+    async fn connection_catalog_store(&self) -> SdkResult<McpConnectionStore> {
+        let store = self.connection_store_metadata().await?;
+        let host = self.connection_host()?.as_ref();
+        host.require_mcp_global_config_read().await?;
+        crate::permissions::require_path(
+            host,
+            PathKind::Read,
+            &store.workspace_path.to_string_lossy(),
+        )
+        .await?;
+        Ok(store)
+    }
+
+    async fn connection_store(
+        &self,
+        write: Option<McpConnectionScope>,
+    ) -> SdkResult<McpConnectionStore> {
+        let store = self.connection_store_metadata().await?;
+        let host = self.connection_host()?.as_ref();
+        for path in [&store.global_path, &store.workspace_path] {
+            crate::permissions::require_path(host, PathKind::Read, &path.to_string_lossy()).await?;
+        }
+        if let Some(scope) = write {
+            let path = if scope == McpConnectionScope::Global {
+                &store.global_path
+            } else {
+                &store.workspace_path
+            };
+            crate::permissions::require_path(host, PathKind::Write, &path.to_string_lossy())
+                .await?;
+        }
+        Ok(store)
     }
 
     async fn writable_connection_store(&self, id: &str) -> SdkResult<McpConnectionStore> {
@@ -406,16 +416,31 @@ impl McpPlugin {
     }
 
     pub(super) async fn connection_list(&self) -> SdkResult<ToolInvokeOutput> {
-        let store = self.connection_store(None).await?;
+        let store = self.connection_catalog_store().await?;
         let mut catalog = io(move || store.list()).await?;
         management::project_catalog(&mut catalog, Some(&self.manager)).await;
         output("MCP connections", catalog)
     }
     pub(super) async fn connection_get(&self, id: &str) -> SdkResult<ToolInvokeOutput> {
-        output("MCP connection", self.connection_detail(id).await?)
+        let store = self.connection_catalog_store().await?;
+        let mut detail = self.projected_connection_detail(store, id).await?;
+        if detail.summary.state == "invalid" {
+            detail.config = Value::Null;
+            detail.secret_paths.clear();
+        }
+        output("MCP connection", detail)
     }
+
     async fn connection_detail(&self, id: &str) -> SdkResult<McpConnectionDetail> {
         let store = self.connection_store(None).await?;
+        self.projected_connection_detail(store, id).await
+    }
+
+    async fn projected_connection_detail(
+        &self,
+        store: McpConnectionStore,
+        id: &str,
+    ) -> SdkResult<McpConnectionDetail> {
         let id = id.to_owned();
         let mut detail = io(move || store.get(&id)).await?;
         management::project_detail(&mut detail, Some(&self.manager)).await;
@@ -548,26 +573,11 @@ impl McpPlugin {
     async fn configured_connection(
         &self,
         id: &str,
-        active: bool,
     ) -> SdkResult<(McpConnectionStore, String, McpServerConfig)> {
         let store = self.connection_store(None).await?;
         let cloned = store.clone();
         let target = id.to_owned();
         let (name, config) = io(move || {
-            if active {
-                let detail = cloned.get(&target)?;
-                if !detail.summary.enabled
-                    || !detail.summary.effective
-                    || matches!(
-                        detail.summary.state.as_str(),
-                        "pending_reload" | "bridge_disabled"
-                    )
-                {
-                    return Err(McpManagementError::invalid(
-                        "Enable and reload the effective connection before using it.",
-                    ));
-                }
-            }
             let (_, name, raw) = cloned.raw(&target)?;
             Ok((name.clone(), validate_connection(&name, raw)?))
         })
@@ -575,7 +585,7 @@ impl McpPlugin {
         Ok((store, name, config))
     }
     pub(super) async fn connection_test(&self, id: &str) -> SdkResult<ToolInvokeOutput> {
-        let (store, name, config) = self.configured_connection(id, false).await?;
+        let (store, name, config) = self.configured_connection(id).await?;
         let spec = self.authorize_connection(&store, &name, &config).await?;
         let spec = self.prepare_probe_spec(spec).await?;
         let cloned = store.clone();
@@ -596,21 +606,41 @@ impl McpPlugin {
         )
     }
     pub(super) async fn connection_reconnect(&self, id: &str) -> SdkResult<ToolInvokeOutput> {
-        let (store, name, config) = self.configured_connection(id, true).await?;
+        let store = self.connection_catalog_store().await?;
+        let catalog = store.clone();
+        let target = id.to_owned();
+        let (mut detail, config) = io(move || {
+            let (detail, config) = catalog.snapshot(&target)?;
+            if !detail.summary.effective
+                || !detail.summary.enabled
+                || matches!(
+                    detail.summary.state.as_str(),
+                    "pending_reload" | "bridge_disabled"
+                )
+            {
+                return Err(McpManagementError::invalid(
+                    "Enable and reload the effective connection before using it.",
+                ));
+            }
+            let config = validate_connection(&detail.summary.name, config)?;
+            Ok((detail, config))
+        })
+        .await?;
+        let name = detail.summary.name.clone();
         self.authorize_connection(&store, &name, &config).await?;
-        self.authorize_server(&name)
-            .await?
-            .reconnect(&name)
-            .await
-            .map_err(transport_error)?;
-        self.connection_get(id).await
+        let manager = self.authorized_server_manager(&name, true).await?;
+        management::project_detail(&mut detail, Some(&manager)).await;
+        output(
+            "MCP connection reconnected in the current execution scope",
+            detail,
+        )
     }
     pub(super) async fn connection_credential(
         &self,
         id: &str,
         token: Option<String>,
     ) -> SdkResult<ToolInvokeOutput> {
-        let (store, name, config) = self.configured_connection(id, false).await?;
+        let (store, name, config) = self.configured_connection(id).await?;
         let McpServerConfig::Http {
             endpoint,
             auth: Some(McpHttpAuthConfig::BearerFromStore),
@@ -705,7 +735,7 @@ impl McpPlugin {
         &self,
         input: &ConnectionAuthCompleteInput,
     ) -> SdkResult<ToolInvokeOutput> {
-        let (store, name, config) = self.configured_connection(&input.id, false).await?;
+        let (store, name, config) = self.configured_connection(&input.id).await?;
         self.authorize_connection(&store, &name, &config).await?;
         let detail = self.connection_detail(&input.id).await?;
         let authority = self.connection_network_authority()?;
@@ -736,7 +766,7 @@ impl McpPlugin {
         id: &str,
         flow: Option<&str>,
     ) -> SdkResult<ToolInvokeOutput> {
-        let (store, name, config) = self.configured_connection(id, false).await?;
+        let (store, name, config) = self.configured_connection(id).await?;
         let detail = self.connection_detail(id).await?;
         if let Some(flow) = flow {
             self.manager
@@ -787,7 +817,7 @@ impl McpPlugin {
                 .into_iter()
                 .filter(|c| c.enabled && c.effective)
             {
-                let (store, name, config) = self.configured_connection(&entry.id, false).await?;
+                let (store, name, config) = self.configured_connection(&entry.id).await?;
                 self.authorize_connection(&store, &name, &config).await?;
             }
         }

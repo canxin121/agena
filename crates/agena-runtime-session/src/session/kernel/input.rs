@@ -417,8 +417,8 @@ impl KernelPromptHydrator {
                                         text: artifact.text.clone(),
                                     })
                                 }
-                                ActivityPayload::CommandReference(command) => {
-                                    let text = command.model_context_text();
+                                ActivityPayload::SkillReference(skill) => {
+                                    let text = skill.model_context_text();
                                     charge(&mut remaining, text.len().saturating_mul(2) + 256)?;
                                     parts.push(CompletionInputPart::Text { text });
                                 }

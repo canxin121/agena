@@ -73,8 +73,6 @@ pub trait ToolSessionContext {
     fn channel_verifier(&self) -> Option<std::sync::Arc<dyn ChannelAccessVerifier>> {
         None
     }
-
-    fn selected_model(&self) -> Option<&str>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

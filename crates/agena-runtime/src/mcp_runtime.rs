@@ -30,6 +30,7 @@ pub async fn build_mcp_manager(
     workspace_root: &std::path::Path,
 ) -> Arc<McpConnectionManager> {
     let mut manager = McpConnectionManager::new(client_name.into(), client_version.into())
+        .with_apps(true)
         .with_roots([workspace_root.to_path_buf()]);
     if config.runtime.token_store.enabled {
         manager.set_token_store(Arc::new(FileTokenStore::new()));

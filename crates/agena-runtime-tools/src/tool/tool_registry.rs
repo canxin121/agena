@@ -632,7 +632,6 @@ pub struct ToolExecutor {
     pub(super) sandbox_persisted_rules:
         Arc<Vec<agena_runtime_contracts::authorization::SandboxPersistedRule>>,
     pub(super) allowed_tool_names: Option<std::collections::HashSet<String>>,
-    pub(super) model_id: Option<String>,
     /// AI-call execution guard only. Never used to filter tool discovery.
     pub(super) cloud_tool_adapter_gate: Option<CloudToolAdapterGate>,
     /// Trusted session-owned validation and destination binding for media

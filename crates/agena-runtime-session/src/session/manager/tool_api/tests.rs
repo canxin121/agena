@@ -57,6 +57,7 @@ impl Fixture {
                     parent_session_id: Some(fixture.session),
                     relation_kind: agena_domain::SessionRelationKind::Subagent,
                     agent: Some(SessionAgentConfiguration {
+                        assignment: Default::default(),
                         origin_message_id: None,
                         name: "child".into(),
                         status: agena_domain::AgentStatus::Created,

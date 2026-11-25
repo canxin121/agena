@@ -6,7 +6,7 @@
 > agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
-This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **27 plugins and 220 tool definitions**.
+This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **33 plugins and 217 tool definitions**.
 
 - Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, the streaming runtime flag, an input parameter table, and the full input / output JSON Schema.
 - This catalog contains plugin execution tools only. The runtime-owned Tool API protocol (`plugins_list`, `tools_list`, `tools_help`, `tools_call`) has its own registry and is excluded from plugin and tool counts.
@@ -20,27 +20,33 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.chatgpt`](#agenachatgpt) — Model-based tools default to the current session model. Use an OpenAI model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. OpenAI cloud inference, files, knowledge stores, images, audio, realtime voice, batches and agent APIs. Inputs leave this computer; no local execution fallback. (27 tools)
 - [`agena.claude`](#agenaclaude) — Model-based tools default to the current session model. Use an Anthropic Claude model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. Anthropic cloud inference, search, code execution, files, Skills, batches and managed-agent APIs. Inputs leave this computer; no local execution fallback. (15 tools)
 - [`agena.code`](#agenacode) — Structured code search and syntax inspection tools. (3 tools)
-- [`agena.commands`](#agenacommands) — Declare the built-in commands every Agena client renders locally, and project skills from other agent ecosystems into the same surface. (6 tools)
+- [`agena.code_mode`](#agenacode_mode) — Compose session tools in a JavaScript program. (1 tools)
+- [`agena.commands`](#agenacommands) — Declare the built-in slash commands shared by Agena clients. (0 tools)
 - [`agena.companion`](#agenacompanion) — Memory settings and reminders. (1 tools)
 - [`agena.cron`](#agenacron) — Cron-style and one-shot wakeup scheduling tools. (7 tools)
+- [`agena.desktop`](#agenadesktop) — Inspect and control allowed application windows on Windows, Linux, and macOS with Cua Driver. (3 tools)
+- [`agena.discord`](#agenadiscord) — Read and reply to messages in configured Discord channels using the Discord Bot API. (0 tools)
+- [`agena.feishu`](#agenafeishu) — Receive signed Feishu or Lark message events and reply using the bot API. (0 tools)
 - [`agena.fs`](#agenafs) — Filesystem command tools for read/search and explicit edits. (10 tools)
 - [`agena.gemini`](#agenagemini) — Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. Google cloud inference, search, files, knowledge stores, images, audio, video, music, Live voice and agent APIs. Inputs leave this computer; no local execution fallback. (29 tools)
 - [`agena.inline_ui`](#agenainline_ui) — Inline Generative UI: composable, stateful interfaces and live work updates inside answers. guide() teaches the complete core workflow; use sections only for advanced references. prepare/read/update. (4 tools)
 - [`agena.interaction`](#agenainteraction) — User interaction tools. (2 tools)
 - [`agena.lsp`](#agenalsp) — LSP read-only observability and navigation tools. (5 tools)
-- [`agena.mcp`](#agenamcp) — MCP discovery and bridge tools. (26 tools)
+- [`agena.mcp`](#agenamcp) — MCP discovery and bridge tools. (24 tools)
 - [`agena.memory`](#agenamemory) — Persistent memory with searchable retrieval and write tools. (5 tools)
 - [`agena.notebook`](#agenanotebook) — Revision-safe Jupyter notebook cell editing. (1 tools)
 - [`agena.notifications`](#agenanotifications) — AI completion, question and approval notifications for browsers and terminals, with terminal window titles. (0 tools)
 - [`agena.plan`](#agenaplan) — Plan orchestration and plan-autorun tools. (6 tools)
 - [`agena.provider`](#agenaprovider) — Discover model routes across all enabled adapters of the current provider. (1 tools)
 - [`agena.report`](#agenareport) — Structured review and verification findings. (1 tools)
-- [`agena.session`](#agenasession) — Inspect and manage the current runtime session and its environment, model, and token state. (6 tools)
+- [`agena.session`](#agenasession) — Inspect and manage the current session and find conversation text. (8 tools)
 - [`agena.settings`](#agenasettings) — Inspect and edit Agena's global and workspace agena.json settings. (7 tools)
-- [`agena.shell`](#agenashell) — Shell commands: exec waits, spawn runs in background, watch monitors output events, open provides an interactive terminal/PTY; shared logs and lifecycle controls manage them. (11 tools)
+- [`agena.shell`](#agenashell) — Shell commands: exec waits, spawn runs in background, watch monitors output events, open provides an interactive terminal/PTY; shared logs and lifecycle controls manage them. (10 tools)
 - [`agena.skills`](#agenaskills) — Discover, install, author, and manage complete Agent Skills packages. (12 tools)
+- [`agena.slack`](#agenaslack) — Receive signed Slack message events and reply using the Slack Bot API. (0 tools)
 - [`agena.telegram`](#agenatelegram) — Telegram channel adapter: direct chats, groups and channels over the official Bot API. (0 tools)
 - [`agena.web`](#agenaweb) — Web search, fetch and crawl with a local index and optional page rendering. (6 tools)
+- [`agena.whatsapp`](#agenawhatsapp) — Receive signed WhatsApp Cloud text messages and reply using the Meta Graph API. (0 tools)
 
 ## agena.agent
 
@@ -401,7 +407,7 @@ Agent communication and delegation.
 
 ### spawn
 
-`agena.agent.spawn` · **Summary**: Delegate a bounded task to a role profile and return its handle immediately. Choose profile from the available subagent catalog: explore for investigation, worker for implementation, reviewer for verification. Omission uses the configured subagent default. Parent history is not copied; include scope, constraints, and expected result in prompt. Final replies are delivered automatically.
+`agena.agent.spawn` · **Summary**: Delegate a bounded task using an exact profile name from the available subagent catalog. Choose a read-only profile for planning research or a Git worktree for independent changes. Include scope, constraints, context, and the expected result. The child handle returns at launch and the result is delivered automatically.
 
 **Tags**: `agent`
 
@@ -410,19 +416,29 @@ Agent communication and delegation.
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
-| `commands` | `array<string>` | — | `[]` | Command instructions attached to the initial message. |
+| `isolation` | `AgentIsolation / null` | — | — | Start in the parent's checkout or in a separate Git worktree. Worktree<br>isolation requires a project session and a committed Git revision.<br>Omission uses the role default. Read-only profiles use a shared checkout. |
 | `max_cost_microusd` | `integer / null` | — | — |  |
 | `max_tokens` | `integer / null` | — | — | Per-execution token budget, retained for followup executions. |
 | `name` | `string` | ✓ | — | Unique nonnumeric name: 1–64 lowercase letters, digits or underscores; `parent` and `self` are reserved. |
-| `profile` | `string / null` | — | — | Role profile from the available subagent catalog. Choose the role that<br>fits the task; omission uses the configured subagent default. |
+| `profile` | `string / null` | — | — | Exact name from the available subagent profiles. Choose a read-only<br>profile during planning. Omission uses the configured subagent default. |
 | `prompt` | `string` | ✓ | — | Scope, constraints, required context and output contracts, and expected final result.<br>Parent history is not copied; include any chart or UI contract the task needs. |
 | `selection` | `AgentModelSelection / null` | — | — |  |
 | `timeout_ms` | `integer / null` | — | — |  |
+| `verification_commands` | `array<string>` | — | — | Up to eight distinct foreground shell.exec commands, each 1–1024 bytes.<br>The completion includes recorded exit results or a blocked check. |
+| `worktree_base` | `string / null` | — | — | Local Git revision to check out in the isolated worktree. Defaults to HEAD. |
 
 **Input schema**:
 ```json
 {
   "$defs": {
+    "AgentIsolation": {
+      "description": "Filesystem layout for a delegated run.",
+      "type": "string",
+      "enum": [
+        "shared",
+        "worktree"
+      ]
+    },
     "AgentModelSelection": {
       "type": "object",
       "properties": {
@@ -508,21 +524,40 @@ Agent communication and delegation.
       }
     },
     "profile": {
-      "description": "Role profile from the available subagent catalog. Choose the role that\nfits the task; omission uses the configured subagent default.",
+      "description": "Exact name from the available subagent profiles. Choose a read-only\nprofile during planning. Omission uses the configured subagent default.",
       "type": [
         "string",
         "null"
       ],
       "x-agena-order": "000002"
     },
-    "commands": {
-      "description": "Command instructions attached to the initial message.",
+    "isolation": {
+      "description": "Start in the parent's checkout or in a separate Git worktree. Worktree\nisolation requires a project session and a committed Git revision.\nOmission uses the role default. Read-only profiles use a shared checkout.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/AgentIsolation"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "x-agena-order": "000003"
+    },
+    "worktree_base": {
+      "description": "Local Git revision to check out in the isolated worktree. Defaults to HEAD.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000004"
+    },
+    "verification_commands": {
+      "description": "Up to eight distinct foreground shell.exec commands, each 1–1024 bytes.\nThe completion includes recorded exit results or a blocked check.",
       "type": "array",
       "items": {
         "type": "string"
       },
-      "default": [],
-      "x-agena-order": "000003"
+      "x-agena-order": "000005"
     },
     "selection": {
       "anyOf": [
@@ -533,7 +568,7 @@ Agent communication and delegation.
           "type": "null"
         }
       ],
-      "x-agena-order": "000004"
+      "x-agena-order": "000006"
     },
     "timeout_ms": {
       "type": [
@@ -542,7 +577,7 @@ Agent communication and delegation.
       ],
       "format": "uint64",
       "minimum": 1,
-      "x-agena-order": "000005"
+      "x-agena-order": "000007"
     },
     "max_tokens": {
       "description": "Per-execution token budget, retained for followup executions.",
@@ -552,7 +587,7 @@ Agent communication and delegation.
       ],
       "format": "uint64",
       "minimum": 1,
-      "x-agena-order": "000006"
+      "x-agena-order": "000008"
     },
     "max_cost_microusd": {
       "type": [
@@ -561,7 +596,7 @@ Agent communication and delegation.
       ],
       "format": "uint64",
       "minimum": 1,
-      "x-agena-order": "000007"
+      "x-agena-order": "000009"
     }
   },
   "additionalProperties": false,
@@ -12484,230 +12519,105 @@ Structured code search and syntax inspection tools.
 }
 ```
 
+## agena.code_mode
+
+**Version** `0.1.0` · **Tools** 1
+
+Compose session tools in a JavaScript program.
+
+> Use JavaScript to chain tool calls, loop over results, and summarize the outcome in one model turn.
+
+### execute
+
+`agena.code_mode.execute` · **Summary**: Run JavaScript that chains tools through the current session.
+
+**Tags**: `execute`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Supply a JavaScript function body. `tools.search(query, limit = 5)` returns `{tools, truncated}` with matching names and input schemas. `tools.call(name, args = {})` calls a tool serially with the session's usual permissions and returns `{payload, text, truncated, attachment_count}`. Errors throw with a `code` property. For example, `const f = tools.call('fs.stat', {path: 'README.md'}); return f.payload;`. Host I/O goes through the tool interface. Interactive, streaming and background-launch tools require direct calls. Each program can perform up to 50 calls or searches and return up to 16 KiB of JSON. The result reports completed calls even when the script throws.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `code` | `string` | ✓ | — | JavaScript function body. Use an explicit return to emit JSON. |
+
+**Input schema**:
+```json
+{
+  "required": [
+    "code"
+  ],
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "code": {
+      "description": "JavaScript function body. Use an explicit return to emit JSON.",
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      },
+      "maxLength": 65536
+    }
+  },
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "code": {}
+          },
+          "required": [
+            "code"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "code"
+        ]
+      }
+    ]
+  }
+}
+```
+
 ## agena.commands
 
-**Version** `0.1.0` · **Tools** 6 · **Tags** `discovery` `commands`
+**Version** `0.1.0` · **Tools** 0 · **Tags** `discovery` `commands`
 
-Declare the built-in commands every Agena client renders locally, and project skills from other agent ecosystems into the same surface.
+Declare the built-in slash commands shared by Agena clients.
 
-> Expose the built-in command catalog to Agena clients and project skills from other agent ecosystems into the same surface. Read command instructions and bundled resources before applying a workflow.
-
-### get
-
-`agena.commands.get` · **Summary**: Read one discovered skill.
-
-**Tags**: `query` `discovery` `read_only`
-
-**Runtime**: streaming `buffered`
-
-**Help**:
-> Read one skill's instructions in full and apply them to the current task.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `name` | `string` | ✓ | — | Canonical name, or an alias, of the skill to read. |
-
-**Input schema**:
-```json
-{
-  "required": [
-    "name"
-  ],
-  "additionalProperties": false,
-  "type": "object",
-  "properties": {
-    "name": {
-      "description": "Canonical name, or an alias, of the skill to read.",
-      "type": "string"
-    }
-  }
-}
-```
-
-### install
-
-`agena.commands.install` · **Summary**: Install a workspace-managed skill document.
-
-**Tags**: `mutate` `filesystem`
-
-**Runtime**: streaming `buffered`
-
-**Help**:
-> Writes `.agena/skills/<name>/SKILL.md` from a complete package document. Only workspace-local packages are mutable; declared, plugin and user-global packages remain read-only.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `document` | `string` | ✓ | — |  |
-
-**Input schema**:
-```json
-{
-  "required": [
-    "document"
-  ],
-  "additionalProperties": false,
-  "description": "A complete package document. Keeping the editor boundary at the native\ndocument format lets callers preserve a package's YAML frontmatter\nalongside its Markdown instructions instead of maintaining a second,\nlossy model.",
-  "type": "object",
-  "properties": {
-    "document": {
-      "type": "string"
-    }
-  }
-}
-```
-
-### list
-
-`agena.commands.list` · **Summary**: List discovered skills.
-
-**Tags**: `query` `discovery` `read_only`
-
-**Runtime**: streaming `buffered`
-
-**Help**:
-> List discovered skills, with paging. Each entry names the skill, its source, and whether it can be edited in this workspace.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `limit` | `integer / null` | — | — |  |
-| `offset` | `integer / null` | — | — |  |
-| `verbose` | `boolean` | — | `false` |  |
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "offset": {
-      "type": [
-        "integer",
-        "null"
-      ],
-      "format": "uint32",
-      "minimum": 0
-    },
-    "limit": {
-      "type": [
-        "integer",
-        "null"
-      ],
-      "format": "uint32",
-      "minimum": 0
-    },
-    "verbose": {
-      "type": "boolean",
-      "default": false
-    }
-  },
-  "type": "object"
-}
-```
-
-### read_resource
-
-`agena.commands.read_resource` · **Summary**: Read a bounded UTF-8 resource contained by one package.
-
-**Tags**: `query` `filesystem` `read_only`
-
-**Runtime**: streaming `buffered`
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `max_bytes` | `integer` | — | `262144` |  |
-| `name` | `string` | ✓ | — |  |
-| `path` | `string` | ✓ | — |  |
-
-**Input schema**:
-```json
-{
-  "required": [
-    "name",
-    "path"
-  ],
-  "additionalProperties": false,
-  "type": "object",
-  "properties": {
-    "name": {
-      "type": "string"
-    },
-    "path": {
-      "type": "string"
-    },
-    "max_bytes": {
-      "type": "integer",
-      "format": "uint32",
-      "minimum": 1,
-      "maximum": 1048576,
-      "default": 262144
-    }
-  }
-}
-```
-
-### refresh
-
-`agena.commands.refresh` · **Summary**: Rescan filesystem-backed packages and report the catalog generation.
-
-**Tags**: `mutate` `discovery` `read_only`
-
-**Runtime**: streaming `buffered`
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `verbose` | `boolean` | — | `false` | Include discovery diagnostics in the human-readable response. |
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "properties": {
-    "verbose": {
-      "description": "Include discovery diagnostics in the human-readable response.",
-      "type": "boolean",
-      "default": false
-    }
-  },
-  "type": "object"
-}
-```
-
-### remove
-
-`agena.commands.remove` · **Summary**: Remove a workspace-managed skill document.
-
-**Tags**: `mutate` `filesystem`
-
-**Runtime**: streaming `buffered`
-
-**Help**:
-> Deletes only `.agena/skills/<name>/SKILL.md`; declared, plugin and user-global packages cannot be removed through this tool.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `name` | `string` | ✓ | — | Canonical name (or alias) of the workspace-managed package to remove. |
-
-**Input schema**:
-```json
-{
-  "required": [
-    "name"
-  ],
-  "additionalProperties": false,
-  "type": "object",
-  "properties": {
-    "name": {
-      "description": "Canonical name (or alias) of the workspace-managed package to remove.",
-      "type": "string"
-    }
-  }
-}
-```
+> Open /commands to see the actions available in the current conversation.
 
 ## agena.companion
 
@@ -13717,6 +13627,270 @@ Cron-style and one-shot wakeup scheduling tools.
   }
 }
 ```
+
+## agena.desktop
+
+**Version** `0.1.0` · **Tools** 3
+
+Inspect and control allowed application windows on Windows, Linux, and macOS with Cua Driver.
+
+### action
+
+`agena.desktop.action` · **Summary**: Click, scroll, type text, or press a key in a permitted desktop window.
+
+**Tags**: `interactive` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Requires allow_input. Click and scroll coordinates are relative to the top-left of the live window. Cua Driver targets the selected window and may briefly bring it to the foreground. Supported named keys include Enter, Tab, Escape, Backspace, Delete, Home, End, PageUp, PageDown, Left, Right, Up, Down, and F1 through F12.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `action` | `Action` | ✓ | — |  |
+| `window_id` | `string` | ✓ | — | An ID returned by desktop.windows in this conversation. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "Action": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "x": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 0,
+              "maximum": 65535
+            },
+            "y": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 0,
+              "maximum": 65535
+            },
+            "button": {
+              "$ref": "#/$defs/MouseButton",
+              "default": "left"
+            },
+            "kind": {
+              "type": "string",
+              "const": "click"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "x",
+            "y"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "x": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 0,
+              "maximum": 65535
+            },
+            "y": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 0,
+              "maximum": 65535
+            },
+            "direction": {
+              "$ref": "#/$defs/ScrollDirection"
+            },
+            "steps": {
+              "type": "integer",
+              "format": "uint8",
+              "minimum": 1,
+              "maximum": 10
+            },
+            "kind": {
+              "type": "string",
+              "const": "scroll"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "x",
+            "y",
+            "direction",
+            "steps"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "kind": {
+              "type": "string",
+              "const": "type"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string"
+            },
+            "modifiers": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Modifier"
+              },
+              "maxItems": 3,
+              "default": []
+            },
+            "kind": {
+              "type": "string",
+              "const": "key"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "key"
+          ]
+        }
+      ],
+      "type": "object",
+      "properties": {}
+    },
+    "MouseButton": {
+      "type": "string",
+      "enum": [
+        "left",
+        "middle",
+        "right"
+      ]
+    },
+    "ScrollDirection": {
+      "type": "string",
+      "enum": [
+        "up",
+        "down",
+        "left",
+        "right"
+      ]
+    },
+    "Modifier": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "control",
+            "shift",
+            "alt"
+          ]
+        },
+        {
+          "description": "Command on macOS, Windows key on Windows, and Super on Linux.",
+          "type": "string",
+          "const": "meta"
+        }
+      ]
+    }
+  },
+  "required": [
+    "window_id",
+    "action"
+  ],
+  "type": "object",
+  "properties": {
+    "window_id": {
+      "description": "An ID returned by desktop.windows in this conversation.",
+      "type": "string"
+    },
+    "action": {
+      "$ref": "#/$defs/Action"
+    }
+  },
+  "additionalProperties": false
+}
+```
+
+### screenshot
+
+`agena.desktop.screenshot` · **Summary**: Capture a permitted desktop window.
+
+**Tags**: `interactive` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Use an ID returned by desktop.windows. The image reports its dimensions and the window dimensions. Scale image coordinates to window coordinates before clicking.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `window_id` | `string` | ✓ | — | An ID returned by desktop.windows in this conversation. |
+
+**Input schema**:
+```json
+{
+  "required": [
+    "window_id"
+  ],
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "window_id": {
+      "description": "An ID returned by desktop.windows in this conversation.",
+      "type": "string"
+    }
+  }
+}
+```
+
+### windows
+
+`agena.desktop.windows` · **Summary**: List permitted desktop application windows.
+
+**Tags**: `interactive` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Requires a local Cua Driver and an operator-configured allowed_applications list. Use the returned window IDs within this conversation.
+
+**Input schema**:
+```json
+{
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {}
+}
+```
+
+## agena.discord
+
+**Version** `0.1.0` · **Tools** 0
+
+Read and reply to messages in configured Discord channels using the Discord Bot API.
+
+## agena.feishu
+
+**Version** `0.1.0` · **Tools** 0
+
+Receive signed Feishu or Lark message events and reply using the bot API.
 
 ## agena.fs
 
@@ -21919,7 +22093,7 @@ LSP read-only observability and navigation tools.
 
 ## agena.mcp
 
-**Version** `0.1.0` · **Tools** 26 · **Tags** `mcp` `network` · **Condition** `runtime:mcp-manager`
+**Version** `0.1.0` · **Tools** 24 · **Tags** `mcp` `network` · **Condition** `runtime:mcp-manager`
 
 MCP discovery and bridge tools.
 
@@ -22409,7 +22583,7 @@ MCP discovery and bridge tools.
 
 ### connections.reconnect
 
-`agena.mcp.connections.reconnect` · **Summary**: Reconnect the effective enabled connection and refresh capabilities.
+`agena.mcp.connections.reconnect` · **Summary**: Reconnect the effective enabled connection and return its live details for the current execution scope. Use the connection ID from connections.list.
 
 **Tags**: `mcp` `mutate`
 
@@ -23091,102 +23265,6 @@ MCP discovery and bridge tools.
       }
     ]
   }
-}
-```
-
-### servers.reconnect
-
-`agena.mcp.servers.reconnect` · **Summary**: Reconnect one configured MCP server and refresh its tool cache.
-
-**Tags**: `mutate` `mcp`
-
-**Runtime**: streaming `buffered`
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `server` | `string` | ✓ | — |  |
-
-**Input schema**:
-```json
-{
-  "required": [
-    "server"
-  ],
-  "additionalProperties": false,
-  "type": "object",
-  "properties": {
-    "server": {
-      "type": "string",
-      "x-agena-order": "000000",
-      "x-agena-non-empty": true,
-      "minLength": 1,
-      "not": {
-        "type": "string",
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
-      }
-    }
-  },
-  "not": {
-    "anyOf": [
-      {
-        "not": {
-          "type": "object",
-          "properties": {
-            "server": {}
-          },
-          "required": [
-            "server"
-          ]
-        }
-      },
-      {
-        "type": "object",
-        "properties": {
-          "server": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "type": "string",
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
-              },
-              {
-                "type": "array",
-                "maxItems": 0
-              },
-              {
-                "type": "object",
-                "maxProperties": 0,
-                "properties": {}
-              }
-            ]
-          }
-        },
-        "required": [
-          "server"
-        ]
-      }
-    ]
-  }
-}
-```
-
-### servers.status
-
-`agena.mcp.servers.status` · **Summary**: Inspect configured MCP connection health and discovered tool counts.
-
-**Tags**: `query` `mcp` `discovery` `read_only`
-
-**Runtime**: streaming `buffered`
-
-**Input schema**:
-```json
-{
-  "additionalProperties": false,
-  "type": "object",
-  "properties": {}
 }
 ```
 
@@ -24500,7 +24578,7 @@ Plan orchestration and plan-autorun tools.
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Prefer using this tool for implementation tasks unless they are simple. Use it proactively when starting a non-trivial implementation task: getting sign-off on your approach before writing code prevents wasted effort and ensures alignment. Use it when ANY of these conditions apply: new features, multiple valid approaches, changes to existing behavior or structure, architectural decisions, changes touching more than 2-3 files, unclear requirements, or when you would otherwise ask the user to clarify the approach. Only skip it for simple tasks: single-line fixes, adding a single function with clear requirements, very specific detailed instructions, or pure research/read-only work. If unsure whether to use it, err on the side of planning. This tool never blocks on the user: it saves the plan and returns. With `request_approval: true` (the default) the plan stays in the `planning` phase and you must call `plan.review` to request user approval before it becomes active. Pass `request_approval: false` only with prior user authorization AND the trusted setting `agena.plan.allow_unreviewed_activation` — the plan then becomes active immediately. Never change settings to bypass approval. While the plan is in the `planning` phase, mutating tools are blocked; explore with read-only tools (including parallel `agent.spawn` exploration when the scope spans multiple areas), clarify with `interaction.ask` when available, replace the plan content with `plan.set`, and update progress/notes with `plan.edit`. When the plan is complete, call `plan.review` to present it for approval; never ask whether the plan is acceptable via `interaction.ask.
+> Prefer using this tool for implementation tasks unless they are simple. Use it proactively when starting a non-trivial implementation task: getting sign-off on your approach before writing code prevents wasted effort and ensures alignment. Use it when ANY of these conditions apply: new features, multiple valid approaches, changes to existing behavior or structure, architectural decisions, changes touching more than 2-3 files, unclear requirements, or when you would otherwise ask the user to clarify the approach. Only skip it for simple tasks: single-line fixes, adding a single function with clear requirements, very specific detailed instructions, or pure research/read-only work. If unsure whether to use it, err on the side of planning. This tool never blocks on the user: it saves the plan and returns. With `request_approval: true` (the default) the plan stays in the `planning` phase and you must call `plan.review` to request user approval before it becomes active. Pass `request_approval: false` only with prior user authorization AND the trusted setting `agena.plan.allow_unreviewed_activation` — the plan then becomes active immediately. Never change settings to bypass approval. While the plan is in the `planning` phase, mutating tools are blocked; explore with read-only tools (including parallel `agent.spawn` calls with read-only profiles when the scope spans multiple areas), clarify with `interaction.ask` when available, replace the plan content with `plan.set`, and update progress/notes with `plan.edit`. When the plan is complete, call `plan.review` to present it for approval; never ask whether the plan is acceptable via `interaction.ask.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
@@ -24605,7 +24683,7 @@ Plan orchestration and plan-autorun tools.
   "required": [
     "objective"
   ],
-  "description": "Create or overwrite the current active-session plan. If a plan already exists, this replaces it and resets the phase to planning. Use `steps[].title` for steps, `steps[].checks[].text` for checks, and `autorun` to control whether approved active plans should keep running automatically. This tool never blocks on the user: with `request_approval` true (the default) the plan is saved in the `planning` phase and you must call `plan.review` to request user approval before it becomes active; with `request_approval: false` it is applied directly and becomes active immediately, which requires prior user authorization AND the trusted setting `agena.plan.allow_unreviewed_activation`.",
+  "description": "Create or replace the current plan. Use `steps[].title` for steps, `steps[].checks[].text` for checks, and `autorun` to control automatic execution after approval. By default the plan is saved in the `planning` phase. During planning, select a read-only profile in `agent.spawn` to delegate research. Call `plan.review` to request approval before implementation. Using `request_approval: false` activates the plan immediately and requires prior user authorization and the trusted setting `agena.plan.allow_unreviewed_activation`.",
   "type": "object",
   "properties": {
     "expected_revision": {
@@ -24876,11 +24954,11 @@ Structured review and verification findings.
 
 ## agena.session
 
-**Version** `0.1.0` · **Tools** 6 · **Tags** `query` `sessions`
+**Version** `0.1.0` · **Tools** 8 · **Tags** `query` `sessions`
 
-Inspect and manage the current runtime session and its environment, model, and token state.
+Inspect and manage the current session and find conversation text.
 
-> Inspect the current session, environment, model and token state, and apply supported session controls. Operations remain bound to the active runtime session.
+> Inspect the current session, environment, model and token state, apply supported session controls, and search or read conversation text in the active session's scope.
 
 ### environment
 
@@ -25046,6 +25124,96 @@ Inspect and manage the current runtime session and its environment, model, and t
 }
 ```
 
+### read
+
+`agena.session.read` · **Summary**: Read conversation text around a retained entry or page earlier and later.
+
+**Tags**: `query` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Use the session_id and entry_id from session.search. Use the returned before_entry_id or after_entry_id with matching direction to continue. Set byte_offset to continue reading a long entry or locate a search hit within it.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `byte_offset` | `integer / null` | — | — | Read one anchored entry starting at this UTF-8 byte offset. |
+| `direction` | `HostSessionReadDirection` | — | `around` | Around includes the anchor. Before and after exclude the anchor. |
+| `entry_id` | `integer / null` | — | — | Entry ID from a search hit or a previous page. Omit for the latest entries. |
+| `limit` | `integer / null` | — | — | Maximum entries, from 1 to 12. Defaults to 7. |
+| `session_id` | `integer / null` | — | — | Session to read. Defaults to the current session. |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "HostSessionReadDirection": {
+      "type": "string",
+      "enum": [
+        "around",
+        "before",
+        "after"
+      ],
+      "x-agena-order": "000002",
+      "description": "Around includes the anchor. Before and after exclude the anchor."
+    }
+  },
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "session_id": {
+      "description": "Session to read. Defaults to the current session.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int64",
+      "x-agena-order": "000000"
+    },
+    "entry_id": {
+      "description": "Entry ID from a search hit or a previous page. Omit for the latest entries.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int64",
+      "x-agena-order": "000001"
+    },
+    "direction": {
+      "description": "Around includes the anchor. Before and after exclude the anchor.",
+      "$ref": "#/$defs/HostSessionReadDirection",
+      "default": "around"
+    },
+    "limit": {
+      "description": "Maximum entries, from 1 to 12. Defaults to 7.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint",
+      "minimum": 0,
+      "x-agena-order": "000003"
+    },
+    "byte_offset": {
+      "description": "Read one anchored entry starting at this UTF-8 byte offset.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint64",
+      "minimum": 0,
+      "x-agena-order": "000004"
+    }
+  }
+}
+```
+
+**Output schema**:
+```json
+{}
+```
+
 ### rename
 
 `agena.session.rename` · **Summary**: Rename the current session.
@@ -25123,6 +25291,124 @@ Inspect and manage the current runtime session and its environment, model, and t
     ]
   }
 }
+```
+
+### search
+
+`agena.session.search` · **Summary**: Search user and assistant text in saved conversations.
+
+**Tags**: `query` `discovery` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Searches the current session or eligible sessions in the same project. Returns snippets and entry IDs for session.read. An empty page can have a next_cursor when more history remains to be scanned.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `cursor` | `string / null` | — | — | Continue with next_cursor from the previous search using the same query and session_id. |
+| `limit` | `integer / null` | — | — | Maximum hits per page, from 1 to 20. Defaults to 10. |
+| `query` | `string` | ✓ | — | A case-insensitive literal phrase of 1–256 UTF-8 bytes. |
+| `session_id` | `integer / null` | — | — | Search this session only. Omit to search the available project history. |
+
+**Input schema**:
+```json
+{
+  "required": [
+    "query"
+  ],
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "query": {
+      "description": "A case-insensitive literal phrase of 1–256 UTF-8 bytes.",
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "session_id": {
+      "description": "Search this session only. Omit to search the available project history.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "int64",
+      "x-agena-order": "000001"
+    },
+    "limit": {
+      "description": "Maximum hits per page, from 1 to 20. Defaults to 10.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint",
+      "minimum": 0,
+      "x-agena-order": "000002"
+    },
+    "cursor": {
+      "description": "Continue with next_cursor from the previous search using the same query and session_id.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003"
+    }
+  },
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "query": {}
+          },
+          "required": [
+            "query"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "query": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "query"
+        ]
+      }
+    ]
+  }
+}
+```
+
+**Output schema**:
+```json
+{}
 ```
 
 ### tokens
@@ -25802,7 +26088,7 @@ Inspect and edit Agena's global and workspace agena.json settings.
 
 ## agena.shell
 
-**Version** `0.1.0` · **Tools** 11 · **Tags** `shell` `execute`
+**Version** `0.1.0` · **Tools** 10 · **Tags** `shell` `execute`
 
 Shell commands: exec waits, spawn runs in background, watch monitors output events, open provides an interactive terminal/PTY; shared logs and lifecycle controls manage them.
 
@@ -26024,136 +26310,6 @@ Shell commands: exec waits, spawn runs in background, watch monitors output even
   "additionalProperties": false,
   "type": "object",
   "properties": {}
-}
-```
-
-### logs
-
-`agena.shell.logs` · **Summary**: Read bounded output with an explicit replay cursor; shell.read is the unified, automatically consuming entry point.
-
-**Tags**: `query` `shell` `background` `read_only`
-
-**Runtime**: streaming `buffered`
-
-**Help**:
-> Explicit replay of shell process output. since_seq defaults to 0; continue with last_seq AND next_event_offset as event_offset whenever nonzero. last_seq refers to fully consumed events; partially returned event text is resumable without loss. max_output_bytes (1024–16384, default 16384) includes escaping and event structure, with room reserved for lifecycle/cursor metadata. limit caps event count; wait_ms is a diagnostic wait (max 30000). has_more describes buffered output. output_resource identifies the canonical retained content; capture completeness is separate from the preview. Use shell.read without since_seq for new unread output. Background jobs notify when they finish; do not poll to wait.
-
-**Input parameters**:
-| Parameter | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `event_offset` | `integer` | — | `0` |  |
-| `limit` | `integer / null` | — | — |  |
-| `max_output_bytes` | `integer / null` | — | — |  |
-| `process_id` | `string` | ✓ | — |  |
-| `since_seq` | `integer` | — | `0` | Return events after this cursor; continue with the returned last_seq. |
-| `wait_ms` | `integer` | — | `0` |  |
-
-**Input schema**:
-```json
-{
-  "required": [
-    "process_id"
-  ],
-  "additionalProperties": false,
-  "type": "object",
-  "properties": {
-    "process_id": {
-      "type": "string",
-      "x-agena-order": "000000",
-      "x-agena-non-empty": true,
-      "minLength": 1,
-      "not": {
-        "type": "string",
-        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
-      }
-    },
-    "since_seq": {
-      "description": "Return events after this cursor; continue with the returned last_seq.",
-      "type": "integer",
-      "format": "uint64",
-      "minimum": 0,
-      "default": 0,
-      "x-agena-order": "000001"
-    },
-    "event_offset": {
-      "type": "integer",
-      "format": "uint32",
-      "minimum": 0,
-      "default": 0,
-      "x-agena-order": "000002"
-    },
-    "max_output_bytes": {
-      "type": [
-        "integer",
-        "null"
-      ],
-      "format": "uint32",
-      "minimum": 1024,
-      "x-agena-order": "000003",
-      "maximum": 16384
-    },
-    "limit": {
-      "type": [
-        "integer",
-        "null"
-      ],
-      "format": "uint32",
-      "minimum": 1,
-      "x-agena-order": "000004",
-      "maximum": 2000
-    },
-    "wait_ms": {
-      "type": "integer",
-      "format": "uint64",
-      "minimum": 0,
-      "default": 0,
-      "x-agena-order": "000005",
-      "maximum": 30000
-    }
-  },
-  "not": {
-    "anyOf": [
-      {
-        "not": {
-          "type": "object",
-          "properties": {
-            "process_id": {}
-          },
-          "required": [
-            "process_id"
-          ]
-        }
-      },
-      {
-        "type": "object",
-        "properties": {
-          "process_id": {
-            "anyOf": [
-              {
-                "type": "null"
-              },
-              {
-                "type": "string",
-                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
-              },
-              {
-                "type": "array",
-                "maxItems": 0
-              },
-              {
-                "type": "object",
-                "maxProperties": 0,
-                "properties": {}
-              }
-            ]
-          }
-        },
-        "required": [
-          "process_id"
-        ]
-      }
-    ]
-  }
 }
 ```
 
@@ -28562,6 +28718,12 @@ Discover, install, author, and manage complete Agent Skills packages.
 }
 ```
 
+## agena.slack
+
+**Version** `0.1.0` · **Tools** 0
+
+Receive signed Slack message events and reply using the Slack Bot API.
+
 ## agena.telegram
 
 **Version** `0.1.0` · **Tools** 0 · **Tags** `network` `interactive` `telegram`
@@ -29308,4 +29470,10 @@ Web search, fetch and crawl with a local index and optional page rendering.
   }
 }
 ```
+
+## agena.whatsapp
+
+**Version** `0.1.0` · **Tools** 0
+
+Receive signed WhatsApp Cloud text messages and reply using the Meta Graph API.
 

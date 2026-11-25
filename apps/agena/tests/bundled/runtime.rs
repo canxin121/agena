@@ -4,9 +4,12 @@
 
 use std::{collections::BTreeMap, time::Duration};
 
-use agena_api::{live::ToolDetailSection, resource::UserInputReplyKind};
+use agena_api::{
+    live::ToolDetailSection,
+    resource::{ModelRef, RunOptions, UserInputReplyKind},
+};
 use agena_domain::{AgentStatus, RawOutput};
-use agena_testkit::{ModelRequest, Reply, RequestMatch, TestResult, UserSession};
+use agena_testkit::{ModelOptions, ModelRequest, Reply, RequestMatch, TestResult, UserSession};
 use anyhow::{Context, Result, ensure};
 use chrono::{Datelike, Timelike, Utc};
 use serde_json::{Value, json};
@@ -35,6 +38,163 @@ pub(super) const CASES: &[(&str, fn() -> TestResult)] = &[
         interaction_persists_notifications_and_resolves_user_choices,
     ),
 ];
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_catalog_does_not_infer_capabilities_from_model_name() -> TestResult {
+    const MODELS: [&str; 3] = ["fake-model", "fake-chat-model", "fake-readonly-model"];
+    super::fixture_without_memory()
+        .expect_plugin("agena.agent")
+        .model_options(ModelOptions {
+            models: MODELS.map(str::to_owned).into(),
+            default_timeout: Duration::from_secs(30),
+            ..Default::default()
+        })
+        .configure_global(|config| {
+            let models =
+                &mut config["providers"]["testkit"]["adapters"]["openai_responses"]["models"];
+            let baseline = models[MODELS[0]].clone();
+            for name in &MODELS[1..] {
+                models[*name] = baseline.clone();
+            }
+        })
+        .run(|case| async move {
+            let model = case.model();
+            let mut catalogs = Vec::new();
+            for model_id in MODELS {
+                let user = case.user().new_session().await?;
+                allow_permissions(&user).await?;
+                let discover = model
+                    .expect(RequestMatch::user_text(model_id))
+                    .check(move |request| {
+                        ensure!(request.body["model"] == model_id);
+                        Ok(())
+                    })
+                    .reply(Reply::function_call(
+                        model_id,
+                        "tools_list",
+                        json!({"plugin":["agena.agent","agena.session"],"limit":50}),
+                    ));
+                let output = model
+                    .expect(RequestMatch::tool_output(model_id))
+                    .after(&discover)
+                    .reply(Reply::text("Catalog received."));
+                user.send_with(
+                    model_id,
+                    RunOptions {
+                        model: Some(ModelRef {
+                            provider_id: "testkit".into(),
+                            adapter_id: Some("openai_responses".into()),
+                            model_id: model_id.into(),
+                        }),
+                        ..Default::default()
+                    },
+                )
+                .await?
+                .wait_settled()
+                .await?
+                .assert_succeeded()?;
+                let request = output.observed().await?;
+                catalogs.push(
+                    request
+                        .tool_output_text(model_id)
+                        .context("model received no tool catalog")?,
+                );
+            }
+            let baseline = &catalogs[0];
+            ensure!(baseline.contains("- agent.spawn ["));
+            ensure!(baseline.contains("- session.rename ["));
+            assert_eq!(catalogs[1], *baseline);
+            assert_eq!(catalogs[2], *baseline);
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn session_search_locates_persisted_text_and_pages_around_a_match() -> TestResult {
+    super::fixture_without_memory()
+        .expect_plugin("agena.session")
+        .run(|case| async move {
+            let saved = case.user().new_session().await?;
+            let caller = case.user().new_session().await?;
+            allow_permissions(&caller).await?;
+            let model = case.model();
+            for (prompt, answer) in [
+                (
+                    "The München release uses code Indigo",
+                    "Indigo is the agreed release label",
+                ),
+                ("Confirm the ticket assignment", "The ticket is assigned"),
+            ] {
+                model
+                    .expect(RequestMatch::user_text(prompt))
+                    .reply(Reply::text(answer));
+                saved
+                    .send(prompt)
+                    .await?
+                    .wait_settled()
+                    .await?
+                    .assert_succeeded()?;
+            }
+            let first = caller
+                .call_tool("session.search", json!({"query":"iNDIGo", "limit":1}))
+                .await?;
+            first.assert_succeeded()?;
+            ensure!(first.data()?["hits"][0]["session_id"] == saved.id());
+            ensure!(first.data()?["hits"][0]["role"] == "assistant");
+            let cursor = first.data()?["next_cursor"]
+                .as_str()
+                .context("first page cursor")?;
+            let match_id = first.data()?["hits"][0]["entry_id"]
+                .as_i64()
+                .context("assistant match entry")?;
+            let second = caller
+                .call_tool(
+                    "session.search",
+                    json!({"query":"iNDIGo", "limit":1, "cursor":cursor}),
+                )
+                .await?;
+            second.assert_succeeded()?;
+            ensure!(second.data()?["hits"][0]["role"] == "user");
+            let wrong_cursor = caller
+                .call_tool(
+                    "session.search",
+                    json!({"query":"other phrase", "cursor":cursor}),
+                )
+                .await?;
+            wrong_cursor.assert_failed()?;
+
+            let located = caller
+                .call_tool(
+                    "session.read",
+                    json!({"session_id":saved.id(), "entry_id":match_id, "limit":3}),
+                )
+                .await?;
+            located.assert_succeeded()?;
+            ensure!(located.data()?["entries"][0]["role"] == "user");
+            ensure!(located.data()?["entries"][1]["entry_id"] == match_id);
+            ensure!(located.data()?["entries"][2]["text"] == "Confirm the ticket assignment");
+            let after = &located.data()?["after_entry_id"];
+            let newer = caller
+                .call_tool(
+                    "session.read",
+                    json!({"session_id":saved.id(), "entry_id":after, "direction":"after"}),
+                )
+                .await?;
+            newer.assert_succeeded()?;
+            ensure!(newer.data()?["entries"][0]["text"] == "The ticket is assigned");
+
+            let foreign_dir = case.workspace().join("foreign-history-workspace");
+            std::fs::create_dir(&foreign_dir)?;
+            let foreign = case.user().new_session_in(&foreign_dir).await?;
+            let denied = caller
+                .call_tool("session.read", json!({"session_id":foreign.id()}))
+                .await?;
+            denied.assert_failed()?;
+            Ok(())
+        })
+        .await
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn session_tools_observe_and_mutate_the_actual_session() -> TestResult {
@@ -223,7 +383,12 @@ async fn interaction_persists_notifications_and_resolves_user_choices() -> TestR
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn plan_requires_review_and_enforces_the_execution_gate() -> TestResult {
-    fixture().expect_plugin("agena.plan").run(|case| async move {
+    super::fixture_without_memory()
+    .configure_global(|config| {
+        config["sandbox"] = json!(false);
+        config["profiles"]["plan-research"] = json!({"extends": "explore"});
+    })
+    .expect_plugin("agena.plan").run(|case| async move {
         let user = case.user().new_session().await?;
         allow_permissions(&user).await?;
         let empty = user.call_tool("plan.get", json!({"view": "full"})).await?;
@@ -266,6 +431,27 @@ async fn plan_requires_review_and_enforces_the_execution_gate() -> TestResult {
         let blocked = user.call_tool("fs.write", write.clone()).await?;
         blocked.assert_failed()?;
         ensure!(!case.workspace().join("plan-proof.txt").exists(), "planning gate allowed a write");
+        let blocked_delegate = user.call_tool("agent.spawn", json!({
+            "name":"writable_child", "profile":"worker", "prompt":"Write plan-proof.txt"
+        })).await?;
+        blocked_delegate.assert_failed()?;
+        ensure!(blocked_delegate.output.to_string().contains("still in planning"));
+
+        let model = case.model();
+        let research = model
+            .expect(RequestMatch::user_text("plan-readonly-research-probe"))
+            .reply(Reply::text("plan-readonly-research-finished").held());
+        model.expect(RequestMatch::new("planning receives research", |request| {
+            request.body.to_string().contains("plan-readonly-research-finished")
+        })).after(&research).reply(Reply::text("received-planning-research"));
+        let delegated = user.call_tool("agent.spawn", json!({
+            "name":"plan_research", "profile":"plan-research", "prompt":"plan-readonly-research-probe"
+        })).await?;
+        delegated.assert_succeeded()?;
+        ensure!(delegated.data()?["profile"] == "plan-research");
+        research.observed().await?;
+        research.release();
+        user.wait_text_contains("received-planning-research").await?;
 
         let review = user.start_tool("plan.review", json!({})).await?;
         let pending = review.run().wait_user_input().await?;
@@ -506,14 +692,22 @@ async fn agent_runs_messages_follows_up_and_cancels_a_real_child() -> TestResult
                     Ok(())
                 })
                 .reply(Reply::text("runtime-agent-child-result").held());
-            let parent_wait = model
+            let wait_help = model
                 .expect(RequestMatch::tool_output("call_agent_message"))
                 .after(&send_message)
                 .check(|request| model_tool_succeeded(request, "call_agent_message"))
-                .reply(Reply::tool_call(
+                .reply(Reply::function_call(
+                    "call_agent_wait_help",
+                    "tools_help",
+                    json!({"tool":"agent.wait"}),
+                ));
+            let parent_wait = model
+                .expect(RequestMatch::tool_output("call_agent_wait_help"))
+                .after(&wait_help)
+                .reply(Reply::function_call(
                     "call_parent_wait",
-                    "agent.wait",
-                    json!({"timeout_ms": 30000}),
+                    "tools_call",
+                    json!({"tool":"agent.wait","input":{"timeout_ms":30000}}),
                 ));
             let followup = model
                 .expect(RequestMatch::tool_output("call_parent_wait"))

@@ -1,10 +1,13 @@
 pub mod agent;
 pub mod bot;
+pub(crate) mod chat_channels;
 mod cloud_media;
 pub mod code;
+pub(crate) mod code_mode;
 pub mod commands;
 pub mod companion;
 pub mod cron;
+pub(crate) mod desktop;
 pub mod fs;
 pub mod inline_ui;
 pub mod interaction;

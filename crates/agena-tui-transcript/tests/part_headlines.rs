@@ -149,9 +149,9 @@ fn user_document_activities_keep_titles_summaries_and_copy_text_when_folded() {
             "# report_`$i`.txt",
         ),
         (
-            json!({"activity_type":"command_reference","name":"review","description":"Review changes",
+            json!({"activity_type":"skill_reference","name":"review","description":"Review changes",
             "content_hash":"fixture","source":"agena.skills"}),
-            "Command",
+            "Skill",
             "review",
         ),
         (
@@ -173,7 +173,7 @@ fn user_document_activities_keep_titles_summaries_and_copy_text_when_folded() {
             entry.parts[0].content,
             TranscriptPartContent::UserDocument(_)
         ));
-        // The attachment/command/snippet is projected from the same canonical
+        // The attachment/skill/snippet is projected from the same canonical
         // document as the inline chip. Inspect its activity layout in isolation.
         entry.parts.remove(0);
         for expanded in [false, true] {
@@ -337,8 +337,8 @@ fn canonical_reasoning_and_blank_notice_titles_use_the_same_headline_rules() {
             "let useful = true;",
         ),
         (
-            json!({"activity_type": "command_reference", "name": " ", "description": " ", "content_hash": "abc", "source": "plugin"}),
-            "Command",
+            json!({"activity_type": "skill_reference", "name": " ", "description": " ", "content_hash": "abc", "source": "plugin"}),
+            "Skill",
             "plugin",
             "plugin",
         ),
@@ -349,8 +349,8 @@ fn canonical_reasoning_and_blank_notice_titles_use_the_same_headline_rules() {
             "src/main.rs",
         ),
         (
-            json!({"activity_type": "command_reference", "name": "review", "description": "Review implementation", "content_hash": "abc", "source": "plugin"}),
-            "Command: review",
+            json!({"activity_type": "skill_reference", "name": "review", "description": "Review implementation", "content_hash": "abc", "source": "plugin"}),
+            "Skill: review",
             "Review implementation",
             "plugin",
         ),

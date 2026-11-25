@@ -14,6 +14,7 @@ agena-failure = { workspace = true }
 agena-macros = { workspace = true }
 agena-provider = { workspace = true }
 agena-plugin-sdk = { workspace = true }
+agena-prompt-layers = { workspace = true }
 agena-tool = { workspace = true }
 indexmap = { workspace = true }
 ipnet = { workspace = true }

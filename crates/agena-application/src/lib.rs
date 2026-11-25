@@ -27,6 +27,7 @@ mod application_content;
 mod application_conversations;
 mod application_file_changes;
 mod application_inline_ui;
+mod application_mcp_apps;
 mod application_mcp_connections;
 mod application_models;
 mod application_parts;

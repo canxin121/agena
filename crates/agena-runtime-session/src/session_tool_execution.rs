@@ -80,4 +80,16 @@ pub trait SessionToolExecutionService: Send + Sync {
         session_id: i64,
         invocation: ToolInvocation,
     ) -> Result<SessionToolExecutionOutcome, SessionToolExecutionError>;
+
+    /// Run under the live session policy, including current rules and sandbox
+    /// limits. A call without an interaction slot must already be authorized.
+    async fn execute_authorized_session_tool(
+        &self,
+        _session_id: i64,
+        _invocation: ToolInvocation,
+    ) -> Result<ToolExecutionSummary, SessionToolExecutionError> {
+        Err(SessionToolExecutionError::Execution(
+            "Authorized session tools are unavailable.".into(),
+        ))
+    }
 }

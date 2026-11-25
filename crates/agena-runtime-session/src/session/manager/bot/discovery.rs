@@ -1,71 +1,10 @@
 //! Read-only operator discovery over native, bounded repository projections.
 use super::*;
-use std::{sync::OnceLock, time::Instant};
+use crate::session::manager::discovery_cursor::{continuation, resume};
 
 const SCAN_LIMIT: usize = 128;
 const PAGE_BYTES: usize = 28 * 1024;
 const TEXT_BYTES: usize = 16_000;
-
-// Keyset positions can point at excluded private rows. Keep them server-side so
-// a continuation never exposes a channel/self identity, even in an empty page.
-// Restart, eviction and expiration deliberately produce a clear stale error.
-#[derive(Clone)]
-struct DiscoveryContinuation {
-    scope: Value,
-    position: Value,
-    created: Instant,
-}
-static CONTINUATIONS: OnceLock<StdMutex<HashMap<String, DiscoveryContinuation>>> = OnceLock::new();
-
-fn continuations() -> &'static StdMutex<HashMap<String, DiscoveryContinuation>> {
-    CONTINUATIONS.get_or_init(Default::default)
-}
-fn resume<T: serde::de::DeserializeOwned>(
-    token: &Option<String>,
-    scope: &Value,
-) -> Result<Option<T>, AppError> {
-    let Some(token) = token else { return Ok(None) };
-    if token.len() > 128 || !token.starts_with("bd1.") {
-        return Err(invalid("invalid discovery cursor; restart without cursor"));
-    }
-    let registry = continuations().lock().unwrap_or_else(|p| p.into_inner());
-    let value = registry
-        .get(token)
-        .ok_or_else(|| invalid("stale or invalid discovery cursor; restart without cursor"))?;
-    if value.created.elapsed() > Duration::from_secs(1800) {
-        return Err(invalid("expired discovery cursor; restart without cursor"));
-    }
-    if value.scope != *scope {
-        return Err(invalid(
-            "cursor belongs to a different action, target, query or filter; restart without cursor",
-        ));
-    }
-    serde_json::from_value(value.position.clone())
-        .map(Some)
-        .map_err(|_| invalid("invalid discovery cursor position; restart without cursor"))
-}
-fn continuation(scope: &Value, position: &impl Serialize) -> Result<String, AppError> {
-    let mut registry = continuations().lock().unwrap_or_else(|p| p.into_inner());
-    registry.retain(|_, value| value.created.elapsed() <= Duration::from_secs(1800));
-    if registry.len() >= 4096
-        && let Some(oldest) = registry
-            .iter()
-            .min_by_key(|(_, value)| value.created)
-            .map(|(key, _)| key.clone())
-    {
-        registry.remove(&oldest);
-    }
-    let token = format!("bd1.{}", uuid::Uuid::new_v4());
-    registry.insert(
-        token.clone(),
-        DiscoveryContinuation {
-            scope: scope.clone(),
-            position: serde_json::to_value(position)?,
-            created: Instant::now(),
-        },
-    );
-    Ok(token)
-}
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 struct ProjectPosition {

@@ -20,6 +20,10 @@ impl WorkflowPlugin {
                 );
             }
             "agena.interaction" => return matches!(input.tool_name(), "ask" | "notify"),
+            "agena.agent" => {
+                // Delegation is checked by subagent.start after profile resolution.
+                return matches!(input.tool_name(), "spawn" | "wait" | "cancel");
+            }
             _ => {}
         }
         // Planning eligibility reads the tool's declared tags. They are

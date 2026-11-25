@@ -115,6 +115,13 @@ fn project_tool_content(
     sections: &[agena_api::live::ToolDetailSection],
 ) -> serde_json::Value {
     let mut projected = agena_api::live::project_tool_call_content(value, sections);
+    if let Some(metadata) = projected
+        .get_mut("metadata")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        metadata.remove(agena_mcp_client::apps::APP_METADATA_KEY);
+        metadata.remove(agena_mcp_client::apps::APP_RESULT_METADATA_KEY);
+    }
     if value.get("resources").is_some()
         && let Some(content) = tool_content_for_presentation(value)
     {
@@ -613,6 +620,20 @@ impl Application {
         };
         let mut blocks = tool_part_control(content).into_iter().collect::<Vec<_>>();
         let tool_name = agena_tool::normalized_tool_identity(&content.name);
+        if tool_name == "mcp.tools.call"
+            && content.plugin.as_deref() == Some("agena.mcp")
+            && content.state == agena_domain::ToolResultState::Completed
+            && content
+                .metadata
+                .contains_key(agena_mcp_client::apps::APP_METADATA_KEY)
+        {
+            blocks.push(ViewBlock::Custom {
+                id: Some("mcp-app".to_owned()),
+                kind: "mcp_app".to_owned(),
+                schema: serde_json::Value::Null,
+                presentation: Default::default(),
+            });
+        }
         let shell = matches!(
             tool_name.as_str(),
             "shell.exec" | "shell.spawn" | "shell.open" | "shell.watch"

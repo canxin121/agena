@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::Write,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     sync::{Arc, Mutex},
     time::UNIX_EPOCH,
 };
@@ -12,9 +12,10 @@ use sha2::{Digest, Sha256};
 use crate::import::{ignored_path, join_relative, path_string, read_bounded, safe_relative};
 use crate::{
     DeclaredSkill, MAX_DOCUMENT_BYTES, MAX_PACKAGE_BYTES, MAX_PACKAGE_DEPTH, MAX_PACKAGE_FILES,
-    Result, STATE_FILE, SkillCatalog, SkillDetail, SkillDiagnostic, SkillError, SkillErrorKind,
-    SkillFile, SkillImport, SkillInstallPreview, SkillInstallResult, SkillMetadata, SkillResource,
-    SkillRoot, SkillScope, SkillSource, SkillSummary, parse_document, validate_document,
+    Result, STATE_FILE, SkillCatalog, SkillDetail, SkillDiagnostic, SkillDiscoverySettings,
+    SkillError, SkillErrorKind, SkillFile, SkillImport, SkillInstallPreview, SkillInstallResult,
+    SkillMetadata, SkillResource, SkillRoot, SkillScope, SkillSource, SkillSummary, parse_document,
+    validate_document,
 };
 
 type ReadFilter = Arc<dyn Fn(&Path) -> bool + Send + Sync>;
@@ -142,6 +143,45 @@ impl SkillManager {
     pub fn with_disabled_names(mut self, names: Vec<String>) -> Self {
         self.disabled_names = names;
         self
+    }
+
+    pub fn with_discovery_settings(self, settings: SkillDiscoverySettings) -> Result<Self> {
+        let mut disabled = BTreeSet::new();
+        for name in &settings.disabled {
+            let name = name.trim().to_ascii_lowercase();
+            if name.is_empty() || !disabled.insert(name) {
+                return Err(SkillError::invalid(
+                    "Disabled skill names must be non-empty and unique.",
+                ));
+            }
+        }
+        if !self.instance_only && !settings.additional_roots.is_empty() {
+            let workspace = self.workspace.canonicalize()?;
+            for root in &settings.additional_roots {
+                if root.as_os_str().is_empty()
+                    || root.components().any(|part| {
+                        matches!(
+                            part,
+                            Component::Prefix(_) | Component::RootDir | Component::ParentDir
+                        )
+                    })
+                {
+                    return Err(SkillError::invalid(
+                        "Additional skill directories must be workspace-relative paths without '..'.",
+                    ));
+                }
+                let candidate = workspace.join(root);
+                if candidate.try_exists()? && !candidate.canonicalize()?.starts_with(&workspace) {
+                    return Err(SkillError::invalid(format!(
+                        "Additional skill directory '{}' resolves outside the workspace.",
+                        root.display()
+                    )));
+                }
+            }
+        }
+        Ok(self
+            .with_additional_roots(settings.additional_roots)
+            .with_disabled_names(settings.disabled))
     }
 
     pub fn with_read_filter(mut self, filter: ReadFilter) -> Self {

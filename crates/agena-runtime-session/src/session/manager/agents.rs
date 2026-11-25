@@ -1,16 +1,18 @@
 //! Durable agent identity, launch and completion. Plugins own no parallel registry.
 use super::results_text::truncate;
 use super::*;
-use agena_domain::{ActivityPayload, AgentStatus, CommandReferenceActivity, ComposerActivity};
+use agena_domain::{AgentAssignment, AgentIsolation, AgentStatus};
 use agena_plugin_host::sdk::host_api::{AgentHandle, AgentSpawnRequest};
-use sha2::{Digest, Sha256};
 
 mod messaging;
+mod verification;
+mod worktree;
 
 #[cfg(test)]
 mod tests;
 
 const MAX_AGENTS_PER_PARENT: usize = 8;
+const MAX_DELEGATION_DEPTH: usize = 3;
 
 struct AgentLaunch {
     parent_session_id: i64,
@@ -18,7 +20,9 @@ struct AgentLaunch {
     name: String,
     prompt: String,
     profile: Option<String>,
-    commands: Vec<String>,
+    isolation: Option<AgentIsolation>,
+    worktree_base: Option<String>,
+    verification_commands: Vec<String>,
     selection: agena_domain::ModelSelectionConfig,
     timeout_ms: Option<u64>,
     max_tokens: Option<u64>,
@@ -96,7 +100,9 @@ impl SessionManager {
             name: request.name,
             prompt: request.prompt,
             profile: request.profile,
-            commands: request.commands,
+            isolation: request.isolation,
+            worktree_base: request.worktree_base,
+            verification_commands: request.verification_commands,
             selection: agena_domain::ModelSelectionConfig {
                 provider: selection.provider,
                 adapter: selection.adapter,
@@ -244,11 +250,6 @@ impl SessionManager {
         let parent = self
             .get_session_with_state(request.parent_session_id, Some(state.clone()))
             .await?;
-        if parent.is_subagent() {
-            return Err(AppError::Config(
-                "delegated agents cannot create nested agents".into(),
-            ));
-        }
         let name = request.name.trim().to_owned();
         if name.is_empty()
             || name == "parent"
@@ -264,7 +265,6 @@ impl SessionManager {
             ));
         }
         let mut denials = parent.execution.capability_denied_tool_names.clone();
-        denials.extend(agent_child_capability_denials());
         let selected = request.selection;
         let explicit_selection = ExecutionSelection {
             provider: selected.provider,
@@ -282,10 +282,15 @@ impl SessionManager {
             .configuration(session_id(parent.id)?)
             .await
             .map_err(kernel_error)?;
-        let references = resolve_agent_command_references(
-            &state.executor.plugin_manager().command_catalog(),
-            &request.commands,
-        )?;
+        let depth = self.delegation_depth(&parent_configuration).await?;
+        if depth >= MAX_DELEGATION_DEPTH {
+            return Err(AppError::Config(format!(
+                "agents can delegate up to {MAX_DELEGATION_DEPTH} levels below the main session"
+            )));
+        }
+        if depth + 1 == MAX_DELEGATION_DEPTH {
+            denials.extend(agent_tool_names("spawn"));
+        }
         let origin = match &launch {
             Some((_, control)) => Some(
                 self.kernel()
@@ -390,6 +395,65 @@ impl SessionManager {
                 agena_domain::SessionRelationKind::Subagent,
             )
             .map_err(AppError::Config)?;
+        let mut worktree_plan = None;
+        let assignment = if let Some(previous) = &existing_configuration {
+            previous
+                .agent
+                .as_ref()
+                .ok_or_else(|| AppError::Config("target has no agent identity".into()))?
+                .assignment
+                .clone()
+        } else {
+            let verification_commands =
+                verification::validate_commands(request.verification_commands)?;
+            let isolation = request.isolation.unwrap_or(resolved_profile.isolation);
+            if resolved_profile.read_only
+                && (isolation == AgentIsolation::Worktree || !verification_commands.is_empty())
+            {
+                return Err(AppError::Config(format!(
+                    "read-only agent profile `{effective_profile}` uses a shared checkout and permits read-only tools only"
+                )));
+            }
+            if isolation == AgentIsolation::Worktree {
+                if parent.execution.channel_authority.is_some() || parent.workspace_id.is_none() {
+                    return Err(AppError::Config(
+                        "worktree isolation requires a project session outside an external channel; use isolation: shared here".into(),
+                    ));
+                }
+                let source = parent
+                    .effective_workspace_root()
+                    .ok_or_else(|| {
+                        AppError::Config("worktree isolation requires a Git checkout".into())
+                    })?
+                    .to_path_buf();
+                let revision = worktree::revision(request.worktree_base)?;
+                let snapshot = self
+                    .agent_worktree_permissions(parent.id, &state.executor, &parent.execution)
+                    .await?;
+                let (worktree, snapshot, ceiling) = tokio::task::spawn_blocking(move || {
+                    let (worktree, ceiling) = worktree::prepare(&source, &revision, &snapshot)?;
+                    Ok::<_, AppError>((worktree, snapshot, ceiling))
+                })
+                .await
+                .map_err(|error| AppError::internal_error(&error))??;
+                let assignment = AgentAssignment {
+                    worktree: Some(worktree),
+                    verification_commands,
+                };
+                worktree_plan = Some((snapshot, ceiling));
+                assignment
+            } else {
+                if request.worktree_base.is_some() {
+                    return Err(AppError::Config(
+                        "worktree_base requires worktree isolation".into(),
+                    ));
+                }
+                AgentAssignment {
+                    worktree: None,
+                    verification_commands,
+                }
+            }
+        };
         let mut parent_selection = parent.execution.selection.clone();
         if let Some((_, control)) = &launch {
             parent_selection = parent_selection.overlay_with_cascade(&ExecutionSelection {
@@ -428,6 +492,7 @@ impl SessionManager {
                 max_tokens: request.max_tokens,
                 max_cost_microusd: request.max_cost_microusd,
             },
+            assignment: assignment.clone(),
         };
         let mut selection_configuration = existing_configuration.clone().unwrap_or_default();
         selection_configuration.profile = profile.clone();
@@ -455,13 +520,26 @@ impl SessionManager {
                         &previous.permission_ceiling,
                         previous.permission_ceiling_layers,
                     )?;
+                if let Some(info) = assignment.worktree.clone() {
+                    let snapshot = self
+                        .agent_worktree_permissions(parent.id, &state.executor, &parent.execution)
+                        .await?;
+                    let ceiling = worktree::followup_policy(info, snapshot).await?;
+                    super::permission_config::append_permission_ceiling_layer(
+                        &previous.permission_ceiling,
+                        &mut previous.permission_ceiling_layers,
+                        &ceiling,
+                    )?;
+                }
                 self.validate_session_permission_configuration_with_state(
                     parent.workspace_id,
                     &previous,
                     &state,
                 )
                 .await?;
-                denials.extend(previous.capability_denied_tool_names.iter().cloned());
+                // Existing capability denials are immutable on disk. The
+                // execution projection handles the legacy delegation bundle.
+                denials.extend(previous.capability_denied_tool_names);
                 let change = SessionConfigurationChange {
                     agent: Some(Some(agent.clone())),
                     message_queue_paused: Some(false),
@@ -500,6 +578,20 @@ impl SessionManager {
                     &mut permission_ceiling_layers,
                     &resolved_profile.permission,
                 )?;
+                if let Some(ceiling) = resolved_profile.read_only_ceiling() {
+                    super::permission_config::append_permission_ceiling_layer(
+                        &permission_ceiling,
+                        &mut permission_ceiling_layers,
+                        &ceiling,
+                    )?;
+                }
+                if let Some((_, ceiling)) = &worktree_plan {
+                    super::permission_config::append_permission_ceiling_layer(
+                        &permission_ceiling,
+                        &mut permission_ceiling_layers,
+                        ceiling,
+                    )?;
+                }
                 let configuration = SessionConfiguration {
                     parent_session_id: Some(session_id(parent.id)?),
                     relation_kind: agena_domain::SessionRelationKind::Subagent,
@@ -512,7 +604,11 @@ impl SessionManager {
                     permission_ceiling_layers,
                     channel_authority: parent.execution.channel_authority.clone(),
                     capability_denied_tool_names: denials.clone(),
-                    effective_workspace_root: parent.execution.effective_workspace_root.clone(),
+                    effective_workspace_root: assignment
+                        .worktree
+                        .as_ref()
+                        .map(|info| info.path.clone())
+                        .or_else(|| parent.execution.effective_workspace_root.clone()),
                     agent: Some(agent.clone()),
                     ..Default::default()
                 };
@@ -567,9 +663,20 @@ impl SessionManager {
                 session_id: request.parent_session_id,
                 child_session_id: child.get(),
                 name: name.clone(),
+                profile: Some(effective_profile.clone()),
+                profile_read_only: resolved_profile.read_only,
             })
             .await
             .map_err(|error| AppError::Config(error.diagnostic_message().to_owned()))?;
+        if let Some(info) = assignment.worktree.clone() {
+            if let Some((snapshot, _)) = worktree_plan {
+                tokio::task::spawn_blocking(move || worktree::create(&info, &snapshot))
+                    .await
+                    .map_err(|error| AppError::internal_error(&error))??;
+            } else {
+                worktree::verify_async(info).await?;
+            }
+        }
         self.persist_submission_selection(child.get(), options.clone())
             .await?;
         self.prepare_options_with_state(child, &mut options, &state)
@@ -597,18 +704,9 @@ impl SessionManager {
         }
         // No child provider is polled before its durable configuration and
         // launch intent have committed. An uncertain send retains its identity.
-        let mut document = ComposerDocument(vec![ComposerNode::Text {
+        let document = ComposerDocument(vec![ComposerNode::Text {
             text: request.prompt,
         }]);
-        for reference in references {
-            document.0.push(ComposerNode::Activity {
-                activity: Box::new(ComposerActivity {
-                    id: agena_domain::ActivityId::new(),
-                    payload: ActivityPayload::CommandReference(reference),
-                    provenance: Default::default(),
-                }),
-            });
-        }
         let command = RequestId::new();
         let execution = persist(|| {
             self.kernel()
@@ -693,6 +791,7 @@ impl SessionManager {
             agent_id: child.get(),
             name,
             profile: Some(effective_profile),
+            worktree: assignment.worktree,
             status: AgentStatus::Running,
         })
     }
@@ -710,6 +809,28 @@ impl SessionManager {
             .is_some_and(|pending| {
                 pending.execution == execution && pending.generation == generation
             })
+    }
+
+    async fn delegation_depth(
+        &self,
+        configuration: &SessionConfiguration,
+    ) -> Result<usize, AppError> {
+        let mut parent = configuration.parent_session_id;
+        let mut delegated = configuration.relation_kind.is_subagent();
+        let mut depth = 0;
+        while delegated && depth < MAX_DELEGATION_DEPTH {
+            depth += 1;
+            let id = parent.ok_or_else(|| AppError::Config("agent has no parent".into()))?;
+            let configuration = self
+                .kernel()
+                .reader
+                .configuration(id)
+                .await
+                .map_err(kernel_error)?;
+            delegated = configuration.relation_kind.is_subagent();
+            parent = configuration.parent_session_id;
+        }
+        Ok(depth)
     }
 
     fn register_agent_settlement(
@@ -788,6 +909,9 @@ impl SessionManager {
                     _ = notified => {}
                 }
                 continue;
+            }
+            if let Some(info) = agent.assignment.worktree.clone() {
+                worktree::verify_async(info).await?;
             }
             let started = Utc::now()
                 .timestamp_millis()
@@ -968,26 +1092,60 @@ impl SessionManager {
             .await
             .map_err(kernel_error)?;
         let parent_session_id = configuration.parent_session_id.map(SessionId::get);
-        let limits = configuration
+        let mut agent = configuration
             .agent
-            .as_ref()
-            .map(|a| a.limits.clone())
-            .unwrap_or_default();
-        let agent = SessionAgentConfiguration {
-            origin_message_id: origin,
-            name: name.clone(),
-            status,
-            started_at_ms: Some(started),
-            finished_at_ms: Some(finished),
-            failure: failure.clone(),
-            limits,
-        };
-        let text = self
+            .clone()
+            .ok_or_else(|| AppError::Internal("agent settlement has no identity".into()))?;
+        agent.origin_message_id = origin;
+        agent.status = status;
+        agent.started_at_ms = Some(started);
+        agent.finished_at_ms = Some(finished);
+        agent.failure = failure.clone();
+        let reply = self
             .final_text_for(child, Some(execution), 12 * 1024)
             .await?;
-        let value = bounded_agent_payload(
-            serde_json::json!({"kind":"agent_result","message_id":origin.map(EntryId::get),"agent_id":child.get(),"name":name,"run_id":execution.to_string(),"attempt_generation":view.generation.get(),"status":status,"text":format!("Agent {} ({}) {}:\n{}",name,child.get(),status.as_ref(),text.unwrap_or_default()),"failure":failure}),
-        )?;
+        let mut text = format!("Agent {} ({}) {}:", name, child.get(), status.as_ref());
+        let mut value = serde_json::json!({
+            "kind": "agent_result", "message_id": origin.map(EntryId::get),
+            "agent_id": child.get(), "name": name, "run_id": execution.to_string(),
+            "attempt_generation": generation.get(), "status": status, "failure": failure,
+        });
+        let checks = self.verification_checks(child, execution, generation, &agent.assignment)
+            .await.unwrap_or_else(|error| {
+                tracing::warn!(%error, agent_id = child.get(), "could not read agent verification results");
+                verification::blocked(&agent.assignment, "could not read recorded outcomes")
+            });
+        if !checks.is_empty() {
+            text.push_str("\n\nVerification from recorded shell results\n");
+            text.push_str(
+                &checks
+                    .iter()
+                    .map(verification::Check::display)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            );
+            value["verification"] = serde_json::to_value(&checks)?;
+        }
+        if let Some(info) = agent.assignment.worktree.clone() {
+            value["worktree"] = serde_json::to_value(&info)?;
+            let summary = async {
+                let state = &control.state;
+                let context = self.execution_context_with_state(child, state).await?;
+                let snapshot = self.agent_worktree_permissions(child.get(), &state.executor, &context).await?;
+                tokio::task::spawn_blocking(move || worktree::describe(&info, &snapshot))
+                    .await.map_err(|error| AppError::internal_error(&error))?
+            }.await.unwrap_or_else(|error| {
+                tracing::warn!(%error, agent_id = child.get(), "could not read agent worktree status");
+                "Git worktree status unavailable.".into()
+            });
+            text.push_str("\n\n");
+            text.push_str(&summary);
+            value["worktree_summary"] = summary.into();
+        }
+        text.push('\n');
+        text.push_str(reply.as_deref().unwrap_or_default());
+        value["text"] = text.into();
+        let value = bounded_agent_payload(value)?;
         if let Some(activity) = activity {
             let command = RequestId::new();
             let outcome = match status {
@@ -1050,20 +1208,13 @@ impl SessionManager {
             .configuration(pending.child)
             .await
             .map_err(kernel_error)?;
-        let limits = configuration
+        let mut agent = configuration
             .agent
-            .as_ref()
-            .map(|agent| agent.limits.clone())
-            .unwrap_or_default();
-        let agent = SessionAgentConfiguration {
-            origin_message_id: pending.origin,
-            name: pending.name.clone(),
-            status: AgentStatus::Failed,
-            started_at_ms: Some(pending.started),
-            finished_at_ms: Some(Utc::now().timestamp_millis().max(pending.started)),
-            failure: Some(failure.clone()),
-            limits,
-        };
+            .clone()
+            .ok_or_else(|| AppError::Internal("agent preparation has no identity".into()))?;
+        agent.status = AgentStatus::Failed;
+        agent.finished_at_ms = Some(Utc::now().timestamp_millis().max(pending.started));
+        agent.failure = Some(failure.clone());
         if let Some(activity) = pending.activity {
             let command = RequestId::new();
             persist(|| {
@@ -1158,57 +1309,31 @@ fn bounded_agent_payload(mut value: serde_json::Value) -> Result<serde_json::Val
     Ok(value)
 }
 
-fn resolve_agent_command_references(
-    catalog: &[agena_plugin_host::CommandCatalogItem],
-    requested: &[String],
-) -> Result<Vec<CommandReferenceActivity>, AppError> {
-    if requested.len() > 32 {
-        return Err(AppError::Config(
-            "agent command references exceed their limit".into(),
-        ));
-    }
-    requested
-        .iter()
-        .map(|name| {
-            let query = name.trim().trim_start_matches('/');
-            let item = catalog
-                .iter()
-                .find(|item| {
-                    item.command.id.eq_ignore_ascii_case(query)
-                        || item.command.slash.as_deref().is_some_and(|slash| {
-                            slash.trim_start_matches('/').eq_ignore_ascii_case(query)
-                        })
-                        || item
-                            .command
-                            .aliases
-                            .iter()
-                            .any(|alias| alias.eq_ignore_ascii_case(query))
-                })
-                .ok_or_else(|| AppError::Config(format!("unknown command '{name}' for agent")))?;
-            let hash = Sha256::digest(serde_json::to_vec(&item.command)?);
-            Ok(CommandReferenceActivity {
-                name: item.command.id.clone(),
-                description: item.command.docs.summary.clone().unwrap_or_default(),
-                content_hash: hex::encode(hash),
-                source: item.plugin_id.to_string(),
-                skill_id: None,
-                aliases: item.command.aliases.clone(),
-            })
-        })
-        .collect()
+fn agent_tool_names(name: &str) -> [String; 3] {
+    [
+        format!("agent.{name}"),
+        format!("agena.agent.{name}"),
+        format!("agena_agent_{name}"),
+    ]
 }
 
-fn agent_child_capability_denials() -> std::collections::BTreeSet<String> {
-    ["spawn", "followup", "cancel"]
+pub(super) fn delegation_capability_denials(
+    configuration: &SessionConfiguration,
+) -> std::collections::BTreeSet<String> {
+    let mut denials = configuration.capability_denied_tool_names.clone();
+    // Older sessions persisted this exact bundle as a blanket runtime rule.
+    // User policy and channel authority are applied as independent ceilings.
+    let legacy = ["spawn", "followup", "cancel"]
         .into_iter()
-        .flat_map(|name| {
-            [
-                format!("agent.{name}"),
-                format!("agena.agent.{name}"),
-                format!("agena_agent_{name}"),
-            ]
-        })
-        .collect()
+        .flat_map(agent_tool_names);
+    if configuration.relation_kind.is_subagent()
+        && legacy.clone().all(|name| denials.contains(&name))
+    {
+        for name in legacy {
+            denials.remove(&name);
+        }
+    }
+    denials
 }
 
 fn resolve_subagent_profile_name(
@@ -1228,13 +1353,8 @@ fn resolve_subagent_profile_name(
         config.validate_session_profile(Some(name), agena_domain::SessionRelationKind::Subagent)
     {
         let available = config
-            .profiles
-            .keys()
-            .filter_map(|name| {
-                let profile =
-                    agena_runtime_config::resolve_agent_profile(&config.profiles, name).ok()?;
-                (profile.mode.allows_subagent() && !profile.hidden).then_some(name.as_str())
-            })
+            .visible_subagent_profiles()
+            .map(|(name, _)| name)
             .collect::<Vec<_>>()
             .join(", ");
         return Err(AppError::Config(format!(

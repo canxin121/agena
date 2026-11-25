@@ -21,7 +21,6 @@ impl ToolExecutor {
             configured_resource_guard: true,
             sandbox_persisted_rules: Arc::new(Vec::new()),
             allowed_tool_names: None,
-            model_id: None,
             cloud_tool_adapter_gate: None,
             media_input_binder: None,
             plugin_scope: None,
@@ -172,9 +171,6 @@ impl ToolExecutor {
         let mut scoped = self.scope_session_principal(session_context);
         scoped.allowed_tool_names = Some(Default::default());
         scoped.definition_catalog = Some(Arc::new(Vec::new()));
-        if let Some(model_id) = session_context.selected_model() {
-            scoped.model_id = Some(model_id.to_owned());
-        }
         scoped
     }
 
@@ -203,9 +199,6 @@ impl ToolExecutor {
                 Some(existing) => existing.retain(|name| allowed_tools.contains(name)),
                 None => scoped.allowed_tool_names = Some(allowed_tools),
             }
-        }
-        if let Some(model_id) = session_context.selected_model() {
-            scoped.model_id = Some(model_id.to_owned());
         }
         scoped
     }
@@ -373,10 +366,6 @@ impl ToolExecutor {
         self.principal.plugin_is_enabled(plugin)
     }
 
-    pub fn builtin_tool_set(&self) -> BuiltinToolSet {
-        BuiltinToolSet::for_model(self.model_id.as_deref())
-    }
-
     pub(crate) fn registered_tools_with_definition_overrides(&self) -> Vec<RegisteredTool> {
         if let Some(catalog) = self.definition_catalog.as_ref() {
             return self.with_resource_mode_help(catalog.as_ref().clone());
@@ -447,17 +436,18 @@ impl ToolExecutor {
     }
 
     fn filter_tool_catalog(&self, tools: Vec<RegisteredTool>) -> Vec<RegisteredTool> {
-        let tool_set = self.builtin_tool_set();
-        let uses_profile = self
-            .channel_authority
-            .as_ref()
-            .is_some_and(|authority| authority.uses_profile_tool_permissions());
+        let uses_role_permissions = self.session_relation_kind.is_subagent()
+            || self
+                .channel_authority
+                .as_ref()
+                .is_some_and(|authority| authority.uses_profile_tool_permissions());
         tools
             .into_iter()
             .filter(|entry| {
-                tool_set.is_tool_enabled(entry)
-                    && self.tool_is_within_capability(entry)
-                    && (!uses_profile || self.tool_is_discoverable_under_permission(entry))
+                let check_permissions = uses_role_permissions
+                    || (entry.namespace() == "agena" && entry.plugin_name() == "agent");
+                self.tool_is_within_capability(entry)
+                    && (!check_permissions || self.tool_is_discoverable_under_permission(entry))
             })
             .collect()
     }
@@ -491,7 +481,6 @@ impl ToolExecutor {
                 (entry.namespace(), entry.plugin_name(), entry.tool_name()),
                 ("agena", "interaction", "ask" | "notify")
                     | ("agena", "plan", "set" | "review" | "phase" | "clear")
-                    | ("agena", "agent", "spawn" | "followup" | "cancel")
                     | ("agena", "bot", "profile")
             )
         {
@@ -576,9 +565,9 @@ impl ToolExecutor {
 }
 
 use super::{
-    Arc, BuiltinToolSet, ExecutionPrincipal, MonitorService, Path, PathBuf, PermissionDecision,
-    PluginHost, PluginToolDefinitionInput, RegisteredTool, ToolError, ToolExecutor,
-    suggest_tool_names, tool_summary, unknown_tool_hint,
+    Arc, ExecutionPrincipal, MonitorService, Path, PathBuf, PermissionDecision, PluginHost,
+    PluginToolDefinitionInput, RegisteredTool, ToolError, ToolExecutor, suggest_tool_names,
+    tool_summary, unknown_tool_hint,
 };
 use agena_plugin_host::PluginError;
 

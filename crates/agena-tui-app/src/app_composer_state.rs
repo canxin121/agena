@@ -1,5 +1,5 @@
 const MAX_RESOURCE_ATTACHMENTS_PER_MESSAGE: usize = 8;
-const MAX_COMMAND_REFERENCES_PER_MESSAGE: usize = 8;
+const MAX_SKILL_REFERENCES_PER_MESSAGE: usize = 8;
 const MAX_CLIPBOARD_UPLOAD_BYTES: u64 = 20 * 1024 * 1024;
 const MAX_CLIPBOARD_UPLOAD_TOTAL_BYTES: u64 = 40 * 1024 * 1024;
 
@@ -352,29 +352,28 @@ impl App {
             .filter(|item| {
                 matches!(
                     item.payload(),
-                    agena_domain::ActivityPayload::CommandReference(_)
+                    agena_domain::ActivityPayload::SkillReference(_)
                 )
             })
             .count();
-        if references >= MAX_COMMAND_REFERENCES_PER_MESSAGE {
+        if references >= MAX_SKILL_REFERENCES_PER_MESSAGE {
             return Err(crate::UiFailure::message(self.i18n.text_args(
                 "flash-skill-count-limit",
-                &agena_tui::fl_args!("count" => MAX_COMMAND_REFERENCES_PER_MESSAGE as i64),
+                &agena_tui::fl_args!("count" => MAX_SKILL_REFERENCES_PER_MESSAGE as i64),
             )));
         }
 
         let plugin_id = "agena.skills".to_owned();
         let content_hash = skill.revision.clone();
-        let payload = agena_domain::ActivityPayload::CommandReference(
-            agena_domain::CommandReferenceActivity {
+        let payload =
+            agena_domain::ActivityPayload::SkillReference(agena_domain::SkillReferenceActivity {
                 name: skill.name.clone(),
                 description: skill.description.clone(),
                 content_hash: content_hash.clone(),
                 source: plugin_id.clone(),
                 skill_id: Some(skill.id.clone()),
                 aliases: Vec::new(),
-            },
-        );
+            });
         let placeholder =
             crate::composer_state_impls::composer_activity_presentation(&payload, &self.i18n).0;
         let placeholder = self.make_unique_composer_placeholder(placeholder);

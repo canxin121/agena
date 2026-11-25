@@ -16,17 +16,17 @@ pub(crate) fn activity_presentation(
             },
             None,
         ),
-        ActivityPayload::CommandReference(command) => (
+        ActivityPayload::SkillReference(skill) => (
             "skill_reference".to_owned(),
-            if command.name.trim().is_empty() {
-                "Command".to_owned()
+            if skill.name.trim().is_empty() {
+                "Skill".to_owned()
             } else {
-                format!("Command: {}", command.name)
+                format!("Skill: {}", skill.name)
             },
-            if command.description.trim().is_empty() {
-                command.source.clone()
+            if skill.description.trim().is_empty() {
+                skill.source.clone()
             } else {
-                command.description.clone()
+                skill.description.clone()
             },
             None,
         ),

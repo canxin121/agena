@@ -177,6 +177,32 @@ impl AssistantRuntime {
         }
     }
 
+    pub(super) async fn dispatch_channel_webhook(
+        &self,
+        platform: &str,
+        request: agena_assistant::ChannelWebhookRequest,
+    ) -> Result<agena_assistant::ChannelWebhookResponse> {
+        let provider = match platform {
+            "slack" => "agena.slack",
+            "feishu" => "agena.feishu",
+            "whatsapp" => "agena.whatsapp",
+            _ => return Err(Error::NotFound),
+        };
+        let host = self.integration_host()?;
+        if !host
+            .plugins()
+            .iter()
+            .any(|plugin| plugin.key().to_string() == provider)
+        {
+            return Err(Error::NotFound);
+        }
+        decode(
+            host.invoke_integration_service(provider, "webhook", json!(request))
+                .await
+                .map_err(runtime_error)?,
+        )
+    }
+
     fn integration_host(&self) -> Result<Arc<agena_plugin_host::PluginHost>> {
         let runtime = self
             .runtime

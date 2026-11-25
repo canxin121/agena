@@ -305,6 +305,7 @@ async fn configure(
         }
         if let (Some(old), Some(new)) = (&original.agent, value)
             && (old.name != new.name
+                || old.assignment != new.assignment
                 || (old.started_at_ms == new.started_at_ms
                     && old.origin_message_id != new.origin_message_id)
                 || (old.status.is_terminal()
@@ -318,6 +319,17 @@ async fn configure(
             ));
         }
         next.agent = value.clone();
+    }
+    if let Some(worktree) = next
+        .agent
+        .as_ref()
+        .and_then(|agent| agent.assignment.worktree.as_ref())
+        && (next.effective_workspace_root.as_ref() != Some(&worktree.path)
+            || next.channel_authority.is_some())
+    {
+        return Err(invalid(
+            "the agent's worktree must remain its effective project workspace",
+        ));
     }
     normalize_configuration_permissions(&mut next)?;
     let body = encode(&next)?;

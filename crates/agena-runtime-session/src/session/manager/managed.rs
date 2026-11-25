@@ -294,7 +294,7 @@ impl SessionManager {
         for layer in &mut layers {
             layer.plugins.clear();
         }
-        let configuration = SessionConfiguration {
+        let mut configuration = SessionConfiguration {
             prompts,
             permission,
             permission_ceiling: ceiling,
@@ -305,6 +305,10 @@ impl SessionManager {
             effective_workspace_root: (!global).then_some(root),
             ..Default::default()
         };
+        let inherits_bot_profile = self.inherited_bot_profile(&configuration).await?.is_some();
+        if inherits_bot_profile {
+            configuration.selection_defaults = source.execution.selection.clone();
+        }
         self.validate_session_permission_configuration(workspace, &configuration)
             .await?;
         let command = request_key("channel-principal-session", scope_key);
@@ -328,11 +332,13 @@ impl SessionManager {
         .map_err(kernel_error)?
         .value
         .id;
-        self.update_session_selection(
-            session.get(),
-            self.options_for_selection(&source.execution.selection)?,
-        )
-        .await?;
+        if !inherits_bot_profile {
+            self.update_session_selection(
+                session.get(),
+                self.options_for_selection(&source.execution.selection)?,
+            )
+            .await?;
+        }
         Ok(session.get())
     }
 

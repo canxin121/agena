@@ -1,10 +1,17 @@
 //! Built-in roles share the resolved catalog and execution path of user profiles.
 use std::collections::BTreeMap;
 
-use agena_domain::{PathAccessModes, PathPermissionConfig, PathPermissionMode, PermissionConfig};
+use agena_domain::{
+    PathAccessModes, PathPermissionConfig, PathPermissionMode, PermissionConfig, PermissionMode,
+    SHELL_COMMAND_RULE_GROUP, TOOL_CLASS_READ_ONLY, ToolPermissionConfig, ToolPermissionRules,
+};
 use agena_prompt_layers::{FragmentId, LayerMode, PromptFragment, PromptLayer};
+use agena_runtime_contracts::identity::{
+    IMPLEMENTATION_PROMPT_ID, INVESTIGATION_PROMPT_ID, PLANNING_PROMPT_ID, READ_ONLY_PROMPT_ID,
+    VERIFICATION_PROMPT_ID,
+};
 
-use crate::{AgentProfileConfig, AgentProfileMode};
+use crate::{AgentProfileConfig, AgentProfileMode, ProjectInstructionsMode};
 
 pub const MAIN_AGENT_PROFILE: &str = "main";
 pub const DEFAULT_SUBAGENT_PROFILE: &str = "worker";
@@ -15,6 +22,7 @@ fn role(
     description: &str,
     mode: AgentProfileMode,
     instructions: &str,
+    task_prompts: &[&str],
 ) -> AgentProfileConfig {
     let id =
         FragmentId::parse(&format!("agena-profile-{name}")).expect("valid built-in fragment ID");
@@ -23,8 +31,17 @@ fn role(
         description: description.into(),
         mode: Some(mode),
         prompts: PromptLayer {
-            order: vec![id.clone()],
-            inline: vec![PromptFragment::new(id, instructions.trim())],
+            order: std::iter::once(id.clone())
+                .chain(
+                    std::iter::once(INVESTIGATION_PROMPT_ID)
+                        .chain(task_prompts.iter().copied())
+                        .map(|id| FragmentId::parse(id).expect("valid reusable prompt ID")),
+                )
+                .collect(),
+            inline: vec![PromptFragment {
+                title: format!("{title} role"),
+                ..PromptFragment::new(id, instructions.trim())
+            }],
             ..Default::default()
         },
         ..Default::default()
@@ -42,6 +59,32 @@ fn readonly() -> PermissionConfig {
     }
 }
 
+pub(crate) fn read_only_agent_permission() -> PermissionConfig {
+    PermissionConfig {
+        tools: Some(ToolPermissionConfig {
+            default: Some(PermissionMode::Deny),
+            rules: BTreeMap::from([
+                (
+                    "*".into(),
+                    ToolPermissionRules::Ordered(
+                        [(TOOL_CLASS_READ_ONLY.into(), PermissionMode::Allow)]
+                            .into_iter()
+                            .collect(),
+                    ),
+                ),
+                (
+                    SHELL_COMMAND_RULE_GROUP.into(),
+                    ToolPermissionRules::Ordered(
+                        [("*".into(), PermissionMode::Deny)].into_iter().collect(),
+                    ),
+                ),
+            ]),
+            ..Default::default()
+        }),
+        ..readonly()
+    }
+}
+
 pub fn builtin_agent_profiles() -> BTreeMap<String, AgentProfileConfig> {
     let main = role(
         MAIN_AGENT_PROFILE,
@@ -49,6 +92,11 @@ pub fn builtin_agent_profiles() -> BTreeMap<String, AgentProfileConfig> {
         "Own the user's goal, coordinate specialist roles, implement and verify work, and deliver an integrated result.",
         AgentProfileMode::Primary,
         include_str!("profile_prompts/main.md"),
+        &[
+            PLANNING_PROMPT_ID,
+            IMPLEMENTATION_PROMPT_ID,
+            VERIFICATION_PROMPT_ID,
+        ],
     );
     let worker = role(
         DEFAULT_SUBAGENT_PROFILE,
@@ -56,6 +104,7 @@ pub fn builtin_agent_profiles() -> BTreeMap<String, AgentProfileConfig> {
         "Complete a bounded implementation, fix, or other substantive task. Give each worker clear ownership and acceptance criteria.",
         AgentProfileMode::Subagent,
         include_str!("profile_prompts/worker.md"),
+        &[IMPLEMENTATION_PROMPT_ID, VERIFICATION_PROMPT_ID],
     );
     let mut explore = role(
         "explore",
@@ -63,8 +112,11 @@ pub fn builtin_agent_profiles() -> BTreeMap<String, AgentProfileConfig> {
         "Read-only exploration: locate code, trace behavior, research a focused question, and return evidence before implementation.",
         AgentProfileMode::Subagent,
         include_str!("profile_prompts/explore.md"),
+        &[READ_ONLY_PROMPT_ID],
     );
     explore.permission = readonly();
+    explore.read_only = Some(true);
+    explore.context.project_instructions = Some(ProjectInstructionsMode::OnDemand);
     explore.max_turns = Some(40);
     let mut reviewer = role(
         "reviewer",
@@ -72,14 +124,64 @@ pub fn builtin_agent_profiles() -> BTreeMap<String, AgentProfileConfig> {
         "Independently review changes for correctness, regressions, security and test gaps; return prioritized, evidence-backed findings.",
         AgentProfileMode::All,
         include_str!("profile_prompts/reviewer.md"),
+        &[READ_ONLY_PROMPT_ID],
     );
     reviewer.permission = readonly();
     reviewer.max_turns = Some(40);
+    let mut planner = role(
+        "planner",
+        "Planner",
+        "Plan a change when the approach involves meaningful tradeoffs, multiple components, or unclear acceptance criteria. Return a grounded implementation sequence and checks.",
+        AgentProfileMode::Subagent,
+        include_str!("profile_prompts/planner.md"),
+        &[PLANNING_PROMPT_ID, READ_ONLY_PROMPT_ID],
+    );
+    planner.permission = read_only_agent_permission();
+    planner.read_only = Some(true);
+    planner.context.project_instructions = Some(ProjectInstructionsMode::OnDemand);
+    planner.max_turns = Some(40);
+    let mut verifier = role(
+        "verifier",
+        "Verifier",
+        "Run independent acceptance checks on an existing change. Return exact commands, outcomes, and evidence for tests, builds, or other requested checks.",
+        AgentProfileMode::Subagent,
+        include_str!("profile_prompts/verifier.md"),
+        &[VERIFICATION_PROMPT_ID],
+    );
+    verifier.permission = PermissionConfig {
+        tools: Some(ToolPermissionConfig {
+            default: Some(PermissionMode::Deny),
+            names: [
+                ("agena.shell.exec", PermissionMode::Allow),
+                ("agena.shell.spawn", PermissionMode::Allow),
+                ("agena.shell.list", PermissionMode::Allow),
+                ("agena.shell.read", PermissionMode::Allow),
+                ("agena.shell.stop", PermissionMode::Allow),
+                ("agena.shell.open", PermissionMode::Deny),
+                ("agena.shell.watch", PermissionMode::Deny),
+            ]
+            .map(|(name, mode)| (name.to_owned(), mode))
+            .into(),
+            rules: BTreeMap::from([(
+                "*".into(),
+                ToolPermissionRules::Ordered(
+                    [(TOOL_CLASS_READ_ONLY.into(), PermissionMode::Allow)]
+                        .into_iter()
+                        .collect(),
+                ),
+            )]),
+            ..Default::default()
+        }),
+        ..readonly()
+    };
+    verifier.max_turns = Some(40);
     BTreeMap::from([
         (MAIN_AGENT_PROFILE.into(), main),
         (DEFAULT_SUBAGENT_PROFILE.into(), worker),
         ("explore".into(), explore),
         ("reviewer".into(), reviewer),
+        ("planner".into(), planner),
+        ("verifier".into(), verifier),
     ])
 }
 
@@ -107,6 +209,9 @@ pub(crate) fn compose_profile_overrides(
             if overlay.hidden.is_some() {
                 base.hidden = overlay.hidden;
             }
+            if overlay.read_only.is_some() {
+                base.read_only = overlay.read_only;
+            }
             if overlay.extends.is_some() {
                 base.extends = overlay.extends;
             }
@@ -115,6 +220,10 @@ pub(crate) fn compose_profile_overrides(
             }
             if overlay.max_turns.is_some() {
                 base.max_turns = overlay.max_turns;
+            }
+            base.context.merge_from(&overlay.context);
+            if overlay.isolation.is_some() {
+                base.isolation = overlay.isolation;
             }
             if overlay.permission_profile.is_some() {
                 base.permission_profile = overlay.permission_profile;
@@ -126,6 +235,16 @@ pub(crate) fn compose_profile_overrides(
                 base.prompts = overlay.prompts;
             } else {
                 let layer = overlay.prompts;
+                // A legacy override that suppressed the former role prompt
+                // also suppressed the instructions now shared by reference.
+                if base
+                    .prompts
+                    .inline
+                    .iter()
+                    .any(|fragment| layer.disabled.contains(&fragment.id))
+                {
+                    base.prompts.order.retain(|id| !id.is_reusable_builtin());
+                }
                 base.prompts.order.retain(|id| !layer.disabled.contains(id));
                 base.prompts
                     .inline

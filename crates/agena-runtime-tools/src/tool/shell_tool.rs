@@ -105,28 +105,6 @@ pub(crate) fn execute(
                 .map_err(into_tool_error)?;
             Ok(render_watch_update(summary, policy.is_some()))
         }
-        ShellToolInput::Logs {
-            process_id,
-            since_seq,
-            event_offset,
-            max_output_bytes,
-            limit,
-            wait_ms,
-        } => read_output(
-            executor,
-            input,
-            context.session_id,
-            process_id,
-            crate::ProcessReadOptions {
-                since_seq: Some(*since_seq),
-                event_offset: *event_offset,
-                max_output_bytes: *max_output_bytes,
-                limit: *limit,
-                wait_ms: *wait_ms,
-            },
-            false,
-            cancel,
-        ),
         ShellToolInput::Read { input: read } => read_output(
             executor,
             input,
@@ -234,10 +212,7 @@ pub(crate) async fn execute_async(
                 Some(
                     worker_permit(
                         executor,
-                        if matches!(
-                            input,
-                            ShellToolInput::Read { .. } | ShellToolInput::Logs { .. }
-                        ) {
+                        if matches!(input, ShellToolInput::Read { .. }) {
                             &SHELL_READ_WORKERS
                         } else {
                             &SHELL_LAUNCH_WORKERS
@@ -734,7 +709,7 @@ fn render_spawn(
         events: Vec::new(),
         processes: Vec::new(),
         // A launch receipt has consumed no output. Returning the registry's
-        // current cursor would make the first shell.logs call skip startup logs.
+        // current cursor would make the first explicit replay skip startup logs.
         last_seq: 0,
         next_event_offset: 0,
         has_more: summary.last_seq > 0,

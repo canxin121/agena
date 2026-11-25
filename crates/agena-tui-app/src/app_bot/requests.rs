@@ -17,6 +17,54 @@ impl App {
             let result = tokio::time::timeout(std::time::Duration::from_secs(30), async {
                 match operation {
                     BotOperation::List => Ok(BotReply::List(client.list_bots(true).await?)),
+                    BotOperation::PromptLibrary => {
+                        let (builtins, settings) = tokio::try_join!(
+                            client.builtin_prompt_catalog(),
+                            client.settings_layer_value("global", "prompts"),
+                        )?;
+                        Ok(BotReply::PromptLibrary(BotPromptCatalog::new(
+                            builtins, &settings,
+                        )?))
+                    }
+                    BotOperation::AgentProfiles => {
+                        backend.refresh_config_sources().await?;
+                        let sources = crate::app_backend::config::config_json_sources(&backend)?;
+                        Ok(BotReply::AgentProfiles(
+                            crate::app_agent_profiles::profile_catalog(&sources, true),
+                        ))
+                    }
+                    BotOperation::CreateAgentProfile(draft) => {
+                        let (name, profile) = super::profiles::parse_profile_draft(&draft)?;
+                        backend.refresh_config_sources().await?;
+                        let sources = crate::app_backend::config::config_json_sources(&backend)?;
+                        let catalog = crate::app_agent_profiles::profile_catalog(&sources, true);
+                        anyhow::ensure!(
+                            catalog["profiles"].get(&name).is_none(),
+                            "An agent profile with ID `{name}` already exists."
+                        );
+                        let settings = client.settings_layer_value("global", "profiles").await?;
+                        let mut profiles =
+                            settings["value"].as_object().cloned().unwrap_or_default();
+                        anyhow::ensure!(
+                            !profiles.contains_key(&name),
+                            "An agent profile with ID `{name}` already exists."
+                        );
+                        let revision = settings["revision"].as_str().ok_or_else(|| {
+                            anyhow::anyhow!("The configuration revision is missing.")
+                        })?;
+                        profiles.insert(name.clone(), profile);
+                        client
+                            .set_settings_layer_value_if_revision(
+                                "global",
+                                "profiles",
+                                serde_json::Value::Object(profiles),
+                                false,
+                                true,
+                                Some(revision),
+                            )
+                            .await?;
+                        Ok(BotReply::AgentProfileCreated(name))
+                    }
                     BotOperation::Edit(id) => {
                         let profile = client.get_bot(id).await?;
                         anyhow::ensure!(
@@ -109,6 +157,7 @@ impl App {
                                         request_key: create.request_key,
                                         expected_revision: revision,
                                         name: create.name,
+                                        agent_profile: create.agent_profile,
                                         persona: create.persona.unwrap_or_default(),
                                         avatar,
                                     },

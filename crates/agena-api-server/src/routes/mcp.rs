@@ -7,6 +7,12 @@ use crate::{AppState, rest};
 pub(super) fn routes() -> Router<AppState> {
     Router::new()
         .route(
+            "/api/v1/sessions/{session_id}/parts/{part_id}/mcp-app",
+            get(rest::get_mcp_app_document)
+                .post(rest::request_mcp_app)
+                .layer(DefaultBodyLimit::max(128 * 1024)),
+        )
+        .route(
             "/api/v1/mcp-connections",
             get(rest::list_mcp_connections).post(rest::create_mcp_connection),
         )

@@ -196,6 +196,7 @@ async fn operator_and_target_guards_reject_subagents_side_conversations_and_chan
             parent_session_id: Some(ordinary),
             relation_kind: agena_domain::SessionRelationKind::Subagent,
             agent: Some(SessionAgentConfiguration {
+                assignment: Default::default(),
                 origin_message_id: None,
                 name: "guard_probe".into(),
                 status: agena_domain::AgentStatus::Created,
@@ -1069,6 +1070,7 @@ async fn checked_delete_refuses_active_subagent_even_when_parent_is_idle() {
                 parent_session_id: Some(target),
                 relation_kind: agena_domain::SessionRelationKind::Subagent,
                 agent: Some(SessionAgentConfiguration {
+                    assignment: Default::default(),
                     origin_message_id: None,
                     name: "active_probe".into(),
                     status: agena_domain::AgentStatus::Created,

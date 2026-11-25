@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::part::AttachmentItem;
 use agena_domain::ToolOutput;
+use agena_domain::mcp_connections::{APP_METADATA_KEY, APP_RESULT_METADATA_KEY};
 
 use super::ToolPayloadOutput;
 use agena_tool::ApplyPatchExecution;
@@ -39,7 +40,10 @@ impl ToolExecutionView {
             summary: self.summary.clone(),
             output_text: self.output_text.clone(),
             payload: None,
-            metadata: self.metadata.clone(),
+            metadata: self
+                .public_metadata()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
             attachments: self
                 .attachments
                 .iter()
@@ -52,6 +56,12 @@ impl ToolExecutionView {
                 })
                 .collect(),
         }
+    }
+
+    fn public_metadata(&self) -> impl Iterator<Item = (&String, &String)> {
+        self.metadata
+            .iter()
+            .filter(|(key, _)| !matches!(key.as_str(), APP_METADATA_KEY | APP_RESULT_METADATA_KEY))
     }
 
     pub fn raw_output(&self, output: &ToolOutput) -> agena_domain::RawOutput {
@@ -69,12 +79,13 @@ impl ToolExecutionView {
         // Presentation metadata is string-valued. Keeping it out of the
         // result's field namespace also preserves typed defaults that serde
         // omits, such as Read::truncated=false. Tool-owned metadata wins.
-        if !self.metadata.is_empty()
+        let mut public_metadata = self.public_metadata().peekable();
+        if public_metadata.peek().is_some()
             && let serde_json::Value::Object(metadata) = payload
                 .entry("metadata".to_owned())
                 .or_insert_with(|| serde_json::Value::Object(Default::default()))
         {
-            for (key, value) in &self.metadata {
+            for (key, value) in public_metadata {
                 metadata
                     .entry(key.clone())
                     .or_insert_with(|| serde_json::Value::String(value.clone()));

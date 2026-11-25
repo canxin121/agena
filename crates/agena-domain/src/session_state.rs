@@ -1,5 +1,39 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+
+/// Filesystem layout for a delegated run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentIsolation {
+    #[default]
+    Shared,
+    Worktree,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AgentWorktree {
+    pub path: PathBuf,
+    pub source_path: PathBuf,
+    pub branch: String,
+    pub base_commit: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct AgentAssignment {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<AgentWorktree>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub verification_commands: Vec<String>,
+}
+
+impl AgentAssignment {
+    pub fn is_empty(&self) -> bool {
+        self.worktree.is_none() && self.verification_commands.is_empty()
+    }
+}
 
 /// Lifecycle status of an agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]

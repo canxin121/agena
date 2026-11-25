@@ -37,9 +37,10 @@ fn statement(sql: &str, values: Vec<Value>) -> Statement {
     Statement::from_sql_and_values(DatabaseBackend::Sqlite, sql, values)
 }
 
-const PROFILE_FIELDS: &str = "b.id,b.name,b.name_folded,b.instructions,b.revision,b.archived,b.created_at_ms,b.updated_at_ms,a.avatar,p.ids_json,p.publish_to_channels";
+const PROFILE_FIELDS: &str = "b.id,b.name,b.name_folded,b.instructions,b.revision,b.archived,b.created_at_ms,b.updated_at_ms,a.avatar,p.ids_json,p.publish_to_channels,json_extract(r.value_json,'$') AS agent_profile";
 const PROFILE_TABLES: &str = "FROM agena_bots b LEFT JOIN agena_bot_avatars a ON a.bot_id=b.id
-    LEFT JOIN agena_bot_prompts p ON p.bot_id=b.id";
+    LEFT JOIN agena_bot_prompts p ON p.bot_id=b.id
+    LEFT JOIN agena_server_state r ON r.key='bot-agent-profile/'||b.id";
 
 pub(crate) const LIVE_LOCAL_SESSION: &str = "agena_sessions s ON s.id=m.session_id
     AND s.deleted_at_ms IS NULL AND s.owner_bot_id=m.bot_id AND s.owner_surface='local'
@@ -73,6 +74,7 @@ fn record(row: sea_orm::QueryResult) -> Result<BotRecord, BotRepositoryError> {
         name: row.try_get("", "name").map_err(backend)?,
         name_folded: row.try_get("", "name_folded").map_err(backend)?,
         instructions: row.try_get("", "instructions").map_err(backend)?,
+        agent_profile: row.try_get("", "agent_profile").map_err(backend)?,
         prompt_ids: prompt_ids
             .as_deref()
             .map(serde_json::from_str)
@@ -89,6 +91,28 @@ fn record(row: sea_orm::QueryResult) -> Result<BotRecord, BotRepositoryError> {
         created_at_ms: row.try_get("", "created_at_ms").map_err(backend)?,
         updated_at_ms: row.try_get("", "updated_at_ms").map_err(backend)?,
     })
+}
+
+async fn write_agent_profile(
+    db: &impl ConnectionTrait,
+    value: &BotRecord,
+) -> Result<(), BotRepositoryError> {
+    let key = format!("bot-agent-profile/{}", value.id);
+    let query = match &value.agent_profile {
+        Some(profile) => statement(
+            "INSERT INTO agena_server_state(key,value_json) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+            vec![
+                key.into(),
+                serde_json::to_string(profile).map_err(backend)?.into(),
+            ],
+        ),
+        None => statement(
+            "DELETE FROM agena_server_state WHERE key=?",
+            vec![key.into()],
+        ),
+    };
+    db.execute(query).await.map_err(backend)?;
+    Ok(())
 }
 
 async fn write_prompts(
@@ -167,6 +191,18 @@ fn classify_write(error: sea_orm::DbErr) -> BotRepositoryError {
 
 #[async_trait]
 impl BotRepository for SqliteBotRepository {
+    async fn agent_profile(&self, id: Uuid) -> Result<Option<String>, BotRepositoryError> {
+        self.reader
+            .query_one(statement(
+                "SELECT json_extract(value_json,'$') AS agent_profile FROM agena_server_state WHERE key=?",
+                vec![format!("bot-agent-profile/{id}").into()],
+            ))
+            .await
+            .map_err(backend)?
+            .map(|row| row.try_get("", "agent_profile").map_err(backend))
+            .transpose()
+    }
+
     async fn create(&self, value: &BotRecord) -> Result<BotRecord, BotRepositoryError> {
         let transaction = self.database.begin().await.map_err(backend)?;
         transaction
@@ -187,6 +223,7 @@ impl BotRepository for SqliteBotRepository {
             .map_err(classify_write)?;
         write_avatar(&transaction, value).await?;
         write_prompts(&transaction, value).await?;
+        write_agent_profile(&transaction, value).await?;
         let created = read(&transaction, value.id)
             .await?
             .ok_or_else(|| BotRepositoryError::Backend("created Bot row is missing".into()))?;
@@ -217,6 +254,25 @@ impl BotRepository for SqliteBotRepository {
             .map_err(classify_write)?;
         if changed.rows_affected() != 1 {
             return Err(BotRepositoryError::Conflict);
+        }
+        let current = read(&transaction, value.id)
+            .await?
+            .ok_or(BotRepositoryError::NotFound)?;
+        if current.agent_profile != value.agent_profile {
+            let busy = transaction
+                .query_one(statement(
+                    "SELECT EXISTS(SELECT 1 FROM agena_sessions s WHERE s.owner_bot_id=? AND s.deleted_at_ms IS NULL AND s.relation_kind<>'subagent' AND json_extract(s.configuration_json,'$.profile') IS NULL AND (EXISTS(SELECT 1 FROM agena_attempts a WHERE a.session_id=s.id AND a.phase IN ('queued','running')) OR EXISTS(SELECT 1 FROM agena_interactions i WHERE i.session_id=s.id AND i.decision_json IS NULL))) AS busy",
+                    vec![value.id.to_string().into()],
+                ))
+                .await
+                .map_err(backend)?
+                .ok_or_else(|| backend("missing Bot activity result"))?
+                .try_get::<bool>("", "busy")
+                .map_err(backend)?;
+            if busy {
+                return Err(BotRepositoryError::AgentProfileBusy);
+            }
+            write_agent_profile(&transaction, value).await?;
         }
         write_avatar(&transaction, value).await?;
         write_prompts(&transaction, value).await?;

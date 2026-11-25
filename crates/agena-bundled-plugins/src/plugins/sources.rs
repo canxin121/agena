@@ -18,7 +18,7 @@ fn static_entry(config: serde_json::Value) -> ConfiguredPlugin {
 }
 
 pub fn bundled_plugin_entries() -> BTreeMap<String, ConfiguredPlugin> {
-    BTreeMap::from([
+    let mut entries = BTreeMap::from([
         (
             crate::tool::inline_ui_plugin_id().to_string(),
             static_entry(serde_json::Value::Null),
@@ -53,6 +53,10 @@ pub fn bundled_plugin_entries() -> BTreeMap<String, ConfiguredPlugin> {
         ),
         (
             crate::tool::code_plugin_id().to_string(),
+            static_entry(serde_json::Value::Null),
+        ),
+        (
+            crate::tool::code_mode_plugin_id().to_string(),
             static_entry(serde_json::Value::Null),
         ),
         (
@@ -120,6 +124,10 @@ pub fn bundled_plugin_entries() -> BTreeMap<String, ConfiguredPlugin> {
             static_entry(serde_json::Value::Null),
         ),
         (
+            crate::plugins::provided::desktop::DESKTOP_PLUGIN_ID.into(),
+            static_entry(serde_json::Value::Null),
+        ),
+        (
             crate::tool::memory_plugin_id().to_string(),
             static_entry(serde_json::Value::Null),
         ),
@@ -127,7 +135,14 @@ pub fn bundled_plugin_entries() -> BTreeMap<String, ConfiguredPlugin> {
             crate::tool::mcp_plugin_id().to_string(),
             static_entry(serde_json::Value::Null),
         ),
-    ])
+    ]);
+    for platform in crate::tool::CHAT_PLATFORM_PLUGINS {
+        entries.insert(
+            platform.plugin_id().into(),
+            static_entry(serde_json::Value::Null),
+        );
+    }
+    entries
 }
 
 fn localized_static_plugin<P: Plugin>(
@@ -145,6 +160,7 @@ pub fn static_plugin_registrations(
     mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
     notification_source: Option<crate::tool::NotificationSource>,
     browser: crate::tool::BrowserSessionPool,
+    desktop: crate::tool::DesktopWindowPool,
 ) -> Vec<StaticPluginRegistration> {
     let mut registrations = vec![
         localized_static_plugin(
@@ -182,6 +198,10 @@ pub fn static_plugin_registrations(
         localized_static_plugin(
             plugin_key(crate::tool::code_plugin_id()),
             crate::tool::new_code_plugin(),
+        ),
+        localized_static_plugin(
+            plugin_key(crate::tool::code_mode_plugin_id()),
+            crate::tool::new_code_mode_plugin(),
         ),
         localized_static_plugin(
             plugin_key(crate::tool::fs_plugin_id()),
@@ -248,10 +268,24 @@ pub fn static_plugin_registrations(
             browser.plugin(),
         ),
         localized_static_plugin(
+            plugin_key(crate::plugins::provided::desktop::DESKTOP_PLUGIN_ID),
+            desktop.plugin(),
+        ),
+        localized_static_plugin(
             plugin_key(crate::tool::memory_plugin_id()),
             crate::tool::new_memory_plugin(),
         ),
     ];
+    registrations.extend(
+        crate::tool::CHAT_PLATFORM_PLUGINS
+            .into_iter()
+            .map(|platform| {
+                localized_static_plugin(
+                    plugin_key(platform.plugin_id()),
+                    crate::tool::ChatChannel::new(platform),
+                )
+            }),
+    );
     if let Some(manager) = mcp_manager {
         registrations.push(localized_static_plugin(
             plugin_key(crate::tool::mcp_plugin_id()),

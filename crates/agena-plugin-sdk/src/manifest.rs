@@ -222,7 +222,7 @@ where
 }
 
 /// The tag vocabulary a tool declares for discovery, search, UI badges,
-/// profile filtering, and workflow hints.
+/// permissions, and workflow hints.
 ///
 /// Tags are the tool's single self-description surface. There is no parallel
 /// set of behavior flags: everything the host reads about *what a tool is* —
@@ -238,15 +238,13 @@ pub enum ToolTag {
     Mutate,
     /// Execute or run something (shell commands, code execution).
     Execute,
-    /// Runs arbitrary shell commands. Selects the shell executor, routes the
-    /// tool through the shell command-class rules, and makes the tool
-    /// ineligible for the read-only builtin profile.
+    /// Runs arbitrary shell commands. Selects the shell executor and routes
+    /// the tool through the shell command-class rules.
     Shell,
-    /// Agent coordination tool; excluded from no-agent model
-    /// profiles and granted a long invoke budget.
+    /// Agent coordination tool with a long invoke budget.
     Agent,
-    /// Declared read-only: the tool only reads. Used for the read-only builtin
-    /// profile, the `tools.rules."*".read-only` class default, and discovery.
+    /// Declared read-only: the tool only reads. Used for the
+    /// `tools.rules."*".read-only` class default and discovery.
     ReadOnly,
     /// Operates on files/paths in the workspace.
     Filesystem,
@@ -257,8 +255,8 @@ pub enum ToolTag {
     /// Discovers or lists things (search, list, index, help).
     Discovery,
     /// Declared interactive: the tool opens a live session with a process or a
-    /// human. Used for builtin profiles, discovery, the invoke timeout budget,
-    /// and planning eligibility.
+    /// human. Used for discovery, the invoke timeout budget, and planning
+    /// eligibility.
     Interactive,
     /// Supports planning / plan-locked workflows.
     Planning,
@@ -415,8 +413,8 @@ pub struct ToolDefinition {
     ///
     /// This is the tool's single self-description surface: the host reads
     /// `shell`, `agent`, `read_only`, `interactive`, and `mutate` here to select
-    /// an executor, decide whether the tool may run concurrently, filter the
-    /// builtin profiles, and pick the shell command-class rules. A tool that
+    /// an executor, decide whether the tool may run concurrently, and pick
+    /// the shell command-class rules. A tool that
     /// performs its own I/O is responsible for asking the host
     /// (`HostClient::require_path_permission` and friends) before it touches
     /// anything.

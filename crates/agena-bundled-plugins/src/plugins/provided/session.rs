@@ -13,6 +13,7 @@ use crate::plugins::provided::workflow::{
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::host_api::{
     HostClient, HostContextStatusRequest, HostContextStatusResponse, HostProcessResources,
+    HostSessionReadRequest, HostSessionSearchRequest,
 };
 use agena_plugin_host::sdk::{
     InitContext, InitOutcome, Result as SdkResult, ToolInvokeContext, ToolInvokeOutput,
@@ -162,11 +163,11 @@ fn git_facts(
     display_name = "Sessions",
     icon = crate::plugin_metadata::icon(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/plugin-icons/session.svg"))),
     authors = ["canxin121"],
-    help = "Inspect the current session, environment, model and token state, and apply supported session controls. Operations remain bound to the active runtime session.",
+    help = "Inspect the current session, environment, model and token state, apply supported session controls, and search or read conversation text in the active session's scope.",
     tags(agena_plugin_host::sdk::ToolTag::Query, agena_plugin_host::sdk::ToolTag::Custom("sessions".to_owned())),
-    summary = "Inspect and manage the current runtime session and its environment, model, and token state.",
+    summary = "Inspect and manage the current session and find conversation text.",
     translations(
-        locale("zh-CN", summary = "查看并管理当前运行会话及其环境、模型和令牌状态。", help = "检查当前会话、环境、模型和令牌状态，并执行受支持的会话管理操作。操作绑定到当前运行时会话。"),
+        locale("zh-CN", summary = "查看与管理当前会话，并查找历史对话正文。", help = "检查当前会话、环境、模型和令牌状态，执行会话管理操作，并在当前会话的访问范围内搜索和读取对话正文。"),
         locale("zh-TW", summary = "檢視並管理目前執行階段的工作階段、環境、模型與 Token 狀態。"),
         locale("ja-JP", summary = "現在の実行セッションと、その環境・モデル・トークンの状態を確認および管理します。"),
         locale("ko-KR", summary = "현재 런타임 세션과 환경, 모델, 토큰 상태를 확인하고 관리합니다."),
@@ -275,6 +276,42 @@ impl SessionPlugin {
     )]
     async fn get(&self) -> SdkResult<ToolInvokeOutput> {
         self.inner.invoke_get_session().await
+    }
+
+    #[tool(
+        tags(query, discovery, read_only),
+        summary = "Search user and assistant text in saved conversations.",
+        help = "Searches the current session or eligible sessions in the same project. Returns snippets and entry IDs for session.read. An empty page can have a next_cursor when more history remains to be scanned.",
+        translations(locale(
+            "zh-CN",
+            summary = "搜索已保存会话的用户和助手正文。",
+            help = "搜索当前会话或同项目内有权访问的会话。结果包含摘要和 session.read 可用的条目 ID。空结果仍可能附带 next_cursor，可继续搜索。"
+        ))
+    )]
+    async fn search(&self, input: &HostSessionSearchRequest) -> SdkResult<serde_json::Value> {
+        self.host
+            .get()
+            .ok_or_else(|| PluginError::internal("session plugin invoked before init"))?
+            .search_session_transcript(input.clone())
+            .await
+    }
+
+    #[tool(
+        tags(query, read_only),
+        summary = "Read conversation text around a retained entry or page earlier and later.",
+        help = "Use the session_id and entry_id from session.search. Use the returned before_entry_id or after_entry_id with matching direction to continue. Set byte_offset to continue reading a long entry or locate a search hit within it.",
+        translations(locale(
+            "zh-CN",
+            summary = "定位并读取会话正文，支持向前或向后翻页。",
+            help = "使用 session.search 返回的会话 ID 和条目 ID。按 before_entry_id 或 after_entry_id 翻页，也可指定 byte_offset 继续读取长条目或定位命中位置。"
+        ))
+    )]
+    async fn read(&self, input: &HostSessionReadRequest) -> SdkResult<serde_json::Value> {
+        self.host
+            .get()
+            .ok_or_else(|| PluginError::internal("session plugin invoked before init"))?
+            .read_session_transcript(input.clone())
+            .await
     }
 
     #[tool(

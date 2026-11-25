@@ -133,10 +133,30 @@ impl WorkflowPlugin {
         }
         Ok(Some(ToolBeforePatch {
             abort_reason: Some(
-                "the active plan is still in planning; use plan.edit, plan.phase, or clear the plan before using mutating tools"
+                "the active plan is still in planning. Use a read-only agent profile for research, or use plan.review to request approval before implementation"
                     .to_string(),
             ),
             ..ToolBeforePatch::default()
+        }))
+    }
+
+    pub(crate) async fn subagent_start_hook(
+        &self,
+        input: agena_plugin_host::SubagentStartInput,
+    ) -> SdkResult<Option<agena_plugin_host::SubagentStartPatch>> {
+        if input.profile_read_only {
+            return Ok(None);
+        }
+        let planning = self
+            .load_active_plan()
+            .await?
+            .as_ref()
+            .is_some_and(Self::plan_lock_active);
+        Ok(planning.then(|| agena_plugin_host::SubagentStartPatch {
+            deny_reason: Some(format!(
+                "the active plan is still in planning. Profile `{}` cannot be used here. Choose a read-only agent profile, such as `explore` or `planner`.",
+                input.profile.as_deref().unwrap_or("default"),
+            )),
         }))
     }
 

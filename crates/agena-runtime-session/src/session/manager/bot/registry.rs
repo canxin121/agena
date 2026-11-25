@@ -4,11 +4,15 @@
 //! remote conversations. Legacy local roots keep their ownership and history.
 //! The kernel owns the atomic local mapping; this module shares its lookup and
 //! admission rules across HTTP, HostClient and the native clients.
+use super::super::session_prompt::BotPromptLayer;
 use super::*;
+use crate::session::model::SessionExecutionContext;
 use agena_assistant::bot::*;
 use agena_domain::SessionOwner;
 use agena_plugin_host::sdk::host_api::BotProfileRequest;
-use agena_prompt_layers::{FragmentId, PromptLayer, PromptScope};
+use agena_prompt_layers::{
+    BOT_INSTRUCTIONS_ID, FragmentId, PromptLayer, PromptScope, ResolvedFragment,
+};
 use agena_storage::kernel::SessionConfiguration;
 use agena_storage::{BotRecord, BotRepositoryError};
 use caseless::Caseless;
@@ -65,6 +69,9 @@ fn repository_error(error: BotRepositoryError) -> AppError {
         BotRepositoryError::Conflict => {
             conflict("stale Bot revision; reload the profile before editing")
         }
+        BotRepositoryError::AgentProfileBusy => conflict(
+            "finish running and queued Bot conversations before changing its agent profile",
+        ),
         BotRepositoryError::NotFound => {
             AppError::BotNotFound("Bot was not found; select an existing Bot or create one".into())
         }
@@ -82,6 +89,7 @@ fn profile(record: BotRecord) -> BotProfile {
     BotProfile {
         id: record.id,
         name: record.name,
+        agent_profile: record.agent_profile,
         persona: BotPersona {
             instructions: record.instructions,
             prompts: (!record.prompt_ids.is_empty()).then_some(BotPromptSelection {
@@ -111,6 +119,7 @@ fn record(profile: &BotProfile) -> BotRecord {
         name: profile.name.clone(),
         name_folded: folded_name(&profile.name),
         instructions: profile.persona.instructions.clone(),
+        agent_profile: profile.agent_profile.clone(),
         prompt_ids: prompts.ids,
         publish_prompts: prompts.publish_to_channels,
         avatar: profile.avatar.clone(),
@@ -153,6 +162,34 @@ impl SessionManager {
         self.kernel_runtime.bots.as_ref()
     }
 
+    pub(in crate::session::manager) async fn inherited_bot_profile(
+        &self,
+        configuration: &SessionConfiguration,
+    ) -> Result<Option<String>, AppError> {
+        let Some(owner) = configuration.owner.as_ref().filter(|_| {
+            configuration.profile.is_none() && !configuration.relation_kind.is_subagent()
+        }) else {
+            return Ok(None);
+        };
+        self.bots()
+            .agent_profile(owner.bot)
+            .await
+            .map_err(repository_error)
+    }
+
+    fn validate_bot_agent_profile(&self, profile: &str) -> Result<Option<String>, AppError> {
+        let name = profile.trim();
+        if name.is_empty() {
+            return Ok(None);
+        }
+        self.global_state
+            .load()
+            .config
+            .validate_session_profile(Some(name), agena_domain::SessionRelationKind::Root)
+            .map_err(AppError::Config)?;
+        Ok(Some(name.to_owned()))
+    }
+
     fn validate_bot_prompt_selection(
         &self,
         selection: Option<&BotPromptSelection>,
@@ -166,6 +203,9 @@ impl SessionManager {
             .library(PromptScope::Global)
             .map_err(|error| invalid(&error.to_string()))?;
         for id in prompt_layer(&selection.ids)?.order {
+            if id.as_str() == BOT_INSTRUCTIONS_ID || crate::identity::is_builtin_prompt(&id) {
+                continue;
+            }
             if !library.contains_key(&id) && !prompts.global.inline.iter().any(|part| part.id == id)
             {
                 return Err(invalid(&format!(
@@ -178,17 +218,47 @@ impl SessionManager {
 
     pub(in crate::session::manager) async fn bot_prompt_layer(
         &self,
-        owner: Option<&SessionOwner>,
-        relation: agena_domain::SessionRelationKind,
-    ) -> Result<Option<PromptLayer>, AppError> {
-        let Some(owner) = owner.filter(|_| !relation.is_subagent()) else {
+        context: &SessionExecutionContext,
+    ) -> Result<Option<BotPromptLayer>, AppError> {
+        let Some(owner) = context
+            .owner
+            .as_ref()
+            .filter(|_| !context.relation_kind.is_subagent())
+        else {
             return Ok(None);
         };
         let record = self.bots().get(owner.bot).await.map_err(repository_error)?;
-        if record.prompt_ids.is_empty() || (!owner.surface.is_local() && !record.publish_prompts) {
-            return Ok(None);
-        }
-        prompt_layer(&record.prompt_ids).map(Some)
+        let mut layer = if owner.surface.is_local() || record.publish_prompts {
+            prompt_layer(&record.prompt_ids)?
+        } else {
+            PromptLayer::default()
+        };
+        let instructions = if !record.archived
+            && !record.instructions.trim().is_empty()
+            && context.conversation.is_none()
+            && (!owner.surface.is_local()
+                || (context.scope_session_id.is_some()
+                    && self.default_bot_conversation(owner.bot).await? == context.scope_session_id))
+        {
+            let id = FragmentId::parse(BOT_INSTRUCTIONS_ID)
+                .expect("Bot instruction fragment ID is valid");
+            if !layer.order.contains(&id) {
+                layer.order.push(id.clone());
+            }
+            Some(ResolvedFragment::new(
+                id,
+                "Bot instructions",
+                PromptScope::Bot,
+                record.instructions,
+            ))
+        } else {
+            layer.order.retain(|id| id.as_str() != BOT_INSTRUCTIONS_ID);
+            None
+        };
+        Ok((!layer.order.is_empty()).then_some(BotPromptLayer {
+            layer,
+            instructions,
+        }))
     }
 
     /// Short instance-wide gate for Bot creation and first-open.
@@ -420,6 +490,7 @@ impl SessionManager {
             let update = BotUpdate {
                 request_key: format!("chat:{source}:{message}:profile"),
                 expected_revision,
+                agent_profile: None,
                 name: name.unwrap_or(profile.name),
                 persona: BotPersona {
                     instructions: instructions.unwrap_or(profile.persona.instructions),
@@ -464,6 +535,12 @@ impl SessionManager {
             id: Uuid::new_v4(),
             name,
             persona,
+            agent_profile: create
+                .agent_profile
+                .as_deref()
+                .map(|name| self.validate_bot_agent_profile(name))
+                .transpose()?
+                .flatten(),
             avatar,
             revision: 1,
             archived: false,
@@ -507,6 +584,10 @@ impl SessionManager {
         }
         let name = validate_name(&update.name, &update.persona)?;
         self.validate_bot_prompt_selection(update.persona.prompts.as_ref())?;
+        let agent_profile = match update.agent_profile.as_deref() {
+            Some(name) => self.validate_bot_agent_profile(name)?,
+            None => current.agent_profile.clone(),
+        };
         let mut persona = update.persona.clone();
         if persona.prompts.is_none() {
             persona.prompts = current.persona.prompts.clone();
@@ -519,6 +600,7 @@ impl SessionManager {
         let next = BotProfile {
             name,
             persona,
+            agent_profile,
             avatar,
             revision: update.expected_revision + 1,
             updated_at_ms: chrono::Utc::now().timestamp_millis(),
@@ -667,6 +749,7 @@ impl SessionManager {
             id: Uuid::new_v4(),
             name,
             persona: BotPersona::default(),
+            agent_profile: None,
             avatar: None,
             revision: 1,
             archived: false,

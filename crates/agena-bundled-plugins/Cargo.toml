@@ -30,24 +30,28 @@ agena-storage = { workspace = true }
 agena-tool = { workspace = true }
 agena-web = { workspace = true }
 agena-agent-browser = { workspace = true }
+aes = "0.8.4"
 async-trait = { workspace = true }
 base64 = { workspace = true }
+cbc = "0.1.2"
 chrono = { workspace = true }
 futures-util = { workspace = true }
 hex = { workspace = true }
-ignore = { workspace = true }
+hmac = "0.13.0"
 image = { workspace = true }
 ipnet = { workspace = true }
 jsonschema = { workspace = true }
 moka = { workspace = true }
-notify = { workspace = true }
 regex = { workspace = true }
+viperjs = { workspace = true }
 which = { workspace = true }
 reqwest = { workspace = true, features = ["rustls", "multipart", "stream"] }
+rmcp = { workspace = true, features = ["client", "transport-async-rw"] }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+subtle = "2.6.1"
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
 tokio-tungstenite = { workspace = true }

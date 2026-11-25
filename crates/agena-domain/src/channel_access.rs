@@ -165,6 +165,7 @@ fn is_channel_management_tool(canonical: &str) -> bool {
                     | "companion"
                     | "config"
                     | "cron"
+                    | "desktop"
                     | "marketplace"
                     | "mcp"
                     | "memory"
@@ -977,7 +978,7 @@ mod mcp_grant_tests {
             "agena.mcp.connections.create",
             "agena.mcp.connections.update",
             "agena.mcp.connections.list",
-            "agena.mcp.servers.reconnect",
+            "agena.mcp.connections.reconnect",
         ] {
             assert!(
                 ChannelGrant {

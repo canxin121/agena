@@ -10,6 +10,7 @@ fn bot(name: &str, avatar: Option<&str>) -> BotRecord {
         name: name.into(),
         name_folded: name.to_lowercase(),
         instructions: String::new(),
+        agent_profile: None,
         prompt_ids: Vec::new(),
         publish_prompts: false,
         avatar: avatar.map(str::to_owned),

@@ -42,6 +42,7 @@ use agena_plugin_host::sdk::host_api::{
     SessionOpResponse, ToolDescriptor, current_host_callback_context,
 };
 
+use agena_plugin_host::sdk::host_api::{HostSessionReadRequest, HostSessionSearchRequest};
 use agena_plugin_host::{
     EventEnvelope, EventFilter as PluginEventFilter, PluginError, ToolInvokeOutput,
 };
@@ -81,6 +82,13 @@ fn bot_plugin_error(error: crate::AppError) -> PluginError {
         | crate::AppError::BotLocalHistory { .. }
         | crate::AppError::Conflict { .. } => PluginError::invalid_params_error(&error),
         _ => plugin_error_from_app(error),
+    }
+}
+
+fn transcript_plugin_error(error: crate::AppError) -> PluginError {
+    match error {
+        crate::AppError::Config(message) => PluginError::invalid_params(message),
+        other => plugin_error_from_app(other),
     }
 }
 
@@ -275,6 +283,21 @@ impl RuntimeHostClient {
     fn callback_context(&self) -> Result<HostCallbackContext, PluginError> {
         current_host_callback_context()
             .ok_or_else(|| host_unavailable("host callback context is not available"))
+    }
+
+    fn transcript_callback_session(&self, tool: &str) -> Result<i64, PluginError> {
+        let context = self.callback_context()?;
+        if context.plugin_id.as_deref() != Some("agena.session")
+            || context.tool_name.as_deref() != Some(tool)
+            || context.call_id.is_none()
+        {
+            return Err(host_unavailable(
+                "transcript access requires an active bundled session tool",
+            ));
+        }
+        context
+            .session_id
+            .ok_or_else(|| host_unavailable("transcript access requires a session"))
     }
 
     fn callback_session_and_call(&self) -> Result<(i64, i64), PluginError> {
@@ -528,6 +551,26 @@ impl HostClient for RuntimeHostClient {
             .map_err(|e| PluginError::invalid_params_error(&e))
     }
 
+    async fn require_mcp_global_config_read(&self) -> Result<(), PluginError> {
+        if self.callback_plugin_key()?.to_string() != agena_bundled_plugins::tool::mcp_plugin_id() {
+            return Err(PluginError::from_kind(
+                agena_plugin_host::sdk::PluginErrorKind::PolicyDenied,
+                "This configuration read belongs to the native MCP management plugin.",
+            ));
+        }
+        let path = self
+            .config
+            .pointer("/meta/config_path")
+            .and_then(serde_json::Value::as_str)
+            .map(PathBuf::from)
+            .ok_or_else(|| host_unavailable("Global configuration path is unavailable"))?;
+        let (session, call) = self.callback_scope()?;
+        self.session_manager()?
+            .require_host_instance_config_read(session, call, path)
+            .await
+            .map_err(plugin_error_from_app)
+    }
+
     // ---------------- permission queries ----------------
 
     /// Answer one path-access question from the effective policy.
@@ -719,6 +762,20 @@ impl HostClient for RuntimeHostClient {
 
         let caller = self.callback_context()?;
         let plugin_id = resolution.plugin_full_name();
+        let code_mode_id = agena_bundled_plugins::tool::code_mode_plugin_id();
+        if plugin_id == code_mode_id
+            || (caller.plugin_id.as_deref() == Some(code_mode_id)
+                && !code_mode_can_invoke(&resolution))
+        {
+            return Err(PluginError::from_kind_with_public_detail(
+                agena_plugin_sdk::PluginErrorKind::CapabilityUnavailable,
+                format!(
+                    "Code Mode cannot delegate to {}",
+                    resolution.canonical_name()
+                ),
+                "This tool needs its own invocation. Call it directly.",
+            ));
+        }
         if caller
             .plugin_id
             .as_ref()
@@ -908,9 +965,14 @@ impl HostClient for RuntimeHostClient {
         let (executor, _) = self.callback_scoped_tool_executor().await?;
         let tools = executor.detailed_execution_tools_async().await;
         let names = crate::tool::execution_tool_names(&tools);
+        let code_mode = current_host_callback_context()
+            .and_then(|context| context.plugin_id)
+            .as_deref()
+            == Some(agena_bundled_plugins::tool::code_mode_plugin_id());
         Ok(tools
             .into_iter()
             .zip(names)
+            .filter(|(tool, _)| !code_mode || code_mode_can_invoke(tool))
             .map(|(tool, name)| {
                 let mut descriptor = render_tool_descriptor(tool.into_registered());
                 descriptor.name = name;
@@ -986,6 +1048,26 @@ impl HostClient for RuntimeHostClient {
         Ok(HostGetSessionResponse {
             session: session_resource_from_session(&session),
         })
+    }
+
+    async fn search_session_transcript(
+        &self,
+        req: HostSessionSearchRequest,
+    ) -> Result<serde_json::Value, PluginError> {
+        self.session_manager()?
+            .search_session_transcript(self.transcript_callback_session("search")?, req)
+            .await
+            .map_err(transcript_plugin_error)
+    }
+
+    async fn read_session_transcript(
+        &self,
+        req: HostSessionReadRequest,
+    ) -> Result<serde_json::Value, PluginError> {
+        self.session_manager()?
+            .read_session_transcript(self.transcript_callback_session("read")?, req)
+            .await
+            .map_err(transcript_plugin_error)
     }
 
     async fn rename_session(

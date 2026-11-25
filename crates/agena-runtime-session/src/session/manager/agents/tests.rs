@@ -160,6 +160,7 @@ impl Fixture {
                     parent_session_id: Some(parent),
                     relation_kind: agena_domain::SessionRelationKind::Subagent,
                     agent: Some(SessionAgentConfiguration {
+                        assignment: Default::default(),
                         origin_message_id: None,
                         name: "worker".into(),
                         status: AgentStatus::Completed,
@@ -633,7 +634,9 @@ async fn a_direct_turn_queued_after_delegation_waits_for_exactly_one_previous_se
             name: "worker".into(),
             prompt: "Delegated first task".into(),
             profile: None,
-            commands: Vec::new(),
+            isolation: None,
+            worktree_base: None,
+            verification_commands: Vec::new(),
             selection: agena_domain::ModelSelectionConfig {
                 provider: Some("agent-lifecycle-test".into()),
                 model: Some("probe".into()),
@@ -693,7 +696,9 @@ async fn denied_subagent_launch_settles_failed_without_running_a_model() {
             name: "worker".into(),
             prompt: "This work must not execute".into(),
             profile: None,
-            commands: Vec::new(),
+            isolation: None,
+            worktree_base: None,
+            verification_commands: Vec::new(),
             selection: agena_domain::ModelSelectionConfig {
                 provider: Some("agent-lifecycle-test".into()),
                 model: Some("probe".into()),
@@ -782,11 +787,7 @@ async fn delegated_profile_keeps_the_parent_permission_ceiling() {
                 name: "profile_worker".into(),
                 prompt: "Inspect the project".into(),
                 profile: Some("builder".into()),
-                commands: vec![],
-                selection: None,
-                timeout_ms: None,
-                max_tokens: None,
-                max_cost_microusd: None,
+                ..Default::default()
             },
         )
         .await
@@ -901,11 +902,7 @@ async fn delegated_profile_freezes_parent_permissions_under_a_wider_ceiling() {
                 name: "profile_worker".into(),
                 prompt: "Inspect the project".into(),
                 profile: Some("review".into()),
-                commands: vec![],
-                selection: None,
-                timeout_ms: None,
-                max_tokens: None,
-                max_cost_microusd: None,
+                ..Default::default()
             },
         )
         .await
@@ -1007,11 +1004,7 @@ fn role_spawn(name: &str, profile: Option<&str>) -> AgentSpawnRequest {
         name: name.into(),
         prompt: "Inspect the role behavior and report evidence".into(),
         profile: profile.map(ToOwned::to_owned),
-        commands: Vec::new(),
-        selection: None,
-        timeout_ms: None,
-        max_tokens: None,
-        max_cost_microusd: None,
+        ..Default::default()
     }
 }
 
@@ -1059,6 +1052,77 @@ fn subagent_profile_selection_uses_defaults_and_rejects_primary_roles() {
     assert!(error.contains("Available subagent profiles"));
     assert!(error.contains("explore"));
     assert!(!error.contains("hidden_probe"));
+}
+
+#[tokio::test]
+async fn legacy_children_can_resume_with_their_other_capability_denials_preserved() {
+    let mut fixture = Fixture::new(Default::default()).await;
+    *fixture.reply.lock().unwrap() = Some(agena_provider::CompletionUsage::default());
+    fixture
+        .manager
+        .kernel()
+        .sessions
+        .update_selection(
+            RequestId::new(),
+            fixture.child,
+            SelectionChange::Model(Some(fixture.options.model.clone())),
+        )
+        .await
+        .unwrap();
+    let mut legacy: std::collections::BTreeSet<_> = ["spawn", "followup", "cancel"]
+        .into_iter()
+        .flat_map(agent_tool_names)
+        .collect();
+    legacy.insert("agena.shell.exec".into());
+    fixture
+        .manager
+        .kernel()
+        .sessions
+        .configure(
+            RequestId::new(),
+            fixture.child,
+            SessionConfigurationChange {
+                capability_denied_tool_names: Some(legacy.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let context = fixture
+        .manager
+        .execution_context_value(fixture.child)
+        .await
+        .unwrap();
+    assert_eq!(
+        context.capability_denied_tool_names,
+        ["agena.shell.exec".into()].into()
+    );
+
+    let handle = fixture
+        .manager
+        .followup_agent(
+            fixture.parent.get(),
+            None,
+            agena_plugin_host::sdk::host_api::AgentMessageRequest {
+                target: "worker".into(),
+                message: "Resume an existing agent".into(),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(handle.agent_id, fixture.child.get());
+    fixture.wait_provider().await;
+    let saved = fixture
+        .manager
+        .kernel()
+        .reader
+        .configuration(fixture.child)
+        .await
+        .unwrap();
+    assert_eq!(saved.capability_denied_tool_names, legacy);
+    fixture.gate.add_permits(1);
+    fixture.idle().await;
+    fixture.close().await;
 }
 
 #[tokio::test]
@@ -1443,6 +1507,54 @@ async fn saved_roles_survive_mode_changes_and_clear_to_relation_defaults() {
         .set_session_profile(fixture.child.get(), Some("reviewer".into()))
         .await
         .unwrap();
+    fixture.close().await;
+}
+
+#[tokio::test]
+async fn reviewer_prompt_routes_to_the_recipient_for_its_session() {
+    let fixture = Fixture::new(Default::default()).await;
+    let model = ModelRef::new("agent-lifecycle-test", "probe");
+    for (session, expected, other) in [
+        (
+            fixture.parent,
+            "# User-facing session",
+            "# Delegated session",
+        ),
+        (
+            fixture.child,
+            "# Delegated session",
+            "# User-facing session",
+        ),
+    ] {
+        fixture
+            .manager
+            .set_session_profile(session.get(), Some("reviewer".into()))
+            .await
+            .unwrap();
+        let preview = fixture
+            .manager
+            .prompt_preview(session, &model)
+            .await
+            .unwrap();
+        let relationship = preview
+            .fragments
+            .iter()
+            .find(|part| part.id.as_str() == "agena.runtime.session-relation")
+            .expect("session relationship");
+        assert_eq!(
+            relationship.scope,
+            agena_prompt_layers::PromptScope::Runtime
+        );
+        assert!(relationship.text.starts_with(expected));
+        assert_eq!(preview.text.matches(expected).count(), 1);
+        assert!(!preview.text.contains(other));
+        assert!(
+            preview
+                .fragments
+                .iter()
+                .any(|part| part.id.as_str() == "agena-profile-reviewer")
+        );
+    }
     fixture.close().await;
 }
 

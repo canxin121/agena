@@ -38,7 +38,7 @@ pub fn count_args(key: &'static str, count: usize) -> FluentArgs {
 ///
 /// These are the fixed English headlines the canonical activity presenter
 /// composes for rows that carry no stored title of their own. Content-bearing
-/// titles (a resource name, a command name, a notice's own title) have no key
+/// titles (a resource name, a skill name, a notice's own title) have no key
 /// and keep their own text.
 pub fn activity_title_key(canonical: &str) -> Option<&'static str> {
     match canonical {
@@ -54,7 +54,7 @@ pub fn activity_title_key(canonical: &str) -> Option<&'static str> {
         "User input requested" => Some("activity-title-user-input"),
         "Pasted text" => Some("activity-title-pasted-text"),
         "Attachment" => Some("message-input-activity-attachment"),
-        "Command" => Some("message-input-activity-skill"),
+        "Skill" => Some("message-input-activity-skill"),
         "System notification" => Some("activity-title-system-notification"),
         _ => None,
     }

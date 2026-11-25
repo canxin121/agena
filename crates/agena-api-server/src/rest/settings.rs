@@ -2,6 +2,22 @@ use super::{AppState, AxumQuery, IntoResponse, Json, Path, ServerError, State, j
 use agena_api::management::{SettingsCommand, SettingsQuery, settings::*};
 
 #[derive(serde::Deserialize)]
+pub struct BuiltinPromptsQuery {
+    #[serde(default)]
+    include_reusable: bool,
+}
+
+pub async fn get_builtin_prompts(
+    AxumQuery(query): AxumQuery<BuiltinPromptsQuery>,
+) -> impl IntoResponse {
+    let mut catalog = agena_runtime_contracts::identity::builtin_prompt_catalog();
+    if query.include_reusable {
+        catalog.extend(agena_runtime_contracts::identity::reusable_prompt_catalog());
+    }
+    Json(catalog)
+}
+
+#[derive(serde::Deserialize)]
 pub struct SettingsSourcesQuery {
     paths: String,
 }

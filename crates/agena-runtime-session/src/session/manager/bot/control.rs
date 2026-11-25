@@ -347,13 +347,12 @@ impl SessionManager {
             .configuration(session_id(target)?)
             .await
             .map_err(control_error)?;
-        let effective = state
-            .config
-            .session_selection(
-                &configuration,
-                &metadata.selection.clone().unwrap_or_default(),
-            )
-            .map_err(AppError::Config)?;
+        let profile = self.conversation_profile(&configuration, &state).await?;
+        let effective = state.config.selection_with_profile(
+            &configuration,
+            &metadata.selection.clone().unwrap_or_default(),
+            &profile.definition,
+        );
         // Read only registered configured/cached routes; the public catalog
         // and default strings are never used to invent selectable models.
         let mut inventory = state.providers.selection_model_inventory();

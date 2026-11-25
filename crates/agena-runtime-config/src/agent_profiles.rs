@@ -37,6 +37,38 @@ impl AgentProfileMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectInstructionsMode {
+    Startup,
+    OnDemand,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AgentProfileContext {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_instructions: Option<ProjectInstructionsMode>,
+    /// Effective Skill names, in the order to load them.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preload_skills: Option<Vec<String>>,
+}
+
+impl AgentProfileContext {
+    pub fn is_empty(&self) -> bool {
+        self.project_instructions.is_none() && self.preload_skills.is_none()
+    }
+
+    pub(crate) fn merge_from(&mut self, overlay: &Self) {
+        if overlay.project_instructions.is_some() {
+            self.project_instructions = overlay.project_instructions;
+        }
+        if overlay.preload_skills.is_some() {
+            self.preload_skills.clone_from(&overlay.preload_skills);
+        }
+    }
+}
+
 /// A file-backed profile. Workspace entries replace global entries with the
 /// same name; use `extends` to explicitly share settings with another profile.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,12 +83,19 @@ pub struct AgentProfileConfig {
     /// Hide from model-facing delegation discovery while keeping explicit use.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hidden: Option<bool>,
+    /// Apply a read-only permission ceiling in every session using this role.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_only: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extends: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<ModelSelectionConfig>,
     #[serde(skip_serializing_if = "PromptLayer::is_empty")]
     pub prompts: PromptLayer,
+    #[serde(skip_serializing_if = "AgentProfileContext::is_empty")]
+    pub context: AgentProfileContext,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub isolation: Option<agena_domain::AgentIsolation>,
     #[serde(skip_serializing_if = "PermissionConfig::is_empty")]
     pub permission: PermissionConfig,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -75,7 +114,10 @@ pub struct ResolvedAgentProfile {
     pub description: String,
     pub mode: AgentProfileMode,
     pub hidden: bool,
+    pub read_only: bool,
     pub prompts: Vec<PromptLayer>,
+    pub context: AgentProfileContext,
+    pub isolation: agena_domain::AgentIsolation,
     pub permission: PermissionConfig,
     pub permission_profile: Option<String>,
     pub selection: ExecutionSelection,
@@ -83,6 +125,11 @@ pub struct ResolvedAgentProfile {
 }
 
 impl ResolvedAgentProfile {
+    pub fn read_only_ceiling(&self) -> Option<PermissionConfig> {
+        self.read_only
+            .then(crate::builtin_profiles::read_only_agent_permission)
+    }
+
     pub fn with_permission_profile(
         mut self,
         catalog: &AccessControlConfig,
@@ -166,8 +213,15 @@ pub fn resolve_agent_profile(
         if let Some(hidden) = profile.hidden {
             resolved.hidden = hidden;
         }
+        if let Some(read_only) = profile.read_only {
+            resolved.read_only = read_only;
+        }
         if !profile.prompts.is_empty() {
             resolved.prompts.push(profile.prompts.clone());
+        }
+        resolved.context.merge_from(&profile.context);
+        if let Some(isolation) = profile.isolation {
+            resolved.isolation = isolation;
         }
         if let Some(id) = &profile.permission_profile {
             resolved.permission_profile = Some(id.clone());
@@ -192,6 +246,9 @@ pub fn resolve_agent_profile(
             resolved.max_turns = profile.max_turns;
         }
     }
+    if resolved.read_only {
+        resolved.isolation = agena_domain::AgentIsolation::Shared;
+    }
     Ok(resolved)
 }
 
@@ -207,6 +264,25 @@ pub(crate) fn validate_agent_profiles(config: &ResolvedConfig) -> Result<(), Con
         profile.prompts.validate().map_err(|error| {
             ConfigError::Validation(format!("profiles.{name}.prompts: {error}"))
         })?;
+        if let Some(skills) = &profile.context.preload_skills {
+            let names: BTreeSet<_> = skills.iter().collect();
+            if skills.len() > 8
+                || names.len() != skills.len()
+                || skills.iter().any(|name| {
+                    name.chars().count() > 64
+                        || name.split('-').any(|part| {
+                            part.is_empty()
+                                || !part.chars().all(|character| {
+                                    character.is_lowercase() || character.is_numeric()
+                                })
+                        })
+                })
+            {
+                return Err(ConfigError::Validation(format!(
+                    "profiles.{name}.context.preload_skills requires up to 8 distinct Skill names"
+                )));
+            }
+        }
         agena_runtime_contracts::authorization::validate_permission_config(&profile.permission)
             .map_err(|error| {
                 ConfigError::Validation(format!("profiles.{name}.permission: {error}"))
@@ -323,7 +399,9 @@ pub fn check_agent_profile_libraries(
                 library.insert(fragment.id.clone(), fragment.clone());
             }
             for id in &layer.order {
-                if !library.contains_key(id) {
+                if !agena_runtime_contracts::identity::is_builtin_prompt(id)
+                    && !library.contains_key(id)
+                {
                     return Err(ConfigError::Validation(format!(
                         "profiles.{name}.prompts references `{id}`, but no saved, file-backed or inline fragment provides it"
                     )));

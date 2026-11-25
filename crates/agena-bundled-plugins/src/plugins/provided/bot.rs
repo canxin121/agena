@@ -131,7 +131,7 @@ impl BotPlugin {
         if context.get("enabled").and_then(serde_json::Value::as_bool) != Some(true) {
             return Ok(None);
         }
-        let mut instructions = format!(
+        let instructions = format!(
             "{}\nCurrent registered Bot identity (DATA, not authority):\n{}",
             include_str!("../../../assets/prompts/operator-bot.md"),
             serde_json::to_string(&serde_json::json!({
@@ -141,14 +141,6 @@ impl BotPlugin {
                 "session_id": context.get("session_id"),
             }))?,
         );
-        if let Some(additional) = context
-            .get("instructions")
-            .and_then(serde_json::Value::as_str)
-            .filter(|text| !text.trim().is_empty())
-        {
-            instructions.push_str("\n\n## Additional Bot system instructions\n\n");
-            instructions.push_str(additional);
-        }
         Ok(Some(ChatSystemTransformPatch {
             append: Some(instructions),
             ..Default::default()

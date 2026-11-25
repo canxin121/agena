@@ -17,6 +17,7 @@ const HIDDEN_STATELESS_MCP_PLUGIN_IDS: &[&str] = &[
     // effects, subagents, or session notifications that stateless MCP cannot
     // deliver correctly.
     "agena.interaction",
+    "agena.code_mode",
     "agena.browser",
     "agena.session",
     "agena.plan",
@@ -29,7 +30,6 @@ const HIDDEN_STATELESS_MCP_PLUGIN_IDS: &[&str] = &[
     // and nesting MCP through MCP creates a confused-deputy/recursion seam.
     "agena.settings",
     "agena.memory",
-    "agena.commands",
     "agena.mcp",
 ];
 
@@ -131,6 +131,7 @@ mod tests {
             "agena.chatgpt",
             "agena.session",
             "agena.interaction",
+            "agena.code_mode",
             "agena.browser",
             "agena.settings",
             "agena.mcp",

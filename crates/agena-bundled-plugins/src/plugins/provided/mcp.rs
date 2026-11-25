@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+mod apps;
 mod connections;
 mod scoped;
 use connections::*;
@@ -25,7 +26,8 @@ use sha2::{Digest, Sha256};
 use crate::part::{AttachmentItem, AttachmentKind, AttachmentSource};
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::{
-    InitOutcome, Result as SdkResult, ToolDefinitionInput, ToolDefinitionPatch, ToolInvokeOutput,
+    InitOutcome, Result as SdkResult, ToolDefinitionInput, ToolDefinitionPatch, ToolInvokeContext,
+    ToolInvokeOutput,
 };
 use base64::Engine as _;
 
@@ -321,10 +323,19 @@ impl McpPlugin {
     )]
     async fn invoke_resources_read(
         &self,
+        context: &ToolInvokeContext<'_>,
         input: &ReadResourceInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        if let Some(binding) = self.app_binding(context, &input.server).await? {
+            return self.read_app_resource(input, &binding).await;
+        }
+        if agena_mcp_client::apps::is_app_uri(&input.uri) {
+            return Err(PluginError::invalid_params(
+                "An MCP App document is available in its transcript card.",
+            ));
+        }
         let manager = self.authorize_server(&input.server).await?;
-        let result = manager
+        let mut result = manager
             .read_resource(&input.server, input.uri.as_str())
             .await
             .map_err(|err| {
@@ -333,6 +344,9 @@ impl McpPlugin {
                     input.server, input.uri
                 ))
             })?;
+        result
+            .contents
+            .retain(|item| !apps::is_app_content(&item.uri, item.mime_type.as_deref()));
         read_resource_output(&input.server, input.uri.as_str(), result)
     }
 
@@ -421,9 +435,29 @@ impl McpPlugin {
             locale("pt-BR", summary = "Chame uma ferramenta MCP descoberta.")
         )
     )]
-    async fn invoke_tools_call(&self, input: &CallToolInput) -> SdkResult<ToolInvokeOutput> {
+    async fn invoke_tools_call(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &CallToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        use agena_mcp_client::apps::{
+            APP_METADATA_KEY, APP_RESULT_METADATA_KEY, McpAppBinding, app_resource_uri,
+            tool_visible_to,
+        };
+
+        if let Some(binding) = self.app_binding(context, &input.server).await? {
+            return self.call_app_tool(input, &binding).await;
+        }
         let manager = self.authorize_server(&input.server).await?;
-        let result = manager
+        let descriptor = self
+            .model_tool_descriptor(&manager, &input.server, &input.name)
+            .await?;
+        if !tool_visible_to(&descriptor, "model") {
+            return Err(PluginError::invalid_params(
+                "The MCP tool is unavailable to the model.",
+            ));
+        }
+        let mut result = manager
             .call_tool(
                 &input.server,
                 input.name.as_str(),
@@ -436,7 +470,39 @@ impl McpPlugin {
                     input.server, input.name
                 ))
             })?;
-        invoke_tool_output(&input.server, input.name.as_str(), result)
+        let result_meta = result.meta.take();
+        result.content.retain(|block| !apps::is_app_block(block));
+        let mut output = invoke_tool_output(&input.server, input.name.as_str(), result)?;
+        if context.session_id > 0 && context.call_id > 0 && app_resource_uri(&descriptor).is_some()
+        {
+            let spec = self
+                .manager
+                .server_spec(&input.server)
+                .await
+                .map_err(|error| PluginError::internal_error(&error))?;
+            if let Some(binding) = McpAppBinding::issue(
+                context.session_id,
+                context.call_id,
+                &input.server,
+                &descriptor,
+                &spec,
+            )
+            .await
+            {
+                output.metadata.insert(
+                    APP_METADATA_KEY.into(),
+                    serde_json::to_string(&binding)
+                        .map_err(|error| PluginError::internal_error(&error))?,
+                );
+                if let Some(meta) = result_meta {
+                    let meta = meta.to_string();
+                    if meta.len() <= 64 * 1024 {
+                        output.metadata.insert(APP_RESULT_METADATA_KEY.into(), meta);
+                    }
+                }
+            }
+        }
+        Ok(output)
     }
 
     #[tool(
@@ -499,6 +565,9 @@ impl McpPlugin {
             .await?
             .into_iter()
             .filter_map(|(server, tool)| {
+                if !agena_mcp_client::apps::tool_visible_to(&tool, "model") {
+                    return None;
+                }
                 if channel.as_ref().is_some_and(|authority| {
                     !authority.allows_mcp_tool(
                         &server,
@@ -580,207 +649,6 @@ impl McpPlugin {
                 ("result_count".to_string(), results.len().to_string()),
                 ("fingerprint".to_string(), fingerprint),
             ]),
-            Vec::new(),
-        ))
-    }
-
-    #[tool(
-        tags(query, mcp, discovery, read_only),
-        name = "servers.status",
-        summary = "Inspect configured MCP connection health and discovered tool counts.",
-        translations(
-            locale("zh-CN", summary = "查看已配置 MCP 连接的健康状态和已发现工具数量。"),
-            locale("zh-TW", summary = "檢視已設定 MCP 連線的健康狀態與已探索工具數量。"),
-            locale(
-                "ja-JP",
-                summary = "設定済み MCP 接続の状態と検出済みツール数を確認します。"
-            ),
-            locale(
-                "ko-KR",
-                summary = "구성된 MCP 연결 상태와 검색된 도구 수를 확인합니다."
-            ),
-            locale(
-                "fr-FR",
-                summary = "Vérifier l’état des connexions MCP et le nombre d’outils détectés."
-            ),
-            locale(
-                "de-DE",
-                summary = "Status der MCP-Verbindungen und Anzahl gefundener Werkzeuge prüfen."
-            ),
-            locale(
-                "es-ES",
-                summary = "Consulta el estado de las conexiones MCP y el número de herramientas detectadas."
-            ),
-            locale(
-                "hi-IN",
-                summary = "कॉन्फ़िगर किए गए MCP कनेक्शन की स्थिति और मिले टूल की संख्या देखें।"
-            ),
-            locale(
-                "ar-SA",
-                summary = "افحص حالة اتصالات MCP المُهيأة وعدد الأدوات المكتشفة."
-            ),
-            locale(
-                "pt-BR",
-                summary = "Verifique a saúde das conexões MCP e a quantidade de ferramentas descobertas."
-            )
-        )
-    )]
-    async fn invoke_servers_status(&self) -> SdkResult<ToolInvokeOutput> {
-        let statuses = self.scoped_statuses().await?;
-        let text = if statuses.is_empty() {
-            "No MCP servers configured.".to_string()
-        } else {
-            statuses
-                .iter()
-                .map(|status| {
-                    format!(
-                        "- {}: {} ({} tools){}{}",
-                        status.name,
-                        if status.connected {
-                            "connected"
-                        } else {
-                            "disconnected"
-                        },
-                        status.tool_count,
-                        status
-                            .last_failure
-                            .as_ref()
-                            .map(|failure| format!(" — {}", failure.user.fallback))
-                            .or_else(|| {
-                                status
-                                    .last_refresh_failure
-                                    .as_ref()
-                                    .map(|failure| format!(" — {}", failure.user.fallback))
-                            })
-                            .unwrap_or_default(),
-                        status_summary_suffix(status)
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
-        Ok(ToolInvokeOutput::from_parts(
-            "MCP server status",
-            format!(
-                "{} of {} connected · {} tools",
-                statuses.iter().filter(|status| status.connected).count(),
-                statuses.len(),
-                statuses
-                    .iter()
-                    .map(|status| status.tool_count)
-                    .sum::<usize>()
-            ),
-            text,
-            Some(
-                serde_json::json!({ "servers": statuses.iter().map(|status| serde_json::json!({
-                "name": status.name,
-                "connected": status.connected,
-                "tool_count": status.tool_count,
-                "network_target": status.network_target,
-                "last_failure": status.last_failure.as_ref().map(agena_failure::UserProblem::from),
-                "tool_generation": status.tool_generation,
-                "resource_generation": status.resource_generation,
-                "prompt_generation": status.prompt_generation,
-                "last_refresh_failure": status.last_refresh_failure.as_ref().map(agena_failure::UserProblem::from),
-                "reconnect_supervisor_running": status.reconnect_supervisor_running,
-                "auth_mode": status.auth_mode.as_str(),
-                "oauth_health": status.oauth_health.as_ref().map(|health| serde_json::json!({
-                    "credential_state": health.credential_state.as_str(),
-                    "expiry_state": health.expiry_state.map(|state| state.as_str()),
-                    "refresh_available": health.refresh_available,
-                    "recommendation": oauth_health_recommendation(health),
-                })),
-                "credential_conflict": status.credential_conflict.map(|conflict| serde_json::json!({
-                    "state": conflict.as_str(),
-                    "recommendation": conflict.recommendation(),
-                })),
-            })).collect::<Vec<_>>() }),
-            ),
-            std::collections::BTreeMap::new(),
-            Vec::new(),
-        ))
-    }
-
-    #[tool(
-        tags(mutate, mcp),
-        name = "servers.reconnect",
-        summary = "Reconnect one configured MCP server and refresh its tool cache.",
-        translations(
-            locale("zh-CN", summary = "重新连接一个已配置的 MCP 服务器并刷新工具缓存。"),
-            locale("zh-TW", summary = "重新連線至一個已設定的 MCP 伺服器並更新工具快取。"),
-            locale(
-                "ja-JP",
-                summary = "設定済み MCP サーバーに再接続し、ツールキャッシュを更新します。"
-            ),
-            locale(
-                "ko-KR",
-                summary = "구성된 MCP 서버 하나에 다시 연결하고 도구 캐시를 새로 고칩니다."
-            ),
-            locale(
-                "fr-FR",
-                summary = "Reconnecter un serveur MCP configuré et actualiser son cache d’outils."
-            ),
-            locale(
-                "de-DE",
-                summary = "Einen konfigurierten MCP-Server erneut verbinden und den Werkzeugcache aktualisieren."
-            ),
-            locale(
-                "es-ES",
-                summary = "Reconecta un servidor MCP configurado y actualiza su caché de herramientas."
-            ),
-            locale(
-                "hi-IN",
-                summary = "कॉन्फ़िगर किए गए MCP सर्वर से फिर जुड़ें और टूल कैश ताज़ा करें।"
-            ),
-            locale(
-                "ar-SA",
-                summary = "أعد الاتصال بخادم MCP مُهيأ وحدّث ذاكرة أدواته المؤقتة."
-            ),
-            locale(
-                "pt-BR",
-                summary = "Reconecte um servidor MCP configurado e atualize o cache de ferramentas."
-            )
-        )
-    )]
-    async fn invoke_servers_reconnect(
-        &self,
-        input: &McpServerNameInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        let manager = self.authorize_server(&input.server).await?;
-        manager
-            .reconnect(input.server.as_str())
-            .await
-            .map_err(|error| {
-                PluginError::internal(format!("mcp:{} reconnect failed: {error}", input.server))
-            })?;
-        let status = manager
-            .statuses()
-            .await
-            .into_iter()
-            .find(|status| status.name == input.server);
-        Ok(ToolInvokeOutput::from_parts(
-            format!("MCP reconnect {}", input.server),
-            status.as_ref().map_or_else(
-                || "Reconnected · status unavailable".to_string(),
-                |status| {
-                    format!(
-                        "{} · {} tools",
-                        if status.connected {
-                            "Connected"
-                        } else {
-                            "Disconnected"
-                        },
-                        status.tool_count
-                    )
-                },
-            ),
-            format!("Reconnected MCP server '{}'.", input.server),
-            Some(serde_json::json!({
-                "server": input.server,
-                "connected": status.as_ref().is_some_and(|status| status.connected),
-                "tool_count": status.as_ref().map_or(0, |status| status.tool_count),
-            })),
-            std::collections::BTreeMap::new(),
             Vec::new(),
         ))
     }
@@ -899,7 +767,7 @@ impl McpPlugin {
     #[tool(
         tags(mcp, mutating),
         name = "connections.reconnect",
-        summary = "Reconnect the effective enabled connection and refresh capabilities."
+        summary = "Reconnect the effective enabled connection and return its live details for the current execution scope. Use the connection ID from connections.list."
     )]
     async fn invoke_connection_reconnect(
         &self,
@@ -1026,7 +894,10 @@ impl McpPlugin {
         let statuses = self.manager.statuses().await;
         let tools = self.manager.all_tools().await;
         let server_count = servers.len();
-        let tool_count = tools.len();
+        let tool_count = tools
+            .iter()
+            .filter(|(_, tool)| agena_mcp_client::apps::tool_visible_to(tool, "model"))
+            .count();
         let mut lines = vec![
             "Use `resources.list` to list resources, `resources.templates.list` to list URI templates, `resources.read` to read a resource URI, `prompts.list` to list prompt templates, `prompts.get` to fetch a prompt template, and `tools.call` with `server`, `name`, and optional `arguments` to call a discovered MCP tool. Pass a returned cursor back to the corresponding list tool to continue pagination.".to_string(),
             format!("Currently configured servers: {server_count}."),
@@ -1076,41 +947,6 @@ impl McpPlugin {
     }
 }
 
-/// Render only redacted operational state. Do not add credential values or
-/// secret-store errors here: this string is visible to the model and terminal UI.
-fn status_summary_suffix(status: &agena_mcp_client::McpServerStatus) -> String {
-    let mut parts = vec![format!("; auth={}", status.auth_mode.as_str())];
-    if let Some(health) = status.oauth_health.as_ref() {
-        parts.push(format!(
-            "; oauth={}{}",
-            health.credential_state.as_str(),
-            health
-                .expiry_state
-                .map(|state| format!("/{}", state.as_str()))
-                .unwrap_or_default()
-        ));
-    }
-    if let Some(conflict) = status.credential_conflict {
-        parts.push(format!("; credential_conflict={}", conflict.as_str()));
-    }
-    parts.concat()
-}
-
-fn oauth_health_recommendation(health: &agena_mcp_client::OAuthCredentialHealth) -> &'static str {
-    use agena_mcp_client::{OAuthCredentialState, OAuthExpiryState};
-
-    match (health.credential_state, health.expiry_state) {
-        (OAuthCredentialState::Missing, _) => "run_mcp_login",
-        (OAuthCredentialState::Unreadable, _) => "clear_or_reauthenticate",
-        (_, Some(OAuthExpiryState::Expired)) => "reconnect_or_reauthenticate",
-        (_, Some(OAuthExpiryState::Expiring)) if health.refresh_available == Some(false) => {
-            "reauthenticate_before_expiry"
-        }
-        (_, Some(OAuthExpiryState::Unknown)) => "reconnect_to_verify",
-        _ => "none",
-    }
-}
-
 /// Normalize advisory MCP tool annotations into a stable, non-authoritative
 /// risk projection. These hints are never used to relax the bridge's static
 /// `mutating` permission tag: third-party metadata may only inform UI,
@@ -1157,13 +993,6 @@ struct McpServerInput {
     server: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cursor: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ToolInput, PartialEq, Eq)]
-#[input(trim("server"), non_empty("server"))]
-#[serde(deny_unknown_fields)]
-struct McpServerNameInput {
-    server: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ToolInput, PartialEq, Eq)]
@@ -1281,7 +1110,6 @@ fn invoke_tool_output(
         "tool": tool,
         "content": result.content,
         "structured_content": result.structured_content,
-        "mcp_meta": result.meta,
     });
 
     Ok(ToolInvokeOutput::from_parts(

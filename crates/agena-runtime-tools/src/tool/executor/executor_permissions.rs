@@ -115,17 +115,6 @@ impl ToolExecutor {
                 })));
             }
         }
-        if !self.builtin_tool_set().is_tool_enabled(&definition) {
-            return Err(ToolError::CapabilityUnavailable(Box::new(
-                agena_domain::CapabilityUnavailableResult {
-                    capability: "model_tool_profile".to_string(),
-                    tool_name: Some(tool_name.clone()),
-                    reason: format!("tool '{tool_name}' is disabled for the current model profile"),
-                    source: agena_domain::CapabilitySourceKind::ModelProfile,
-                    retryable: false,
-                },
-            )));
-        }
         let command = shell_command_from_invocation(invocation);
         let names = self.tool_permission_names(&definition);
         Ok((
@@ -861,9 +850,6 @@ mod session_role_tests {
         ("agena.plan", "review"),
         ("agena.plan", "phase"),
         ("agena.plan", "clear"),
-        ("agena.agent", "spawn"),
-        ("agena.agent", "followup"),
-        ("agena.agent", "cancel"),
     ];
 
     fn tool(plugin: &str, name: &str, tags: Vec<ToolTag>) -> RegisteredTool {
@@ -924,6 +910,9 @@ mod session_role_tests {
         tools.extend([
             tool("agena.plan", "get", vec![ToolTag::ReadOnly]),
             tool("agena.plan", "edit", vec![ToolTag::Mutate]),
+            tool("agena.agent", "spawn", vec![ToolTag::Agent]),
+            tool("agena.agent", "followup", vec![ToolTag::Agent]),
+            tool("agena.agent", "cancel", vec![ToolTag::Agent]),
             tool("agena.agent", "message", vec![ToolTag::Agent]),
             tool("agena.agent", "wait", vec![ToolTag::Agent]),
             tool(
@@ -1155,6 +1144,9 @@ mod session_role_tests {
             [
                 "agena.plan.get",
                 "agena.plan.edit",
+                "agena.agent.spawn",
+                "agena.agent.followup",
+                "agena.agent.cancel",
                 "agena.agent.message",
                 "agena.agent.wait",
                 "agena.shell.open",
@@ -1307,10 +1299,6 @@ mod session_role_tests {
 
         fn channel_authority(&self) -> Option<&agena_domain::ChannelAuthority> {
             self.channel_authority.as_ref()
-        }
-
-        fn selected_model(&self) -> Option<&str> {
-            None
         }
     }
 

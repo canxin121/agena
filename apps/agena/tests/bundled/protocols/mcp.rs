@@ -1,3 +1,4 @@
+mod apps;
 mod connections;
 
 use std::sync::{Arc, Mutex};
@@ -13,7 +14,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 
-use super::super::{allow_permissions, fixture};
+use super::super::{allow_permissions, fixture_without_memory, native_fixture_address};
 
 const TOKEN: &str = "local-mcp-fixture-token";
 const SERVER: &str = "loopback-peer";
@@ -164,11 +165,13 @@ async fn rpc(
 pub(super) async fn http_peer_handshake_discovery_and_calls() -> TestResult {
     let peer = Arc::new(Peer::default());
     let setup_peer = peer.clone();
-    fixture()
+    fixture_without_memory()
+        .env("AGENA_SANDBOX", "disabled")
         .expect_plugin("agena.mcp")
         .before_start(move |case| async move {
             let server = case
-                .serve_http(
+                .serve_http_on(
+                    native_fixture_address()?,
                     Router::new()
                         .route(
                             "/mcp",
@@ -200,6 +203,27 @@ pub(super) async fn http_peer_handshake_discovery_and_calls() -> TestResult {
         .run(move |case| async move {
             let user = case.user().new_session().await?;
             allow_permissions(&user).await?;
+            let listed = user.call_tool("mcp.connections.list", json!({})).await?;
+            listed.assert_succeeded()?;
+            let id = listed.data()?["connections"]
+                .as_array()
+                .and_then(|items| items.iter().find(|item| item["name"] == SERVER))
+                .and_then(|item| item["id"].as_str())
+                .context("HTTP connection ID")?;
+            let initialization_count = || {
+                peer.requests.lock().unwrap().iter()
+                    .filter(|request| request.body["method"] == "initialize")
+                    .count()
+            };
+            let before = initialization_count();
+            let result = user.call_tool("mcp.connections.reconnect", json!({"id": id})).await?;
+            result.assert_succeeded()?;
+            assert_eq!(result.data()?["id"], id);
+            assert_eq!(result.data()?["state"], "connected");
+            assert_eq!(result.data()?["tool_count"], 2);
+            ensure!(!result.output.to_string().contains(TOKEN));
+            assert_eq!(initialization_count(), before + 1);
+
             let search = user
                 .call_tool("mcp.tools.search", json!({"query": "fixture", "limit": 10}))
                 .await?;

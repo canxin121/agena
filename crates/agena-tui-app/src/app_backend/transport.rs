@@ -988,7 +988,7 @@ impl TuiBackend {
         Ok(sources)
     }
 
-    async fn refresh_after_config_edit(&self, path: &str) -> Result<()> {
+    pub(crate) async fn refresh_after_config_edit(&self, path: &str) -> Result<()> {
         self.refresh_config_sources().await?;
         let path = path.trim();
         let root = path.split('.').next().unwrap_or_default();

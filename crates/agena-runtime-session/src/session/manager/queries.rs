@@ -196,20 +196,16 @@ impl SessionManager {
                 self.state.load_full()
             }
         });
-        let profile = state
+        let profile = self.conversation_profile(configuration, &state).await?;
+        let selection = state.config.selection_with_profile(
+            configuration,
+            &metadata.selection.clone().unwrap_or_default(),
+            &profile.definition,
+        );
+        let permission = state
             .config
-            .resolve_session_profile(
-                configuration.profile.as_deref(),
-                configuration.relation_kind,
-            )
-            .map_err(AppError::Config)?;
-        let selection = state
-            .config
-            .session_selection(
-                configuration,
-                &metadata.selection.clone().unwrap_or_default(),
-            )
-            .map_err(AppError::Config)?;
+            .permission_with_profile(configuration, &profile.definition);
+        let permission_ceiling_layers = profile.permission_ceilings(configuration)?;
         let mut context = ToolContext {
             global: metadata.workspace_id.is_none(),
             owner: configuration.owner.clone(),
@@ -217,28 +213,32 @@ impl SessionManager {
             relation_kind: configuration.relation_kind,
             conversation: configuration.conversation.clone(),
             prompts: configuration.prompts.clone(),
-            profile: Some(
-                state
-                    .config
-                    .effective_profile_name(
-                        configuration.profile.as_deref(),
-                        configuration.relation_kind,
-                    )
-                    .to_owned(),
-            ),
+            profile: Some(profile.name),
             profile_is_default: configuration.profile.is_none(),
-            profile_prompts: profile.prompts,
-            max_turns: profile.max_turns.or(state.config.max_turns),
+            profile_from_bot: profile.from_bot,
+            profile_prompts: profile.definition.prompts,
+            project_instructions_on_demand: profile.definition.context.project_instructions
+                == Some(agena_runtime_config::ProjectInstructionsMode::OnDemand),
+            preload_skills: profile
+                .definition
+                .context
+                .preload_skills
+                .unwrap_or_default(),
+            agent_assignment: configuration
+                .agent
+                .as_ref()
+                .map(|agent| agent.assignment.clone())
+                .unwrap_or_default(),
+            max_turns: profile.definition.max_turns.or(state.config.max_turns),
             selection,
-            effective_permission: state
-                .config
-                .effective_permission(configuration)
-                .map_err(AppError::Config)?,
+            effective_permission: permission,
             permission_ceiling: configuration.permission_ceiling.clone(),
-            permission_ceiling_layers: configuration.permission_ceiling_layers.clone(),
+            permission_ceiling_layers,
             channel_authority: configuration.channel_authority.clone(),
             channel_verifier: self.channel_verifier.get().cloned(),
-            capability_denied_tool_names: configuration.capability_denied_tool_names.clone(),
+            capability_denied_tool_names: super::agents::delegation_capability_denials(
+                configuration,
+            ),
             effective_workspace_root: self
                 .execution_workspace_root(
                     metadata.workspace_id,
@@ -291,63 +291,43 @@ impl SessionManager {
         self.execution_context_with_state(id, &state).await
     }
 
-    /// Resolve the additional-instruction layers for a preview, using the same
-    /// inputs assembly would use for this session and model.
+    /// Resolve the ordered system prompt before per-run plugin hooks.
     pub async fn prompt_preview(
         &self,
         id: SessionId,
         model: &agena_domain::ModelRef,
     ) -> Result<agena_prompt_layers::PromptResolution, AppError> {
         let state = self.state_for_session(id).await?;
-        let configuration = self
-            .kernel()
-            .reader
-            .configuration(id)
-            .await
-            .map_err(kernel_error)?;
-        let global = self
-            .kernel()
-            .reader
-            .metadata(id)
-            .await
-            .map_err(kernel_error)?
-            .workspace_id
-            .is_none();
+        let context = self.execution_context_with_state(id, &state).await?;
+        let executor = state.executor.for_session_context_async(&context).await;
         let tools_enabled = state
             .providers
             .agena_tool_mode(model)
             .map(|mode| !mode.is_disabled())
             .unwrap_or(true);
-        let workspace = (!global)
-            .then_some(configuration.effective_workspace_root.as_ref())
-            .flatten()
+        let workspace = context
+            .effective_workspace_root
+            .as_ref()
             .map(|path| path.to_string_lossy().into_owned())
             .unwrap_or_default();
-        let profile = state
-            .config
-            .resolve_session_profile(
-                configuration.profile.as_deref(),
-                configuration.relation_kind,
-            )
-            .map_err(AppError::Config)?;
-        let profile_prompts = profile.prompts;
-        let bot = self
-            .bot_prompt_layer(configuration.owner.as_ref(), configuration.relation_kind)
-            .await?;
+        let bot = self.bot_prompt_layer(&context).await?;
         let inputs = super::session_prompt::PromptInputs {
-            profile: &profile_prompts,
-            session: &configuration.prompts,
+            profile: &context.profile_prompts,
+            project_instructions_on_demand: context.project_instructions_on_demand,
+            preload_skills: &context.preload_skills,
+            assignment: &context.agent_assignment,
+            profile_from_bot: context.profile_from_bot,
+            session: &context.prompts,
             bot: bot.as_ref(),
             request_layer: None,
             model,
             session_id: id.get(),
             workspace,
-            global,
+            global: context.global,
             tools_enabled,
         };
-        super::session_prompt::prompt_preview(&state, &inputs).map_err(|error| {
-            AppError::Internal(format!("prompt layers could not be resolved: {error}"))
-        })
+        self.session_system_prompt(&executor, &state, &inputs, context.profile.as_deref())
+            .await
     }
     /// A shared transcript has one claimed execution. Queued input and a
     /// later speaker must never supply identity to the current tool callback.
@@ -737,6 +717,18 @@ impl SessionManager {
             self.channel_authority_for_execution(id, execution, baseline, delegated)
                 .await?
         };
+        if let Some(worktree) = configuration
+            .agent
+            .as_ref()
+            .and_then(|agent| agent.assignment.worktree.as_ref())
+            && (metadata.workspace_id.is_none()
+                || authority.is_some()
+                || configuration.effective_workspace_root.as_ref() != Some(&worktree.path))
+        {
+            return Err(AppError::Config(
+                "the agent's worktree requires its original project session".into(),
+            ));
+        }
         if let Some(authority) = &authority {
             self.channel_verifier
                 .get()
@@ -747,6 +739,16 @@ impl SessionManager {
                 .await
                 .map_err(AppError::Config)?;
         }
+        let profile = self.conversation_profile(&configuration, state).await?;
+        let permission = state
+            .config
+            .permission_with_profile(&configuration, &profile.definition);
+        let permission_ceiling_layers = profile.permission_ceilings(&configuration)?;
+        let selection = state.config.selection_with_profile(
+            &configuration,
+            &metadata.selection.clone().unwrap_or_default(),
+            &profile.definition,
+        );
         let mut context = ToolContext {
             global: metadata.workspace_id.is_none(),
             owner: configuration.owner.clone(),
@@ -754,49 +756,32 @@ impl SessionManager {
             relation_kind: configuration.relation_kind,
             conversation: configuration.conversation.clone(),
             prompts: configuration.prompts.clone(),
-            profile: Some(
-                state
-                    .config
-                    .effective_profile_name(
-                        configuration.profile.as_deref(),
-                        configuration.relation_kind,
-                    )
-                    .to_owned(),
-            ),
+            profile: Some(profile.name),
             profile_is_default: configuration.profile.is_none(),
-            profile_prompts: state
-                .config
-                .resolve_session_profile(
-                    configuration.profile.as_deref(),
-                    configuration.relation_kind,
-                )
-                .map_err(AppError::Config)?
-                .prompts,
-            max_turns: state
-                .config
-                .resolve_session_profile(
-                    configuration.profile.as_deref(),
-                    configuration.relation_kind,
-                )
-                .map_err(AppError::Config)?
-                .max_turns
-                .or(state.config.max_turns),
-            selection: state
-                .config
-                .session_selection(
-                    &configuration,
-                    &metadata.selection.clone().unwrap_or_default(),
-                )
-                .map_err(AppError::Config)?,
-            effective_permission: state
-                .config
-                .effective_permission(&configuration)
-                .map_err(AppError::Config)?,
+            profile_from_bot: profile.from_bot,
+            profile_prompts: profile.definition.prompts,
+            project_instructions_on_demand: profile.definition.context.project_instructions
+                == Some(agena_runtime_config::ProjectInstructionsMode::OnDemand),
+            preload_skills: profile
+                .definition
+                .context
+                .preload_skills
+                .unwrap_or_default(),
+            agent_assignment: configuration
+                .agent
+                .as_ref()
+                .map(|agent| agent.assignment.clone())
+                .unwrap_or_default(),
+            max_turns: profile.definition.max_turns.or(state.config.max_turns),
+            selection,
+            effective_permission: permission,
             permission_ceiling: configuration.permission_ceiling.clone(),
-            permission_ceiling_layers: configuration.permission_ceiling_layers.clone(),
+            permission_ceiling_layers,
             channel_authority: authority,
             channel_verifier: self.channel_verifier.get().cloned(),
-            capability_denied_tool_names: configuration.capability_denied_tool_names.clone(),
+            capability_denied_tool_names: super::agents::delegation_capability_denials(
+                &configuration,
+            ),
             effective_workspace_root: self
                 .execution_workspace_root(
                     metadata.workspace_id,
@@ -1317,7 +1302,7 @@ impl SessionQueryService for SessionManager {
             .await
             .map_err(query_error)
     }
-    fn execution_context(
+    async fn execution_context(
         &self,
         snapshot: &SessionControlSnapshot,
     ) -> Result<SessionExecutionContext, SessionQueryError> {
@@ -1328,25 +1313,19 @@ impl SessionQueryService for SessionManager {
         };
         let configuration = &snapshot.configuration;
         let selected_selection = snapshot.metadata.selection.clone().unwrap_or_default();
-        let inherited_selection = state
-            .config
-            .session_selection(configuration, &agena_domain::ExecutionSelection::default())
-            .map_err(|error| query_error(AppError::Config(error)))?;
-        let selection = state
-            .config
-            .session_selection(configuration, &selected_selection)
-            .map_err(|error| query_error(AppError::Config(error)))?;
+        let profile = self
+            .conversation_profile(configuration, &state)
+            .await
+            .map_err(query_error)?;
+        let inherited_selection = state.config.selection_with_profile(
+            configuration,
+            &agena_domain::ExecutionSelection::default(),
+            &profile.definition,
+        );
+        let selection = inherited_selection.overlay_with_cascade(&selected_selection);
         let agent = configuration.agent.as_ref();
         Ok(SessionExecutionContext {
-            profile: Some(
-                state
-                    .config
-                    .effective_profile_name(
-                        configuration.profile.as_deref(),
-                        configuration.relation_kind,
-                    )
-                    .to_owned(),
-            ),
+            profile: Some(profile.name.clone()),
             profile_is_default: configuration.profile.is_none(),
             conversation: configuration.conversation.clone(),
             prompts: configuration.prompts.clone(),
@@ -1354,16 +1333,16 @@ impl SessionQueryService for SessionManager {
             agent_id: crate::identity::AGENA_AGENT_ID.into(),
             selected_permission: configuration.permission.clone(),
             permission_profile: configuration.permission_profile.clone(),
-            inherited_permission: state
-                .config
-                .inherited_permission(configuration)
-                .map_err(|error| query_error(AppError::Config(error)))?,
+            inherited_permission: profile
+                .definition
+                .effective_permission(&state.config.permission),
             effective_permission: state
                 .config
-                .effective_permission(configuration)
-                .map_err(|error| query_error(AppError::Config(error)))?,
+                .permission_with_profile(configuration, &profile.definition),
             permission_ceiling: configuration.permission_ceiling.clone(),
-            permission_ceiling_layers: configuration.permission_ceiling_layers.clone(),
+            permission_ceiling_layers: profile
+                .permission_ceilings(configuration)
+                .map_err(query_error)?,
             selected_selection,
             inherited_selection,
             model_provider_id: selection.provider,

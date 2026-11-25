@@ -2,9 +2,9 @@
   "schema_version": 3,
   "snapshot_date": "2026-07-27",
   "counts": {
-    "plugins": 27,
-    "tools": 220,
-    "bundled_commands": 14
+    "plugins": 33,
+    "tools": 217,
+    "bundled_commands": 50
   },
   "plugins": [
     {
@@ -47,8 +47,8 @@
           "tags": [
             "agent"
           ],
-          "definition_identity": "d2f55229c236d1a6f0932f7f651aa1c7808f27cde255ad9de54fb9c7901355a3",
-          "input_schema_sha256": "9d1e990449b29be4ea62d10651f1173e82bd28640139c0e7969df030e7626623",
+          "definition_identity": "fa1bf50af610585ab14d09d7e350521e713511ad9c29e35a36c89e8058e1c407",
+          "input_schema_sha256": "9a54f07926e71db10f472be8eceacf66850c1d18c184e34c2ebfc39cbbac7d43",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
         },
         {
@@ -937,84 +937,33 @@
       "conditional": null
     },
     {
-      "id": "agena.commands",
+      "id": "agena.code_mode",
       "version": "0.1.0",
       "tools": [
         {
-          "canonical_name": "agena.commands.get",
+          "canonical_name": "agena.code_mode.execute",
           "conditional": null,
           "tags": [
-            "query",
-            "discovery",
-            "read_only"
+            "execute"
           ],
-          "definition_identity": "98d2908966a5c946b9d2fe8acd78643849c2f7103a4dfb3f1c34fe3240b6a0d5",
-          "input_schema_sha256": "cd527b68b8fdd824e4d926400461165ba7bfe8c677f168fbb5643a6bd51e3b7f",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
-        },
-        {
-          "canonical_name": "agena.commands.install",
-          "conditional": null,
-          "tags": [
-            "mutate",
-            "filesystem"
-          ],
-          "definition_identity": "30f78ec994066154587ac50987f634703bd798849b09e696d6b5e0471115780d",
-          "input_schema_sha256": "578674fa368023f75e6e0c2b2714b116b6cf8a8f2bbbdfdadf8a199fb6d47b18",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
-        },
-        {
-          "canonical_name": "agena.commands.list",
-          "conditional": null,
-          "tags": [
-            "query",
-            "discovery",
-            "read_only"
-          ],
-          "definition_identity": "8021f52e033bb9a835b76c9d24176a655920deeca53be7dac594d694783f12d6",
-          "input_schema_sha256": "cb7f5bc04b8a64968948fc269ca7396cf375594179a1354869813141090daa49",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
-        },
-        {
-          "canonical_name": "agena.commands.read_resource",
-          "conditional": null,
-          "tags": [
-            "query",
-            "filesystem",
-            "read_only"
-          ],
-          "definition_identity": "fa981ba08c58a92935ea4f497b513fcdc58bc15832568f7950433a0849845a7a",
-          "input_schema_sha256": "7d62e3bee925b0ad10c5d98b24a14f2870bfb276a8f80171021f348a17e7b176",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
-        },
-        {
-          "canonical_name": "agena.commands.refresh",
-          "conditional": null,
-          "tags": [
-            "mutate",
-            "discovery",
-            "read_only"
-          ],
-          "definition_identity": "fada8008fc1e9c0a5f762990a18bb9a85eb879186c7f05fd243849de9b11d223",
-          "input_schema_sha256": "136f69fde1fc9c61244e437a06d36c3cb43b53d73be5fda8089e0531af27026a",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
-        },
-        {
-          "canonical_name": "agena.commands.remove",
-          "conditional": null,
-          "tags": [
-            "mutate",
-            "filesystem"
-          ],
-          "definition_identity": "e7a49a6ebff4983413b32436d73b602359ef4577569b7fb34163a8769f91100f",
-          "input_schema_sha256": "a4e6d3182f4894396db1770f7740836ae3434ff6c4af12cb5c1e24a9ad0d24a4",
+          "definition_identity": "138db78b324aca2732b97f250bb128caf783c3c16b1997d1cf8fc3ac5650a3db",
+          "input_schema_sha256": "7a585a75d6cea3e96e1b386abdc0aebcb6243f8317fe874eeb3799edbf15e7b1",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
         }
       ],
       "hooks": [
         "init",
-        "tool.invoke",
-        "tool.definition"
+        "tool.invoke"
+      ],
+      "conditional": null
+    },
+    {
+      "id": "agena.commands",
+      "version": "0.1.0",
+      "tools": [],
+      "hooks": [
+        "init",
+        "shutdown"
       ],
       "conditional": null
     },
@@ -1129,6 +1078,70 @@
       "hooks": [
         "init",
         "tool.invoke"
+      ],
+      "conditional": null
+    },
+    {
+      "id": "agena.desktop",
+      "version": "0.1.0",
+      "tools": [
+        {
+          "canonical_name": "agena.desktop.action",
+          "conditional": null,
+          "tags": [
+            "interactive",
+            "mutate"
+          ],
+          "definition_identity": "83de4123976f408038a181c5659da16a8e02bfd53304d538aeb158e40c6765c2",
+          "input_schema_sha256": "600e4d8dc177c8ee458f38ed585cec290069e51c630d5259d8bed3a46974feba",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+        },
+        {
+          "canonical_name": "agena.desktop.screenshot",
+          "conditional": null,
+          "tags": [
+            "interactive",
+            "read_only"
+          ],
+          "definition_identity": "6979c8ce2f518b272af8bf4e64898d1797016c9cf7dba35ce54a5e6fe6ff0d2c",
+          "input_schema_sha256": "1d6dc012397803a3e1873202c60b0860b7070e520da80f34d66b49c6f3abf8e1",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+        },
+        {
+          "canonical_name": "agena.desktop.windows",
+          "conditional": null,
+          "tags": [
+            "interactive",
+            "read_only"
+          ],
+          "definition_identity": "535c6b2ebd980a677f45b684d25b0d464669f7efc2535ac50f496082bbd842c7",
+          "input_schema_sha256": "c891cf2445087af59e0336855a83add164516ad33268063fa9d09110dd47ace7",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+        }
+      ],
+      "hooks": [
+        "init",
+        "tool.invoke"
+      ],
+      "conditional": null
+    },
+    {
+      "id": "agena.discord",
+      "version": "0.1.0",
+      "tools": [],
+      "hooks": [
+        "init",
+        "shutdown"
+      ],
+      "conditional": null
+    },
+    {
+      "id": "agena.feishu",
+      "version": "0.1.0",
+      "tools": [],
+      "hooks": [
+        "init",
+        "shutdown"
       ],
       "conditional": null
     },
@@ -1919,7 +1932,7 @@
             "mcp",
             "mutate"
           ],
-          "definition_identity": "4a627ff3c8d4aa7b7373214c52847217602fd803b535d69b9f56cc1f43f90bbf",
+          "definition_identity": "3db3b9ced776575786ed259cc952c0a93e68f0a2de0bc4b6c104236dc099a78f",
           "input_schema_sha256": "56a8909ae43cea032ad63d396749461ed45935e03f489cfb4ce7e4c083319477",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
         },
@@ -2017,30 +2030,6 @@
           ],
           "definition_identity": "9a6a2eb0e004d8de625b030f4af9c625be856eec8f066650925ce448e30a80b8",
           "input_schema_sha256": "9514258b23be12ef8841eeeeaa3adf7a5db2f44bf092209f6fb8309166f4f3af",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
-        },
-        {
-          "canonical_name": "agena.mcp.servers.reconnect",
-          "conditional": "runtime:mcp-manager",
-          "tags": [
-            "mutate",
-            "mcp"
-          ],
-          "definition_identity": "1c512d5345a9e71e7c6e1a66a162a6b87d2fdfc227f6c6670346323068598e07",
-          "input_schema_sha256": "f886c957e03d519b4b09294d97ce61ff4f3d6b0a20decf60ff70a0dce694612c",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
-        },
-        {
-          "canonical_name": "agena.mcp.servers.status",
-          "conditional": "runtime:mcp-manager",
-          "tags": [
-            "query",
-            "mcp",
-            "discovery",
-            "read_only"
-          ],
-          "definition_identity": "e84d18a7352857a1cf8918166c7188f5eaed64f4f246cf7f0ddb8ce628790f45",
-          "input_schema_sha256": "c891cf2445087af59e0336855a83add164516ad33268063fa9d09110dd47ace7",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
         },
         {
@@ -2255,8 +2244,8 @@
             "mutate",
             "planning"
           ],
-          "definition_identity": "67194fd5f67cbcb8c734766f17f33a1817c2fe369dbbc6026f5271b37cf99f69",
-          "input_schema_sha256": "990000cb7af91d6c37d44e1d509bd4f362672dd0b744aa4716cbdbf9fd2930b6",
+          "definition_identity": "2c11827ee22572d8ff59d4226b667aa538082f366b1e6cf20c6acee0c6d3a2c8",
+          "input_schema_sha256": "08f78deef973bc567ed919f40a9a1c8480d391b2380168d56dd238c211e639b2",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
         }
       ],
@@ -2266,7 +2255,8 @@
         "tool.invoke",
         "shell.before",
         "agent.stop",
-        "agent.cancel"
+        "agent.cancel",
+        "subagent.start"
       ],
       "conditional": null
     },
@@ -2368,6 +2358,17 @@
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
         },
         {
+          "canonical_name": "agena.session.read",
+          "conditional": null,
+          "tags": [
+            "query",
+            "read_only"
+          ],
+          "definition_identity": "fa0e6c754f824c35fd21c0518cf82f20e60b9e4e32a7970a30c7187ceebca38e",
+          "input_schema_sha256": "68c751034b0bc79fb8e11d26b5046de0a0acb03585daedf88dab1efd1fc6c853",
+          "output_schema_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        },
+        {
           "canonical_name": "agena.session.rename",
           "conditional": null,
           "tags": [
@@ -2376,6 +2377,18 @@
           "definition_identity": "f8861a144a06e0585988adfd21057a6b9c3c08ccfaf14017b4b22d79d63fc86a",
           "input_schema_sha256": "7653247b77cfe47a507fe477ad85538198b2e4c38af3491fab2eca4444f6cfaa",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+        },
+        {
+          "canonical_name": "agena.session.search",
+          "conditional": null,
+          "tags": [
+            "query",
+            "discovery",
+            "read_only"
+          ],
+          "definition_identity": "d2bf5241a589119fcd6b294424f763aafb99baacde7c125f9cea8dd6e387ff97",
+          "input_schema_sha256": "17b2b4ef56d1ab5a90c1c42092c9a08fe415d603b052cf621ecc3f78d0a03422",
+          "output_schema_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
         },
         {
           "canonical_name": "agena.session.tokens",
@@ -2528,19 +2541,6 @@
           ],
           "definition_identity": "613ddeab74fd493a9a2ac086c33372f449344849adeb41ac8d221c0b09affb55",
           "input_schema_sha256": "c891cf2445087af59e0336855a83add164516ad33268063fa9d09110dd47ace7",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
-        },
-        {
-          "canonical_name": "agena.shell.logs",
-          "conditional": null,
-          "tags": [
-            "query",
-            "shell",
-            "background",
-            "read_only"
-          ],
-          "definition_identity": "ff031b6d3b243532a22ce7d519069a38906a47dcd07a137d29597a34786a0c3c",
-          "input_schema_sha256": "ad130a560bafb5d1076b3ffa12ea8acd8f4826cc93492b71fc9677834948440e",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
         },
         {
@@ -2815,6 +2815,16 @@
       "conditional": null
     },
     {
+      "id": "agena.slack",
+      "version": "0.1.0",
+      "tools": [],
+      "hooks": [
+        "init",
+        "shutdown"
+      ],
+      "conditional": null
+    },
+    {
       "id": "agena.telegram",
       "version": "0.1.0",
       "tools": [],
@@ -2905,96 +2915,325 @@
         "tool.invoke.stream"
       ],
       "conditional": null
+    },
+    {
+      "id": "agena.whatsapp",
+      "version": "0.1.0",
+      "tools": [],
+      "hooks": [
+        "init",
+        "shutdown"
+      ],
+      "conditional": null
     }
   ],
   "commands": [
     {
-      "name": "batch",
-      "content_sha256": "f58872984161a4221f63c76461fde99a3c08dc96b152b77a162aacada8ce980b",
+      "name": "add_chat",
+      "content_sha256": "f33f28cfec218bd4167cc1a54144bc9988511459a89551f151c67345c4027bb3",
       "aliases": []
     },
     {
-      "name": "debug",
-      "content_sha256": "1dcfd518c8bac6bd603c3cbf5342d41bbeb6c46535e9d4d4c7be5203bae9a079",
+      "name": "assistant",
+      "content_sha256": "a99c2af519b38ce0eba7054e54a0bfc835127c415bc7956452befefb86b024e6",
+      "aliases": [
+        "companion"
+      ]
+    },
+    {
+      "name": "attach",
+      "content_sha256": "78eee22e404091ae5d599b31f822e1b6985ebbf2ed90d649756ea5b215b80893",
+      "aliases": [
+        "file"
+      ]
+    },
+    {
+      "name": "background",
+      "content_sha256": "cb0b84080db53f1737200e6f78c86fdabf7dc9f425429543cc4431880d888c0c",
       "aliases": []
     },
     {
-      "name": "doctor",
-      "content_sha256": "a86963c6ce5b791e8af1ce693270bfe0ade9d4cefd5bf23a391207a4d7d80f83",
+      "name": "bot",
+      "content_sha256": "75b0322e79a80d2376abf3e0449165b8a39d95f775dd5cba2733d7e5ad7e05ad",
       "aliases": []
     },
     {
-      "name": "imagegen",
-      "content_sha256": "324c4a35a7518d5498ea2e0ef95eee4a23b13238c892f364a8e11b75e3bf1009",
-      "aliases": [
-        "image-generate",
-        "image-edit"
-      ]
-    },
-    {
-      "name": "init",
-      "content_sha256": "429c2681b567891f32216e375c7482fb0729b19bb04eccea08f50de13e543425",
-      "aliases": [
-        "bootstrap"
-      ]
-    },
-    {
-      "name": "plugin_creator",
-      "content_sha256": "a17466b99d1911fdc3f331cb3884fcba6aae7a1a37d3af9f76155e51777148f1",
-      "aliases": [
-        "create-plugin"
-      ]
-    },
-    {
-      "name": "review",
-      "content_sha256": "1cea33862917846caf44fce529f8d82692da641f54757670eb42f6a29ebb5e8e",
+      "name": "bot_inventory",
+      "content_sha256": "9a962460665f1f9528e313cdc7f4d158d430aeddbf37e158ddcd11c981c5e845",
       "aliases": []
     },
     {
-      "name": "run",
-      "content_sha256": "73b4d363539c6f0528763cc3f2ab14b7cc7ac8fb49b2a89179d0d13b5b26e3d0",
-      "aliases": [
-        "start"
-      ]
-    },
-    {
-      "name": "run_skill_generator",
-      "content_sha256": "6243fa2793fdf015d224cf3ddb954bcc80a2b565bff2d6c7a3fac7cbed9e1025",
-      "aliases": [
-        "skill-from-run"
-      ]
-    },
-    {
-      "name": "security_review",
-      "content_sha256": "3e0d63213aa8f27807772e15403eb292dc0581ed7a2dc5fdcb33d85587af4f1c",
-      "aliases": [
-        "security-review"
-      ]
-    },
-    {
-      "name": "simplify",
-      "content_sha256": "1672a6ebde20872680efe0035a0652c5aa58a363ca69068b57555f5f5aff0d12",
+      "name": "btw",
+      "content_sha256": "a293fbb0ce92c9b7bfc90f8ee0dfca5d028e907ed544ac9318d423df0e91cef6",
       "aliases": []
     },
     {
-      "name": "skill_creator",
-      "content_sha256": "cb792528bc96a0d703d0d4154d6d2aceeb3533904c676cb0e530661559d121bd",
+      "name": "check_connection",
+      "content_sha256": "003e47fb06c3573fd89a01b5dff00d7137599ba9467b7b5cc0870127c5eb4b3c",
+      "aliases": []
+    },
+    {
+      "name": "children",
+      "content_sha256": "a4151fe6a20b21c0d71e8e979669e4cc919d5e3ba54ab93a58f68bd5b5b9f2f5",
       "aliases": [
-        "create-skill"
+        "child"
       ]
     },
     {
-      "name": "skill_installer",
-      "content_sha256": "eecd6dd6996146401218f528cd87fbecdd11a2c759fecf5ba0e34e222107addd",
+      "name": "clear",
+      "content_sha256": "497f4c668f4aa2a4e6446bc467b9bd25d85e07c30ee08aaffa154c27c9945e70",
       "aliases": [
-        "install-skill"
+        "reset"
       ]
     },
     {
-      "name": "verify",
-      "content_sha256": "372154305037a47fa6dd7b89c5f750673b47b478f70eb0204c47b55c179249e9",
+      "name": "commands",
+      "content_sha256": "160f0ef3d529cc2d40cebaa171e40f65dcd11ee7863702a8231d903fa4472710",
       "aliases": [
-        "check"
+        "palette"
+      ]
+    },
+    {
+      "name": "commit",
+      "content_sha256": "11e1d3dbdafa98325c00b3a9e46bb5edd35902760b46be7c3fd0c2110fcacab7",
+      "aliases": []
+    },
+    {
+      "name": "compact",
+      "content_sha256": "13243182effbb23585e4d08988a344460e6e5f6f24e03d9ed52aacf49968fca0",
+      "aliases": [
+        "compress",
+        "summarize"
+      ]
+    },
+    {
+      "name": "continue",
+      "content_sha256": "830e8fb42b210500579805d660300fbb8d6f5f9171020984753ac3c9a4b3c0a8",
+      "aliases": [
+        "resume-run"
+      ]
+    },
+    {
+      "name": "copy",
+      "content_sha256": "1fa4f61e82e0292251647e67bc7983c9116082cf1c287acec081837eba914a2a",
+      "aliases": [
+        "yank"
+      ]
+    },
+    {
+      "name": "copy-message",
+      "content_sha256": "77e722e4484b5661f04ce80a825a8ae301a90f32cf9f4bbb81c87f59362bd2be",
+      "aliases": [
+        "copy-last",
+        "copy-assistant"
+      ]
+    },
+    {
+      "name": "copy-visible",
+      "content_sha256": "667b7064f89feca816d56bebb33dd577dac1a9cafe3357b08b3f1f19ede9613f",
+      "aliases": []
+    },
+    {
+      "name": "diagnostics",
+      "content_sha256": "3bdab7f8be077066dabd69b0e23c905497e4f888c40fd3b843f0f783d8f6d13d",
+      "aliases": [
+        "feedback"
+      ]
+    },
+    {
+      "name": "editor",
+      "content_sha256": "a550b743543c1e9d5a226ab6a468d01904f008574a9da09144248057d5240957",
+      "aliases": [
+        "edit"
+      ]
+    },
+    {
+      "name": "export",
+      "content_sha256": "9f4a151d1a28f2ad8f91c6e634496613984831e177faf9a8df4dfcf966e8c010",
+      "aliases": [
+        "save"
+      ]
+    },
+    {
+      "name": "favorite",
+      "content_sha256": "a44e40d25e83a9bd89983a83398d5c1c58d7c44cc989a0d298d2cee38416cb6a",
+      "aliases": [
+        "star"
+      ]
+    },
+    {
+      "name": "fork",
+      "content_sha256": "b8483f2489fc99769aeed62c524ec592d9b3e5f9a02217e58304847aa18a818d",
+      "aliases": [
+        "branch"
+      ]
+    },
+    {
+      "name": "help",
+      "content_sha256": "5268def3e6a307782f47aa1594ef9f6123e351c4d70f704ea58175dd00c83ad4",
+      "aliases": [
+        "?"
+      ]
+    },
+    {
+      "name": "hub",
+      "content_sha256": "8e70a8b6881d870a602417277fce6d02fbfb02f565570c3a9b468a95a3b63ed5",
+      "aliases": []
+    },
+    {
+      "name": "image",
+      "content_sha256": "5d61e3c1573ef7015b713a2e328ce3c34e3f25f03d0eaf6b232ac4ddcbf6a369",
+      "aliases": []
+    },
+    {
+      "name": "inspect_chat",
+      "content_sha256": "826b9dc2a947aa12531d8f110be60ca3f0a36759b961836bb42ec2482efe26d3",
+      "aliases": []
+    },
+    {
+      "name": "integrations",
+      "content_sha256": "c7bf0286a97db16b245e4af1ab8a9b73be0a28459d210bb2898aaa66f7c52826",
+      "aliases": [
+        "connections"
+      ]
+    },
+    {
+      "name": "lineage",
+      "content_sha256": "eec5dc49e1496c5dcdf115f97687bc8e0fabac4e15c69c26f8eddead4fa5df0b",
+      "aliases": [
+        "branch-history",
+        "branches"
+      ]
+    },
+    {
+      "name": "list_ai_bots",
+      "content_sha256": "fed6ca5e4a34b1c9000ee634318d653fba5cecb5d563edd335881d376c151e04",
+      "aliases": []
+    },
+    {
+      "name": "list_bots",
+      "content_sha256": "fb5ade18fa75c3ba67db2281f3e4397402ed77c4b775ebb84e9e236f292e2f3f",
+      "aliases": []
+    },
+    {
+      "name": "model",
+      "content_sha256": "7d902b641a40cd0768050a8ef8d39289a4fe202da830176821545ab80195e0f6",
+      "aliases": []
+    },
+    {
+      "name": "new",
+      "content_sha256": "62bc8b61254aaa3ebbddde97886a063d674082306a11e469277b3dfefd9ebf6f",
+      "aliases": []
+    },
+    {
+      "name": "pager",
+      "content_sha256": "562f7975a087b4c7fdbf5cd2c476bd7eccfb49349d122958dbf1787ef90ff86c",
+      "aliases": [
+        "view",
+        "less"
+      ]
+    },
+    {
+      "name": "parent",
+      "content_sha256": "a22fd722aba94fa459a7c466a9013699ed6fa01b2654e06e21c20f3ad306b691",
+      "aliases": []
+    },
+    {
+      "name": "plan",
+      "content_sha256": "f9e2e52e83079969ef3985af99e188ecfc45a1991f6f87574a0f31d4970e3076",
+      "aliases": [
+        "plan-view",
+        "show-plan"
+      ]
+    },
+    {
+      "name": "pr",
+      "content_sha256": "0d3c4416fc3256ff7e2ac02dcceff05d221435c90496db28a630935b941dad2f",
+      "aliases": []
+    },
+    {
+      "name": "queue",
+      "content_sha256": "235e906fca4efe7fd5659f282f184e6ff72685726870895604674852b8b9843b",
+      "aliases": []
+    },
+    {
+      "name": "remove_bot",
+      "content_sha256": "607dd6c89e063949aa78a178778376adbabc8ca8e1b54c7529a651bfb62aa184",
+      "aliases": []
+    },
+    {
+      "name": "rename",
+      "content_sha256": "d45180c9ac4cad9563860c06d51a4c48db22a27488a7bfd4dcc14d94999705f7",
+      "aliases": [
+        "title"
+      ]
+    },
+    {
+      "name": "rewind",
+      "content_sha256": "a281baf6db7fbe847533b08ca7fe266a0bffd8ec1c50fb737220262088246c11",
+      "aliases": [
+        "backtrack"
+      ]
+    },
+    {
+      "name": "save_bot",
+      "content_sha256": "2d35d9080985c4820603c4c4c3488ac1e510c6ff1eb1d615caf9b4b2b93ae13e",
+      "aliases": []
+    },
+    {
+      "name": "schedules",
+      "content_sha256": "6b7ee6a91211334276a378e575e005f63bf82d2a9090ddc6d75a29ec396b32be",
+      "aliases": []
+    },
+    {
+      "name": "sessions",
+      "content_sha256": "debbe718d519e318345c7aea86bc455d3bcd3ba4105f67bab9b0d33ad8e25854",
+      "aliases": []
+    },
+    {
+      "name": "settings",
+      "content_sha256": "849d4e823d5e89221cb23a3156b5c7d685064889f95fd0de6774d4472cde09be",
+      "aliases": [
+        "config"
+      ]
+    },
+    {
+      "name": "side",
+      "content_sha256": "350fbe995f5bd15d3414cc83da18acd9d90a6b2ff96518a49ec4a321a0630cd0",
+      "aliases": [
+        "aside"
+      ]
+    },
+    {
+      "name": "status",
+      "content_sha256": "bd576141edce218f0cab4657cfb1949fa77c2ae224d18985b19ad8ce780971ca",
+      "aliases": []
+    },
+    {
+      "name": "sync_chats",
+      "content_sha256": "fee97889fbd7edb53d09b78d426b86f36e80bcc90b43c31cd4b8ecb956a07e85",
+      "aliases": []
+    },
+    {
+      "name": "timeline",
+      "content_sha256": "b356ab8c180d2da80560b360a8bf52e491419dacb277ddc4e8c35beeaabeaec6",
+      "aliases": [
+        "events"
+      ]
+    },
+    {
+      "name": "ui",
+      "content_sha256": "46f3023da343eaea35a9e09a25f837ed83ce7feed4201aa88086bf29cd79a4f5",
+      "aliases": [
+        "inline-ui"
+      ]
+    },
+    {
+      "name": "usage",
+      "content_sha256": "3e2afb5c1343e6d194ea2dbc39042cde6a4d83b588334d402f3ad2b4732ac932",
+      "aliases": [
+        "stats",
+        "analytics"
       ]
     }
   ],

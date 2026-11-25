@@ -891,8 +891,8 @@ mod rewind_document_tests {
                 "reference":{"reference_type":"artifact","uri":"agena:media:v1:fixture","sha256":"a".repeat(64)}
             }}},
             {"type":"activity","activity":{"id":ActivityId::new(),"payload":{
-                "activity_type":"command_reference","name":"review","description":"Review changes",
-                "content_hash":"command-revision","source":"agena.skills","skill_id":"skill:review","aliases":["r"]
+                "activity_type":"skill_reference","name":"review","description":"Review changes",
+                "content_hash":"skill-revision","source":"agena.skills","skill_id":"skill:review","aliases":["r"]
             }}},
             {"type":"activity","activity":{"id":ActivityId::new(),"payload":{
                 "activity_type":"text_artifact","label":"snippet","language":"rust","text":"fn main() {}\n"

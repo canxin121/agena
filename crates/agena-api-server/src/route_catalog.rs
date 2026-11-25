@@ -279,6 +279,7 @@
 //! | GET | `/api/v1/sessions/{session_id}/state` | `get_session_state()` |
 //! | GET,DELETE | `/api/v1/sessions/{session_id}/executions/{execution_id}/attempts/{attempt_generation}` | `get_execution_attempt()`, `cancel_execution_attempt()` |
 //! | GET | `/api/v1/sessions/{session_id}/prompts/preview` | `get_session_prompt_preview()` |
+//! | GET | `/api/v1/prompts/builtins` | `get_builtin_prompts()` |
 //! | GET | `/api/v1/sessions/{session_id}/file-changes` | `get_session_file_changes()` |
 //! | GET | `/api/v1/sessions/{session_id}/plan` | `get_session_plan()` |
 //! | GET | `/api/v1/sessions/{session_id}/cost` | `get_session_cost()` |

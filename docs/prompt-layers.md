@@ -1,11 +1,31 @@
 # Layered prompt fragments
 
-Agena keeps its common identity, authorization, tool, presentation, conversation,
-and project guidance separate from role-specific instructions. Built-in and custom
-agent profiles supply task responsibilities through the same prompt-layer path.
-Prompt layers add ordered fragments after the common execution contract. A layer can append fragments,
-discard broader configured fragments, hide inherited fragment ids, and define
-inline fragments, but it does not replace the built-in prompt itself.
+Agena assembles its system prompt as an ordered list of fragments. The prompt
+library shows three required built-ins for identity and shared rules, tool
+protocol, and communication and delivery. Every session receives these
+fragments. The identity section covers evidence, authorization, and context.
+Live capability guidance applies when the run exposes tools.
+The required groups can be moved within the order and have read-only bodies.
+Legacy built-in IDs still resolve to their containing group. When a layer
+lists multiple IDs for one group, the last occurrence sets its position.
+
+The built-in library also supplies reusable role instructions under
+`agena.profile.*`. These read-only fragments take effect when a layer
+references them. They can also be used as parts of a composition.
+
+| ID | Title |
+| --- | --- |
+| `agena.profile.investigation` | Investigation and evidence |
+| `agena.profile.implementation` | Implementation and verification |
+| `agena.profile.read-only` | Read-only work |
+| `agena.profile.planning` | Planning and acceptance criteria |
+| `agena.profile.verification` | Verification and evidence |
+
+The built-in agent profiles reference these fragments in their own prompt order.
+
+Saved prompts and agent profile instructions use the same ordered composition.
+Use a layer to select reusable prompts, define inline fragments, or control
+which optional instructions are inherited.
 
 ## Saved prompt entries
 
@@ -44,9 +64,9 @@ id to the applicable prompt layer.
 
 | Field | Meaning |
 | --- | --- |
-| `mode` | `append` (default) keeps fragments from broader scopes. `replace` first discards every fragment resolved by earlier scopes, then adds this layer. |
-| `order` | Fragment ids in render order. |
-| `disabled` | Inherited fragment ids hidden by this layer. |
+| `mode` | `append` (default) keeps fragments from broader scopes. `replace` clears inherited optional fragments before applying this layer. |
+| `order` | Fragment IDs in render order. Listing a built-in ID sets its position alongside the selected prompts. |
+| `disabled` | Optional inherited fragment IDs hidden by this layer. |
 | `inline` | Fragments defined directly in this layer. |
 
 Global and workspace `PromptScopeConfig` also include an independent
@@ -54,8 +74,9 @@ Global and workspace `PromptScopeConfig` also include an independent
 for referencing from narrower layers, but do not execute until selected in
 `order`. Session layers contain references in `order`, not a copied body.
 
-A layer rejects duplicate ids in `order`, duplicate ids in `inline`, and an id
-that appears in both `disabled` and `order` or `inline`.
+A layer rejects duplicate IDs in `order` or `inline`, and an ID that appears in
+both `disabled` and `order` or `inline`. The `agena.system.*` namespace is
+reserved for the server catalog. Those IDs can only appear in `order`.
 
 ### `PromptFragment`
 
@@ -79,7 +100,8 @@ the fragment is found and before its body is rendered.
 
 ## Resolution order
 
-The resolver starts with the broadest layer and appends toward the narrowest:
+The resolver starts with the applicable built-ins in catalog order. It then
+processes layers from broadest to narrowest.
 
 1. Global layer, using the global fragment library.
 2. Workspace layer, using the workspace and inherited global libraries.
@@ -93,22 +115,34 @@ The resolver starts with the broadest layer and appends toward the narrowest:
    permission defaults, and turn limit.
 6. Session layer. Its ordered entries may refer to saved global or workspace
    fragments, or to legacy session-local inline fragments.
-7. Request layer. Explicit per-run system instructions replace the accumulated
-   configured layers for that request; omission adds no layer. The built-in
-   prompt is preserved.
+7. AI Bot layer. A Bot's order can position built-ins, selected global prompts,
+   and its own instructions where the Bot persona applies.
+8. Request layer. Explicit per-run system instructions replace accumulated
+   optional selections for that request. The Bot's own instructions still apply
+   in its main conversation. Omission adds no layer.
 
-Each layer is processed in this order:
+Each layer applies the following steps.
 
-1. A `replace` mode clears every configured fragment accumulated from earlier
-   scopes. It does not remove the built-in prompt, conversation instructions, or
-   project guidance.
-2. Every id in `disabled` is added to a suppression set and removed from the
-   resolved fragments.
-3. Every id in `order` is resolved from that layer's inline fragments first and
-   its scoped `.md` library second. Suppressed ids are skipped. A fragment whose
-   condition does not match is skipped with a warning.
-4. Variables are substituted, then the fragment replaces any earlier fragment
-   with the same id and is appended at its new position.
+1. A `replace` layer clears accumulated optional fragments. The applicable
+   built-ins keep the order established so far.
+2. Each ID in `disabled` is recorded and removed from the resolved fragments.
+3. Each ID in `order` is processed in sequence. A built-in is moved to the end
+   if it applies to the run. A custom fragment is resolved from inline definitions
+   or the scoped library. Suppressed fragments and fragments whose conditions
+   fail are skipped.
+4. After variable substitution, each selected custom fragment replaces any earlier
+   occurrence with the same ID and goes at the end.
+
+A layer can interleave selected custom fragments with all applicable built-ins by
+listing their IDs in the desired order. Unlisted built-ins keep their relative
+order. The runtime adds a **Session relationship** fragment before optional
+instructions. Delegated subagent sessions receive the parent-agent workflow.
+Root sessions, user-created children, forks, and rewinds receive the
+user-facing workflow. The runtime also adds active profile context,
+conversation and project guidance, and an agent roster where applicable.
+Session previews include these sections in the same order used to prepare a
+model request. Per-run options and plugin transforms are applied at execution
+time.
 
 Each resolved fragment body is trimmed before assembly. Fragments whose trimmed
 body is empty are omitted from the composed text, while
@@ -136,8 +170,8 @@ are visible in previews and logged by the server, but do not prevent assembly.
 Structural errors such as an invalid id, a missing ordered fragment, or an
 oversized body are reported instead of silently dropping instructions. During
 execution the assembled prompt contains an explicit
-`[Additional instructions could not be assembled: ...]` marker; preview requests
-return the error.
+`[Additional instructions could not be assembled: ...]` marker, visible in the
+session preview alongside the required built-ins.
 
 ## Route patterns and variables
 
@@ -188,7 +222,7 @@ Example global or workspace layer:
 {
   "prompts": {
     "mode": "append",
-    "order": ["house-style", "tool-policy"],
+    "order": ["agena.system.identity", "house-style", "tool-policy", "agena.system.tools"],
     "disabled": ["legacy-verbose"],
     "inline": [],
     "models": [
@@ -359,17 +393,19 @@ configuration editor or edited directly.
 
 ## TUI and Web editors
 
-In the TUI, open **Runtime & Session → Prompt layers** while a session is
+In the TUI, open **Runtime & Session → System prompt** while a session is
 current or selected. `Tab` switches between global, workspace, and session
 scopes.
 
 | Key | Action |
 | --- | --- |
 | `a` | Add an inline fragment and edit its body. |
-| `e` / `Enter` | Edit the selected inline body. |
+| `Enter` | Read the selected prompt. |
+| `e` | Edit the selected inline body. |
 | `t` | Edit the selected inline title. |
 | `d` | Remove the selected fragment from this layer. |
-| `Ctrl+Up` / `Ctrl+Down` | Reorder the selected fragment. |
+| `[` / `]`, or `Ctrl+Up` / `Ctrl+Down` | Reorder the selected fragment. |
+| `l` | Browse built-in and saved prompts in the library. |
 | `o` | Choose a saved prompt by title and add it to `order`. |
 | `h` / `u` | Choose an inherited prompt to hide or restore. |
 | `i` | Rename an inline fragment and update layer references. |
@@ -379,13 +415,17 @@ scopes.
 | `Ctrl+S` | Save the scope. |
 | `Esc` | Close. |
 
-The TUI preserves model overlays but does not edit fragment conditions or model
-overlays. Its preview is the saved server state and excludes unsaved edits.
+In the Web client, open **Settings → AI & sessions → System prompt** and choose
+**Global layer**, **Workspace layer**, or **Current session**. Use **Add prompt**
+to select from the library. The arrows move items up or down. A lock marks the
+required entries. The editor shows the built-ins and prompts selected at that
+scope. **Preview saved prompt** shows the session's full resolved order, including
+inherited prompts, model rules, and runtime context.
 
 In the Web client, open **Settings → AI & sessions → Prompt library** to create,
 edit, or categorize reusable prompts. Choose **Global layer** or **Workspace
-layer** in the page toolbar. The category buttons show counts and filter the
-list of saved prompts. The toolbar creates fragments and compositions in the
+layer** in the page toolbar. Select **Built-in prompts** to browse the server
+catalog. The category buttons filter the list. The toolbar creates fragments and compositions in the
 selected category, with **Uncategorized** as the destination from **All
 categories**. The selected category's add button creates a fragment in that
 category. A composition lets you order existing prompts and preview the
@@ -394,6 +434,23 @@ combined text before saving.
 Open **Settings → AI & sessions → Agent profiles** to edit a role’s instructions
 and attach saved prompts under **Instructions**. The global and workspace
 `prompts` settings are also available in **Advanced settings**.
+
+## AI Bot prompts
+
+Open an AI Bot's settings in the Web client, or select **System prompt** in the
+TUI Bot form. The ordered list can mix required built-ins, reusable global
+library entries, and the Bot's own additional instructions. Existing Bot
+instruction text appears as one editable fragment. Select a row to read it or
+edit the Bot's own text, and use the movement controls to change its position.
+The resolved **System prompt** preview for the Bot's conversation shows how the
+order combines with its profile and current model.
+
+The Bot API stores the explicit order in `persona.prompts.ids`. The ID
+`agena.bot.instructions` positions the literal `persona.instructions` body.
+An existing body without a position follows the selected references. The
+channel option applies the selected library references and explicit order to
+connected channels. Bot-owned instructions follow the Bot's existing main
+conversation rules.
 
 ## Migrating from `additional_system_prompt`
 

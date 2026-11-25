@@ -1,7 +1,17 @@
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(default, deny_unknown_fields)]
+pub struct SkillDiscoverySettings {
+    /// Extra read-only skill directories relative to the project workspace.
+    pub additional_roots: Vec<PathBuf>,
+    /// Canonical skill names disabled by default in this catalog.
+    pub disabled: Vec<String>,
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]

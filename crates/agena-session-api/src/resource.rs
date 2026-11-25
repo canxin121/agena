@@ -331,8 +331,8 @@ pub enum PartLoadMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-/// Reference to a command attached to a message.
-pub struct PartCommandReference {
+/// Reference to a skill attached to a message.
+pub struct PartSkillReference {
     pub name: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,

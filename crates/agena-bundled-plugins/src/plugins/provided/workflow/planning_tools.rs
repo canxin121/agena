@@ -109,7 +109,7 @@ pub(crate) struct WorkflowPlanStepInput {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 #[schemars(
-    description = "Create or overwrite the current active-session plan. If a plan already exists, this replaces it and resets the phase to planning. Use `steps[].title` for steps, `steps[].checks[].text` for checks, and `autorun` to control whether approved active plans should keep running automatically. This tool never blocks on the user: with `request_approval` true (the default) the plan is saved in the `planning` phase and you must call `plan.review` to request user approval before it becomes active; with `request_approval: false` it is applied directly and becomes active immediately, which requires prior user authorization AND the trusted setting `agena.plan.allow_unreviewed_activation`."
+    description = "Create or replace the current plan. Use `steps[].title` for steps, `steps[].checks[].text` for checks, and `autorun` to control automatic execution after approval. By default the plan is saved in the `planning` phase. During planning, select a read-only profile in `agent.spawn` to delegate research. Call `plan.review` to request approval before implementation. Using `request_approval: false` activates the plan immediately and requires prior user authorization and the trusted setting `agena.plan.allow_unreviewed_activation`."
 )]
 pub(crate) struct PlanSetInput {
     /// Optional revision from plan.get; mismatches never overwrite newer state.

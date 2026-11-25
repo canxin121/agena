@@ -172,6 +172,7 @@ async fn usage_stats_preserves_legacy_permission_history_and_subagent_filters() 
                             SessionRelationKind::Root
                         },
                         agent: is_subagent.then(|| SessionAgentConfiguration {
+                            assignment: Default::default(),
                             origin_message_id: None,
                             name: "legacy_accounting".into(),
                             status: AgentStatus::Created,

@@ -143,6 +143,14 @@ fn render_execution(
     let mut view = ToolExecutionView::simple("PowerShell", run_summary, display_output);
     view.metadata
         .insert("exit_code".to_string(), execution.exit_code.to_string());
+    if let Some(cwd) = request
+        .cwd
+        .canonicalize()
+        .ok()
+        .and_then(|path| path.to_str().map(str::to_owned))
+    {
+        view.metadata.insert("workdir".into(), cwd);
+    }
     view.metadata
         .insert("timed_out".to_string(), execution.timed_out.to_string());
     view.metadata.insert(

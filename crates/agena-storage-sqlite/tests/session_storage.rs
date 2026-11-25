@@ -777,6 +777,7 @@ async fn bot_totals_include_owned_sessions_and_binding_storage_once() {
         name: "Research Bot".into(),
         name_folded: "research bot".into(),
         instructions: "整理资料".into(),
+        agent_profile: None,
         prompt_ids: vec![],
         publish_prompts: false,
         avatar: None,

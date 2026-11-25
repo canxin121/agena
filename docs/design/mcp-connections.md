@@ -54,6 +54,20 @@ resources can be read and prompts expanded with named string arguments. Catalog
 pagination and change notifications are supported. The client advertises roots;
 sampling and elicitation are not advertised.
 
+### MCP Apps
+
+In Web chat, a successful MCP tool call can show an **Open app** button when
+the tool advertises an app resource in `_meta.ui.resourceUri`. Agena loads the
+matching `text/html;profile=mcp-app` resource when you open the card. Inherited
+transcript entries retain their tool results as history.
+
+The app runs in a sandboxed iframe with an opaque origin. Bundle scripts,
+styles, and assets in the HTML document. The host sends the original tool
+arguments and result during initialization. The app can use `tools/call` and
+`resources/read` through its originating MCP connection, subject to the live
+session permissions and each tool's declared visibility. Use the session's
+permission settings to allow operations the app needs.
+
 Connection status comes from the transport, including a closed child process.
 Disconnected tools disappear from the active catalog, and the configured
 reconnect supervisor retries failures. **Test connection** creates an isolated
@@ -113,8 +127,12 @@ The `agena.mcp` plugin exposes `connections.list`, `connections.get`,
 `connections.create`, `connections.update`, `connections.delete`,
 `connections.set_enabled`, `connections.import_preview`, `connections.import`,
 `connections.test`, `connections.reconnect`, credential operations, and OAuth
-start/complete/cancel/logout. Existing discovery and invocation tools continue
-to expose external tools, resources, and prompts. Configuration file access,
+start/complete/cancel/logout. Use `connections.list` or `connections.get` to
+inspect the saved configuration and runtime status. A stdio connection awaiting
+an authorized execution scope appears as `scoped`. Reconnect by the effective
+connection ID returned by `list`. The result uses the same detail format and
+reports capabilities for the authorized execution scope. The discovery and
+invocation tools expose external tools, resources, and prompts. Configuration file access,
 subprocess execution, network access, and credential-store writes retain the
 originating AI tool's permission context. Authorization precedes side effects;
 creating a connection does not implicitly grant execution permission.

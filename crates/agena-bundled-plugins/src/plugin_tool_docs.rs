@@ -2,8 +2,7 @@
 //! the `#[tool]` documentation attributes.
 //!
 //! The English contract sent to models remains unchanged. This table fills
-//! translated summaries for hand-built command tools and macro-generated web
-//! and memory tools whose schemas are stable but whose annotations are split
+//! translated summaries and help for tools whose annotations are split
 //! across modules.
 
 use agena_plugin_host::sdk::PluginManifest;
@@ -42,54 +41,6 @@ pub(crate) fn localize_builtin_tool_docs(manifest: &mut PluginManifest) {
 /// and the English contracts sent to models remain defined at their sources.
 fn help(plugin: &str, tool: &str, locale: &str) -> Option<&'static str> {
     let values = match (plugin, tool) {
-        ("commands", "list") => [
-            "用 list 发现当前工作区可用的命令包；随后用 get 阅读所选命令的完整说明。",
-            "用 list 探索目前工作區可用的命令套件；再用 get 閱讀所選命令的完整說明。",
-            "list で利用可能なコマンドパッケージを確認し、get で選んだコマンドの説明を読みます。",
-            "list로 사용 가능한 명령 패키지를 확인한 뒤 get으로 선택한 명령의 전체 설명을 읽으세요.",
-            "Utilisez list pour découvrir les paquets disponibles, puis get pour lire les instructions complètes d’une commande.",
-            "Mit list verfügbare Befehlspakete finden und anschließend mit get die vollständige Anleitung lesen.",
-            "Usa list para descubrir los paquetes disponibles y luego get para leer las instrucciones completas de un comando.",
-            "list से उपलब्ध कमांड पैकेज खोजें, फिर चुने गए कमांड के पूरे निर्देश get से पढ़ें।",
-            "استخدم list لاكتشاف حزم الأوامر المتاحة، ثم get لقراءة تعليمات الأمر كاملة.",
-            "Use list para descobrir os pacotes disponíveis e depois get para ler as instruções completas de um comando.",
-        ],
-        ("commands", "get") => [
-            "用命令名称读取完整指令。需要时再用 read_resource 查看命令包附带的资源。",
-            "用命令名稱讀取完整指示。需要時再用 read_resource 檢視命令套件附帶的資源。",
-            "コマンド名を指定して完全な手順を読みます。必要なら read_resource で同梱リソースを確認します。",
-            "명령 이름으로 전체 지침을 읽으세요. 필요하면 read_resource로 패키지 리소스를 확인하세요.",
-            "Indiquez le nom de la commande pour lire ses instructions complètes. Consultez les ressources avec read_resource si nécessaire.",
-            "Den Befehlsnamen angeben, um die vollständige Anleitung zu lesen. Paketressourcen bei Bedarf mit read_resource öffnen.",
-            "Indica el nombre del comando para leer sus instrucciones completas. Consulta los recursos con read_resource si hace falta.",
-            "कमांड का नाम देकर पूरे निर्देश पढ़ें। ज़रूरत हो तो पैकेज संसाधन read_resource से खोलें।",
-            "حدّد اسم الأمر لقراءة تعليماته كاملة. افتح موارد الحزمة باستخدام read_resource عند الحاجة.",
-            "Informe o nome do comando para ler todas as instruções. Se necessário, consulte os recursos do pacote com read_resource.",
-        ],
-        ("commands", "install") => [
-            "仅安装工作区管理目录中的命令文档；不会安装软件或修改外部命令包。",
-            "只會安裝工作區管理目錄中的命令文件；不會安裝軟體或修改外部命令套件。",
-            "ワークスペース管理対象のコマンド文書だけをインストールします。ソフトウェアや外部パッケージは変更しません。",
-            "작업 공간에서 관리하는 명령 문서만 설치합니다. 소프트웨어나 외부 패키지는 변경하지 않습니다.",
-            "Installe uniquement les documents de commande gérés par l’espace de travail ; aucun logiciel ni paquet externe n’est modifié.",
-            "Installiert nur vom Workspace verwaltete Befehlsdokumente, keine Software oder externen Pakete.",
-            "Instala únicamente documentos de comandos gestionados por el espacio de trabajo; no instala software ni modifica paquetes externos.",
-            "केवल वर्कस्पेस द्वारा प्रबंधित कमांड दस्तावेज़ स्थापित करें; सॉफ़्टवेयर या बाहरी पैकेज नहीं बदलते।",
-            "ثبّت مستندات الأوامر التي يديرها نطاق العمل فقط؛ لا يثبّت برامج ولا يغيّر الحزم الخارجية.",
-            "Instala apenas documentos de comando gerenciados pelo workspace; não instala software nem altera pacotes externos.",
-        ],
-        ("commands", "remove") => [
-            "仅移除工作区管理目录中的命令文档；不会删除外部命令包或软件。",
-            "只會移除工作區管理目錄中的命令文件；不會刪除外部命令套件或軟體。",
-            "ワークスペース管理対象のコマンド文書だけを削除します。外部パッケージやソフトウェアは削除しません。",
-            "작업 공간에서 관리하는 명령 문서만 제거합니다. 외부 패키지나 소프트웨어는 삭제하지 않습니다.",
-            "Supprime uniquement les documents de commande gérés par l’espace de travail, sans retirer de logiciel ni de paquet externe.",
-            "Entfernt nur vom Workspace verwaltete Befehlsdokumente, keine Software oder externen Pakete.",
-            "Elimina únicamente documentos de comandos gestionados por el espacio de trabajo; no quita software ni paquetes externos.",
-            "केवल वर्कस्पेस द्वारा प्रबंधित कमांड दस्तावेज़ हटाएँ; बाहरी पैकेज या सॉफ़्टवेयर नहीं हटते।",
-            "أزِل مستندات الأوامر التي يديرها نطاق العمل فقط؛ لا تحذف البرامج أو الحزم الخارجية.",
-            "Remove apenas documentos de comando gerenciados pelo workspace; não remove software nem pacotes externos.",
-        ],
         ("fs", "document") => [
             "可提取 PDF、DOCX、PPTX、XLSX 的本地文本；不会安装转换依赖或提供图片、音频转写。空结果可能表示扫描版 PDF 需要 OCR。",
             "可擷取 PDF、DOCX、PPTX、XLSX 的本機文字；不會安裝轉換相依套件，也不提供圖片或音訊轉錄。空結果可能代表掃描版 PDF 需要 OCR。",
@@ -197,18 +148,6 @@ fn help(plugin: &str, tool: &str, locale: &str) -> Option<&'static str> {
             "कमांड पूरा होने तक चलाएँ। वास्तविक पढ़ने/लिखने के पथ और नेटवर्क लक्ष्य घोषित करें। timeout_ms समय और max_output_bytes पूर्वावलोकन सीमित करता है; पूरा आउटपुट output_resource से पढ़ें।",
             "شغّل الأمر حتى يكتمل. صرّح بمسارات القراءة/الكتابة الفعلية وأهداف الشبكة. يحد timeout_ms من المدة وmax_output_bytes من المعاينة؛ ويمكن قراءة الالتقاط الكامل عبر output_resource.",
             "Execute um comando até terminar. Declare os caminhos realmente lidos/escritos e os destinos de rede. timeout_ms limita a duração e max_output_bytes a prévia; a captura completa fica disponível por output_resource.",
-        ],
-        ("shell", "logs") => [
-            "按显式游标重放 shell 输出；续读时同时传 last_seq 与 next_event_offset。读取新输出通常用 shell.read，不要轮询等待后台任务。",
-            "依明確游標重播 shell 輸出；續讀時同時傳入 last_seq 與 next_event_offset。讀取新輸出通常用 shell.read，不要輪詢等待背景工作。",
-            "明示カーソルから shell 出力を再生します。続きには last_seq と next_event_offset の両方を渡してください。新着出力には通常 shell.read を使い、完了待ちのポーリングはしません。",
-            "명시적 커서부터 shell 출력을 재생합니다. 이어 읽을 때 last_seq와 next_event_offset을 함께 전달하세요. 새 출력은 보통 shell.read로 읽고 완료를 폴링해 기다리지 마세요.",
-            "Rejoue la sortie shell depuis un curseur explicite. Pour reprendre, transmettez last_seq et next_event_offset. Utilisez plutôt shell.read pour le nouveau contenu et ne sondez pas pour attendre la fin.",
-            "Gibt Shell-Ausgabe ab einem expliziten Cursor erneut aus. Zum Fortsetzen last_seq und next_event_offset gemeinsam übergeben. Neue Ausgabe normalerweise mit shell.read lesen; nicht auf den Abschluss pollen.",
-            "Reproduce la salida shell desde un cursor explícito. Para continuar, pasa last_seq y next_event_offset juntos. Usa normalmente shell.read para lo nuevo y no consultes repetidamente para esperar.",
-            "स्पष्ट कर्सर से shell आउटपुट दोबारा पढ़ें। आगे जारी रखने के लिए last_seq और next_event_offset दोनों दें। नए आउटपुट के लिए shell.read उपयोग करें; समाप्ति के लिए बार-बार जाँच न करें।",
-            "أعد تشغيل مخرجات shell من مؤشر صريح. للمتابعة أرسل last_seq وnext_event_offset معًا. استخدم shell.read للمخرجات الجديدة ولا تستطلع انتظارًا للاكتمال.",
-            "Reproduza a saída shell a partir de um cursor explícito. Para continuar, envie last_seq e next_event_offset juntos. Use shell.read para novas saídas e não consulte repetidamente para aguardar.",
         ],
         ("shell", "open") => [
             "打开持久交互式 shell/PTY。启动确认后返回 process_id；用 shell.read 与 shell.write 继续交互，静默或提示符不代表进程已退出。",
@@ -386,78 +325,6 @@ fn help(plugin: &str, tool: &str, locale: &str) -> Option<&'static str> {
 
 fn summaries(plugin: &str, tool: &str) -> Option<[&'static str; 10]> {
     Some(match (plugin, tool) {
-        ("commands", "list") => [
-            "列出已发现的命令包。",
-            "列出已發現的命令套件。",
-            "見つかったコマンドパッケージを一覧表示します。",
-            "발견된 명령 패키지를 나열합니다.",
-            "Lister les paquets de commandes détectés.",
-            "Gefundene Befehlspakete auflisten.",
-            "Enumera los paquetes de comandos encontrados.",
-            "मिले हुए कमांड पैकेज की सूची दिखाएँ।",
-            "اعرض حزم الأوامر التي تم العثور عليها.",
-            "Lista os pacotes de comandos encontrados.",
-        ],
-        ("commands", "get") => [
-            "读取一个命令包的完整说明。",
-            "讀取一個命令套件的完整說明。",
-            "コマンドパッケージの説明を全文取得します。",
-            "명령 패키지의 전체 지침을 읽습니다.",
-            "Lire les instructions complètes d’un paquet de commandes.",
-            "Die vollständige Anleitung eines Befehlspakets lesen.",
-            "Lee las instrucciones completas de un paquete de comandos.",
-            "किसी कमांड पैकेज के पूरे निर्देश पढ़ें।",
-            "اقرأ التعليمات الكاملة لحزمة أوامر واحدة.",
-            "Lê as instruções completas de um pacote de comandos.",
-        ],
-        ("commands", "install") => [
-            "安装工作区管理的命令包文档。",
-            "安裝由工作區管理的命令套件文件。",
-            "ワークスペース管理のコマンドパッケージ文書をインストールします。",
-            "작업 공간에서 관리하는 명령 패키지 문서를 설치합니다.",
-            "Installer un document de paquet de commandes géré par l’espace de travail.",
-            "Ein vom Workspace verwaltetes Befehlspaket-Dokument installieren.",
-            "Instala un documento de paquete de comandos gestionado por el espacio de trabajo.",
-            "वर्कस्पेस द्वारा प्रबंधित कमांड पैकेज दस्तावेज़ स्थापित करें।",
-            "ثبّت مستند حزمة أوامر يديره نطاق العمل.",
-            "Instala um documento de pacote de comandos gerenciado pelo workspace.",
-        ],
-        ("commands", "remove") => [
-            "移除工作区管理的命令包文档。",
-            "移除由工作區管理的命令套件文件。",
-            "ワークスペース管理のコマンドパッケージ文書を削除します。",
-            "작업 공간에서 관리하는 명령 패키지 문서를 제거합니다.",
-            "Supprimer un document de paquet de commandes géré par l’espace de travail.",
-            "Ein vom Workspace verwaltetes Befehlspaket-Dokument entfernen.",
-            "Elimina un documento de paquete de comandos gestionado por el espacio de trabajo.",
-            "वर्कस्पेस द्वारा प्रबंधित कमांड पैकेज दस्तावेज़ हटाएँ।",
-            "أزِل مستند حزمة أوامر يديره نطاق العمل.",
-            "Remove um documento de pacote de comandos gerenciado pelo workspace.",
-        ],
-        ("commands", "read_resource") => [
-            "读取命令包中受限大小的 UTF-8 资源。",
-            "讀取命令套件中大小受限的 UTF-8 資源。",
-            "コマンドパッケージ内のサイズ制限付き UTF-8 リソースを読み込みます。",
-            "명령 패키지에 포함된 크기 제한 UTF-8 리소스를 읽습니다.",
-            "Lire une ressource UTF-8 de taille limitée contenue dans un paquet.",
-            "Eine größenbegrenzte UTF-8-Ressource aus einem Paket lesen.",
-            "Lee un recurso UTF-8 de tamaño limitado incluido en un paquete.",
-            "पैकेज के भीतर सीमित आकार वाला UTF-8 संसाधन पढ़ें।",
-            "اقرأ مورد UTF-8 محدود الحجم من داخل الحزمة.",
-            "Lê um recurso UTF-8 com tamanho limitado dentro de um pacote.",
-        ],
-        ("commands", "refresh") => [
-            "重新扫描文件系统中的命令包并返回目录版本。",
-            "重新掃描檔案系統中的命令套件並回傳目錄版本。",
-            "ファイルシステム上のコマンドパッケージを再スキャンし、カタログの世代を返します。",
-            "파일 시스템의 명령 패키지를 다시 검색하고 카탈로그 세대를 반환합니다.",
-            "Reparcourir les paquets de commandes du système de fichiers et renvoyer la version du catalogue.",
-            "Befehlspakete im Dateisystem erneut einlesen und die Katalogversion zurückgeben.",
-            "Vuelve a explorar los paquetes de comandos del sistema de archivos y devuelve la versión del catálogo.",
-            "फ़ाइल सिस्टम के कमांड पैकेज फिर से स्कैन करें और कैटलॉग संस्करण लौटाएँ।",
-            "أعِد فحص حزم الأوامر في نظام الملفات وأعد إصدار الفهرس.",
-            "Examina novamente os pacotes de comandos no sistema de arquivos e retorna a versão do catálogo.",
-        ],
         ("memory", "search") => [
             "搜索持久记忆记录。",
             "搜尋持久記憶記錄。",

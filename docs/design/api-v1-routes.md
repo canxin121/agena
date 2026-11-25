@@ -120,6 +120,7 @@ git 属于目录，不属于会话，也不要求目录已被登记。
 | GET | `/api/v1/sessions/{id}/export` |
 | POST | `/api/v1/sessions/imports` |
 | GET | `/api/v1/sessions/{id}/prompts/preview` |
+| GET | `/api/v1/prompts/builtins` |
 | GET | `/api/v1/sessions/{id}/edits` |
 | GET | `/api/v1/sessions/{id}/folder` |
 

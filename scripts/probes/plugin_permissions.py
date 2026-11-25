@@ -218,12 +218,14 @@ def main() -> None:
             sid = session(name, child_permission, tool, inputs)
             complete(sid, name, 'denied')
 
-        # Concrete records, including command aliases, cannot bypass child rules.
+        # A concrete skill document must honor its own path permission.
         skill = workspace / '.agena/skills/permission-fixture/SKILL.md'
         skill.parent.mkdir(parents=True)
         skill.write_text('---\nname: permission-fixture\ndescription: controlled permission fixture\naliases: [permission-alias]\n---\nPrivate fixture instructions.\n')
-        sid = session('commands_child_denied', {'path': {'rules': {str(skill): 'deny'}}}, 'commands.get', {'name': 'permission-alias'})
-        complete(sid, 'commands_child_denied', 'denied')
+        skill_catalog = api.get(f'/api/v1/skills?workspace_id={wid}')
+        skill_id = next(item['id'] for item in skill_catalog['skills'] if item['name'] == 'permission-fixture')
+        sid = session('skills_child_denied', {'path': {'rules': {str(skill): 'deny'}}}, 'skills.get', {'id': skill_id})
+        complete(sid, 'skills_child_denied', 'denied')
 
         sid = session('memory_write_allowed', {}, 'memory.write', {'name': 'permission-record', 'content': 'controlled private memory'})
         complete(sid, 'memory_write_allowed')

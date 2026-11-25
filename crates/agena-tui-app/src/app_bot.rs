@@ -7,8 +7,11 @@ use agena_tui_components::Editor;
 use crossterm::event::{KeyCode, KeyModifiers};
 use uuid::Uuid;
 
+mod profiles;
+mod prompts;
 mod render;
 mod requests;
+use prompts::{BotPromptCatalog, BotPromptEditor};
 
 #[derive(Default)]
 pub(crate) struct BotState {
@@ -62,13 +65,21 @@ enum BotView {
     Opening,
     List,
     Form,
+    Prompts,
     Archive,
     Reload,
     /// Confirm deleting one conversation of the highlighted Bot.
     DeleteConversation,
 }
-const BOT_FORM_FIELDS: [&str; 3] = ["bot-name", "bot-instructions", "bot-avatar"];
+const BOT_FORM_FIELDS: [&str; 4] = [
+    "bot-name",
+    "prompt-studio-title",
+    "bot-avatar",
+    "settings-agent-profile-label",
+];
+const BOT_PROMPTS_FIELD: usize = 1;
 const BOT_AVATAR_FIELD: usize = 2;
+const BOT_PROFILE_FIELD: usize = 3;
 
 #[derive(Clone, Default)]
 enum BotAvatarDraft {
@@ -86,9 +97,11 @@ struct BotForm {
     base: Option<BotProfile>,
     name: String,
     persona: BotPersona,
+    agent_profile: Option<String>,
     avatar: BotAvatarDraft,
     index: usize,
     edit: Option<Editor>,
+    prompts: BotPromptEditor,
     request_key: String,
 }
 impl BotForm {
@@ -98,17 +111,19 @@ impl BotForm {
             persona: base
                 .as_ref()
                 .map_or_else(BotPersona::default, |p| p.persona.clone()),
+            agent_profile: base.as_ref().and_then(|p| p.agent_profile.clone()),
             avatar: BotAvatarDraft::Keep,
             base,
             index: 0,
             edit: None,
+            prompts: BotPromptEditor::default(),
             request_key: Uuid::new_v4().to_string(),
         }
     }
     fn value(&self, index: usize) -> String {
         match index {
             0 => self.name.clone(),
-            1 => self.persona.instructions.clone(),
+            BOT_PROMPTS_FIELD => self.prompt_summary_count().to_string(),
             _ => match &self.avatar {
                 BotAvatarDraft::File { path, .. } => path.clone(),
                 _ => String::new(),
@@ -130,7 +145,17 @@ impl BotForm {
             let value = editor.text().to_owned();
             match self.index {
                 0 => self.name = value,
-                1 => self.persona.instructions = value,
+                BOT_PROMPTS_FIELD => {
+                    self.persona.instructions = value;
+                    if self.persona.instructions.trim().is_empty()
+                        && let Some(selection) = &mut self.persona.prompts
+                    {
+                        selection
+                            .ids
+                            .retain(|id| id != agena_prompt_layers::BOT_INSTRUCTIONS_ID);
+                    }
+                    self.select_personal_instructions();
+                }
                 BOT_AVATAR_FIELD => {
                     let path = value.trim().to_owned();
                     self.avatar = if path.is_empty() {
@@ -157,6 +182,9 @@ pub(crate) enum BotReply {
     Saved(BotProfile),
     Archived(BotProfile),
     Edit(BotProfile),
+    PromptLibrary(BotPromptCatalog),
+    AgentProfiles(serde_json::Value),
+    AgentProfileCreated(String),
     AvatarLoaded {
         path: String,
         data: String,
@@ -178,6 +206,9 @@ enum BotOperation {
     LoadAvatar(String),
     Archive(Uuid, BotArchive),
     Edit(Uuid),
+    PromptLibrary,
+    AgentProfiles,
+    CreateAgentProfile(String),
     Conversations(Uuid),
     DeleteConversation { bot: Uuid, session_id: i64 },
 }
@@ -232,12 +263,18 @@ impl BotState {
     pub(crate) fn accepts_text(&self) -> bool {
         self.task.is_none()
             && self.form.as_ref().is_some_and(|f| f.edit.is_some())
-            && self.view == BotView::Form
+            && matches!(self.view, BotView::Form | BotView::Prompts)
     }
     pub(crate) fn paste(&mut self, text: &str) {
         if self.accepts_text()
-            && let Some(editor) = self.form.as_mut().and_then(|f| f.edit.as_mut())
-            && editor.text().len() + text.len() <= 16384
+            && let Some(form) = self.form.as_mut()
+            && let Some(editor) = form.edit.as_mut()
+            && editor.text().len() + text.len()
+                <= if matches!(form.index, BOT_PROMPTS_FIELD | BOT_PROFILE_FIELD) {
+                    MAX_BOT_INSTRUCTIONS_BYTES
+                } else {
+                    16384
+                }
         {
             editor.insert_str(text);
         }
@@ -477,6 +514,13 @@ impl App {
                 self.bot.form = Some(BotForm::new(Some(profile)));
                 self.bot.view = BotView::Form;
             }
+            Ok(BotReply::PromptLibrary(catalog)) => {
+                if let Some(form) = &mut self.bot.form {
+                    form.prompts.catalog = Some(catalog);
+                }
+            }
+            Ok(BotReply::AgentProfiles(catalog)) => self.show_bot_agent_profiles(&catalog),
+            Ok(BotReply::AgentProfileCreated(name)) => self.choose_bot_agent_profile(name),
             Ok(BotReply::AvatarLoaded { path, data }) => {
                 if let Some(form) = &mut self.bot.form
                     && let BotAvatarDraft::File {
@@ -536,6 +580,12 @@ impl App {
                 request_key: form.request_key.clone(),
                 name: form.name.trim().into(),
                 persona: Some(form.persona.clone()),
+                agent_profile: (form
+                    .base
+                    .as_ref()
+                    .and_then(|base| base.agent_profile.as_ref())
+                    != form.agent_profile.as_ref())
+                .then(|| form.agent_profile.clone().unwrap_or_default()),
                 avatar: avatar.clone().flatten(),
             },
             form.base.as_ref().map(|p| (p.id, p.revision)),
@@ -551,6 +601,12 @@ impl App {
                     .modifiers
                     .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
             {
+                let form = self.bot.form.as_ref().unwrap();
+                if form.index == BOT_PROFILE_FIELD {
+                    let definition = form.edit.as_ref().unwrap().text().to_owned();
+                    self.request_bot(BotOperation::CreateAgentProfile(definition));
+                    return false;
+                }
                 let path = self.bot.form.as_mut().unwrap().commit_field();
                 self.bot.error = None;
                 if let Some(path) = path {
@@ -566,6 +622,10 @@ impl App {
                     .unwrap()
                     .handle_multiline_input_key(key);
             }
+            return false;
+        }
+        if self.bot.view == BotView::Prompts {
+            self.handle_bot_prompt_key(key);
             return false;
         }
         if key.code == KeyCode::Esc {
@@ -749,6 +809,33 @@ impl App {
                         self.bot.view = BotView::Reload;
                     }
                 }
+                KeyCode::Enter | KeyCode::Char('e')
+                    if self
+                        .bot
+                        .form
+                        .as_ref()
+                        .is_some_and(|form| form.index == BOT_PROFILE_FIELD) =>
+                {
+                    self.request_bot(BotOperation::AgentProfiles);
+                }
+                KeyCode::Enter | KeyCode::Char('e')
+                    if self
+                        .bot
+                        .form
+                        .as_ref()
+                        .is_some_and(|form| form.index == BOT_PROMPTS_FIELD) =>
+                {
+                    self.bot.view = BotView::Prompts;
+                    self.bot.error = None;
+                    if self
+                        .bot
+                        .form
+                        .as_ref()
+                        .is_some_and(|form| form.prompts.catalog.is_none())
+                    {
+                        self.request_bot(BotOperation::PromptLibrary);
+                    }
+                }
                 KeyCode::Enter | KeyCode::Char('e') => {
                     if let Some(f) = &mut self.bot.form {
                         let mut editor = Editor::default();
@@ -795,6 +882,7 @@ impl App {
                     self.request_bot(BotOperation::Edit(id));
                 }
             }
+            BotView::Prompts => unreachable!("prompt keys handled before the form routes"),
         }
         false
     }

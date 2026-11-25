@@ -57,6 +57,7 @@ impl McpConnectionManager {
             ));
         }
         let mut manager = Self::new(&self.client_name, &self.client_version)
+            .with_apps(self.apps_enabled)
             .with_timeouts(stored.connect_timeout, stored.request_timeout)
             .with_http_network_authorizer(authorizer);
         manager.token_store = self.token_store.clone();
@@ -87,6 +88,24 @@ impl McpConnectionManager {
         self: &Arc<Self>,
         name: &str,
         context: McpSandboxContext,
+    ) -> McpResult<Arc<Self>> {
+        self.open_sandbox_scope(name, context, false).await
+    }
+
+    /// Refresh the live connection for this exact authorized process scope.
+    pub async fn reconnect_in_sandbox_scope(
+        self: &Arc<Self>,
+        name: &str,
+        context: McpSandboxContext,
+    ) -> McpResult<Arc<Self>> {
+        self.open_sandbox_scope(name, context, true).await
+    }
+
+    async fn open_sandbox_scope(
+        &self,
+        name: &str,
+        context: McpSandboxContext,
+        reconnect: bool,
     ) -> McpResult<Arc<Self>> {
         if context.scope.is_empty() || context.scope.len() > 4096 || !context.cwd.is_absolute() {
             return Err(missing_scope(name));
@@ -125,7 +144,7 @@ impl McpConnectionManager {
             }
         }
         if let Some(manager) = self.scoped_servers.lock().await.get(&key).cloned() {
-            if manager.get(name).await.is_err() {
+            if reconnect || manager.get(name).await.is_err() {
                 manager.reconnect(name).await?;
             }
             return Ok(manager);
@@ -157,6 +176,7 @@ impl McpConnectionManager {
         }
         let manager = Arc::new(
             McpConnectionManager::new(&self.client_name, &self.client_version)
+                .with_apps(self.apps_enabled)
                 .with_roots([key.context.cwd.clone()])
                 .with_timeouts(stored.connect_timeout, stored.request_timeout),
         );

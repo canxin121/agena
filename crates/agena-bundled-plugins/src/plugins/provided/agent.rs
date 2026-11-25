@@ -104,11 +104,11 @@ impl AgentPlugin {
     }
     #[tool(
         tags(agent),
-        summary = "Delegate a bounded task to a role profile and return its handle immediately. Choose profile from the available subagent catalog: explore for investigation, worker for implementation, reviewer for verification. Omission uses the configured subagent default. Parent history is not copied; include scope, constraints, and expected result in prompt. Final replies are delivered automatically.",
+        summary = "Delegate a bounded task using an exact profile name from the available subagent catalog. Choose a read-only profile for planning research or a Git worktree for independent changes. Include scope, constraints, context, and the expected result. The child handle returns at launch and the result is delivered automatically.",
         translations(
             locale(
                 "zh-CN",
-                summary = "按任务选择 Profile 创建独立 agent：探索用 explore，实现用 worker，审查用 reviewer；省略时使用默认子角色。结果自动送达。"
+                summary = "用可用子智能体目录中的准确配置名委派任务。规划时选择只读配置进行调查，独立修改可使用 Git 工作树。请提供任务范围、约束、上下文和预期结果。启动时返回子智能体标识，任务结果自动送达。"
             ),
             locale("zh-TW", summary = "建立獨立 agent，立即回傳識別碼；結果自動送達。"),
             locale(

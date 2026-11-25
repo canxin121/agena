@@ -28,6 +28,14 @@ impl McpPlugin {
         &self,
         server: &str,
     ) -> SdkResult<Arc<McpConnectionManager>> {
+        self.authorized_server_manager(server, false).await
+    }
+
+    pub(super) async fn authorized_server_manager(
+        &self,
+        server: &str,
+        reconnect: bool,
+    ) -> SdkResult<Arc<McpConnectionManager>> {
         let spec = self
             .manager
             .server_spec(server)
@@ -81,13 +89,16 @@ impl McpPlugin {
                 PluginError::internal(format!("invalid host sandbox policy: {error}"))
             })?,
         };
-        let manager = self
-            .manager
-            .for_sandbox_scope(server, context)
-            .await
-            .map_err(|error| {
-                PluginError::internal(format!("MCP sandbox for `{server}` failed: {error}"))
-            })?;
+        let manager = if reconnect {
+            self.manager
+                .reconnect_in_sandbox_scope(server, context)
+                .await
+        } else {
+            self.manager.for_sandbox_scope(server, context).await
+        }
+        .map_err(|error| {
+            PluginError::internal(format!("MCP sandbox for `{server}` failed: {error}"))
+        })?;
         if let Some(completion) = completion {
             let owner = Arc::downgrade(&self.manager);
             let scope = prepared.scope;
@@ -137,22 +148,5 @@ impl McpPlugin {
             );
         }
         Ok(tools)
-    }
-
-    pub(super) async fn scoped_statuses(
-        &self,
-    ) -> SdkResult<Vec<agena_mcp_client::McpServerStatus>> {
-        let mut statuses = Vec::new();
-        for name in self.manager.server_names().await {
-            let manager = self.authorize_server(&name).await?;
-            statuses.extend(
-                manager
-                    .statuses()
-                    .await
-                    .into_iter()
-                    .filter(|status| status.name == name),
-            );
-        }
-        Ok(statuses)
     }
 }

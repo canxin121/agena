@@ -61,7 +61,6 @@ impl ToolPermissionConfig {
             "agena.shell.open" | "shell.open" | "agena_shell_open" => Some("agena.shell.open"),
             "agena.shell.write" | "shell.write" | "agena_shell_write" => Some("agena.shell.write"),
             "agena.shell.read" | "shell.read" | "agena_shell_read" => Some("agena.shell.read"),
-            "agena.shell.logs" | "shell.logs" | "agena_shell_logs" => Some("agena.shell.logs"),
             "agena.shell.list" | "shell.list" | "agena_shell_list" => Some("agena.shell.list"),
             "agena.shell.stop" | "shell.stop" | "agena_shell_stop" => Some("agena.shell.stop"),
             "agena.shell.resize" | "shell.resize" | "agena_shell_resize" => {

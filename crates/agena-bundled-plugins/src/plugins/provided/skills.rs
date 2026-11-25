@@ -11,9 +11,9 @@ use agena_domain::PathKind;
 use agena_plugin_host::sdk::host_api::HostProcessResources;
 use agena_plugin_host::sdk::{
     ApplicableSessions, HookSubscription, HostClient, InitContext, InitOutcome, Plugin,
-    PluginError, PluginManifest, Result as SdkResult, ToolContract, ToolDefinition, ToolDocs,
-    ToolInvokeInput, ToolInvokeOutput, ToolRuntimePolicy, ToolStreamingMode, ToolTag,
-    macro_support,
+    PluginError, PluginManifest, PluginSkillDefinition, Result as SdkResult, ToolContract,
+    ToolDefinition, ToolDocs, ToolInvokeInput, ToolInvokeOutput, ToolRuntimePolicy,
+    ToolStreamingMode, ToolTag, macro_support,
 };
 use agena_skills::source::{
     SkillCreateRequest, SkillDeleteResult, SkillInstallRequest, SkillResourceWriteRequest,
@@ -22,8 +22,8 @@ use agena_skills::source::{
 };
 use agena_skills::worker::{SkillWorkerOperation, SkillWorkerRequest};
 use agena_skills::{
-    DeclaredSkill, SkillCatalog, SkillDetail, SkillError, SkillInstallPreview, SkillManager,
-    SkillScope, SkillSummary,
+    DeclaredSkill, SkillCatalog, SkillDetail, SkillDiscoverySettings, SkillError,
+    SkillInstallPreview, SkillManager, SkillScope, SkillSummary,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -34,7 +34,121 @@ pub(crate) const SKILLS_PLUGIN_ID: &str = "agena.skills";
 #[derive(Default)]
 pub(crate) struct SkillsPlugin {
     workspace: OnceLock<PathBuf>,
-    initial_host: OnceLock<Arc<dyn HostClient>>,
+    host: OnceLock<Arc<dyn HostClient>>,
+    discovery: OnceLock<SkillDiscoverySettings>,
+}
+
+struct BundledSkill {
+    name: &'static str,
+    description: &'static str,
+    aliases: &'static [&'static str],
+    instructions: &'static str,
+}
+
+/// The packages every Agena install ships with. The instructions live in
+/// markdown so the text stays readable and diffable instead of being buried in
+/// a Rust string literal.
+const BUNDLED_SKILLS: &[BundledSkill] = &[
+    BundledSkill {
+        name: "batch",
+        description: "Execute independent repository tasks with Git worktree isolation and delegated agents",
+        aliases: &[],
+        instructions: include_str!("../../../assets/skills/batch.md"),
+    },
+    BundledSkill {
+        name: "debug",
+        description: "Diagnose a reproducible failure from logs, state and source evidence",
+        aliases: &[],
+        instructions: include_str!("../../../assets/skills/debug.md"),
+    },
+    BundledSkill {
+        name: "doctor",
+        description: "Diagnose Agena runtime, provider, plugin, Skill, MCP and project tooling health",
+        aliases: &[],
+        instructions: include_str!("../../../assets/skills/doctor.md"),
+    },
+    BundledSkill {
+        name: "imagegen",
+        description: "Generate or edit images with ordinary ChatGPT and Gemini execution tools",
+        aliases: &["image-generate", "image-edit"],
+        instructions: include_str!("../../../assets/skills/imagegen.md"),
+    },
+    BundledSkill {
+        name: "init",
+        description: "Initialise an AGENA.md describing the codebase",
+        aliases: &["bootstrap"],
+        instructions: include_str!("../../../assets/skills/init.md"),
+    },
+    BundledSkill {
+        name: "plugin_creator",
+        description: "Scaffold and verify an Agena plugin using the repository SDK",
+        aliases: &["create-plugin"],
+        instructions: include_str!("../../../assets/skills/plugin_creator.md"),
+    },
+    BundledSkill {
+        name: "review",
+        description: "Review the current branch as a senior code reviewer",
+        aliases: &[],
+        instructions: include_str!("../../../assets/skills/review.md"),
+    },
+    BundledSkill {
+        name: "run",
+        description: "Identify and start the current project with a reusable shell process",
+        aliases: &["start"],
+        instructions: include_str!("../../../assets/skills/run.md"),
+    },
+    BundledSkill {
+        name: "run_skill_generator",
+        description: "Turn a proven one-off workflow into a reusable validated Skill package",
+        aliases: &["skill-from-run"],
+        instructions: include_str!("../../../assets/skills/run_skill_generator.md"),
+    },
+    BundledSkill {
+        name: "security_review",
+        description: "Audit the current branch for security regressions",
+        aliases: &["security-review"],
+        instructions: include_str!("../../../assets/skills/security_review.md"),
+    },
+    BundledSkill {
+        name: "simplify",
+        description: "Reduce unnecessary complexity without changing behavior",
+        aliases: &[],
+        instructions: include_str!("../../../assets/skills/simplify.md"),
+    },
+    BundledSkill {
+        name: "skill_creator",
+        description: "Create or update a validated Agena Skill package",
+        aliases: &["create-skill"],
+        instructions: include_str!("../../../assets/skills/skill_creator.md"),
+    },
+    BundledSkill {
+        name: "skill_installer",
+        description: "Install Skills from a trusted local or Git repository source",
+        aliases: &["install-skill"],
+        instructions: include_str!("../../../assets/skills/skill_installer.md"),
+    },
+    BundledSkill {
+        name: "verify",
+        description: "Run the smallest sufficient validation for the current change",
+        aliases: &["check"],
+        instructions: include_str!("../../../assets/skills/verify.md"),
+    },
+];
+
+fn bundled_skill_definitions() -> Vec<PluginSkillDefinition> {
+    BUNDLED_SKILLS
+        .iter()
+        .map(|skill| PluginSkillDefinition {
+            name: skill.name.to_string(),
+            description: skill.description.to_string(),
+            instructions: skill.instructions.trim().to_string(),
+            aliases: skill
+                .aliases
+                .iter()
+                .map(|alias| (*alias).to_string())
+                .collect(),
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
@@ -236,6 +350,10 @@ impl Plugin for SkillsPlugin {
             },
         );
         manifest.hooks = HookSubscription::INIT | HookSubscription::TOOL_INVOKE;
+        manifest.skills = bundled_skill_definitions();
+        manifest.settings = Some(macro_support::settings_contract_for_default(
+            SkillDiscoverySettings::default(),
+        ));
         let read = &[ToolTag::Query, ToolTag::Discovery, ToolTag::ReadOnly];
         let write = &[ToolTag::Mutate, ToolTag::Filesystem];
         manifest.tools = vec![
@@ -320,10 +438,17 @@ impl Plugin for SkillsPlugin {
         context: InitContext,
         host: Arc<dyn HostClient>,
     ) -> SdkResult<InitOutcome> {
+        let discovery = macro_support::parse_defaulted_settings(
+            context.settings,
+            "invalid skills plugin config",
+        )?;
+        self.discovery
+            .set(discovery)
+            .map_err(|_| PluginError::internal("skills discovery initialized twice"))?;
         self.workspace
             .set(context.workspace_root)
             .map_err(|_| PluginError::internal("skills plugin initialized twice"))?;
-        self.initial_host
+        self.host
             .set(host)
             .map_err(|_| PluginError::internal("skills permission host initialized twice"))?;
         Ok(InitOutcome::ack(self.manifest()))
@@ -709,24 +834,7 @@ impl SkillsPlugin {
     }
 
     fn permission_host(&self) -> SdkResult<Arc<dyn HostClient>> {
-        if let Some(host) = agena_runtime_plugins::plugin_slot::current_plugin_host()
-            && let Some(plugin) = host
-                .plugins()
-                .iter()
-                .find(|plugin| plugin.key().to_string() == SKILLS_PLUGIN_ID)
-        {
-            return Ok(host
-                .host_handle()
-                .scoped_host_client_for_scope(SKILLS_PLUGIN_ID.to_owned(), plugin.effect_scope()));
-        }
-        if agena_plugin_host::sdk::host_api::current_host_callback_context()
-            .is_some_and(|context| context.session_id.is_some())
-        {
-            return Err(PluginError::internal(
-                "skills host for this session is unavailable",
-            ));
-        }
-        self.initial_host
+        self.host
             .get()
             .cloned()
             .ok_or_else(|| PluginError::internal("skills permission host is unavailable"))
@@ -734,24 +842,9 @@ impl SkillsPlugin {
 
     fn manager(&self) -> SdkResult<SkillManager> {
         let mut declared = Vec::new();
-        let mut additional = Vec::new();
-        let mut disabled = Vec::new();
         if let Some(host) = agena_runtime_plugins::plugin_slot::current_plugin_host() {
             for plugin in host.plugins() {
                 let id = plugin.key().to_string();
-                if id == "agena.commands" {
-                    let settings = plugin.configured_plugin.settings();
-                    additional = settings
-                        .get("additional_roots")
-                        .cloned()
-                        .and_then(|value| serde_json::from_value(value).ok())
-                        .unwrap_or_default();
-                    disabled = settings
-                        .get("disabled")
-                        .cloned()
-                        .and_then(|value| serde_json::from_value(value).ok())
-                        .unwrap_or_default();
-                }
                 for skill in &plugin.manifest.skills {
                     declared.push(DeclaredSkill {
                         plugin_id: id.clone(),
@@ -773,13 +866,13 @@ impl SkillsPlugin {
             self.workspace_root()?
         };
         let mut manager = SkillManager::new(workspace, instance_root.join("skills"))
-            .with_additional_roots(additional)
-            .with_declared_skills(declared)
-            .with_disabled_names(disabled);
+            .with_declared_skills(declared);
         if Self::is_global_session() {
             manager = manager.with_instance_only_roots();
         }
-        Ok(manager)
+        manager
+            .with_discovery_settings(self.discovery.get().cloned().unwrap_or_default())
+            .map_err(skill_error)
     }
 
     async fn run(&self, operation: SkillWorkerOperation) -> SdkResult<Value> {
@@ -1072,7 +1165,7 @@ fn output(title: &str, value: impl Serialize, changed: bool) -> SdkResult<ToolIn
     let text = serde_json::to_string_pretty(&payload)
         .map_err(|error| PluginError::internal_error(&error))?;
     let metadata = if changed {
-        BTreeMap::from([("agena.effect".to_owned(), "command_catalog".to_owned())])
+        BTreeMap::from([("agena.effect".to_owned(), "skill_catalog".to_owned())])
     } else {
         BTreeMap::new()
     };

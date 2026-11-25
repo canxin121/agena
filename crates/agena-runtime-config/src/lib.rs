@@ -30,8 +30,9 @@ pub mod config_environment;
 pub mod config_paths;
 
 pub use agent_profiles::{
-    AgentProfileConfig, AgentProfileMode, ResolvedAgentProfile, check_agent_profile_libraries,
-    resolve_agent_profile, validate_agent_profile_name,
+    AgentProfileConfig, AgentProfileContext, AgentProfileMode, ProjectInstructionsMode,
+    ResolvedAgentProfile, check_agent_profile_libraries, resolve_agent_profile,
+    validate_agent_profile_name,
 };
 pub use builtin_profiles::{DEFAULT_SUBAGENT_PROFILE, MAIN_AGENT_PROFILE, builtin_agent_profiles};
 pub use config::raw::{normalize_execution_settings_document, normalize_settings_document};

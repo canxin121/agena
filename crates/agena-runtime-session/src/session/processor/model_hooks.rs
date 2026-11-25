@@ -6,6 +6,7 @@ use agena_plugin_host::{
     ChatSystemTransformInput, HookSubscription, ModelRequestAfterInput, ModelRequestBeforeInput,
     ModelRequestErrorInput, PluginHost,
 };
+use agena_prompt_layers::{PromptScope, ResolvedFragment};
 use agena_provider::{CompletionInputPart, CompletionInputProviderState, CompletionInputRun};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -22,6 +23,36 @@ use agena_domain::ModelRef;
 use tokio_util::sync::CancellationToken;
 
 const MAX_HOOK_PROJECTION_BYTES: usize = 16 * 1024 * 1024;
+
+fn retain_builtin_prompts(system: &mut String, fragments: &[ResolvedFragment]) {
+    let required: Vec<_> = fragments
+        .iter()
+        .filter(|fragment| fragment.scope == PromptScope::Builtin)
+        .map(|fragment| fragment.text.as_str())
+        .collect();
+    if required
+        .iter()
+        .try_fold(system.as_str(), |rest, text| {
+            rest.split_once(*text).map(|(_, tail)| tail)
+        })
+        .is_some()
+    {
+        return;
+    }
+
+    // A whole-string hook may replace the optional instructions. Keep the
+    // applicable built-ins in the original order and retain the hook's text.
+    let mut extra = std::mem::take(system);
+    for text in &required {
+        extra = extra.replace(*text, "");
+    }
+    *system = required
+        .into_iter()
+        .chain(std::iter::once(extra.trim()))
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+}
 
 struct ChatHeaderPolicy {
     plugins: Arc<PluginHost>,
@@ -238,6 +269,7 @@ impl SessionProcessor {
         session_id: i64,
         workspace_root: Option<&std::path::Path>,
         system: &mut String,
+        fragments: &[ResolvedFragment],
         turns: &mut Vec<CompletionInputRun>,
     ) -> Result<(), AppError> {
         let system_hook = self
@@ -262,6 +294,7 @@ impl SessionProcessor {
                 .await
                 .map_err(|error| invalid_projection(error.diagnostic_message()))?;
             *system = updated.current_system;
+            retain_builtin_prompts(system, fragments);
             if system.len() > MAX_HOOK_PROJECTION_BYTES {
                 return Err(invalid_projection("system prompt exceeds hook byte budget"));
             }
@@ -333,6 +366,37 @@ impl SessionProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replacement_hooks_keep_required_prompts_in_the_configured_order() {
+        let fragments = [
+            ResolvedFragment::new(
+                agena_prompt_layers::FragmentId::parse("agena.system.second").unwrap(),
+                "Second",
+                PromptScope::Builtin,
+                "Second built-in.".to_owned(),
+            ),
+            ResolvedFragment::new(
+                agena_prompt_layers::FragmentId::parse("agena.system.first").unwrap(),
+                "First",
+                PromptScope::Builtin,
+                "First built-in.".to_owned(),
+            ),
+        ];
+        let mut append =
+            "Second built-in.\n\nOptional.\n\nFirst built-in.\n\nPlugin append.".to_owned();
+        retain_builtin_prompts(&mut append, &fragments);
+        assert_eq!(
+            append,
+            "Second built-in.\n\nOptional.\n\nFirst built-in.\n\nPlugin append."
+        );
+        let mut replace = "First built-in.\n\nPlugin replacement.".to_owned();
+        retain_builtin_prompts(&mut replace, &fragments);
+        assert_eq!(
+            replace,
+            "Second built-in.\n\nFirst built-in.\n\nPlugin replacement."
+        );
+    }
     use agena_domain::Role;
 
     #[test]

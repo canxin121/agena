@@ -157,10 +157,11 @@ pub(crate) enum PermissionStudioTextTarget {
 
 pub(crate) type SettingsValueEditOverlay = InputDialogState<SettingsFieldSpec>;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum PromptStudioScope {
     Global,
     Workspace,
+    #[default]
     Session,
 }
 
@@ -174,30 +175,20 @@ impl PromptStudioScope {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct PromptStudioDraft {
     pub layer: agena_prompt_layers::PromptLayer,
     /// Shared saved prompts are managed separately; preserve them on layer edits.
     pub library: Vec<agena_prompt_layers::PromptFragment>,
+    pub categories: Vec<String>,
     /// Model-scoped overlays are configuration-only and are preserved while
     /// this editor changes the top-level layer.
     pub models: Vec<serde_json::Value>,
 }
 
-impl PromptStudioDraft {
-    pub(crate) fn is_empty(&self) -> bool {
-        // A `replace` layer with no fragments still has meaning: it suppresses
-        // every inherited fragment. Only the default (append) empty layer can
-        // be deleted without changing behavior.
-        self.layer.is_empty()
-            && self.layer.mode == agena_prompt_layers::LayerMode::Append
-            && self.library.is_empty()
-            && self.models.is_empty()
-    }
-}
-
 #[derive(Debug, Clone)]
 pub(crate) enum PromptStudioEditorAction {
+    Add(agena_prompt_layers::FragmentId),
     Body(String),
     Title(String),
     Rename(String),
@@ -205,27 +196,52 @@ pub(crate) enum PromptStudioEditorAction {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PromptStudioPickerAction {
+    Browse,
     Order,
     Hide,
     Unhide,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct PromptStudioOverlay {
     pub session_id: i64,
+    pub session_has_workspace: bool,
     pub scope: PromptStudioScope,
+    pub builtins: Vec<agena_prompt_layers::BuiltinPrompt>,
+    pub reusable: Vec<agena_prompt_layers::PromptFragment>,
     pub global: PromptStudioDraft,
     pub workspace: PromptStudioDraft,
     pub session: PromptStudioDraft,
+    pub saved: [PromptStudioDraft; 3],
+    pub global_revision: Option<String>,
+    pub workspace_revision: Option<String>,
+    pub saving: bool,
     pub selected: usize,
     pub picker: Option<PromptStudioPickerAction>,
     pub picker_selected: usize,
     pub editor: Option<EditorDialogState<PromptStudioEditorAction>>,
     pub status: String,
     pub preview: Option<agena_prompt_layers::PromptResolution>,
+    pub preview_request: Option<uuid::Uuid>,
+    pub preview_selected: usize,
+    pub detail_open: bool,
+    pub detail_scroll: std::cell::Cell<u16>,
 }
 
 impl PromptStudioOverlay {
+    pub(crate) fn has_workspace(&self) -> bool {
+        self.scope == PromptStudioScope::Workspace
+            || (self.scope == PromptStudioScope::Session && self.session_has_workspace)
+    }
+
+    pub(crate) fn scope_index(&self) -> usize {
+        match self.scope {
+            PromptStudioScope::Global => 0,
+            PromptStudioScope::Workspace => 1,
+            PromptStudioScope::Session => 2,
+        }
+    }
+
     pub(crate) fn draft(&self) -> &PromptStudioDraft {
         match self.scope {
             PromptStudioScope::Global => &self.global,
@@ -257,6 +273,7 @@ pub(crate) enum ChoiceOverlayAction {
     SessionProfile {
         session_id: i64,
     },
+    BotAgentProfile,
     MessageQueue {
         session_id: i64,
     },

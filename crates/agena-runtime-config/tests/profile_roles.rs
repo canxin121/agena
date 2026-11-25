@@ -18,10 +18,16 @@ fn empty_configuration_has_executable_roles_and_role_specific_instructions() {
     let explore = resolve_agent_profile(&config.profiles, "explore").unwrap();
     assert_eq!(main.mode, AgentProfileMode::Primary);
     assert_eq!(explore.mode, AgentProfileMode::Subagent);
+    assert!(explore.read_only);
+    assert!(
+        resolve_agent_profile(&config.profiles, "planner")
+            .unwrap()
+            .read_only
+    );
     let main_text = &main.prompts[0].inline[0].body;
     let explore_text = &explore.prompts[0].inline[0].body;
     assert!(main_text.contains("agena.agent.spawn"));
-    for name in ["explore", "worker", "reviewer"] {
+    for name in ["explore", "planner", "worker", "reviewer", "verifier"] {
         assert!(main_text.contains(name));
     }
     assert!(explore_text.contains("read-only investigation"));
@@ -31,6 +37,22 @@ fn empty_configuration_has_executable_roles_and_role_specific_instructions() {
         "readonly"
     );
     assert_eq!(explore.max_turns, Some(40));
+}
+
+#[test]
+fn the_resolved_read_only_policy_is_inherited_with_the_role() {
+    let config = resolve(json!({"profiles": {
+        "explore": {"isolation": "worktree"},
+        "project-research": {"extends": "explore"},
+        "project-worker": {"extends": "project-research", "read_only": false}
+    }}));
+    let research = resolve_agent_profile(&config.profiles, "project-research").unwrap();
+    assert!(research.read_only);
+    assert!(research.read_only_ceiling().is_some());
+    assert_eq!(research.isolation, agena_domain::AgentIsolation::Shared);
+    let worker = resolve_agent_profile(&config.profiles, "project-worker").unwrap();
+    assert!(worker.read_only_ceiling().is_none());
+    assert_eq!(worker.isolation, agena_domain::AgentIsolation::Worktree);
 }
 
 #[test]
@@ -169,7 +191,14 @@ fn builtin_prompt_customization_appends_or_explicitly_suppresses_factory_instruc
             .iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>(),
-        vec!["agena-profile-main", "project"]
+        vec![
+            "agena-profile-main",
+            "agena.profile.investigation",
+            "agena.profile.planning",
+            "agena.profile.implementation",
+            "agena.profile.verification",
+            "project"
+        ]
     );
     let suppressed = resolve(json!({"profiles":{"main":{"prompts":{
         "disabled":["agena-profile-main"], "order":["project"], "inline":[{"id":"project","body":"PROJECT_RULE"}]
@@ -178,6 +207,51 @@ fn builtin_prompt_customization_appends_or_explicitly_suppresses_factory_instruc
     assert_eq!(profile.prompts[0].order.len(), 1);
     assert_eq!(profile.prompts[0].inline.len(), 1);
     assert_eq!(profile.prompts[0].inline[0].body, "PROJECT_RULE");
+}
+
+#[test]
+fn factory_roles_reference_the_common_library_using_compatible_methods() {
+    use agena_prompt_layers::{LayerSource, PromptContext, PromptScope};
+    let config = resolve(json!({}));
+    let library = config.prompts.library(PromptScope::Global).unwrap();
+    let roles: &[(&str, &[&str])] = &[
+        (
+            "main",
+            &[
+                "agena.profile.planning",
+                "agena.profile.implementation",
+                "agena.profile.verification",
+            ],
+        ),
+        (
+            "worker",
+            &["agena.profile.implementation", "agena.profile.verification"],
+        ),
+        ("reviewer", &["agena.profile.read-only"]),
+        ("explore", &["agena.profile.read-only"]),
+        (
+            "planner",
+            &["agena.profile.planning", "agena.profile.read-only"],
+        ),
+        ("verifier", &["agena.profile.verification"]),
+    ];
+    for &(role, methods) in roles {
+        let layer = &config.profiles[role].prompts;
+        let prompt = agena_prompt_layers::resolve(
+            &[LayerSource::new(PromptScope::Profile, layer, &library)],
+            &PromptContext::default(),
+        )
+        .unwrap();
+        let ids: Vec<_> = prompt
+            .fragments
+            .iter()
+            .map(|fragment| fragment.id.as_str())
+            .collect();
+        let role_id = format!("agena-profile-{role}");
+        let mut expected = vec![role_id.as_str(), "agena.profile.investigation"];
+        expected.extend_from_slice(methods);
+        assert_eq!(ids, expected, "{role}");
+    }
 }
 
 #[test]

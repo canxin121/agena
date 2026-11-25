@@ -18,7 +18,7 @@ use crate::{
     session::{ContextGovernor, SessionManager, SessionProcessor},
     tool::ToolExecutor,
 };
-use agena_bundled_plugins::tool::{BrowserSessionPool, browser_plugin_id};
+use agena_bundled_plugins::tool::{BrowserSessionPool, DesktopWindowPool, browser_plugin_id};
 use agena_domain::ModelRef;
 use agena_plugin_host::PluginHost;
 use agena_provider::{ModelCatalogResponse, decorate_provider_models};
@@ -139,6 +139,7 @@ pub(crate) struct RuntimeSnapshot {
     global_plugins: Arc<PluginHost>,
     global_plugin_config: agena_plugin_host::PluginsConfig,
     browser_sessions: BrowserSessionPool,
+    desktop_windows: DesktopWindowPool,
     _global_mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
     _global_plugin_shutdown: Option<Arc<agena_runtime::CallbackOnDrop>>,
     _global_lsp_registration: Option<Arc<agena_runtime::AbortOnDrop>>,
@@ -317,6 +318,10 @@ impl RuntimeSnapshot {
             || BrowserSessionPool::new(host_client.clone()),
             |previous| previous.browser_sessions.clone(),
         );
+        let desktop_windows = previous
+            .as_ref()
+            .map(|previous| previous.desktop_windows.clone())
+            .unwrap_or_default();
         let plugins = build_plugin_services(
             agena_runtime::PluginCompositionInputs {
                 sandbox_enabled: resolution.config.sandbox,
@@ -340,6 +345,7 @@ impl RuntimeSnapshot {
                     state: kernel.instance_state.clone(),
                 }),
             browser_sessions.clone(),
+            desktop_windows.clone(),
         )
         .await?;
         // Own successful plugin initialization across every later service
@@ -380,6 +386,7 @@ impl RuntimeSnapshot {
                     state: kernel.instance_state.clone(),
                 }),
             browser_sessions.clone(),
+            desktop_windows.clone(),
         )
         .await?;
         let global_plugin_shutdown =
@@ -500,6 +507,7 @@ impl RuntimeSnapshot {
             global_plugins,
             global_plugin_config: global_resolution.config.plugins,
             browser_sessions,
+            desktop_windows,
             _global_mcp_manager: global_mcp_manager,
             _global_plugin_shutdown: global_plugin_shutdown,
             _global_lsp_registration: global_lsp_registration,
@@ -1026,6 +1034,7 @@ mod global_plugin_tests {
             },
             None,
             BrowserSessionPool::default(),
+            DesktopWindowPool::default(),
         )
         .await
         .unwrap();
@@ -1043,6 +1052,7 @@ mod global_plugin_tests {
             },
             None,
             BrowserSessionPool::default(),
+            DesktopWindowPool::default(),
         )
         .await
         .unwrap();

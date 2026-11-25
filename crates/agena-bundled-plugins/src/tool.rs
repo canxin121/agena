@@ -5,8 +5,8 @@ use std::sync::Arc;
 pub use agena_runtime_tools::tool::*;
 
 use crate::plugins::provided::{
-    agent, bot, code, commands, cron, fs, interaction, lsp, mcp, notebook, notifications, planning,
-    report, session, settings, shell, skills, telegram,
+    agent, bot, code, code_mode, commands, cron, fs, interaction, lsp, mcp, notebook,
+    notifications, planning, report, session, settings, shell, skills, telegram,
 };
 
 pub fn commands_plugin_id() -> &'static str {
@@ -14,7 +14,7 @@ pub fn commands_plugin_id() -> &'static str {
 }
 
 pub fn new_commands_plugin() -> impl agena_plugin_host::sdk::Plugin {
-    commands::CommandsPlugin::new()
+    commands::CommandsPlugin
 }
 
 pub fn skills_plugin_id() -> &'static str {
@@ -47,6 +47,14 @@ pub fn code_plugin_id() -> &'static str {
 
 pub fn new_code_plugin() -> impl agena_plugin_host::sdk::Plugin {
     code::new_plugin()
+}
+
+pub fn code_mode_plugin_id() -> &'static str {
+    code_mode::CODE_MODE_PLUGIN_ID
+}
+
+pub fn new_code_mode_plugin() -> impl agena_plugin_host::sdk::Plugin {
+    code_mode::CodeModePlugin::default()
 }
 
 pub fn fs_plugin_id() -> &'static str {
@@ -195,6 +203,13 @@ pub fn new_browser_plugin() -> impl agena_plugin_host::sdk::Plugin {
 }
 
 pub use crate::browser::BrowserSessionPool;
+pub use crate::plugins::provided::desktop::DesktopWindowPool;
+
+pub(crate) fn new_desktop_plugin() -> impl agena_plugin_host::sdk::Plugin {
+    crate::plugins::provided::desktop::DesktopPlugin::default()
+}
+
+pub(crate) use crate::plugins::provided::chat_channels::{CHAT_PLATFORM_PLUGINS, ChatChannel};
 
 pub fn memory_plugin_id() -> &'static str {
     crate::memory::MEMORY_PLUGIN_ID

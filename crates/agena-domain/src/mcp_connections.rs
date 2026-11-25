@@ -4,6 +4,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// These tool result metadata fields are reserved for the authenticated UI.
+pub const APP_METADATA_KEY: &str = "agena.mcp.app";
+pub const APP_RESULT_METADATA_KEY: &str = "agena.mcp.app.result_meta";
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum McpConnectionScope {

@@ -7,6 +7,7 @@ use std::{
 };
 
 use agena_api::bot::{BotList, BotPersona, BotProfile, BotSession};
+use agena_api::resource::RunOptions;
 use agena_testkit::{Reply, RequestMatch, TestCase, TestHttpResponse, TestResult, UserSession};
 use anyhow::{Context, Result, ensure};
 use reqwest::Method;
@@ -295,6 +296,118 @@ async fn bot_profiles_registry_auth_validation_concurrency_and_receipts() -> Tes
         ensure!(profile(&case,b.id).await? == b);
         Ok(())
     }).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn bot_prompt_fragments_keep_legacy_body_and_follow_one_saved_order() -> TestResult {
+    fixture()
+        .configure_global(|config| {
+            config["prompts"]["library"] =
+                json!([{"id":"bot-reviewed-style", "body":"LIBRARY-PROMPT-932"}]);
+        })
+        .run(|case| async move {
+            let literal = "BOT-PERSONAL-PROMPT-638 {{ model }}";
+            let bot = create(
+                &case,
+                "ordered-bot",
+                "Ordered Bot",
+                Some(json!({
+                    "instructions": literal,
+                    "prompts":{"ids":["bot-reviewed-style"]}
+                })),
+            )
+            .await?;
+            let id = ensure_named(&case, bot.id).await?.session_id;
+            let session = case.user().attach_session(id).await?;
+            let initial = session.client().session_prompt_preview(id).await?;
+            ensure!(initial.text.find("LIBRARY-PROMPT-932") < initial.text.find(literal));
+
+            let expected = [
+                "agena.system.communication",
+                "agena.bot.instructions",
+                "bot-reviewed-style",
+                "agena.system.identity",
+            ];
+            let payload = json!({
+                "name":bot.name, "request_key":"ordered-bot-edit", "expected_revision":bot.revision,
+                "persona":{"instructions":literal, "prompts":{"ids":expected}}
+            });
+            let saved: BotProfile = case
+                .http()
+                .await
+                .send_json(Method::PUT, &format!("/api/v1/bots/{}", bot.id), &payload)
+                .await?
+                .require_success()?
+                .json()?;
+            ensure!(
+                saved
+                    .persona
+                    .prompts
+                    .context("missing persisted order")?
+                    .ids
+                    == expected
+            );
+            let preview = session.client().session_prompt_preview(id).await?;
+            let actual = preview
+                .fragments
+                .iter()
+                .filter_map(|fragment| {
+                    expected
+                        .contains(&fragment.id.as_str())
+                        .then_some(fragment.id.as_str())
+                })
+                .collect::<Vec<_>>();
+            ensure!(actual == expected, "{actual:?}");
+            ensure!(
+                preview.text.contains(literal),
+                "the existing Bot body must stay literal"
+            );
+            case.model()
+                .expect(RequestMatch::user_text("Check Bot prompt order"))
+                .check(move |request| {
+                    let received = request.body["instructions"]
+                        .as_str()
+                        .context("system prompt")?;
+                    ensure!(received.starts_with(&preview.text));
+                    ensure!(received.matches(literal).count() == 1);
+                    Ok(())
+                })
+                .reply(Reply::text("Ordered prompt checked."));
+            session
+                .send("Check Bot prompt order")
+                .await?
+                .wait_settled()
+                .await?
+                .assert_succeeded()?;
+            case.model()
+                .expect(RequestMatch::user_text("Check Bot request override"))
+                .check(move |request| {
+                    let received = request.body["instructions"]
+                        .as_str()
+                        .context("system prompt")?;
+                    ensure!(
+                        received.contains("BOT-PER-RUN-772")
+                            && received.matches(literal).count() == 1
+                    );
+                    ensure!(!received.contains("LIBRARY-PROMPT-932"));
+                    Ok(())
+                })
+                .reply(Reply::text("Request override checked."));
+            session
+                .send_with(
+                    "Check Bot request override",
+                    RunOptions {
+                        system: Some("BOT-PER-RUN-772".into()),
+                        ..Default::default()
+                    },
+                )
+                .await?
+                .wait_settled()
+                .await?
+                .assert_succeeded()?;
+            Ok(())
+        })
+        .await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

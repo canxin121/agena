@@ -19,6 +19,7 @@ pub use fs_broker::read_regular_file_nofollow;
 pub mod media_input;
 mod monitor;
 mod process_output;
+mod profile_skills;
 mod project_instructions;
 mod project_paths;
 pub mod sandbox_worker;

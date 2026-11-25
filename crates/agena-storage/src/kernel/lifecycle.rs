@@ -100,6 +100,11 @@ pub struct SessionAgentConfiguration {
     pub finished_at_ms: Option<i64>,
     pub failure: Option<agena_failure::Failure>,
     pub limits: AgentExecutionLimits,
+    #[serde(
+        default,
+        skip_serializing_if = "agena_domain::AgentAssignment::is_empty"
+    )]
+    pub assignment: agena_domain::AgentAssignment,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]

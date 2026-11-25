@@ -911,6 +911,7 @@ async fn shared_channel_child_continuation_keeps_alice_after_bob_speaks() {
         inputs.push(input);
     }
     let mut agent = SessionAgentConfiguration {
+        assignment: Default::default(),
         origin_message_id: Some(inputs[0].message_id),
         name: "alice_worker".into(),
         status: agena_domain::AgentStatus::Running,

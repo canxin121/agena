@@ -45,18 +45,25 @@ impl SessionManager {
             );
         }
         // Resolution fails closed when a saved profile was removed or renamed.
-        if validate_mode {
-            state.config.validate_session_profile(
-                configuration.profile.as_deref(),
-                configuration.relation_kind,
-            )
+        if configuration.profile.is_none() && configuration.owner.is_some() {
+            self.conversation_profile(&configuration, &state).await?;
+        } else if validate_mode {
+            state
+                .config
+                .validate_session_profile(
+                    configuration.profile.as_deref(),
+                    configuration.relation_kind,
+                )
+                .map_err(AppError::Config)?;
         } else {
-            state.config.resolve_session_profile(
-                configuration.profile.as_deref(),
-                configuration.relation_kind,
-            )
+            state
+                .config
+                .resolve_session_profile(
+                    configuration.profile.as_deref(),
+                    configuration.relation_kind,
+                )
+                .map_err(AppError::Config)?;
         }
-        .map_err(AppError::Config)?;
         self.validate_session_permission_configuration(workspace_id, &configuration)
             .await?;
         Ok(configuration)
@@ -252,10 +259,14 @@ impl SessionManager {
             .await
             .map_err(kernel_error)?;
         let state = self.state_for_session(session).await?;
-        let selection = state
-            .config
-            .session_selection(&snapshot.configuration, &ExecutionSelection::default())
-            .map_err(AppError::Config)?;
+        let profile = self
+            .conversation_profile(&snapshot.configuration, &state)
+            .await?;
+        let selection = state.config.selection_with_profile(
+            &snapshot.configuration,
+            &ExecutionSelection::default(),
+            &profile.definition,
+        );
         if let Some(model) = state
             .providers
             .resolve_default_model_selection(&selection)?

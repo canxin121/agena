@@ -143,6 +143,18 @@ impl HostClient for ScopedHostClient {
         .await
     }
 
+    async fn require_mcp_global_config_read(&self) -> crate::sdk::Result<()> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                crate::sdk::permission_wait::waiting(inner.require_mcp_global_config_read()),
+            )
+            .await
+        })
+        .await
+    }
+
     async fn check_path_permission(
         &self,
         request: crate::sdk::host_api::PathPermissionQuery,
@@ -427,6 +439,36 @@ impl HostClient for ScopedHostClient {
         self.run_callback(async {
             let inner = self.handle.inner.read().await.clone();
             host_api::run_in_host_callback_context(self.context()?, inner.get_session(req)).await
+        })
+        .await
+    }
+
+    async fn search_session_transcript(
+        &self,
+        req: host_api::HostSessionSearchRequest,
+    ) -> crate::sdk::Result<serde_json::Value> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.search_session_transcript(req),
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn read_session_transcript(
+        &self,
+        req: host_api::HostSessionReadRequest,
+    ) -> crate::sdk::Result<serde_json::Value> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.read_session_transcript(req),
+            )
+            .await
         })
         .await
     }

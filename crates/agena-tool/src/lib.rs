@@ -391,7 +391,6 @@ fn tool_result_fragment_from_text(key: &str, text: &str) -> Option<String> {
         "memory.write" if lower.starts_with("saved ") => Some("saved".to_owned()),
         "memory.delete" if lower.starts_with("deleted ") => Some("removed".to_owned()),
         "plan.clear" if lower.contains("cleared") => Some("cleared".to_owned()),
-        "mcp.servers.status" if lower.starts_with("no mcp servers") => Some("0 servers".to_owned()),
         _ => None,
     };
     specific.or_else(|| discovery_text_result_fragment(key, text))
@@ -713,8 +712,9 @@ fn tool_result_fragment(
         | "mcp.prompts.get"
         | "mcp.tools.call"
         | "mcp.tools.search"
-        | "mcp.servers.status"
-        | "mcp.servers.reconnect" => {
+        | "mcp.connections.list"
+        | "mcp.connections.get"
+        | "mcp.connections.reconnect" => {
             if let Some(fragment) = mcp_result_fragment(key, object) {
                 return Some(fragment);
             }
@@ -747,16 +747,6 @@ fn tool_result_fragment(
         }
         "agent.spawn" | "agent.message" | "agent.wait" | "agent.followup" | "agent.cancel" => {
             return agent_result_fragment(key, object);
-        }
-        "commands.install"
-        | "commands.remove"
-        | "commands.get"
-        | "commands.list"
-        | "commands.read_resource"
-        | "commands.refresh" => {
-            if let Some(fragment) = command_result_fragment(key, object) {
-                return Some(fragment);
-            }
         }
         "settings.get" | "settings.list" | "settings.inspect" => {
             if let Some(fragment) = settings_result_fragment(key, object) {
@@ -1008,16 +998,6 @@ fn shell_result_fragment(
             .get("processes")
             .and_then(serde_json::Value::as_array)
             .map(|processes| format_count(processes.len(), "processes")),
-        "shell.logs" => object
-            .get("events")
-            .and_then(serde_json::Value::as_array)
-            .map(|events| {
-                let mut fragment = format_count(events.len(), "events");
-                if object.get("has_more").and_then(serde_json::Value::as_bool) == Some(true) {
-                    fragment.push_str(" · more available");
-                }
-                fragment
-            }),
         "shell.stop" => {
             if let Some(stopped) = object
                 .get("stopped")
@@ -1418,86 +1398,6 @@ fn agent_result_fragment(
     })
 }
 
-fn command_result_fragment(
-    key: &str,
-    object: &serde_json::Map<String, serde_json::Value>,
-) -> Option<String> {
-    match key {
-        "commands.install" | "commands.remove" => {
-            let operation = object
-                .get("operation")
-                .and_then(serde_json::Value::as_str)
-                .map(|value| match value {
-                    "deleted" | "removed" => "removed".to_owned(),
-                    value => normalize_tool_title(value),
-                });
-            let name = object
-                .get("name")
-                .and_then(serde_json::Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-                .map(normalize_tool_title);
-            let parts = operation.into_iter().chain(name).collect::<Vec<_>>();
-            if !parts.is_empty() {
-                return Some(parts.join(" · "));
-            }
-        }
-        "commands.list" => {
-            let returned = object.get("returned").and_then(value_as_u64);
-            if let Some(returned) = returned {
-                let total = object.get("total").and_then(value_as_u64);
-                return Some(match total {
-                    Some(total) => format!("{returned} of {total} packages"),
-                    None => format_count(returned as usize, "packages"),
-                });
-            }
-        }
-        "commands.get" => {
-            let name = object.get("name").and_then(serde_json::Value::as_str);
-            let source = object.get("source").and_then(serde_json::Value::as_str);
-            let parts = name
-                .into_iter()
-                .chain(source)
-                .map(normalize_tool_title)
-                .collect::<Vec<_>>();
-            if !parts.is_empty() {
-                return Some(parts.join(" · "));
-            }
-        }
-        "commands.read_resource" => {
-            let path = object.get("path").and_then(serde_json::Value::as_str);
-            let bytes = object.get("bytes").and_then(value_as_u64);
-            let parts = path
-                .into_iter()
-                .map(normalize_tool_title)
-                .chain(bytes.map(format_bytes))
-                .collect::<Vec<_>>();
-            if !parts.is_empty() {
-                return Some(parts.join(" · "));
-            }
-        }
-        "commands.refresh" => {
-            let changed = object
-                .get("changed")
-                .and_then(serde_json::Value::as_bool)
-                .map(|changed| if changed { "changed" } else { "unchanged" });
-            let generation = object
-                .get("generation")
-                .and_then(value_as_u64)
-                .map(|value| format!("catalog {value}"));
-            let parts = changed
-                .into_iter()
-                .map(ToOwned::to_owned)
-                .chain(generation)
-                .collect::<Vec<_>>();
-            if !parts.is_empty() {
-                return Some(parts.join(" · "));
-            }
-        }
-        _ => {}
-    }
-    None
-}
-
 fn settings_result_fragment(
     key: &str,
     object: &serde_json::Map<String, serde_json::Value>,
@@ -1645,29 +1545,22 @@ fn mcp_result_fragment(
                 parts.push(format_count(results.len(), "tools"));
             }
         }
-        "mcp.servers.status" => {
-            if let Some(servers) = object.get("servers").and_then(serde_json::Value::as_array) {
-                let connected = servers
+        "mcp.connections.list" => {
+            if let Some(connections) = object
+                .get("connections")
+                .and_then(serde_json::Value::as_array)
+            {
+                parts.push(format_count(connections.len(), "connections"));
+                let connected = connections
                     .iter()
-                    .filter(|server| {
-                        server.get("connected").and_then(serde_json::Value::as_bool) == Some(true)
-                    })
+                    .filter(|item| item["state"] == "connected")
                     .count();
-                let tools = servers
-                    .iter()
-                    .filter_map(|server| server.get("tool_count").and_then(value_as_u64))
-                    .sum::<u64>();
-                parts.push(format!("{connected}/{} connected", servers.len()));
-                parts.push(format_count(tools as usize, "tools"));
+                parts.push(format!("{connected} connected"));
             }
         }
-        "mcp.servers.reconnect" => {
-            if let Some(connected) = object.get("connected").and_then(serde_json::Value::as_bool) {
-                parts.push(if connected {
-                    "connected".to_owned()
-                } else {
-                    "disconnected".to_owned()
-                });
+        "mcp.connections.get" | "mcp.connections.reconnect" => {
+            if let Some(state) = object.get("state").and_then(serde_json::Value::as_str) {
+                parts.push(normalize_tool_title(state));
             }
             if let Some(tool_count) = object.get("tool_count").and_then(value_as_u64) {
                 parts.push(format_count(tool_count as usize, "tools"));
@@ -2363,7 +2256,6 @@ fn tool_action_label(tool_name: &str) -> String {
         "shell.open" => "Open interactive terminal".to_owned(),
         "shell.read" => "Read terminal output".to_owned(),
         "shell.list" => "List processes".to_owned(),
-        "shell.logs" => "Show process logs".to_owned(),
         "shell.stop" => "Stop process".to_owned(),
         "shell.write" => "Interact with terminal".to_owned(),
         "shell.resize" => "Resize terminal".to_owned(),
@@ -2426,9 +2318,9 @@ fn tool_action_label(tool_name: &str) -> String {
         "mcp.prompts.list" => "List MCP prompts".to_owned(),
         "mcp.prompts.get" => "Get MCP prompt".to_owned(),
         "mcp.prompts" => "List MCP prompts".to_owned(),
-        "mcp.servers.status" => "Check MCP servers".to_owned(),
-        "mcp.servers.reconnect" => "Reconnect MCP server".to_owned(),
-        "mcp.servers" => "List MCP servers".to_owned(),
+        "mcp.connections.list" => "List MCP connections".to_owned(),
+        "mcp.connections.get" => "Inspect MCP connection".to_owned(),
+        "mcp.connections.reconnect" => "Reconnect MCP connection".to_owned(),
         "memory.search" => "Search memory".to_owned(),
         "memory.get" => "Read memory".to_owned(),
         "memory.list" => "List memories".to_owned(),
@@ -2468,12 +2360,6 @@ fn tool_action_label(tool_name: &str) -> String {
         "settings.delete" => "Delete setting".to_owned(),
         "settings.patch" => "Patch settings".to_owned(),
         "settings.validate" => "Validate settings".to_owned(),
-        "commands.install" => "Install command".to_owned(),
-        "commands.remove" => "Remove command".to_owned(),
-        "commands.get" => "Inspect command".to_owned(),
-        "commands.list" => "List commands".to_owned(),
-        "commands.read_resource" => "Read command resource".to_owned(),
-        "commands.refresh" => "Refresh commands".to_owned(),
         "snapshot.status" => "Inspect snapshot".to_owned(),
         "repo.status" => "Inspect repository".to_owned(),
         "browser.open" => "Open page".to_owned(),
@@ -2578,7 +2464,6 @@ pub fn invocation_title_subject(tool_name: &str, input: &serde_json::Value) -> S
     {
         &["command", "description"]
     } else if [
-        "shell.logs",
         "shell.read",
         "shell.write",
         "shell.stop",
@@ -2666,8 +2551,6 @@ pub fn invocation_title_subject(tool_name: &str, input: &serde_json::Value) -> S
         &["name", "path"]
     } else if key.starts_with("session.") {
         &["title", "name", "session_id"]
-    } else if key.starts_with("commands.") {
-        &["name", "path", "resource", "document"]
     } else if key.starts_with("chatgpt.")
         || key.starts_with("claude.")
         || key.starts_with("gemini.")
@@ -3207,30 +3090,6 @@ pub enum PatchOpKind {
     Update,
     Delete,
     Move,
-}
-
-/// Model-facing builtin-tool availability profile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BuiltinToolProfile {
-    Full,
-    ReadOnly,
-    NoAgent,
-}
-
-impl BuiltinToolProfile {
-    pub fn infer(model_id: Option<&str>) -> Self {
-        let Some(model_id) = model_id else {
-            return Self::Full;
-        };
-        let lowered = model_id.to_ascii_lowercase();
-        if lowered.contains("readonly") || lowered.contains("read_only") {
-            return Self::ReadOnly;
-        }
-        if lowered.contains("no-agent") || lowered.contains("chat") {
-            return Self::NoAgent;
-        }
-        Self::Full
-    }
 }
 
 /// Presentation-neutral availability result for one builtin tool.

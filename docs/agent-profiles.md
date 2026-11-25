@@ -11,19 +11,32 @@ the selected role when creating a child agent.
 | --- | --- | --- |
 | `main` | `primary` | Own the user goal, coordinate specialists, integrate work, verify, and deliver. |
 | `explore` | `subagent` | Read-only discovery of code, behavior, and sources; return evidence and recommendations. |
+| `planner` | `subagent` | Recommend an implementation sequence, weigh tradeoffs, and define acceptance checks. |
 | `worker` | `subagent` | Complete a bounded implementation, fix, or other substantive assignment. |
 | `reviewer` | `all` | Independently review correctness, regressions, authorization boundaries, and test gaps. |
+| `verifier` | `subagent` | Run acceptance checks and report each outcome with evidence. |
 
-`explore` and `reviewer` have read-only filesystem defaults and a 40-turn limit.
+`explore`, `planner`, `reviewer`, and `verifier` have read-only filesystem defaults and a 40-turn limit.
+`explore` and `planner` use a read-only permission ceiling and can run read-only
+tools. `verifier` can run
+noninteractive shell checks within the effective permissions. When native sandboxing is
+enabled, it enforces the filesystem policy for those processes. Checks that write
+artifacts can use permitted output paths or a private sandbox temporary directory.
 `main` and `worker` use the surrounding permission and turn-limit defaults. Roles
 use configured models; a delegated role without its own model can use the parent's
 actual model as a fallback.
 
 The common system layer contains identity, evidence and authorization requirements,
-tool protocols, conversation routing, and output-format rules. Task methods and
-role responsibilities come from the selected profile's prompt layer. An explorer
-therefore receives exploration instructions, rather than a copy of the parent's
-main-role workflow.
+tool protocols, and output-format rules. The runtime selects the conversation
+recipient and approval workflow from the session relationship. Task methods
+and role responsibilities come from the selected profile's ordered prompt layer.
+All six roles reference **Investigation and evidence**. `main` and `planner`
+share **Planning and acceptance criteria**. `main`, `worker`, and `verifier`
+share **Verification and evidence**. `main` and `worker` also reference
+**Implementation and verification**. `explore`, `planner`, and `reviewer`
+share **Read-only work**. Each profile supplies its specific responsibilities
+as one inline fragment. Custom profiles can reference the shared fragments
+in `prompts.order`.
 
 ## Active role selection
 
@@ -65,15 +78,15 @@ restore its definition or select another role, including restoring the default.
 
 ## Model-driven delegation
 
-When the agent can use `agena.agent.spawn`, its system context contains the
-current delegation catalog: names, descriptions, and the configured default.
+When an agent can use `agena.agent.spawn`, its system context contains the
+current delegation catalog with names, descriptions, read-only access, and the configured default.
 The catalog is resolved from the same scope and execution snapshot used for the
 run, and includes custom roles. Only roles that support subagent use and are not
 hidden appear in discovery.
 
-The main role uses this catalog to assign independent exploration, implementation,
-and review work. A useful delegation specifies the role, the task, relevant
-context, ownership boundaries, and expected output:
+The main role uses this catalog to assign independent exploration, planning,
+implementation, review, and verification work. Specify the role, task, relevant
+context, ownership boundaries, and expected output when delegating.
 
 ```json
 {
@@ -91,14 +104,77 @@ context, ownership boundaries, and expected output:
 }
 ```
 
-Use `reviewer` for an independent review of the result. `agent.spawn` validates the
+Use `planner` before implementation when the approach or acceptance criteria
+need investigation. Use `reviewer` to inspect a change for defects and `verifier`
+to execute the acceptance checks and report results. `agent.spawn` validates the
 name and role mode, and its handle returns the actual selected profile. A
 primary-only role cannot be launched as a subagent. Omitting `profile` uses the
 configured subagent default; an explicit empty value uses `worker`.
 
 Continue an existing assignment with `agent.followup`. Followup preserves the
-child's own profile, explicit settings, and permission boundaries. It does not
-reset the child to the parent's role.
+child's own profile, explicit settings, and permission boundaries. Delegation
+supports three levels of subagents, with up to eight direct children per parent.
+An agent can message its parent, peers, and direct children and can follow up
+with or cancel its direct children. Use the returned ID when names overlap.
+
+### Research during planning
+
+During the planning phase, choose a profile marked **Read only** in
+`agent.spawn`, such as `explore`, `planner`, or a custom role derived from them.
+The plan gate checks the resolved profile before the child starts. The child
+uses its parent's checkout, and its read-only permission ceiling also applies
+to future followups. The parent can wait with `agent.wait` and request
+implementation approval with `plan.review`.
+
+Set **Execution access** to **Read only** in the profile editor, or set
+`read_only: true` in the profile definition. Profiles inherit this setting
+through `extends`. Setting `read_only: false` applies the configured
+permissions without the additional role ceiling.
+Existing callers that requested read-only investigation can migrate to
+`profile: "explore"` in `agent.spawn`.
+
+### Startup context
+
+`context.project_instructions` controls project instruction loading.
+`startup` loads the normal project guidance into the system prompt.
+`on_demand` asks the agent to read the guidance for the parts of the repository
+it investigates. The built-in `explore` and `planner` roles use `on_demand`.
+
+`context.preload_skills` accepts up to eight enabled Skill names in the desired
+order. Agena loads accessible Skill documents through the current workspace
+catalog, with a combined 32 KiB instruction budget. The prompt preview lists
+loaded documents and reports unavailable or oversized ones. Each context
+setting can be inherited independently. Set the Skill list to `[]` to clear
+an inherited preload list.
+
+### Isolated implementation and verification
+
+Set `isolation: "worktree"` on a delegatable profile or on a spawn request to
+start an independent Git checkout. A spawn request can select `"shared"` to use
+the parent's checkout. Worktree isolation uses a project session and committed
+local `HEAD` by default. Use `worktree_base` to pin another local revision.
+
+```json
+{
+  "name": "verify_parser",
+  "profile": "worker",
+  "isolation": "worktree",
+  "prompt": "Fix the parser's empty-input case and verify the behavior.",
+  "verification_commands": ["cargo test -p parser empty_input"]
+}
+```
+
+The launch and completion return the worktree path, branch, and base commit.
+The completion also summarizes changed paths. Agena retains the worktree for
+inspection and followup. Integration into the source branch is a separate Git
+operation.
+
+`verification_commands` records outcomes from exact `shell.exec` commands in
+the current child execution. For a worktree assignment, the command must launch
+inside that checkout. The parent receives `PASS` for exit 0, `FAIL` for another
+exit code, and `BLOCKED` for a missing or incomplete result. Each recorded check
+links to its output resource or tool call. The agent receives one reminder if
+requested checks are still missing when it attempts to finish.
 
 ### Delegated models and permissions
 
@@ -141,6 +217,7 @@ A profile supports:
 | `title`, `description` | Display name and purpose. Descriptions also help the model choose a child role. |
 | `mode` | `primary`, `subagent`, or `all`. A new custom profile defaults to `all`; inherited roles keep their parent's mode unless overridden. |
 | `hidden` | Hide from model-facing delegation discovery. Explicit selection and a configured default remain supported. |
+| `read_only` | Apply a read-only tool and filesystem ceiling. Subagents using the profile share their parent's checkout. |
 | `extends` | One parent profile; instructions and defaults resolve parent first. |
 | `model` | Provider, adapter, model, thinking/speed modes, verbosity, and parallel-tool preference. |
 | `prompts` | A prompt layer with `mode`, `order`, `disabled`, and `inline`. |
@@ -234,6 +311,13 @@ the profile's preferred model. Inherited defaults are never saved as if the user
 had manually selected them.
 
 ## Clients and API
+
+In AI Bot settings, choose a global profile that supports primary sessions.
+**New profile** saves a reusable global definition and selects it in the Bot
+form. Save the Bot to bind that profile. Its conversations inherit the profile
+unless they have an explicit selection of their own. The Bot's ordered prompts
+and private instructions are applied as an additional prompt layer. Connected
+channels keep their own authorization and permission ceilings.
 
 The Web entry is **Settings → AI & sessions → Agent profiles** (Chinese:
 **设置 → AI 与会话 → 智能体配置**). It shows factory roles and their overrides,

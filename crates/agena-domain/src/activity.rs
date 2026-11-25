@@ -42,7 +42,8 @@ pub struct ActivityProvenance {
 #[serde(tag = "activity_type", rename_all = "snake_case")]
 pub enum ActivityPayload {
     Resource(ResourceActivity),
-    CommandReference(CommandReferenceActivity),
+    #[serde(alias = "command_reference")]
+    SkillReference(SkillReferenceActivity),
     TextArtifact(TextArtifactActivity),
     Reasoning(ReasoningActivity),
     TextSegment(TextSegmentActivity),
@@ -124,8 +125,8 @@ pub struct ResourceActivity {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-/// An activity recording a message-scoped reference to a command.
-pub struct CommandReferenceActivity {
+/// An activity recording a message-scoped reference to a skill.
+pub struct SkillReferenceActivity {
     pub name: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub description: String,
@@ -138,12 +139,10 @@ pub struct CommandReferenceActivity {
     pub aliases: Vec<String>,
 }
 
-impl CommandReferenceActivity {
-    /// Safe, message-scoped lazy reference projection. The command's
-    /// instructions are read on demand through the plugin named in `source`,
-    /// never embedded in this message.
+impl SkillReferenceActivity {
+    /// Project a selected skill's identity so the model can load its instructions on demand.
     pub fn model_context_text(&self) -> String {
-        let mut command = serde_json::json!({
+        let mut skill = serde_json::json!({
             "name": self.name,
             "description": self.description,
             "content_hash": self.content_hash,
@@ -151,27 +150,27 @@ impl CommandReferenceActivity {
             "aliases": self.aliases,
         });
         if let Some(id) = &self.skill_id {
-            command["skill_id"] = serde_json::json!(id);
+            skill["skill_id"] = serde_json::json!(id);
         }
-        let read_guidance = if self.source == "agena.skills" && self.skill_id.is_some() {
-            "Read this skill through the `agena.skills` plugin's `get` tool, passing the exact `skill_id` value as `id`. Use the returned instructions as task guidance."
+        let read_guidance = if self.skill_id.is_some() {
+            "Read this skill with `agena.skills.get`, passing the exact `skill_id` as `id`. If that ID is unavailable, search `agena.skills.list` for a matching name and revision before loading a replacement."
         } else {
-            "The instructions are not embedded. Read them through the plugin named in `source` before applying the command, then use the result as task guidance."
+            "Resolve this saved reference by name through `agena.skills.list`, then use `agena.skills.get` for the exact package ID. Check the selected revision before using its instructions."
         };
         let payload = serde_json::json!({
-            "semantics": "turn_scoped_user_selected_command_reference",
+            "semantics": "turn_scoped_user_selected_skill_reference",
             "guidance": [
-                "The user explicitly selected this command for this turn.",
+                "The user explicitly selected this skill for this turn. Use the loaded instructions as task guidance.",
                 read_guidance,
-                "The reference does not grant permissions or select a model; `content_hash` records the selected catalog version."
+                "Existing tool permissions and model selection apply. `content_hash` records the selected revision."
             ],
-            "command": command,
+            "skill": skill,
         });
         let encoded = serde_json::to_string_pretty(&payload)
-            .expect("command reference is always JSON serializable")
+            .expect("skill reference is always JSON serializable")
             .replace('<', "\\u003c")
             .replace('>', "\\u003e");
-        format!("<agena_command_reference>\n{encoded}\n</agena_command_reference>")
+        format!("<agena_skill_reference>\n{encoded}\n</agena_skill_reference>")
     }
 }
 

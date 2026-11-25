@@ -199,6 +199,7 @@ async fn managed_local_bot(case: &TestCase) -> Result<BotSession> {
         .create_bot(&BotCreate {
             request_key: "telegram-ai-bot".into(),
             name: "Telegram AI".into(),
+            agent_profile: None,
             persona: None,
             avatar: None,
         })

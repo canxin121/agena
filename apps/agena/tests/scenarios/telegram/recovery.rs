@@ -25,6 +25,7 @@ async fn review_restores_existing_private_history_and_local_replies_without_repl
             let bot = client.create_bot(&BotCreate {
                 request_key: "review-private-bot".into(),
                 name: "Private review fixture".into(),
+                agent_profile: None,
                 persona: None,
                 avatar: None,
             }).await?;

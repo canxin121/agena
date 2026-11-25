@@ -87,6 +87,7 @@ impl App {
                 "bot-create-title"
             }
             BotView::Form | BotView::Reload => "bot-edit-title",
+            BotView::Prompts => "prompt-studio-title",
             _ => "bot-manager-title",
         });
         let block = Block::default()
@@ -101,6 +102,12 @@ impl App {
             BotView::List => "bot-list-keys",
             BotView::Opening => "bot-entry-keys",
             BotView::Archive | BotView::Reload | BotView::DeleteConversation => "bot-confirm-keys",
+            BotView::Prompts if self.bot.accepts_text() => "bot-editor-keys",
+            BotView::Prompts => match self.bot.form.as_ref() {
+                Some(form) if form.prompts.detail => "prompt-studio-read-keys",
+                Some(form) if form.prompts.library => "prompt-studio-pick-keys",
+                _ => "bot-prompts-keys",
+            },
             BotView::Form
                 if self.bot.accepts_text()
                     && self
@@ -138,7 +145,17 @@ impl App {
         let status = error.unwrap_or_else(|| {
             if self.bot.task.is_some() {
                 text(
-                    if self.bot.view == BotView::Form && self.bot.form.is_some() {
+                    if self.bot.view == BotView::Prompts
+                        && self
+                            .bot
+                            .form
+                            .as_ref()
+                            .is_some_and(|form| form.prompts.catalog.is_none())
+                    {
+                        "bot-prompts-loading"
+                    } else if matches!(self.bot.view, BotView::Form | BotView::Prompts)
+                        && self.bot.form.is_some()
+                    {
                         if self.bot.form.as_ref().is_some_and(|form| {
                             matches!(form.avatar, BotAvatarDraft::File { data: None, .. })
                         }) {
@@ -315,6 +332,8 @@ impl App {
                     if let Some(editor) = &form.edit {
                         let label = text(if form.index == BOT_AVATAR_FIELD {
                             "bot-avatar-path"
+                        } else if form.index == BOT_PROFILE_FIELD {
+                            "bot-agent-profile-create"
                         } else {
                             BOT_FORM_FIELDS[form.index]
                         });
@@ -368,8 +387,15 @@ impl App {
                                         index == form.index,
                                     ));
                                 }
+                                let value = if index == BOT_PROFILE_FIELD {
+                                    form.agent_profile
+                                        .clone()
+                                        .unwrap_or_else(|| text("bot-agent-profile-default"))
+                                } else {
+                                    form.value(index)
+                                };
                                 ListItem::new(short(
-                                    &format!("{}: {}", text(key), form.value(index)),
+                                    &format!("{}: {}", text(key), value),
                                     body.width.saturating_sub(2),
                                 ))
                                 .style(selection_style(index == form.index))
@@ -382,6 +408,24 @@ impl App {
                             body,
                             &mut state,
                         );
+                    }
+                }
+            }
+            BotView::Prompts => {
+                if let Some(form) = &self.bot.form {
+                    if let Some(editor) = &form.edit {
+                        let output = agena_tui_components::render_wrapped_editor_panel(
+                            frame,
+                            body,
+                            &agena_tui_components::EditorPanelSpec {
+                                title: Some(text("bot-instructions").into()),
+                                borders: Borders::ALL,
+                            },
+                            editor,
+                        );
+                        frame.set_cursor_position(output.cursor);
+                    } else {
+                        self.render_bot_prompts(frame, body, form);
                     }
                 }
             }

@@ -382,7 +382,23 @@ impl TelegramPlugin {
         ))
     }
 
-    #[hook(application.ready, summary = "Start Telegram discovery and routing", help = "Starts the shared per-bot collector after application queries and commands are available.")]
+    #[hook(
+        application.ready,
+        summary = "Start Telegram discovery and routing",
+        help = "Starts the shared per-bot collector after application queries and commands are available.",
+        translations(
+            locale("zh-CN", summary = "启动 Telegram 发现与路由", help = "应用查询和命令可用后启动各机器人的共享收集器。"),
+            locale("zh-TW", summary = "啟動 Telegram 探索與路由", help = "應用程式查詢和命令可用後，啟動每個機器人的共用收集器。"),
+            locale("fr-FR", summary = "Démarrer la découverte et le routage Telegram", help = "Démarre le collecteur partagé de chaque bot quand les requêtes et commandes de l’application sont disponibles."),
+            locale("es-ES", summary = "Iniciar el descubrimiento y el enrutamiento de Telegram", help = "Inicia el recolector compartido de cada bot cuando están disponibles las consultas y los comandos de la aplicación."),
+            locale("pt-BR", summary = "Iniciar a descoberta e o roteamento do Telegram", help = "Inicia o coletor compartilhado de cada bot quando as consultas e os comandos do aplicativo estiverem disponíveis."),
+            locale("de-DE", summary = "Telegram-Erkennung und Weiterleitung starten", help = "Startet den gemeinsamen Sammler je Bot, sobald Anwendungsabfragen und Befehle verfügbar sind."),
+            locale("ja-JP", summary = "Telegram の検出とルーティングを開始", help = "アプリのクエリとコマンドが使用可能になったら、ボットごとの共有コレクターを起動します。"),
+            locale("ko-KR", summary = "Telegram 검색 및 라우팅 시작", help = "애플리케이션의 쿼리와 명령을 사용할 수 있게 되면 봇별 공유 수집기를 시작합니다."),
+            locale("hi-IN", summary = "Telegram की खोज और रूटिंग शुरू करें", help = "ऐप की क्वेरी और कमांड उपलब्ध होने पर हर बॉट का साझा कलेक्टर शुरू करता है।"),
+            locale("ar-SA", summary = "بدء اكتشاف Telegram وتوجيهه", help = "يبدأ أداة الجمع المشتركة لكل بوت بعد توفر استعلامات التطبيق وأوامره.")
+        )
+    )]
     async fn application_ready(&self) -> Result<()> {
         self.start_background()
     }
@@ -390,7 +406,59 @@ impl TelegramPlugin {
     #[hook(
         shutdown,
         summary = "Stop Telegram discovery",
-        help = "Stops background collection before the plugin is unloaded."
+        help = "Stops background collection before the plugin is unloaded.",
+        translations(
+            locale(
+                "zh-CN",
+                summary = "停止 Telegram 发现",
+                help = "在卸载插件前停止后台收集。"
+            ),
+            locale(
+                "zh-TW",
+                summary = "停止 Telegram 探索",
+                help = "在卸載外掛前停止背景收集。"
+            ),
+            locale(
+                "fr-FR",
+                summary = "Arrêter la découverte Telegram",
+                help = "Arrête la collecte en arrière-plan avant le déchargement du plugin."
+            ),
+            locale(
+                "es-ES",
+                summary = "Detener el descubrimiento de Telegram",
+                help = "Detiene la recopilación en segundo plano antes de descargar el complemento."
+            ),
+            locale(
+                "pt-BR",
+                summary = "Parar a descoberta do Telegram",
+                help = "Interrompe a coleta em segundo plano antes de descarregar o plugin."
+            ),
+            locale(
+                "de-DE",
+                summary = "Telegram-Erkennung stoppen",
+                help = "Beendet die Erfassung im Hintergrund, bevor das Plugin entladen wird."
+            ),
+            locale(
+                "ja-JP",
+                summary = "Telegram の検出を停止",
+                help = "プラグインをアンロードする前にバックグラウンド収集を停止します。"
+            ),
+            locale(
+                "ko-KR",
+                summary = "Telegram 검색 중지",
+                help = "플러그인을 언로드하기 전에 백그라운드 수집을 중지합니다."
+            ),
+            locale(
+                "hi-IN",
+                summary = "Telegram की खोज रोकें",
+                help = "प्लगइन अनलोड होने से पहले बैकग्राउंड संग्रह रोकता है।"
+            ),
+            locale(
+                "ar-SA",
+                summary = "إيقاف اكتشاف Telegram",
+                help = "يوقف الجمع في الخلفية قبل إلغاء تحميل الإضافة."
+            )
+        )
     )]
     async fn shutdown(&self) -> Result<()> {
         self.stop_background();

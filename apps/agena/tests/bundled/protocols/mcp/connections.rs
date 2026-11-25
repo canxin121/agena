@@ -2,7 +2,8 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use super::{allow_permissions, fixture};
+use super::super::super::fixture_without_memory;
+use super::allow_permissions;
 use agena_testkit::{
     ConfigSnapshot, Failure, ModelFeedbackKind, Reply, RequestMatch, TestAgenaBuilder, TestCase,
     TestResult, ToolResult, UserSession,
@@ -33,7 +34,7 @@ fn workspace_document(servers: Value) -> Value {
 }
 
 fn connection_fixture() -> TestAgenaBuilder {
-    fixture()
+    fixture_without_memory()
         .builtin_plugin(
             "agena.mcp",
             json!({"runtime": {"reconnect": {"enabled": false}}}),
@@ -264,10 +265,16 @@ async fn reads_require_both_config_paths_and_return_redacted_values_in_every_out
                     .len()
                     == 3
             );
+            user.call_tool(
+                "fs.read",
+                json!({"file_path": case.paths().global_config, "mode": "text"}),
+            )
+            .await?
+            .assert_failure_kind(ModelFeedbackKind::PermissionDenied)?;
 
             let before = bytes(&case).await?;
             for denied in [&case.paths().global_config, &case.paths().workspace_config] {
-                configure_policy(&user, &[(denied, "deny", "allow")], "allow").await?;
+                configure_policy(&user, &[(denied, "deny", "deny")], "allow").await?;
                 for (tool, input) in [
                     ("mcp.connections.list", json!({})),
                     ("mcp.connections.get", json!({"id": id})),
@@ -316,7 +323,7 @@ async fn denied_config_reads_fail_before_parsing_files_and_preserve_policy_error
                 .into_iter()
                 .enumerate()
             {
-                configure_policy(&user, &[(path, "deny", "allow")], "allow").await?;
+                configure_policy(&user, &[(path, "deny", "deny")], "allow").await?;
                 for (tool_index, (tool, input)) in [
                     ("mcp.connections.list", json!({})),
                     (
@@ -561,6 +568,75 @@ async fn accepted_mutation_authorizes_then_persists_reloads_and_runs_the_real_st
             );
             #[cfg(unix)]
             assert_peers_exited(&case.paths().root.join("mcp-stdio-record.jsonl")).await?;
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reconnect_returns_live_details_for_the_effective_connection() -> TestResult {
+    connection_fixture()
+        .env("AGENA_SANDBOX", "disabled")
+        .configure_global_with(|config, paths, _| {
+            config["plugins"]["list"]["agena.mcp"]["settings"]["servers"]["peer"] =
+                stdio(&paths.root);
+        })
+        .before_start(|case| async move {
+            case.write_config(
+                agena_testkit::SettingsLayer::Workspace,
+                workspace_document(json!({"peer": stdio(&case.paths().root)})),
+            )
+            .await
+        })
+        .run(|case| async move {
+            let user = user(&case).await?;
+            let listed = user.call_tool("mcp.connections.list", json!({})).await?;
+            listed.assert_succeeded()?;
+            let connections = listed.data()?["connections"]
+                .as_array()
+                .context("MCP catalog")?;
+            let id_for = |effective| {
+                connections
+                    .iter()
+                    .find(|item| item["name"] == "peer" && item["effective"] == effective)
+                    .and_then(|item| item["id"].as_str())
+                    .context("connection id")
+            };
+            let record = case.paths().root.join("mcp-stdio-record.jsonl");
+            user.call_tool("mcp.connections.reconnect", json!({"id": id_for(false)?}))
+                .await?
+                .assert_failed()?;
+            ensure!(!record.exists(), "reconnect launched a shadowed connection");
+
+            let id = id_for(true)?;
+            let detail = user
+                .call_tool("mcp.connections.get", json!({"id":id}))
+                .await?;
+            detail.assert_succeeded()?;
+            assert_eq!(detail.data()?["id"], id);
+            assert_eq!(detail.data()?["state"], "scoped");
+            for expected_starts in 1..=2 {
+                let result = user
+                    .call_tool("mcp.connections.reconnect", json!({"id":id}))
+                    .await?;
+                result.assert_succeeded()?;
+                redacted(&result, &[TOKEN], false)?;
+                let data = result.data()?;
+                assert_eq!(data["id"], id);
+                assert_eq!(data["revision"], detail.data()?["revision"]);
+                assert_eq!(data["state"], "connected");
+                ensure!(data["tool_count"].as_u64().is_some_and(|count| count > 0));
+
+                let records = tokio::fs::read_to_string(&record).await?;
+                let starts = records
+                    .lines()
+                    .map(serde_json::from_str::<Value>)
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .filter(|item| item["event"] == "started")
+                    .count();
+                assert_eq!(starts, expected_starts);
+            }
             Ok(())
         })
         .await

@@ -50,9 +50,9 @@ pub(crate) fn composer_item_label(item: &ComposerItem, i18n: &I18n) -> String {
             }
             label
         }
-        ActivityPayload::CommandReference(command) => i18n.text_args(
-            "composer-command-line",
-            &agena_tui::fl_args!("name" => command.name.clone()),
+        ActivityPayload::SkillReference(skill) => i18n.text_args(
+            "composer-skill-line",
+            &agena_tui::fl_args!("name" => skill.name.clone()),
         ),
         ActivityPayload::TextArtifact(artifact) => crate::ui_text::text_artifact_display_label(
             artifact.text.as_str(),
@@ -117,14 +117,14 @@ pub(crate) fn composer_activity_presentation(
             let plain = strip_chip_brackets(chip.as_str());
             (chip, plain)
         }
-        ActivityPayload::CommandReference(command) => (
+        ActivityPayload::SkillReference(skill) => (
             i18n.text_args(
-                "composer-chip-command",
-                &agena_tui::fl_args!("name" => command.name.clone()),
+                "composer-chip-skill",
+                &agena_tui::fl_args!("name" => skill.name.clone()),
             ),
             i18n.text_args(
-                "composer-command-line",
-                &agena_tui::fl_args!("name" => command.name.clone()),
+                "composer-skill-line",
+                &agena_tui::fl_args!("name" => skill.name.clone()),
             ),
         ),
         ActivityPayload::TextArtifact(artifact) => {

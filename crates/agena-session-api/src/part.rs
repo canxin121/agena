@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::resource::{PartAttachment, PartCommandReference};
+use super::resource::{PartAttachment, PartSkillReference};
 
 fn is_false(value: &bool) -> bool {
     !*value
@@ -91,7 +91,8 @@ pub enum PartDetailResource {
     Text(TextPartResource),
     Reasoning(ReasoningPartResource),
     Attachment(AttachmentPartResource),
-    CommandReference(CommandReferencePartResource),
+    #[serde(alias = "command_reference")]
+    SkillReference(SkillReferencePartResource),
     Error(ErrorPartResource),
     ToolCall(Box<ToolCallPartResource>),
     Hook(HookPartResource),
@@ -141,9 +142,10 @@ pub struct AttachmentPartResource {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-/// A message part that references the commands selected for the run.
-pub struct CommandReferencePartResource {
-    pub commands: Vec<PartCommandReference>,
+/// A message part that references the skills selected for the run.
+pub struct SkillReferencePartResource {
+    #[serde(alias = "commands")]
+    pub skills: Vec<PartSkillReference>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

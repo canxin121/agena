@@ -113,6 +113,13 @@ impl ToolExecutor {
         checks.remove(0)
     }
 
+    pub fn instance_config_read_permission_check(&self, path: &Path) -> ToolPermissionCheck {
+        self.path_access_check(AccessKind::Read, path, |workspace, target| {
+            self.principal
+                .authorize_instance_config_read(workspace, target)
+        })
+    }
+
     pub fn network_permission_check(&self, target: &str) -> Result<ToolPermissionCheck, ToolError> {
         self.network_permission_check_with(target, crate::shell_sandbox::resolved_network_targets)
     }
@@ -285,6 +292,20 @@ impl ToolExecutor {
         access: AccessKind,
         target_path: &Path,
     ) {
+        checks.push(
+            self.path_access_check(access, target_path, |workspace, target| {
+                self.principal
+                    .authorize_path_access(access, workspace, target)
+            }),
+        );
+    }
+
+    fn path_access_check(
+        &self,
+        access: AccessKind,
+        target_path: &Path,
+        decide: impl FnOnce(&Path, &Path) -> agena_domain::PermissionDecision,
+    ) -> ToolPermissionCheck {
         let canonical_workspace_root = if self.is_global() {
             PathBuf::new()
         } else {
@@ -294,18 +315,14 @@ impl ToolExecutor {
         let workspace_root = normalize_path_for_display(&canonical_workspace_root);
         let target = normalize_path_for_display(&canonical_target_path);
 
-        checks.push(ToolPermissionCheck {
+        ToolPermissionCheck {
             action: PermissionAction::PathAccess {
                 access_kind: access_kind_name(access).to_string(),
                 workspace_root,
                 target_path: target,
             },
-            decision: self.principal.authorize_path_access(
-                access,
-                &canonical_workspace_root,
-                &canonical_target_path,
-            ),
-        });
+            decision: decide(&canonical_workspace_root, &canonical_target_path),
+        }
     }
 
     /// Record one resolved path argument of a host-owned tool.

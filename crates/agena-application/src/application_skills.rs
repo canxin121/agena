@@ -23,7 +23,7 @@ impl Application {
         }
     }
 
-    fn skill_manager(&self, workspace: std::path::PathBuf) -> SkillManager {
+    fn skill_manager(&self, workspace: std::path::PathBuf) -> agena_skills::Result<SkillManager> {
         let global_root = agena_storage_layout::StorageLayout::current()
             .root()
             .join("skills");
@@ -48,26 +48,16 @@ impl Application {
                 }
             }
         }
-        let additional = self
+        let discovery = self
             .plugin_runtime()
-            .plugin_inspect("agena.commands")
+            .plugin_inspect("agena.skills")
             .filter(|plugin| plugin.authority.is_some())
             .and_then(|plugin| plugin.configured_plugin)
-            .and_then(|plugin| plugin.settings.get("additional_roots").cloned())
-            .and_then(|roots| serde_json::from_value::<Vec<std::path::PathBuf>>(roots).ok())
-            .unwrap_or_default();
-        let disabled = self
-            .plugin_runtime()
-            .plugin_inspect("agena.commands")
-            .filter(|plugin| plugin.authority.is_some())
-            .and_then(|plugin| plugin.configured_plugin)
-            .and_then(|plugin| plugin.settings.get("disabled").cloned())
-            .and_then(|value| serde_json::from_value::<Vec<String>>(value).ok())
+            .and_then(|plugin| serde_json::from_value(plugin.settings).ok())
             .unwrap_or_default();
         SkillManager::new(workspace, global_root)
-            .with_additional_roots(additional)
             .with_declared_skills(declared)
-            .with_disabled_names(disabled)
+            .with_discovery_settings(discovery)
     }
 
     pub async fn list_skills(
@@ -75,7 +65,7 @@ impl Application {
         workspace_id: Option<i64>,
     ) -> Result<SkillCatalog, ApplicationError> {
         let workspace = self.skills_workspace_root(workspace_id).await?;
-        self.run_blocking(move |app| app.skill_manager(workspace).list())
+        self.run_blocking(move |app| app.skill_manager(workspace)?.list())
             .await?
             .map_err(skill_error)
     }
@@ -86,7 +76,7 @@ impl Application {
         id: String,
     ) -> Result<SkillDetail, ApplicationError> {
         let workspace = self.skills_workspace_root(workspace_id).await?;
-        self.run_blocking(move |app| app.skill_manager(workspace).get(&id))
+        self.run_blocking(move |app| app.skill_manager(workspace)?.get(&id))
             .await?
             .map_err(skill_error)
     }
@@ -98,7 +88,7 @@ impl Application {
     ) -> Result<SkillDetail, ApplicationError> {
         let workspace = self.skills_workspace_root(workspace_id).await?;
         self.run_blocking(move |app| {
-            app.skill_manager(workspace)
+            app.skill_manager(workspace)?
                 .create(request.scope, &request.document)
         })
         .await?
@@ -114,7 +104,7 @@ impl Application {
         let workspace = self.skills_workspace_root(workspace_id).await?;
         require_revision(&request.expected_revision)?;
         self.run_blocking(move |app| {
-            app.skill_manager(workspace).update(
+            app.skill_manager(workspace)?.update(
                 &id,
                 &request.document,
                 Some(&request.expected_revision),
@@ -133,7 +123,7 @@ impl Application {
         let workspace = self.skills_workspace_root(workspace_id).await?;
         require_revision(&expected_revision)?;
         self.run_blocking(move |app| {
-            app.skill_manager(workspace)
+            app.skill_manager(workspace)?
                 .remove(&id, Some(&expected_revision))
         })
         .await?
@@ -153,7 +143,7 @@ impl Application {
         let workspace = self.skills_workspace_root(workspace_id).await?;
         require_revision(&request.expected_revision)?;
         self.run_blocking(move |app| {
-            app.skill_manager(workspace).set_enabled(
+            app.skill_manager(workspace)?.set_enabled(
                 &id,
                 request.enabled,
                 Some(&request.expected_revision),
@@ -170,7 +160,7 @@ impl Application {
         path: String,
     ) -> Result<SkillResource, ApplicationError> {
         let workspace = self.skills_workspace_root(workspace_id).await?;
-        self.run_blocking(move |app| app.skill_manager(workspace).read_resource(&id, &path))
+        self.run_blocking(move |app| app.skill_manager(workspace)?.read_resource(&id, &path))
             .await?
             .map_err(skill_error)
     }
@@ -183,7 +173,7 @@ impl Application {
     ) -> Result<SkillResource, ApplicationError> {
         let workspace = self.skills_workspace_root(workspace_id).await?;
         self.run_blocking(move |app| {
-            app.skill_manager(workspace).write_resource(
+            app.skill_manager(workspace)?.write_resource(
                 &id,
                 &request.path,
                 &request.content,
@@ -204,7 +194,7 @@ impl Application {
         let workspace = self.skills_workspace_root(workspace_id).await?;
         require_revision(&expected_revision)?;
         self.run_blocking(move |app| {
-            app.skill_manager(workspace)
+            app.skill_manager(workspace)?
                 .remove_resource(&id, &path, Some(&expected_revision))
         })
         .await?
@@ -236,7 +226,7 @@ impl Application {
         )
         .await?;
         self.run_blocking(move |app| {
-            app.skill_manager(workspace)
+            app.skill_manager(workspace)?
                 .preview_install(&loaded.package, request.scope)
         })
         .await?
@@ -260,7 +250,7 @@ impl Application {
             .verify_revision(request.expected_source_revision.as_deref())
             .map_err(skill_error)?;
         self.run_blocking(move |app| {
-            app.skill_manager(workspace).install(
+            app.skill_manager(workspace)?.install(
                 &loaded.package,
                 request.scope,
                 &request.selected,

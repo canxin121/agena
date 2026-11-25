@@ -35,8 +35,10 @@ async-trait = { workspace = true }
 chrono = { workspace = true }
 hex = { workspace = true }
 futures-util = { workspace = true }
+git2 = { version = "0.21.0", default-features = false, features = ["vendored-libgit2"] }
 parking_lot = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls", "stream"] }
+regex = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sea-orm = { workspace = true }

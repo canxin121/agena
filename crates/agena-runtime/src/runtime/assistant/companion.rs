@@ -644,6 +644,7 @@ mod tests {
         let active = BotProfile {
             id: Uuid::new_v4(),
             name: "Orchid".into(),
+            agent_profile: None,
             persona: Default::default(),
             avatar: None,
             revision: 1,

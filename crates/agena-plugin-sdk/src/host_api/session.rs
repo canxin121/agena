@@ -12,6 +12,47 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, agena_macros::ToolInput)]
+#[serde(deny_unknown_fields)]
+#[input(trim("query"), non_empty("query"))]
+pub struct HostSessionSearchRequest {
+    /// A case-insensitive literal phrase of 1–256 UTF-8 bytes.
+    pub query: String,
+    /// Search this session only. Omit to search the available project history.
+    pub session_id: Option<i64>,
+    /// Maximum hits per page, from 1 to 20. Defaults to 10.
+    pub limit: Option<usize>,
+    /// Continue with next_cursor from the previous search using the same query and session_id.
+    pub cursor: Option<String>,
+}
+
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum HostSessionReadDirection {
+    #[default]
+    Around,
+    Before,
+    After,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, agena_macros::ToolInput)]
+#[serde(deny_unknown_fields)]
+pub struct HostSessionReadRequest {
+    /// Session to read. Defaults to the current session.
+    pub session_id: Option<i64>,
+    /// Entry ID from a search hit or a previous page. Omit for the latest entries.
+    pub entry_id: Option<i64>,
+    /// Around includes the anchor. Before and after exclude the anchor.
+    #[serde(default)]
+    pub direction: HostSessionReadDirection,
+    /// Maximum entries, from 1 to 12. Defaults to 7.
+    pub limit: Option<usize>,
+    /// Read one anchored entry starting at this UTF-8 byte offset.
+    pub byte_offset: Option<u64>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", content = "request", rename_all = "snake_case")]
 /// One session operation a plugin may run.

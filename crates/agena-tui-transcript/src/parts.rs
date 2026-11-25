@@ -15,11 +15,11 @@
 use agena_api::part::PartResource;
 use agena_api::{
     part::{
-        AttachmentPartResource, CommandReferencePartResource, ErrorPartResource,
-        PartExecutionStatusResource, ReasoningPartResource, TextPartResource,
+        AttachmentPartResource, ErrorPartResource, PartExecutionStatusResource,
+        ReasoningPartResource, SkillReferencePartResource, TextPartResource,
     },
     resource::{
-        PartAttachment, PartAttachmentKind, PartAttachmentSource, PartCommandReference, RunRole,
+        PartAttachment, PartAttachmentKind, PartAttachmentSource, PartSkillReference, RunRole,
         RunStatus, UserInputOption, UserInputQuestion, UserInputReply, UserInputReplyKind,
         UserInputRequest,
     },
@@ -442,15 +442,15 @@ fn entry_parts(part: &PartResource) -> Vec<TranscriptEntryPart<'static>> {
                     attachments: vec![resource_attachment(&resource)],
                 })
             }
-            agena_domain::ActivityPayload::CommandReference(command) => {
-                TranscriptActivityContent::CommandReference(CommandReferencePartResource {
-                    commands: vec![PartCommandReference {
-                        name: command.name,
-                        description: command.description,
-                        content_hash: command.content_hash,
-                        source: command.source,
-                        skill_id: command.skill_id,
-                        aliases: command.aliases,
+            agena_domain::ActivityPayload::SkillReference(skill) => {
+                TranscriptActivityContent::SkillReference(SkillReferencePartResource {
+                    skills: vec![PartSkillReference {
+                        name: skill.name,
+                        description: skill.description,
+                        content_hash: skill.content_hash,
+                        source: skill.source,
+                        skill_id: skill.skill_id,
+                        aliases: skill.aliases,
                     }],
                 })
             }
@@ -543,9 +543,9 @@ fn part_content(part: &PartResource) -> TranscriptPartContent<'static> {
                                         format!("[{}]", resource.name),
                                         crate::TranscriptUserActivityStyle::Resource,
                                     ),
-                                    agena_domain::ActivityPayload::CommandReference(command) => (
-                                        format!("[{}]", command.name),
-                                        crate::TranscriptUserActivityStyle::Command,
+                                    agena_domain::ActivityPayload::SkillReference(skill) => (
+                                        format!("[{}]", skill.name),
+                                        crate::TranscriptUserActivityStyle::Skill,
                                     ),
                                     agena_domain::ActivityPayload::TextArtifact(artifact) => (
                                         format!(

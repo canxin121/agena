@@ -30,6 +30,8 @@
 //!   REST surface keeps returning the plain JSON resources the Studio web UI
 //!   already consumes.
 
+#[cfg(feature = "http")]
+mod channel_webhooks;
 pub mod dispatch;
 pub mod error;
 #[cfg(feature = "ipc")]
@@ -123,4 +125,11 @@ pub fn transport_router(state: AppState) -> Router {
 #[cfg(feature = "http")]
 pub fn plugin_web_asset_routes() -> Router<AppState> {
     plugin_web::asset_routes()
+}
+
+/// Authentication is by the chat provider's callback signature. Mount this
+/// outside operator authentication and request logging of query strings.
+#[cfg(feature = "http")]
+pub fn channel_webhook_routes() -> Router<AppState> {
+    channel_webhooks::routes()
 }

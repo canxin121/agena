@@ -248,7 +248,10 @@ impl PluginHost {
             .iter()
             .find(|m| m.id == method_name)
             .ok_or_else(|| PluginError::invalid_params("integration method is not exported"))?;
-        if !matches!(method_name, "describe" | "poll" | "send") {
+        let webhook = method_name == "webhook"
+            && matches!(provider, "agena.slack" | "agena.feishu" | "agena.whatsapp")
+            && plugin.kind == "static";
+        if !webhook && !matches!(method_name, "describe" | "poll" | "send") {
             return Err(PluginError::invalid_params(
                 "unsupported integration operation",
             ));
@@ -270,7 +273,11 @@ impl PluginHost {
                 plugin,
                 crate::sdk::rpc::method::SERVICE_INVOKE,
                 params,
-                Duration::from_secs(if method_name == "describe" { 3 } else { 20 }),
+                Duration::from_secs(if method_name == "describe" || webhook {
+                    3
+                } else {
+                    20
+                }),
             )
             .await
             .map_err(|e| PluginError::internal(format!("adapter transport failed: {e}")))?;
@@ -897,12 +904,15 @@ impl PluginHost {
         let call_id = input.call_id;
         let workspace_root = input.workspace_root.clone();
         let tool_name = registered_tool.tool_name().to_string();
+        let mcp_app =
+            host_api::mcp_app_request_binding(&registered_tool.plugin_full_name(), &input)?;
         let params =
             serde_json::to_value(&input).map_err(|e| PluginError::invalid_params_error(&e))?;
         let plugin_key = plugin.key();
         let invoke = Box::pin(self._host_handle.run_in_authorized_callback_context(
             &plugin_key,
             HostCallbackContext {
+                mcp_app,
                 caller: input.caller.clone(),
                 session_id: Some(session_id),
                 call_id: Some(call_id),

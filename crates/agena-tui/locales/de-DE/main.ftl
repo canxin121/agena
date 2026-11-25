@@ -1904,14 +1904,13 @@ activities-detail-source-part = Quellteil #{$id}
 activities-detail-next-wake = nächster Aufruf {$at}
 activities-detail-output-separator = Live-Protokoll @ {$seq}
 activities-detail-lines-omitted = … {$count} ältere Zeilen ausgeblendet
-activity-command-reference-title = Skill: {$name}
 activity-detail-type = Typ: {$media_type}
 activity-detail-size = Größe: {$size} Bytes
 activity-detail-dimensions = Abmessungen: {$width}×{$height}
 activity-detail-preview-fields = {$count} Felder
 activity-detail-preview-items = {$count} Elemente
-composer-chip-command = [Skill: {$name}]
-composer-command-line = Skill: {$name}
+composer-chip-skill = [Skill: {$name}]
+composer-skill-line = Skill: {$name}
 composer-clipboard-files = Dateien aus der Zwischenablage: {$error}
 composer-clipboard-image = Bild aus der Zwischenablage: {$error}
 composer-clipboard-text = Text aus der Zwischenablage: {$error}
@@ -2024,7 +2023,7 @@ context-help-context-activities = Hintergrundaktivitäten
 flash-attachment-prepare-failed = Ein Anhang konnte nicht vorbereitet werden; den Entwurf prüfen und erneut senden.
 flash-attachment-preparing = Anhänge werden vorbereitet; die Nachricht wird gesendet, sobald sie bereit sind.
 flash-clipboard-osc52-sent = Zwischenablage-Anfrage an das Terminal gesendet (OSC 52).
-flash-command-no-file-view = Skill-Referenzen haben keine Dateiansicht.
+flash-skill-no-file-view = Skill-Referenzen haben keine Dateiansicht.
 flash-ui-backend-queue-full = Befehlswarteschlange des UI-Backends ist voll; auf laufende Vorgänge warten
 flash-ui-backend-unavailable = Befehlsdienst des UI-Backends ist nicht verfügbar
 help-diagnostics-kitty-helper = Kitty-Helfer
@@ -2235,7 +2234,7 @@ context-help-tip-ctrl-h = Ctrl+H öffnet immer die Hilfe für die gerade verwend
 
 message-input-activity-attachment = Anhang
 
-message-input-activity-skill = Befehl
+message-input-activity-skill = Skill
 
 message-activity-response-running = Antwort wird generiert
 
@@ -3572,6 +3571,9 @@ settings-agent-profile-source-builtin = Integriert
 settings-agent-profile-source-global = Global
 settings-agent-profile-source-workspace = Arbeitsbereich
 settings-agent-profile-effective = Wirksame Standardrolle: {$profile}
+settings-agent-profile-worktree = Git-Arbeitsbaum
+settings-agent-profile-project-instructions-on-demand = Projektanweisungen bei Bedarf lesen
+settings-agent-profile-preloaded-skills = Vorgeladene Skills: {$skills}
 
 # Gemessene Modellleistung
 usage-performance-title = Modellleistung · Mittelwerte

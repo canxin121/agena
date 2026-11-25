@@ -193,7 +193,7 @@ impl App {
             }
             Overlay::SessionPromptEdit(dialog) => match dialog.editor.as_ref() {
                 Some(editor) => self.help_for_editor(editor.title.clone(), editor.multiline),
-                None => self.help_for(HelpPreset::BasicList, "Prompt layers".to_owned()),
+                None => self.help_for(HelpPreset::BasicList, self.i18n.text("prompt-studio-title")),
             },
             Overlay::TranscriptFoldLoad(dialog) => {
                 self.help_for_editor(dialog.title.clone(), false)

@@ -249,6 +249,8 @@ pub struct BotRecord {
     /// Trimmed and case-folded name used for active-name uniqueness.
     pub name_folded: String,
     pub instructions: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_profile: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub prompt_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -276,6 +278,8 @@ pub enum BotRepositoryError {
     NameTaken,
     #[error("Bot revision or archive state changed")]
     Conflict,
+    #[error("finish running and queued Bot conversations before changing its agent profile")]
+    AgentProfileBusy,
     #[error("the Bot was not found")]
     NotFound,
     #[error("the Bot registry limit was reached")]
@@ -316,6 +320,14 @@ pub trait BotRepository: Send + Sync {
     ) -> Result<BotRecord, BotRepositoryError>;
 
     async fn get(&self, id: uuid::Uuid) -> Result<BotRecord, BotRepositoryError>;
+
+    async fn agent_profile(&self, id: uuid::Uuid) -> Result<Option<String>, BotRepositoryError> {
+        match self.get(id).await {
+            Ok(record) => Ok(record.agent_profile),
+            Err(BotRepositoryError::NotFound) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
 
     /// Active Bots in creation order, or every Bot when `include_archived`.
     async fn list(

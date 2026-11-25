@@ -10,6 +10,10 @@ impl App {
                 self.set_session_profile(session_id, (!value.is_empty()).then_some(value));
                 true
             }
+            ChoiceOverlayAction::BotAgentProfile => {
+                self.choose_bot_agent_profile(choice_selection_value(&selection));
+                true
+            }
             ChoiceOverlayAction::Exit => {
                 let close = self.commit_exit_menu(&selection);
                 if !close {

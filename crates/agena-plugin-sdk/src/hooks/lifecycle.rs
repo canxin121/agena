@@ -78,6 +78,12 @@ pub struct SubagentStartInput {
     pub session_id: i64,
     pub child_session_id: i64,
     pub name: String,
+    /// Effective role resolved by the host for this launch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// The resolved role applies an independent read-only permission ceiling.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub profile_read_only: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

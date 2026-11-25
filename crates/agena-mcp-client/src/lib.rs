@@ -6,6 +6,7 @@
 //! ([`manager`]), OAuth login sessions ([`oauth`]), token storage
 //! ([`token_store`]), and typed errors ([`McpError`] / [`McpResult`]).
 
+pub mod apps;
 pub mod credentials;
 pub mod error;
 mod http_transport;

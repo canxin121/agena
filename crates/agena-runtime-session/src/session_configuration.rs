@@ -83,6 +83,17 @@ impl RuntimeSessionManagerConfig {
             .with_permission_profile(&self.access_control)
     }
 
+    pub(crate) fn visible_subagent_profiles(
+        &self,
+    ) -> impl Iterator<Item = (&str, agena_runtime_config::ResolvedAgentProfile)> {
+        self.profiles.keys().filter_map(|name| {
+            let profile = self
+                .validate_session_profile(Some(name), SessionRelationKind::Subagent)
+                .ok()?;
+            (!profile.hidden).then_some((name.as_str(), profile))
+        })
+    }
+
     /// Mode controls new explicit selections, not already saved identities.
     /// Forks and restored sessions retain their selected role after branching.
     pub fn validate_session_profile(
@@ -125,16 +136,31 @@ impl RuntimeSessionManagerConfig {
         &self,
         configuration: &SessionConfiguration,
     ) -> Result<PermissionConfig, String> {
+        let profile = match configuration.permission_profile {
+            Some(_) => Default::default(),
+            None => self.resolve_session_profile(
+                configuration.profile.as_deref(),
+                configuration.relation_kind,
+            )?,
+        };
+        Ok(self.permission_with_profile(configuration, &profile))
+    }
+
+    pub(crate) fn permission_with_profile(
+        &self,
+        configuration: &SessionConfiguration,
+        profile: &agena_runtime_config::ResolvedAgentProfile,
+    ) -> PermissionConfig {
         match configuration.permission_profile.as_deref() {
             // A stored reference may outlive a catalog entry. Keep it visible
             // and deny by default until the operator selects a new policy.
-            Some(id) => Ok(self
+            Some(id) => self
                 .access_control
                 .standalone_permission(id)
-                .unwrap_or_else(|_| PermissionConfig::default().standalone())),
-            None => Ok(self
-                .inherited_permission(configuration)?
-                .merged_with(&configuration.permission)),
+                .unwrap_or_else(|_| PermissionConfig::default().standalone()),
+            None => profile
+                .effective_permission(&self.permission)
+                .merged_with(&configuration.permission),
         }
     }
 
@@ -143,15 +169,22 @@ impl RuntimeSessionManagerConfig {
         configuration: &SessionConfiguration,
         selected: &ExecutionSelection,
     ) -> Result<ExecutionSelection, String> {
-        let inherited = self
-            .default_selection
-            .overlay_with_cascade(&configuration.selection_defaults);
         let profile = self.resolve_session_profile(
             configuration.profile.as_deref(),
             configuration.relation_kind,
         )?;
-        Ok(inherited
+        Ok(self.selection_with_profile(configuration, selected, &profile))
+    }
+
+    pub(crate) fn selection_with_profile(
+        &self,
+        configuration: &SessionConfiguration,
+        selected: &ExecutionSelection,
+        profile: &agena_runtime_config::ResolvedAgentProfile,
+    ) -> ExecutionSelection {
+        self.default_selection
+            .overlay_with_cascade(&configuration.selection_defaults)
             .overlay_with_cascade(&profile.selection)
-            .overlay_with_cascade(selected))
+            .overlay_with_cascade(selected)
     }
 }

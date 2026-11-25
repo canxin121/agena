@@ -755,6 +755,7 @@ async fn status_keeps_subagent_states_native_execution_and_input_pages() {
                 parent_session_id: Some(session),
                 relation_kind: agena_domain::SessionRelationKind::Subagent,
                 agent: Some(SessionAgentConfiguration {
+                    assignment: Default::default(),
                     origin_message_id: None,
                     name: format!("agent_{index}"),
                     status: agena_domain::AgentStatus::Created,
@@ -861,10 +862,7 @@ async fn opaque_cursor_rejects_other_database_and_expiration() {
             .to_string()
             .contains("different")
     );
-    {
-        let mut registry = continuations().lock().unwrap();
-        registry.get_mut(&token).unwrap().created = Instant::now() - Duration::from_secs(3600);
-    }
+    crate::session::manager::discovery_cursor::expire_for_test(&token);
     let error = manager
         .bot_discovery(
             bot,

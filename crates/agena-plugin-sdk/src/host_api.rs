@@ -32,7 +32,8 @@ pub use companion::{CompanionAction, CompanionRequest};
 pub use integrations::{IntegrationAction, IntegrationRequest};
 pub use session::{
     HostExecutionList, HostExecutionSummary, HostPartsPage, HostQueuedMessage, HostSessionAgent,
-    HostSessionModel, HostSessionState, HostSessionStreamKind, HostSessionStreamRequest, SessionOp,
+    HostSessionModel, HostSessionReadDirection, HostSessionReadRequest, HostSessionSearchRequest,
+    HostSessionState, HostSessionStreamKind, HostSessionStreamRequest, SessionOp,
     SessionOpResponse,
 };
 pub use workspace::{HostWorkspaceQuery, HostWorkspaceQueryRequest, HostWorkspaceQueryResponse};
@@ -151,6 +152,12 @@ pub trait HostClient: Send + Sync + 'static {
     }
 
     async fn read_config(&self, path: Option<String>) -> Result<serde_json::Value>;
+
+    /// Authorize the native MCP management plugin's read of the configured
+    /// global settings file for its connection catalog.
+    async fn require_mcp_global_config_read(&self) -> Result<()> {
+        Err(unavailable())
+    }
 
     // ---------------- permission queries ----------------
     //
@@ -290,6 +297,22 @@ pub trait HostClient: Send + Sync + 'static {
 
     /// Read the current session metadata.
     async fn get_session(&self, _req: HostGetSessionRequest) -> Result<HostGetSessionResponse> {
+        Err(unavailable())
+    }
+
+    /// Search plain-text history in the calling session's authorized scope.
+    async fn search_session_transcript(
+        &self,
+        _req: HostSessionSearchRequest,
+    ) -> Result<serde_json::Value> {
+        Err(unavailable())
+    }
+
+    /// Read bounded transcript entries relative to a retained entry ID.
+    async fn read_session_transcript(
+        &self,
+        _req: HostSessionReadRequest,
+    ) -> Result<serde_json::Value> {
         Err(unavailable())
     }
 
@@ -643,6 +666,9 @@ pub struct EventSubscription {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 /// Context of a host callback executed on behalf of a plugin.
 pub struct HostCallbackContext {
+    /// In-process capability for one MCP App to use its original connection.
+    #[serde(skip)]
+    pub mcp_app: Option<McpAppHostBinding>,
     /// Sender metadata frozen by the host for this execution. Plugins may only
     /// echo it with the matching authority token, never substitute another user.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -681,6 +707,47 @@ pub struct HostCallbackContext {
 
 tokio::task_local! {
     static HOST_CALLBACK_CONTEXT: HostCallbackContext;
+    static MCP_APP_REQUEST: McpAppHostRequest;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpAppHostBinding {
+    pub source_call_id: i64,
+    pub reference: String,
+}
+
+/// The authenticated session surface resolves this authority from durable
+/// records before entering the ordinary authorized tool executor.
+pub struct McpAppHostRequest {
+    pub session_id: i64,
+    pub tool_name: &'static str,
+    pub input: serde_json::Value,
+    pub binding: McpAppHostBinding,
+}
+
+pub async fn scope_mcp_app_request<F: Future>(request: McpAppHostRequest, future: F) -> F::Output {
+    MCP_APP_REQUEST.scope(request, future).await
+}
+
+pub fn mcp_app_request_binding(
+    plugin_id: &str,
+    input: &crate::ToolInvokeInput,
+) -> Result<Option<McpAppHostBinding>> {
+    MCP_APP_REQUEST
+        .try_with(|request| {
+            if plugin_id == "agena.mcp"
+                && input.session_id == request.session_id
+                && input.tool_name == request.tool_name
+                && input.input == request.input
+            {
+                Ok(Some(request.binding.clone()))
+            } else {
+                Err(crate::PluginError::invalid_params(
+                    "the MCP App invocation was changed",
+                ))
+            }
+        })
+        .unwrap_or(Ok(None))
 }
 
 /// Patch the enclosing callback context, inheriting any unspecified fields.
@@ -691,6 +758,9 @@ where
     F: Future,
 {
     let mut current = current_host_callback_context().unwrap_or_default();
+    if let Some(binding) = patch.mcp_app {
+        current.mcp_app = Some(binding);
+    }
     if let Some(caller) = patch.caller {
         current.caller = Some(caller);
     }
@@ -899,7 +969,9 @@ pub struct AskUserResponse {
 
 // ---------------- agents ----------------
 
-#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema, agena_macros::ToolInput)]
+#[derive(
+    Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema, agena_macros::ToolInput,
+)]
 #[input(
     trim("name", "prompt"),
     non_empty("name", "prompt"),
@@ -914,13 +986,22 @@ pub struct AgentSpawnRequest {
     /// Scope, constraints, required context and output contracts, and expected final result.
     /// Parent history is not copied; include any chart or UI contract the task needs.
     pub prompt: String,
-    /// Role profile from the available subagent catalog. Choose the role that
-    /// fits the task; omission uses the configured subagent default.
+    /// Exact name from the available subagent profiles. Choose a read-only
+    /// profile during planning. Omission uses the configured subagent default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
-    /// Command instructions attached to the initial message.
-    #[serde(default)]
-    pub commands: Vec<String>,
+    /// Start in the parent's checkout or in a separate Git worktree. Worktree
+    /// isolation requires a project session and a committed Git revision.
+    /// Omission uses the role default. Read-only profiles use a shared checkout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation: Option<agena_domain::AgentIsolation>,
+    /// Local Git revision to check out in the isolated worktree. Defaults to HEAD.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_base: Option<String>,
+    /// Up to eight distinct foreground shell.exec commands, each 1–1024 bytes.
+    /// The completion includes recorded exit results or a blocked check.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub verification_commands: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selection: Option<AgentModelSelection>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -951,6 +1032,8 @@ pub struct AgentHandle {
     /// Effective role selected for this child.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<agena_domain::AgentWorktree>,
     pub status: agena_domain::AgentStatus,
 }
 
@@ -1774,6 +1857,13 @@ mod agent_profile_contract_tests {
         assert_eq!(selected.profile.as_deref(), Some("explore"));
         let schema = serde_json::to_value(schemars::schema_for!(AgentSpawnRequest)).unwrap();
         assert!(schema["properties"].get("profile").is_some());
+        assert!(schema["properties"].get("read_only").is_none());
+        assert!(
+            serde_json::from_value::<AgentSpawnRequest>(serde_json::json!({
+                "name":"research", "prompt":"Find the call sites", "read_only":true
+            }))
+            .is_err()
+        );
         assert!(
             !schema["required"]
                 .as_array()

@@ -26,10 +26,18 @@ pub enum Error {
     Storage(String),
 }
 
-/// Operator-facing service. This is not a public webhook contract: a trusted
-/// adapter must authenticate external identities before granting this access.
+/// Operator-facing service. Webhook ingress has its own signature-verified
+/// path and carries no operator, Bot, or session authority.
 #[async_trait]
 pub trait AssistantService: Send + Sync {
+    async fn channel_webhook(
+        &self,
+        _platform: &str,
+        _request: ChannelWebhookRequest,
+    ) -> Result<ChannelWebhookResponse> {
+        Err(Error::NotFound)
+    }
+
     async fn integrations(&self, source: i64) -> Result<IntegrationsSnapshot>;
     async fn update_channel_policy(
         &self,

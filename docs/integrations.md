@@ -199,6 +199,44 @@ signature = "sha256=" + HMAC_SHA256(
 
 `spool_only: true` 仅把输出写入本地 SQLite，是开发演示模式，不能当作“已发到真实聊天应用”。参考桥的收件箱上限为一万条，超过后拒绝新接收，保留旧记录供运维处理；不能通过随意删除去重记录解决容量问题而忽略消息重放。
 
+## Slack、飞书、Discord 和 WhatsApp Cloud
+
+这四个插件通过同一个渠道集成接口向 Agena AI Bot 提供文本消息和回复。每个插件可配置多个平台账号，凭据由 Agena 服务进程的环境变量提供。插件工作台的 **设置** 保存 `accounts`，绑定只保存公开的账号和房间 ID。
+
+| 插件 | 接入方式 | `channel_policy.identity.tenant` | `channel_policy.identity.account` | 房间 ID |
+| --- | --- | --- | --- | --- |
+| `agena.slack` | Slack Events API 签名回调 | Team ID | Bot User ID | Slack Channel ID |
+| `agena.feishu` | 飞书或 Lark 事件订阅签名回调 | Tenant Key | Bot Open ID | Chat ID |
+| `agena.discord` | Bot API 轮询已配置频道 | `discord` | Bot User ID | Channel 或 Thread ID |
+| `agena.whatsapp` | WhatsApp Cloud 签名回调 | WhatsApp Business Account ID | Phone Number ID | 客户端的号码 ID |
+
+在 **集成 → 受信集成** 选中要接收消息的 Agena Bot 会话，选择提供方并创建渠道绑定。绑定的 `config` 使用 `{}`。按表填写 `channel_policy.identity` 和房间选择器 `resource`，按需配置成员、房间类型和触发条件后再启用。群聊默认在提及 Bot 时触发，私聊可直接发送。Slack 和飞书可沿入站线程回复，Discord 将每个已配置线程当作独立房间，WhatsApp Cloud 支持客服窗口内的一对一文字回复。成员权限、会话隔离与投递审计见 [渠道访问说明](channel-access.md)。
+
+Slack、飞书和 WhatsApp 的 HTTPS 回调地址为 `https://<agena-host>/hooks/chat/<platform>/<name>`。在反向代理上将这一路径转给 Agena，保留原始请求正文及签名头。WhatsApp 的 GET 校验请求含验证令牌，应从反向代理的访问日志排除该查询字符串。签名验证通过的消息先写入私有收件箱，再由各绑定按独立位置消费。收件箱保留 48 小时，每个账号最多 4096 条或 16 MiB。达到容量时回调返回 503，供平台重试。渠道授权使用五分钟内的成员证据，超过时间的积压消息会记录为 `membership_evidence_expired`，因此回调渠道的轮询间隔应小于五分钟。
+
+- **Slack** 使用 `name`、`team_id`、`app_id`、`bot_user_id`、`token_env` 和 `signing_secret_env`。在 Slack 中订阅会使用的 `message.im`、`message.channels`、`message.groups` 或 `message.mpim` 事件，授予对应的 history 权限及 `chat:write`。
+- **飞书或 Lark** 使用 `name`、`tenant_key`、`app_id`、`bot_open_id`、`app_secret_env`、`encrypt_key_env` 和 `verification_token_env`。海外 Lark 设置 `lark: true`。将自建应用的机器人加入目标房间，启用加密并订阅 `im.message.receive_v1`。回复线程需要读取该线程根消息的权限。
+- **Discord** 使用 `name`、`bot_user_id`、`token_env` 和 `rooms`。每个房间形如 `{"id":"123456789","kind":"group"}`。私聊填 `direct`，公告频道填 `broadcast`，普通频道和线程填 `group`。在 Discord 为 Bot 开启 Message Content Intent，并授予目标频道查看、读取历史和发送消息权限。最低轮询间隔为 5 秒，多房间按顺序轮询。
+- **WhatsApp Cloud** 使用 `name`、`business_account_id`、`phone_number_id`、`token_env`、`app_secret_env` 和 `verification_token_env`。在 Meta 的 Webhooks 设置中订阅 `whatsapp_business_account` 的 `messages`，使用相同的验证令牌和 App Secret。同一 Meta 应用下的号码共用一个回调地址，Agena 按 WABA ID 和 Phone Number ID 分发到各账号。服务侧用拥有该号码的 Graph API 凭据回复。
+
+例如在 `plugins.list` 中配置 Discord。
+
+```json
+{
+  "agena.discord": {
+    "package": {"kind": "static"},
+    "settings": {
+      "accounts": [{
+        "name": "main",
+        "bot_user_id": "123456789012345678",
+        "token_env": "AGENA_DISCORD_TOKEN",
+        "rooms": [{"id": "987654321098765432", "kind": "group"}]
+      }]
+    }
+  }
+}
+```
+
 ## 内置 Telegram 渠道插件
 
 `agena.telegram` 是编入 Agena 的内置渠道插件，无需单独安装脚本。它通过官方 Bot API 的 `getUpdates` 长轮询接收私聊、群聊和频道消息，并用 `sendMessage` 把回复发回原会话；不需要公网 HTTPS 地址、反向代理或证书。

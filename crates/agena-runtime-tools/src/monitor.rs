@@ -927,7 +927,7 @@ impl MonitorService for MonitorRegistry {
         while inner.status == ProcessStatus::Running {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                return Err(MonitorError::Invalid("stop requested but termination is not confirmed; inspect shell.logs/list before retrying".into()));
+                return Err(MonitorError::Invalid("stop requested but termination is not confirmed; inspect shell.read or shell.list before retrying".into()));
             }
             let (updated, _) = state
                 .changed

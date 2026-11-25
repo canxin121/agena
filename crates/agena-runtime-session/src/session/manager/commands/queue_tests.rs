@@ -660,8 +660,9 @@ async fn prompt_projection_preserves_the_session_layer_without_a_usable_provider
                 .control_snapshot(session, 1)
                 .await
                 .unwrap();
-            let context =
-                crate::SessionQueryService::execution_context(&manager, &snapshot).unwrap();
+            let context = crate::SessionQueryService::execution_context(&manager, &snapshot)
+                .await
+                .unwrap();
             assert_eq!(context.prompts, layer);
             assert_eq!(
                 manager

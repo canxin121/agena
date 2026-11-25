@@ -40,6 +40,7 @@ async fn interrupted_agent_recovery_preserves_queued_compaction_without_resuming
                 parent_session_id: Some(parent),
                 relation_kind: SessionRelationKind::Subagent,
                 agent: Some(SessionAgentConfiguration {
+                    assignment: Default::default(),
                     origin_message_id: None,
                     name: "worker".into(),
                     status: AgentStatus::Running,

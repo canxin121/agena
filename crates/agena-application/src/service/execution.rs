@@ -332,6 +332,7 @@ impl ApplicationService {
             .map_err(crate::kernel_error)?;
         let mut context = session_queries
             .execution_context(&snapshot)
+            .await
             .map_err(session_query_error)?;
         if context.effective_workspace_root.is_none()
             && let Some(workspace_id) = snapshot.metadata.workspace_id

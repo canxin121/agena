@@ -30,8 +30,28 @@ impl ProtectedPaths {
         layout: &StorageLayout,
         base: Option<&PermissionPolicy>,
     ) -> Self {
+        Self::for_workspace_access(workspace, layout, base, true)
+    }
+
+    pub(crate) fn for_instance_config_read(
+        workspace: &Path,
+        layout: &StorageLayout,
+        base: &PermissionPolicy,
+    ) -> Self {
+        Self::for_workspace_access(workspace, layout, Some(base), false)
+    }
+
+    fn for_workspace_access(
+        workspace: &Path,
+        layout: &StorageLayout,
+        base: Option<&PermissionPolicy>,
+        protect_config: bool,
+    ) -> Self {
         let database = layout.database_path();
-        let mut private_paths = vec![database.clone(), layout.config_path(), layout.secrets_dir()];
+        let mut private_paths = vec![database.clone(), layout.secrets_dir()];
+        if protect_config {
+            private_paths.push(layout.config_path());
+        }
         for suffix in ["-journal", "-shm", "-wal"] {
             let mut sidecar = OsString::from(database.as_os_str());
             sidecar.push(suffix);

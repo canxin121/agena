@@ -30,30 +30,34 @@ impl SessionManager {
         direct_child: bool,
     ) -> Result<SessionId, AppError> {
         let owner = self.agent_group(caller).await?;
-        if direct_child && owner != caller {
-            return Err(AppError::Config(
-                "only the direct parent can control an agent".into(),
-            ));
-        }
         let target = target.trim();
-        let id = if target == "parent" && caller != owner {
+        let peer_access = !direct_child && owner != caller;
+        let id = if target == "parent" && peer_access {
             owner
         } else if let Ok(numeric) = target.parse::<i64>() {
             session_id(numeric)?
         } else {
-            self.kernel()
-                .reader
-                .find_agent(owner, target)
+            let reader = &self.kernel().reader;
+            let child = reader
+                .find_agent(caller, target)
                 .await
-                .map_err(kernel_error)?
-                .ok_or_else(|| AppError::Config("target is not a visible agent".into()))?
+                .map_err(kernel_error)?;
+            let visible = if child.is_none() && peer_access {
+                reader
+                    .find_agent(owner, target)
+                    .await
+                    .map_err(kernel_error)?
+            } else {
+                child
+            };
+            visible.ok_or_else(|| AppError::Config("target is not a visible agent".into()))?
         };
         if id == caller {
             return Err(AppError::Config(
                 "send messages to another visible agent".into(),
             ));
         }
-        if id != owner {
+        if id != owner || !peer_access {
             let config = self
                 .kernel()
                 .reader
@@ -69,10 +73,12 @@ impl SessionManager {
             let parent = self
                 .kernel()
                 .reader
-                .metadata(owner)
+                .metadata(caller)
                 .await
                 .map_err(kernel_error)?;
-            if config.parent_session_id != Some(owner)
+            let in_group = config.parent_session_id == Some(caller)
+                || (peer_access && config.parent_session_id == Some(owner));
+            if !in_group
                 || config.agent.is_none()
                 || config.relation_kind != agena_domain::SessionRelationKind::Subagent
                 || metadata.workspace_id != parent.workspace_id
@@ -81,10 +87,6 @@ impl SessionManager {
                     "target is outside this agent group".into(),
                 ));
             }
-        } else if direct_child {
-            return Err(AppError::Config(
-                "target must be a direct child agent".into(),
-            ));
         }
         Ok(id)
     }
@@ -318,6 +320,7 @@ impl SessionManager {
                                     .unwrap_or(agena_runtime_config::DEFAULT_SUBAGENT_PROFILE)
                                     .to_owned(),
                             ),
+                            worktree: agent.assignment.worktree,
                             status: AgentStatus::Running,
                         });
                     }
@@ -332,7 +335,9 @@ impl SessionManager {
                     name: agent.name,
                     prompt: request.message.clone(),
                     profile: None,
-                    commands: Vec::new(),
+                    isolation: None,
+                    worktree_base: None,
+                    verification_commands: Vec::new(),
                     selection: Default::default(),
                     timeout_ms: agent.limits.timeout_ms,
                     max_tokens: agent.limits.max_tokens,
@@ -388,31 +393,49 @@ impl SessionManager {
         caller: SessionId,
     ) -> Result<String, AppError> {
         let owner = self.agent_group(caller).await?;
-        let page = read_with_busy_retry(caller, "agent_roster", || {
+        let children = self.agent_members(caller).await?;
+        if caller == owner && children.is_empty() {
+            return Ok(String::new());
+        }
+        let mut text = format!("\n\n# Agent roster\nSelf agent_id: {}.\n", caller.get());
+        if caller != owner {
+            text.push_str(&format!(
+                "Parent agent_id: {}. Use agent_id when names overlap.\n",
+                owner.get()
+            ));
+            for member in self.agent_members(owner).await? {
+                if member.id != caller {
+                    text.push_str(&format!(
+                        "Peer {} agent_id={}\n",
+                        member.agent_name.as_deref().unwrap_or("agent"),
+                        member.id.get()
+                    ));
+                }
+            }
+        }
+        for member in children {
+            text.push_str(&format!(
+                "Child {} agent_id={}\n",
+                member.agent_name.as_deref().unwrap_or("agent"),
+                member.id.get()
+            ));
+        }
+        Ok(text)
+    }
+
+    async fn agent_members(
+        &self,
+        parent: SessionId,
+    ) -> Result<Vec<agena_storage::kernel::SessionSummaryView>, AppError> {
+        let page = read_with_busy_retry(parent, "agent_roster", || {
             self.kernel().reader.query_summaries(SummaryQuery {
-                parent_id: Some(owner),
+                parent_id: Some(parent),
                 agents_only: true,
                 limit: MAX_AGENTS_PER_PARENT,
                 ..Default::default()
             })
         })
         .await?;
-        if caller == owner && page.sessions.is_empty() {
-            return Ok(String::new());
-        }
-        let mut text = format!(
-            "\n\n# Agent roster\nSelf agent_id: {}. Parent/group owner agent_id: {}.\n",
-            caller.get(),
-            owner.get()
-        );
-        for member in &page.sessions {
-            text.push_str(&format!(
-                "{} agent_id={}{}\n",
-                member.agent_name.as_deref().unwrap_or("agent"),
-                member.id.get(),
-                if member.id == caller { " (self)" } else { "" }
-            ));
-        }
-        Ok(text)
+        Ok(page.sessions.clone())
     }
 }

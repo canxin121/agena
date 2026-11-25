@@ -79,6 +79,14 @@ fn runtime_error(error: impl std::fmt::Display) -> Error {
 
 #[async_trait]
 impl AssistantService for AssistantRuntime {
+    async fn channel_webhook(
+        &self,
+        platform: &str,
+        request: agena_assistant::ChannelWebhookRequest,
+    ) -> Result<agena_assistant::ChannelWebhookResponse> {
+        self.dispatch_channel_webhook(platform, request).await
+    }
+
     async fn update_channel_policy(
         &self,
         source: i64,

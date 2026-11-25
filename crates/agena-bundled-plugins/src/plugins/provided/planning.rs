@@ -140,7 +140,7 @@ impl PlanPlugin {
     #[tool(
         tags(mutate, planning),
         summary = "Create or replace the current plan without requesting approval.",
-        help = "Prefer using this tool for implementation tasks unless they are simple. Use it proactively when starting a non-trivial implementation task: getting sign-off on your approach before writing code prevents wasted effort and ensures alignment. Use it when ANY of these conditions apply: new features, multiple valid approaches, changes to existing behavior or structure, architectural decisions, changes touching more than 2-3 files, unclear requirements, or when you would otherwise ask the user to clarify the approach. Only skip it for simple tasks: single-line fixes, adding a single function with clear requirements, very specific detailed instructions, or pure research/read-only work. If unsure whether to use it, err on the side of planning. This tool never blocks on the user: it saves the plan and returns. With `request_approval: true` (the default) the plan stays in the `planning` phase and you must call `plan.review` to request user approval before it becomes active. Pass `request_approval: false` only with prior user authorization AND the trusted setting `agena.plan.allow_unreviewed_activation` — the plan then becomes active immediately. Never change settings to bypass approval. While the plan is in the `planning` phase, mutating tools are blocked; explore with read-only tools (including parallel `agent.spawn` exploration when the scope spans multiple areas), clarify with `interaction.ask` when available, replace the plan content with `plan.set`, and update progress/notes with `plan.edit`. When the plan is complete, call `plan.review` to present it for approval; never ask whether the plan is acceptable via `interaction.ask.",
+        help = "Prefer using this tool for implementation tasks unless they are simple. Use it proactively when starting a non-trivial implementation task: getting sign-off on your approach before writing code prevents wasted effort and ensures alignment. Use it when ANY of these conditions apply: new features, multiple valid approaches, changes to existing behavior or structure, architectural decisions, changes touching more than 2-3 files, unclear requirements, or when you would otherwise ask the user to clarify the approach. Only skip it for simple tasks: single-line fixes, adding a single function with clear requirements, very specific detailed instructions, or pure research/read-only work. If unsure whether to use it, err on the side of planning. This tool never blocks on the user: it saves the plan and returns. With `request_approval: true` (the default) the plan stays in the `planning` phase and you must call `plan.review` to request user approval before it becomes active. Pass `request_approval: false` only with prior user authorization AND the trusted setting `agena.plan.allow_unreviewed_activation` — the plan then becomes active immediately. Never change settings to bypass approval. While the plan is in the `planning` phase, mutating tools are blocked; explore with read-only tools (including parallel `agent.spawn` calls with read-only profiles when the scope spans multiple areas), clarify with `interaction.ask` when available, replace the plan content with `plan.set`, and update progress/notes with `plan.edit`. When the plan is complete, call `plan.review` to present it for approval; never ask whether the plan is acceptable via `interaction.ask.",
         translations(
             locale(
                 "zh-CN",
@@ -441,6 +441,30 @@ impl PlanPlugin {
         input: CommandBeforeInput,
     ) -> SdkResult<Option<CommandBeforeResponse>> {
         self.inner.command_execute_before_hook(input).await
+    }
+
+    #[hook(
+        subagent.start,
+        summary = "Check delegated work during planning",
+        help = "Checks the resolved subagent profile's read-only access before a child execution starts.",
+        translations(
+            locale("zh-CN", summary = "检查规划阶段的子智能体委派", help = "启动子智能体前检查其已解析的智能体配置是否为只读。"),
+            locale("zh-TW", summary = "檢查規劃階段的子智能體委派", help = "啟動子智能體前檢查其實際使用的設定是否為唯讀。"),
+            locale("ja-JP", summary = "計画中のサブエージェント委任を確認", help = "子エージェントを起動する前に、適用されるプロファイルが読み取り専用か確認します。"),
+            locale("ko-KR", summary = "계획 중 하위 에이전트 위임 확인", help = "하위 에이전트가 시작되기 전에 적용될 프로필이 읽기 전용인지 확인합니다."),
+            locale("fr-FR", summary = "Contrôler les délégations pendant la planification", help = "Vérifie que le profil effectif du sous-agent est en lecture seule avant son démarrage."),
+            locale("es-ES", summary = "Comprobar la delegación durante la planificación", help = "Comprueba si el perfil efectivo del subagente es de solo lectura antes de iniciarlo."),
+            locale("de-DE", summary = "Delegation in der Planungsphase prüfen", help = "Prüft vor dem Start, ob das tatsächlich verwendete Profil des Subagenten schreibgeschützt ist."),
+            locale("pt-BR", summary = "Verificar a delegação durante o planejamento", help = "Verifica se o perfil efetivo do subagente é de somente leitura antes da inicialização."),
+            locale("hi-IN", summary = "योजना के दौरान कार्य सौंपने की जाँच करें", help = "उप-एजेंट शुरू करने से पहले जाँचता है कि लागू प्रोफ़ाइल केवल पढ़ने की अनुमति देती है।"),
+            locale("ar-SA", summary = "تحقق من التفويض أثناء التخطيط", help = "يتحقق قبل بدء الوكيل الفرعي من أن ملفه الفعلي للقراءة فقط.")
+        )
+    )]
+    async fn subagent_start(
+        &self,
+        input: agena_plugin_host::SubagentStartInput,
+    ) -> SdkResult<Option<agena_plugin_host::SubagentStartPatch>> {
+        self.inner.subagent_start_hook(input).await
     }
 
     #[hook(agent.stop, summary = "Continue active plans", help = "Requests another agent turn when an unfinished plan requires continuation.",

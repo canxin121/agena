@@ -373,30 +373,23 @@ async fn inline_ui_invalid_blocks_return_bounded_safe_model_feedback() -> TestRe
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn command_catalog_and_discovery_preserve_public_authoring_contracts() -> TestResult {
-    const LEGACY: &str = "---\r\nname: legacy_name\r\ndescription: >-\r\n  Use this skill\r\n  for source reviews.\r\nlicense: MIT\r\ncompatibility: Requires Python\r\nmetadata:\r\n  author: Example\r\nallowed-tools: Read Bash(python:*)\r\naliases: [review-sources]\r\ncustom-extension: true\r\n---\r\n# Instructions\r\nlegacy-command-body-marker\r\n";
-    fixture()
+pub(super) async fn commands_and_skills_use_independent_catalogs() -> TestResult {
+    const SKILL: &str = "---\r\nname: source-review\r\ndescription: >-\r\n  Use this skill\r\n  for source reviews.\r\nlicense: MIT\r\nmetadata:\r\n  author: Example\r\naliases: [review-sources]\r\n---\r\n# Instructions\r\nsource-review-body-marker\r\n";
+    super::super::fixture_without_memory()
+        .env("AGENA_SANDBOX", "disabled")
         .expect_plugin("agena.commands")
+        .expect_plugin("agena.skills")
         .configure_global(|config| {
-            config["plugins"]["list"]["agena.commands"] = json!({
+            config["plugins"]["list"]["agena.skills"] = json!({
                 "package":{"kind":"static"},
-                "settings":{"additional_roots":["legacy-skills"]}
+                "settings":{"additional_roots":["extra-skills"],"disabled":["disabled-example"]}
             });
         })
-        .seed_file("workspace/legacy-skills/legacy_name/SKILL.md", LEGACY.as_bytes().to_vec())
+        .seed_file("workspace/extra-skills/source-review/SKILL.md", SKILL.as_bytes().to_vec())
         .seed_file("workspace/.agena/commands/standup.md", b"Plain command marker.\n".to_vec())
         .seed_file(
-            "workspace/legacy-skills/enabled-example/SKILL.md",
-            b"---\nname: enabled-example\ndescription: Example.\n---\nEnabled marker.\n".to_vec(),
-        )
-        .seed_file(
-            "workspace/legacy-skills/disabled-example/SKILL.md",
+            "workspace/extra-skills/disabled-example/SKILL.md",
             b"---\nname: disabled-example\ndescription: Example.\n---\nDisabled marker.\n".to_vec(),
-        )
-        .seed_file("workspace/legacy-skills/disabled-example/.agena-skill.json", br#"{"enabled":false}"#.to_vec())
-        .seed_file(
-            "workspace/legacy-skills/.agena-skill-stage-example/SKILL.md",
-            b"---\nname: staging-example\ndescription: Example.\n---\nStaging marker.\n".to_vec(),
         )
         .run(|case| async move {
             let user = user(&case).await?;
@@ -423,25 +416,21 @@ async fn command_catalog_and_discovery_preserve_public_authoring_contracts() -> 
             compact.command.input.validate_value(&json!({}))?;
             assert_eq!(compact.command.input.default_value()?, json!({}));
 
-            let legacy = call(&user, "commands.get", json!({"name":"review-sources"})).await?;
-            assert_eq!(legacy.data()?["name"], "legacy_name");
-            assert_eq!(legacy.data()?["summary"], "Use this skill for source reviews.");
-            assert_eq!(legacy.data()?["aliases"], json!(["review-sources"]));
-            legacy.assert_text_contains("# Instructions")?;
-            legacy.assert_text_contains("legacy-command-body-marker")?;
-            let bare = call(&user, "commands.get", json!({"name":"standup"})).await?;
-            assert_eq!(bare.data()?["name"], "standup");
-            bare.assert_text_contains("Plain command marker.")?;
+            ensure!(commands.iter().all(|entry| matches!(entry.command.target, CommandTarget::Client { .. })));
+            ensure!(!catalog.commands.iter().any(|entry| matches!(entry.command.id.as_str(), "source-review" | "standup" | "review")));
 
-            let listed = call(&user, "commands.list", json!({"verbose":true})).await?;
-            let names = listed.data()?["packages"].as_array().context("command package catalog")?
-                .iter().filter_map(|entry| entry["name"].as_str()).collect::<BTreeSet<_>>();
-            ensure!(names.contains("enabled-example") && names.contains("legacy_name") && names.contains("standup"));
-            ensure!(!names.contains("disabled-example"));
-            ensure!(!names.contains("staging-example") && !names.contains(".agena-skill-stage-example"));
-            for absent in ["disabled-example", "staging-example"] {
-                user.call_tool("commands.get", json!({"name":absent})).await?.assert_failed()?;
-            }
+            let listed = call(&user, "skills.list", json!({})).await?;
+            let skills = listed.data()?["skills"].as_array().context("skill catalog")?;
+            let source_review = skills.iter().find(|entry| entry["name"] == "source-review").context("configured skill root")?;
+            let id = source_review["id"].as_str().context("skill IDs")?;
+            let source = call(&user, "skills.get", json!({"id": id})).await?;
+            assert_eq!(source.data()?["document"], SKILL);
+            ensure!(skills.iter().any(|entry| entry["name"] == "review"));
+            ensure!(!skills.iter().any(|entry| matches!(entry["name"].as_str(), Some("disabled-example" | "standup"))));
+            let workspace_id = user.snapshot().await?.session.workspace_id.context("project workspace")?;
+            let library = user.client().list_skills(workspace_id).await?;
+            ensure!(library.skills.iter().any(|skill| skill.id == id && skill.enabled));
+            user.call_tool("commands.list", json!({})).await?.assert_failed()?;
             Ok(())
         })
         .await

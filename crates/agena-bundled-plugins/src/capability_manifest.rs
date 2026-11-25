@@ -109,6 +109,7 @@ fn bundled_plugins() -> Vec<(Box<dyn Plugin>, Option<String>)> {
     add!(crate::tool::new_skills_plugin());
 
     add!(crate::tool::new_code_plugin());
+    add!(crate::tool::new_code_mode_plugin());
     add!(crate::tool::new_cron_plugin());
     add!(crate::tool::new_fs_plugin());
     add!(crate::tool::new_interaction_plugin());
@@ -135,6 +136,10 @@ fn bundled_plugins() -> Vec<(Box<dyn Plugin>, Option<String>)> {
     add!(crate::tool::new_companion_plugin());
     add!(crate::tool::new_web_plugin());
     add!(crate::tool::new_browser_plugin());
+    add!(crate::tool::new_desktop_plugin());
+    for platform in crate::tool::CHAT_PLATFORM_PLUGINS {
+        add!(crate::tool::ChatChannel::new(platform));
+    }
     plugins
 }
 
@@ -212,26 +217,31 @@ mod registration_inventory_tests {
 /// and marked conditional because runtime registration requires an MCP
 /// manager.
 pub fn bundled_capability_manifest() -> BundledCapabilityManifest {
-    let mut plugins = bundled_plugin_manifests()
+    let manifests = bundled_plugin_manifests();
+    let mut commands = manifests
+        .iter()
+        .flat_map(|(manifest, _)| &manifest.commands)
+        .map(|command| BundledCommandCapability {
+            name: command.id.clone(),
+            description: command
+                .docs
+                .summary
+                .clone()
+                .unwrap_or_else(|| command.title.clone()),
+            aliases: command.aliases.clone(),
+            content_sha256: hex::encode(Sha256::digest(
+                serde_json::to_vec(command).expect("bundled command must serialize"),
+            )),
+            bundled: true,
+        })
+        .collect::<Vec<_>>();
+    commands.sort_by(|left, right| left.name.cmp(&right.name));
+
+    let mut plugins = manifests
         .into_iter()
         .map(|(manifest, conditional)| plugin_capability(manifest, conditional))
         .collect::<Vec<_>>();
     plugins.sort_by(|left, right| left.id.cmp(&right.id));
-
-    let mut commands = crate::plugins::provided::commands::declared_commands()
-        .into_iter()
-        .map(|command| {
-            let content_sha256 = command.content_sha256;
-            BundledCommandCapability {
-                name: command.name,
-                description: command.description,
-                aliases: command.aliases,
-                content_sha256,
-                bundled: true,
-            }
-        })
-        .collect::<Vec<_>>();
-    commands.sort_by(|left, right| left.name.cmp(&right.name));
 
     let tools = plugins
         .iter()

@@ -224,9 +224,9 @@ impl App {
                 SettingsPickerAction::EditSessionProfile(session_id),
             ));
             runtime_session_items.push(SettingsStudioItem::new(
-                "Prompt layers",
-                format!("Configured for session {session_id}"),
-                "Edit global, workspace, and session instruction layers, their order, titles, and hidden inherited fragments. Preview reflects saved server state only.",
+                self.i18n.text("prompt-studio-title"),
+                self.i18n.text("prompt-studio-order"),
+                self.i18n.text("prompt-studio-settings-detail"),
                 SettingsPickerAction::EditSessionPrompts(session_id),
             ));
         }

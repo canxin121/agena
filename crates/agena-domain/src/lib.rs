@@ -110,16 +110,16 @@ pub use access_control::{
 };
 pub use activity::{
     ActivityPayload, ActivityProvenance, ActivityState, CancellationOutcome, CancellationResult,
-    CommandReferenceActivity, ComposerActivity, ComposerDocument, ComposerNode, ErrorActivity,
-    ExecutionTarget, InteractionActivity, NoticeActivity, OperationAuthorization,
-    OperationPermission, ReasoningActivity, ResourceActivity, ResourceDelivery, ResourceKind,
-    ResourceReference, TextArtifactActivity, TextSegmentActivity,
+    ComposerActivity, ComposerDocument, ComposerNode, ErrorActivity, ExecutionTarget,
+    InteractionActivity, NoticeActivity, OperationAuthorization, OperationPermission,
+    ReasoningActivity, ResourceActivity, ResourceDelivery, ResourceKind, ResourceReference,
+    SkillReferenceActivity, TextArtifactActivity, TextSegmentActivity,
 };
 pub use activity_kind::{
-    ACTIVITY_KIND_COMMAND_REFERENCE, ACTIVITY_KIND_ERROR, ACTIVITY_KIND_HOOK,
-    ACTIVITY_KIND_INTERACTION, ACTIVITY_KIND_NOTICE, ACTIVITY_KIND_OPERATION,
-    ACTIVITY_KIND_REASONING, ACTIVITY_KIND_RESOURCE, ACTIVITY_KIND_TEXT, ActivityKind,
-    ActivityKindCategory, ActivityKindId, builtin_activity_kind_defaults, builtin_activity_kinds,
+    ACTIVITY_KIND_ERROR, ACTIVITY_KIND_HOOK, ACTIVITY_KIND_INTERACTION, ACTIVITY_KIND_NOTICE,
+    ACTIVITY_KIND_OPERATION, ACTIVITY_KIND_REASONING, ACTIVITY_KIND_RESOURCE,
+    ACTIVITY_KIND_SKILL_REFERENCE, ACTIVITY_KIND_TEXT, ActivityKind, ActivityKindCategory,
+    ActivityKindId, builtin_activity_kind_defaults, builtin_activity_kinds,
 };
 pub use activity_view::{ActivityView, DeltaMode, PartDocument, RawOutput, RenderDelta, ViewBlock};
 pub use attachment::{
@@ -231,8 +231,8 @@ pub use role::Role;
 pub use session_conversation::{ConversationMode, SessionConversation};
 pub use session_cost::{ModelCostBreakdown, SessionCostSummary};
 pub use session_state::{
-    AgentStatus, RewindMode, SessionLifecycleState, SessionRelationKind, SessionStateKind,
-    WorkflowState,
+    AgentAssignment, AgentIsolation, AgentStatus, AgentWorktree, RewindMode, SessionLifecycleState,
+    SessionRelationKind, SessionStateKind, WorkflowState,
 };
 pub use session_summary::{SessionListRequest, SessionSummary};
 pub use session_usage::{SessionUsage, SessionUsageLimitBasis};

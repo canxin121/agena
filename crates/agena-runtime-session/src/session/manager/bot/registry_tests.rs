@@ -12,6 +12,7 @@ fn create(key: &str, name: &str) -> BotCreate {
     BotCreate {
         request_key: key.into(),
         name: name.into(),
+        agent_profile: None,
         persona: None,
         avatar: None,
     }
@@ -32,6 +33,7 @@ fn edit_avatar(key: &str, profile: &BotProfile, avatar: Option<Option<&str>>) ->
         request_key: key.into(),
         expected_revision: profile.revision,
         name: profile.name.clone(),
+        agent_profile: None,
         persona: profile.persona.clone(),
         avatar: avatar.map(|value| value.map(str::to_owned)),
     }
@@ -51,6 +53,146 @@ fn restart(manager: &SessionManager) -> SessionManager {
         restarted.install_memory_preferences(repository.clone());
     }
     restarted
+}
+
+#[tokio::test]
+async fn bot_agent_profile_applies_across_conversations_and_retains_explicit_overrides() {
+    let (manager, ordinary) = fixture().await;
+    let state = manager.global_state.load_full();
+    let mut config = state.config.clone();
+    config.profiles.insert(
+        "research".into(),
+        serde_json::from_value(serde_json::json!({
+            "mode": "primary",
+            "title": "Research",
+            "max_turns": 7,
+            "model": {"model": "research-model"},
+            "prompts": {"mode": "replace", "order": ["research"], "inline": [
+                {"id": "research", "body": "Use the Bot's research procedure."}
+            ]}
+        }))
+        .unwrap(),
+    );
+    manager.reconfigure_global(
+        state.providers.clone(),
+        state.processor.clone(),
+        state.executor.clone(),
+        config,
+    );
+    for name in ["unknown", "explore"] {
+        assert!(
+            manager
+                .create_bot_profile(BotCreate {
+                    agent_profile: Some(name.into()),
+                    ..create(name, "Invalid role")
+                })
+                .await
+                .is_err()
+        );
+    }
+    let bot = manager
+        .create_bot_profile(BotCreate {
+            agent_profile: Some("research".into()),
+            ..create("research-bot", "Research Bot")
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        restart(&manager)
+            .get_bot_profile(bot.id)
+            .await
+            .unwrap()
+            .agent_profile
+            .as_deref(),
+        Some("research")
+    );
+    let local = session_id(bot.local_session_id.unwrap()).unwrap();
+    let channel_prompt = super::super::super::session_prompt::CHANNEL_SYSTEM_PROMPT;
+    let remote = manager
+        .kernel()
+        .sessions
+        .create_global(
+            RequestId::new(),
+            "Remote room".into(),
+            SessionConfiguration {
+                owner: Some(SessionOwner {
+                    bot: bot.id,
+                    surface: SessionSurface::Group,
+                    scope_key: None,
+                }),
+                prompts: super::super::super::session_prompt::request_system_layer(Some(
+                    channel_prompt,
+                ))
+                .unwrap(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .value
+        .id;
+    let model = agena_domain::ModelRef::new("test", "test");
+    for session in [local, remote] {
+        let context = manager.execution_context_value(session).await.unwrap();
+        assert_eq!(context.profile.as_deref(), Some("research"));
+        assert!(context.profile_is_default);
+        assert_eq!(context.max_turns, Some(7));
+        assert_eq!(context.selection.model.as_deref(), Some("research-model"));
+        let preview = manager.prompt_preview(session, &model).await.unwrap();
+        assert!(preview.text.contains("Use the Bot's research procedure."));
+        if session == remote {
+            assert!(preview.text.contains(channel_prompt));
+        }
+    }
+    manager
+        .set_session_profile(local.get(), Some("main".into()))
+        .await
+        .unwrap();
+    let selected = manager.get_session(local.get()).await.unwrap().execution;
+    assert_eq!(selected.profile.as_deref(), Some("main"));
+    assert!(!selected.profile_is_default);
+    manager
+        .set_session_profile(local.get(), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        manager
+            .get_session(local.get())
+            .await
+            .unwrap()
+            .execution
+            .profile
+            .as_deref(),
+        Some("research")
+    );
+    let bot = manager
+        .update_bot_profile(bot.id, edit_avatar("legacy-update", &bot, None))
+        .await
+        .unwrap();
+    assert_eq!(bot.agent_profile.as_deref(), Some("research"));
+    let cleared = manager
+        .update_bot_profile(
+            bot.id,
+            BotUpdate {
+                agent_profile: Some(String::new()),
+                ..edit_avatar("clear-agent-profile", &bot, None)
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(cleared.agent_profile, None);
+    for session in [local, remote, ordinary] {
+        assert_eq!(
+            manager
+                .get_session(session.get())
+                .await
+                .unwrap()
+                .execution
+                .profile
+                .as_deref(),
+            Some("main")
+        );
+    }
 }
 
 #[tokio::test]
@@ -106,25 +248,19 @@ async fn bot_resolves_saved_compositions_and_publishes_them_only_when_selected()
         surface: SessionSurface::Group,
         scope_key: None,
     };
-    assert!(
-        manager
-            .bot_prompt_layer(Some(&owner), Default::default())
-            .await
-            .unwrap()
-            .is_none()
-    );
+    let context = crate::session::model::SessionExecutionContext {
+        owner: Some(owner),
+        ..Default::default()
+    };
+    assert!(manager.bot_prompt_layer(&context).await.unwrap().is_none());
     let mut update = edit_avatar("publish", &bot, None);
     update.persona.prompts.as_mut().unwrap().publish_to_channels = true;
     let published = manager.update_bot_profile(bot.id, update).await.unwrap();
     let mut legacy = edit_avatar("rename", &published, None);
     legacy.persona.prompts = None;
     manager.update_bot_profile(bot.id, legacy).await.unwrap();
-    let layer = manager
-        .bot_prompt_layer(Some(&owner), Default::default())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(layer.order[0].as_str(), "answer");
+    let layer = manager.bot_prompt_layer(&context).await.unwrap().unwrap();
+    assert_eq!(layer.layer.order[0].as_str(), "answer");
 
     let state = manager.global_state.load_full();
     let mut config = state.config.clone();
@@ -404,6 +540,7 @@ async fn names_are_unique_per_active_bot_and_revision_guards_edits() {
                 request_key: "edit".into(),
                 expected_revision: first.revision,
                 name: "Lotus II".into(),
+                agent_profile: None,
                 persona: BotPersona {
                     instructions: "短句优先".into(),
                     prompts: None,
@@ -422,6 +559,7 @@ async fn names_are_unique_per_active_bot_and_revision_guards_edits() {
                     request_key: "edit-2".into(),
                     expected_revision: first.revision,
                     name: "Lotus III".into(),
+                    agent_profile: None,
                     persona: BotPersona::default(),
                     avatar: None,
                 },
@@ -1042,6 +1180,7 @@ async fn canonical_local_subagents_remain_writable_but_historical_branches_do_no
                     parent_session_id: Some(session_id(parent).unwrap()),
                     relation_kind: kind,
                     agent: kind.is_subagent().then(|| SessionAgentConfiguration {
+                        assignment: Default::default(),
                         origin_message_id: None,
                         name: name.into(),
                         status: agena_domain::AgentStatus::Created,

@@ -330,7 +330,6 @@ impl ToolApiCatalog {
                 ("spawn", "background command and completion notification"),
                 ("watch", "service readiness and background process watch"),
                 ("open", "interactive shell/terminal/PTY"),
-                ("logs", "explicit-cursor compatibility output"),
                 ("read", "job/terminal output without input"),
                 ("write", "terminal input"),
                 ("stop", "process-tree cleanup"),

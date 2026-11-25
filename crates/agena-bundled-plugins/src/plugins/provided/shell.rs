@@ -20,32 +20,6 @@ pub(crate) fn new_plugin() -> ShellPlugin {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
-#[input(
-    trim("process_id"),
-    non_empty("process_id"),
-    minimum("limit", 1),
-    maximum("limit", 2000),
-    maximum("wait_ms", 30000),
-    minimum("max_output_bytes", 1024),
-    maximum("max_output_bytes", 16384)
-)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ProcessLogsInput {
-    process_id: String,
-    /// Return events after this cursor; continue with the returned last_seq.
-    #[serde(default)]
-    since_seq: u64,
-    #[serde(default)]
-    event_offset: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    max_output_bytes: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    limit: Option<u32>,
-    #[serde(default)]
-    wait_ms: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
 #[input(trim("process_id"), non_empty("process_id"))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ProcessStopInput {
@@ -300,41 +274,6 @@ impl ShellPlugin {
     )]
     async fn invoke_list(&self, context: &ToolInvokeContext<'_>) -> SdkResult<ToolInvokeOutput> {
         invoke(ShellToolInput::List {}, context)
-    }
-
-    #[tool(
-        tags(query, shell, ToolTag::Custom("background".to_owned()), read_only),
-        summary = "Read bounded output with an explicit replay cursor; shell.read is the unified, automatically consuming entry point.",
-        translations(
-            locale("zh-CN", summary = "通过明确的回放游标读取有限输出；通常用 shell.read 自动读取新内容。"),
-            locale("zh-TW", summary = "透過明確的回放游標讀取有限輸出；一般使用 shell.read 自動接收新內容。"),
-            locale("ja-JP", summary = "カーソルを指定して出力を再生します。新着分の読み取りには自動で消費する shell.read を使います。"),
-            locale("ko-KR", summary = "커서를 지정해 제한된 출력을 다시 읽습니다. 새 출력은 자동으로 소비하는 shell.read를 사용하세요."),
-            locale("fr-FR", summary = "Relire une sortie limitée avec un curseur explicite ; shell.read est le point d’entrée pour les nouvelles données."),
-            locale("de-DE", summary = "Begrenzte Ausgabe mit explizitem Cursor erneut lesen; shell.read liest neue Ausgabe automatisch weiter."),
-            locale("es-ES", summary = "Relee una salida limitada con un cursor explícito; shell.read es la opción habitual para consumir lo nuevo."),
-            locale("hi-IN", summary = "स्पष्ट कर्सर से सीमित आउटपुट दोबारा पढ़ें; नई सामग्री के लिए shell.read अपने-आप आगे बढ़ता है।"),
-            locale("ar-SA", summary = "أعد قراءة مخرجات محدودة بمؤشر صريح؛ استخدم shell.read عادةً لقراءة الجديد تلقائيًا."),
-            locale("pt-BR", summary = "Releia uma saída limitada com cursor explícito; shell.read é a opção usual para consumir o que chegou.")
-        ),
-        help = "Explicit replay of shell process output. since_seq defaults to 0; continue with last_seq AND next_event_offset as event_offset whenever nonzero. last_seq refers to fully consumed events; partially returned event text is resumable without loss. max_output_bytes (1024–16384, default 16384) includes escaping and event structure, with room reserved for lifecycle/cursor metadata. limit caps event count; wait_ms is a diagnostic wait (max 30000). has_more describes buffered output. output_resource identifies the canonical retained content; capture completeness is separate from the preview. Use shell.read without since_seq for new unread output. Background jobs notify when they finish; do not poll to wait."
-    )]
-    async fn invoke_logs(
-        &self,
-        context: &ToolInvokeContext<'_>,
-        args: ProcessLogsInput,
-    ) -> SdkResult<ToolInvokeOutput> {
-        invoke(
-            ShellToolInput::Logs {
-                process_id: args.process_id,
-                since_seq: args.since_seq,
-                event_offset: args.event_offset,
-                max_output_bytes: args.max_output_bytes,
-                limit: args.limit,
-                wait_ms: args.wait_ms,
-            },
-            context,
-        )
     }
 
     #[tool(

@@ -327,6 +327,7 @@ pub(crate) fn choice_overlay_clear_detail(i18n: &I18n, action: &ChoiceOverlayAct
     match action {
         ChoiceOverlayAction::InsertContent { .. }
         | ChoiceOverlayAction::SessionProfile { .. }
+        | ChoiceOverlayAction::BotAgentProfile
         | ChoiceOverlayAction::Exit => String::new(),
         ChoiceOverlayAction::SettingsField(field) => i18n.text_args(
             "overlay-choice-clear-settings-detail",

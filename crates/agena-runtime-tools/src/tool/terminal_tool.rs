@@ -220,30 +220,6 @@ pub(super) fn execute(
             terminals.signal_cancellable(process_id, &owner, ShellSignal::Terminate, cancel),
             false,
         ),
-        ShellToolInput::Logs {
-            process_id,
-            since_seq,
-            event_offset,
-            max_output_bytes,
-            limit,
-            wait_ms,
-        } => (
-            "logs",
-            terminals.read_with_output(
-                process_id,
-                &owner,
-                crate::ProcessReadOptions {
-                    since_seq: Some(*since_seq),
-                    event_offset: *event_offset,
-                    wait_ms: (*wait_ms).min(30_000),
-                    limit: *limit,
-                    max_output_bytes: *max_output_bytes,
-                },
-                false,
-                cancel,
-            ),
-            false,
-        ),
         _ => return Err(ToolError::invalid_input("not a terminal interaction")),
     };
     Ok(render(action, read.map_err(error)?, include_screen))

@@ -3,6 +3,7 @@ use super::{
     SessionCreateRequest, SessionResource, SessionState, SessionUpdateRequest, build_page,
     decode_cursor, non_empty, normalize_resource_limit, timestamp_millis_to_utc,
 };
+use agena_prompt_layers::{PromptError, PromptLayer, PromptScope};
 use agena_storage::kernel::{
     MetadataChange, RequestId, SessionSummaryCursor, SessionSummaryView, SummaryQuery,
     SummarySelection,
@@ -90,6 +91,9 @@ impl ApplicationService {
         session_id: i64,
         prompts: Option<agena_prompt_layers::PromptLayer>,
     ) -> ApplicationResult<SessionResource> {
+        if let Some(layer) = &prompts {
+            validate_session_prompt_layer(layer)?;
+        }
         self.session_kernel
             .sessions
             .update_metadata(
@@ -125,6 +129,9 @@ impl ApplicationService {
         request: SessionCreateRequest,
     ) -> ApplicationResult<SessionResource> {
         self.ensure_workspace_exists(request.workspace_id).await?;
+        if let Some(layer) = &request.session.prompts {
+            validate_session_prompt_layer(layer)?;
+        }
         let mut configuration = agena_storage::kernel::SessionConfiguration {
             prompts: request.session.prompts.unwrap_or_default(),
             title_state: if request.session.auto_title {
@@ -196,6 +203,9 @@ impl ApplicationService {
             return Err(ApplicationError::bad_request(
                 "Include title, favorite, pinned, auto_title, prompts, or profile in a session update.",
             ));
+        }
+        if let Some(layer) = &request.prompts {
+            validate_session_prompt_layer(layer)?;
         }
         // Profile validation and the eventual write use one metadata revision;
         // a concurrent update cannot overwrite the policy we just validated.
@@ -284,6 +294,25 @@ impl ApplicationService {
             .map_err(crate::kernel_error)?;
         Ok(resource)
     }
+}
+
+fn validate_session_prompt_layer(layer: &PromptLayer) -> ApplicationResult<()> {
+    layer
+        .validate()
+        .map_err(|error| ApplicationError::bad_request_error(&error))?;
+    if let Some(id) = layer
+        .order
+        .iter()
+        .find(|id| id.is_builtin() && !agena_runtime_contracts::identity::is_builtin_prompt(id))
+    {
+        return Err(ApplicationError::bad_request_error(
+            &PromptError::UnknownFragment {
+                scope: PromptScope::Session,
+                id: id.to_string(),
+            },
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn session_resource_from_kernel_summary(

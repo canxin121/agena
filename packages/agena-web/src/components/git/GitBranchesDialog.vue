@@ -9,6 +9,7 @@ import FormDialog from '@/components/ui/FormDialog.vue'
 import Input from '@/components/ui/Input.vue'
 import SearchInput from '@/components/ui/SearchInput.vue'
 import ScrollArea from '@/components/ui/ScrollArea.vue'
+import { handleOptionKeydown } from '@/lib/keyboardNavigation'
 import Skeleton from '@/components/ui/Skeleton.vue'
 
 import type { GitBranchesResponse } from '@/types/git'
@@ -62,6 +63,11 @@ function onQuickSwitch() {
   if (!target) return
   emit('checkout', target.name)
 }
+
+function onChoicesKeydown(event: KeyboardEvent) {
+  const list = event.currentTarget as HTMLElement
+  handleOptionKeydown(event, list, list.querySelector('[data-branch-search] input'))
+}
 </script>
 
 <template>
@@ -69,9 +75,15 @@ function onQuickSwitch() {
     :open="open"
     :title="t('git.ui.dialogs.branches.title')"
     :description="t('git.ui.dialogs.branches.description')"
+    initial-focus="[data-git-branches]"
     @update:open="onUpdateOpen"
   >
-    <div class="space-y-4">
+    <div
+      data-git-branches
+      tabindex="-1"
+      class="space-y-4 focus-visible:outline-2 focus-visible:outline-ring"
+      @keydown="onChoicesKeydown"
+    >
       <div class="flex gap-2">
         <Input
           :model-value="newBranchName"
@@ -84,6 +96,7 @@ function onQuickSwitch() {
 
       <div class="space-y-2">
         <SearchInput
+          data-branch-search
           v-model="branchSearchQuery"
           :placeholder="t('common.search')"
           class="text-sm"
@@ -98,6 +111,7 @@ function onQuickSwitch() {
         />
         <Button
           v-if="quickSwitchTarget"
+          data-keyboard-option
           variant="secondary"
           size="sm"
           class="w-full justify-start font-mono"
@@ -140,6 +154,8 @@ function onQuickSwitch() {
             <div class="oc-git-branch-actions flex items-center gap-1">
               <Button
                 v-if="!b.current"
+                data-keyboard-option
+                :aria-label="t('git.ui.dialogs.branches.actions.checkout') + ' ' + b.name"
                 size="sm"
                 variant="ghost"
                 class="h-6 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto"

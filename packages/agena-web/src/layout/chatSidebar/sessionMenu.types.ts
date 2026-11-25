@@ -29,3 +29,17 @@ export type DirectoryToggleSelectionOptions = {
   event?: MouseEvent
   orderedDirectoryIds?: string[]
 }
+
+export type ThreadSessionRow = {
+  id: string
+  session: SidebarSession | null
+  directory: DirectoryEntry | null
+  renderKey: string
+  depth: number
+  parentId: string | null
+  rootId: string
+  isParent: boolean
+  isExpanded: boolean
+  childPage?: number
+  childPageCount?: number
+}

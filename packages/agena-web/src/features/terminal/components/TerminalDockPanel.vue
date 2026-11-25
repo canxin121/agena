@@ -1,14 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { FitAddon } from '@xterm/addon-fit'
-import { Terminal } from '@xterm/xterm'
-import '@xterm/xterm/css/xterm.css'
 import { RiAddLine, RiArrowDownSLine, RiPlugLine, RiRefreshLine, RiStopCircleLine } from '@remixicon/vue'
 
 import IconButton from '@/components/ui/IconButton.vue'
 import NameInputPrompt from '@/components/ui/NameInputPrompt.vue'
 import OptionMenu from '@/components/ui/OptionMenu.vue'
+import PickerTrigger from '@/components/ui/PickerTrigger.vue'
+import { usePickerMenu } from '@/components/ui/usePickerMenu'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import { connectSse } from '@/lib/sse'
 import { isDocumentVisible } from '@/lib/backgroundReads'
@@ -17,7 +16,6 @@ import {
   getTerminalSessionInfo,
   getTerminalUiState,
   putTerminalUiState,
-  resizeTerminal,
   sendTerminalInput,
   startTerminalSession,
   stopTerminalSession,
@@ -28,6 +26,9 @@ import {
 } from '@/features/terminal/api/terminalApi'
 import { useDirectoryStore } from '@/stores/directory'
 import { useUiStore } from '@/stores/ui'
+import { usePaneVisibility } from '@/composables/usePaneVisibility'
+import { useTerminalViewport } from '../lib/useTerminalViewport'
+import TerminalViewport from './TerminalViewport.vue'
 
 type TerminalStreamEvent =
   | { type: 'connected'; seq?: number }
@@ -56,23 +57,25 @@ const status = ref<'disconnected' | 'connecting' | 'connected' | 'error'>('disco
 const uiState = ref<TerminalUiState | null>(null)
 const activeSessionInfo = ref<TerminalSessionInfo | null>(null)
 
-const el = ref<HTMLDivElement | null>(null)
-const term = shallowRef<Terminal | null>(null)
-const fit = shallowRef<FitAddon | null>(null)
+const viewport = ref<InstanceType<typeof TerminalViewport> | null>(null)
+const visible = usePaneVisibility()
 
 const streamClient = shallowRef<ReturnType<typeof connectSse> | null>(null)
 const streamSessionId = ref('')
 const streamSeqById = ref<Record<string, number>>({})
 const outputById = new Map<string, SessionBuffer>()
-const sessionMenuOpen = ref(false)
-const sessionMenuQuery = ref('')
+const {
+  trigger: sessionTrigger,
+  open: sessionMenuOpen,
+  openAt: sessionMenuEdge,
+  query: sessionMenuQuery,
+  setOpen: setSessionMenuOpen,
+  openFrom: openSessionMenuFrom,
+} = usePickerMenu()
 const sessionCreateOpen = ref(false)
 const sessionCreateDraft = ref('')
 
-let resizeObserver: ResizeObserver | null = null
-let resizeTimer: number | null = null
 let stateStream: ReturnType<typeof connectSse> | null = null
-let lastResizeSignature = ''
 let sessionInfoRequest = 0
 
 const sessionIds = computed(() => uiState.value?.sessionIds || [])
@@ -80,6 +83,26 @@ const activeSessionId = computed(() => {
   const active = String(uiState.value?.activeSessionId || '').trim()
   if (active) return active
   return sessionIds.value[0] || ''
+})
+
+const { term, ensureTerminalMounted, scheduleResize, resetResize } = useTerminalViewport({
+  container: computed(() => viewport.value?.element ?? null),
+  visible: () => visible.value,
+  sessionId: () => activeSessionId.value,
+  fontSize: 12,
+  onData: (data) => {
+    const sid = activeSessionId.value
+    if (!sid || !activeSessionRunning.value) return
+    void sendTerminalInput(sid, data).catch((err) => {
+      if (activeSessionId.value !== sid) return
+      status.value = 'error'
+      error.value = err instanceof Error ? err.message : String(err)
+    })
+  },
+  onReady: (terminal) => {
+    terminal.options.disableStdin = !activeSessionRunning.value
+    renderSessionOutput(activeSessionId.value)
+  },
 })
 
 const sessionItems = computed(() => {
@@ -204,71 +227,6 @@ function setTerminalStdinEnabled(enabled: boolean) {
   } catch {
     // ignore
   }
-}
-
-function ensureTerminalMounted() {
-  if (!el.value || term.value) return
-
-  const t = new Terminal({
-    cursorBlink: true,
-    scrollback: 5000,
-    fontFamily: '"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-    fontSize: 12,
-    theme: {
-      background: '#101415',
-      foreground: '#e9efe7',
-      cursor: '#e9efe7',
-      selectionBackground: 'rgba(111, 176, 255, 0.25)',
-    },
-  })
-
-  const f = new FitAddon()
-  t.loadAddon(f)
-  t.open(el.value)
-  f.fit()
-
-  t.onData((data) => {
-    const sid = activeSessionId.value
-    if (!sid) return
-    if (!activeSessionRunning.value) return
-    void sendTerminalInput(sid, data).catch((err) => {
-      status.value = 'error'
-      error.value = err instanceof Error ? err.message : String(err)
-    })
-  })
-
-  term.value = t
-  fit.value = f
-}
-
-async function sendResize() {
-  const sid = activeSessionId.value
-  if (!sid || !term.value) return
-  const signature = `${sid}:${term.value.cols}x${term.value.rows}`
-  if (signature === lastResizeSignature) return
-  try {
-    await resizeTerminal(sid, term.value.cols, term.value.rows)
-    lastResizeSignature = signature
-  } catch {
-    // ignore
-  }
-}
-
-function scheduleResize() {
-  if (resizeTimer !== null) {
-    window.clearTimeout(resizeTimer)
-  }
-  resizeTimer = window.setTimeout(() => {
-    resizeTimer = null
-    if (!fit.value || !term.value) return
-    fit.value.fit()
-    try {
-      term.value.refresh(0, Math.max(0, term.value.rows - 1))
-    } catch {
-      // ignore
-    }
-    void sendResize()
-  }, 80)
 }
 
 function openStream(id: string) {
@@ -529,7 +487,7 @@ async function startActiveSession() {
     activeSessionInfo.value = info
     setTerminalStdinEnabled(info.running === true)
     renderSessionOutput(sid)
-    lastResizeSignature = ''
+    resetResize()
     openStream(sid)
     scheduleResize()
   } catch (err) {
@@ -577,7 +535,7 @@ function toggleConnection() {
 
 function startCreateSession() {
   if (creating.value) return
-  sessionMenuOpen.value = false
+  setSessionMenuOpen(false)
   sessionCreateDraft.value = ''
   sessionCreateOpen.value = true
 }
@@ -592,14 +550,6 @@ function saveCreateSession() {
   const name = normalizeSessionName(sessionCreateDraft.value)
   if (!name || creating.value) return
   void createSession(name)
-}
-
-function setSessionMenuOpen(value: boolean) {
-  sessionMenuOpen.value = value
-}
-
-function setSessionMenuQuery(value: string) {
-  sessionMenuQuery.value = String(value || '')
 }
 
 function onSessionMenuSelect(item: OptionMenuItem) {
@@ -662,38 +612,14 @@ watch(activeSessionId, (sid) => {
   }
   ensureTerminalMounted()
   renderSessionOutput(sid)
-  lastResizeSignature = ''
+  resetResize()
   void refreshActiveSessionInfo()
-})
-
-watch(el, () => {
-  if (!el.value) return
-  ensureTerminalMounted()
-  scheduleResize()
-  if (resizeObserver) {
-    try {
-      resizeObserver.disconnect()
-      resizeObserver.observe(el.value)
-    } catch {
-      // ignore
-    }
-  }
 })
 
 onMounted(() => {
   ensureTerminalMounted()
   watchTerminalState()
   document.addEventListener('visibilitychange', watchTerminalState)
-
-  window.addEventListener('resize', scheduleResize)
-  if ('ResizeObserver' in window) {
-    try {
-      resizeObserver = new ResizeObserver(() => scheduleResize())
-      if (el.value) resizeObserver.observe(el.value)
-    } catch {
-      resizeObserver = null
-    }
-  }
 })
 
 onBeforeUnmount(() => {
@@ -702,25 +628,6 @@ onBeforeUnmount(() => {
   closeStream()
   stateStream?.close()
   document.removeEventListener('visibilitychange', watchTerminalState)
-  if (resizeTimer !== null) {
-    window.clearTimeout(resizeTimer)
-    resizeTimer = null
-  }
-  window.removeEventListener('resize', scheduleResize)
-  if (resizeObserver) {
-    try {
-      resizeObserver.disconnect()
-    } catch {
-      // ignore
-    }
-    resizeObserver = null
-  }
-
-  if (term.value) {
-    term.value.dispose()
-    term.value = null
-  }
-  fit.value = null
   outputById.clear()
 })
 </script>
@@ -729,16 +636,20 @@ onBeforeUnmount(() => {
   <div class="flex h-full min-h-0 flex-col gap-3 p-3">
     <div>
       <div class="relative flex items-center gap-1.5">
-        <button
-          type="button"
-          class="inline-flex h-8 min-w-0 flex-1 items-center justify-between gap-2 rounded-md border-0 bg-transparent px-1.5 text-xs text-foreground transition-colors hover:bg-secondary/40 disabled:cursor-not-allowed disabled:opacity-60"
+        <PickerTrigger
+          ref="sessionTrigger"
+          size="sm"
+          monospace
+          class="flex-1 border-0 px-1.5 shadow-none"
+          :open="sessionMenuOpen"
           :disabled="loading || sessionItems.length === 0"
-          :aria-label="sessionPickerLabel"
-          @click.stop="setSessionMenuOpen(!sessionMenuOpen)"
+          :label="activeSessionLabel"
+          :aria-label="`${sessionPickerLabel}: ${activeSessionLabel}`"
+          @toggle="setSessionMenuOpen(!sessionMenuOpen)"
+          @open-at="openSessionMenuFrom"
         >
-          <span class="min-w-0 truncate text-left font-mono">{{ activeSessionLabel }}</span>
-          <RiArrowDownSLine class="h-4 w-4 shrink-0 text-muted-foreground" />
-        </button>
+          <RiArrowDownSLine class="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+        </PickerTrigger>
 
         <div class="flex h-8 items-center gap-0.5">
           <IconButton
@@ -772,8 +683,10 @@ onBeforeUnmount(() => {
         </div>
 
         <OptionMenu
+          v-model:query="sessionMenuQuery"
           :open="sessionMenuOpen"
-          :query="sessionMenuQuery"
+          :open-at="sessionMenuEdge"
+          :desktop-anchor-el="sessionTrigger?.triggerEl"
           :groups="sessionMenuGroups"
           :title="sessionPickerLabel"
           :mobile-title="sessionPickerLabel"
@@ -789,7 +702,6 @@ onBeforeUnmount(() => {
           desktop-placement="bottom-start"
           desktop-class="w-72"
           @update:open="setSessionMenuOpen"
-          @update:query="setSessionMenuQuery"
           @select="onSessionMenuSelect"
         />
       </div>
@@ -827,9 +739,7 @@ onBeforeUnmount(() => {
     </div>
 
     <template v-else>
-      <div class="min-h-[220px] flex-1 overflow-hidden rounded-md border border-border/60 bg-[#101415]">
-        <div ref="el" dir="ltr" class="h-full w-full" />
-      </div>
+      <TerminalViewport ref="viewport" class="min-h-[220px] rounded-md border border-border/60" />
 
       <div class="text-[11px] text-muted-foreground">
         {{ status === 'connected' ? 'Connected' : status === 'connecting' ? 'Connecting...' : 'Disconnected' }}

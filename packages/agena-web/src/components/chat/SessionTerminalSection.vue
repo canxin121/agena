@@ -135,6 +135,7 @@ watch(open, (value) => {
         <li v-for="entry in processes" :key="entry.key">
           <button
             type="button"
+            data-keyboard-option
             class="flex min-h-8 w-full min-w-0 items-center gap-2 rounded px-2 text-start text-xs hover:bg-secondary/50 focus-visible:ring-2 focus-visible:ring-ring"
             :title="entry.label"
             @click="select(entry.key)"

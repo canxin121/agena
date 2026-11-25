@@ -164,6 +164,7 @@ function handleContextMenu(event: MouseEvent) {
       <template v-if="multiSelectEnabled" />
       <template v-else-if="uiIsCompactLayout">
         <ListItemOverflowActionButton
+          data-selection-trigger
           mobile
           :label="String(t('chat.sidebar.directoriesList.directoryActions'))"
           @trigger="handleMobileOpenActionsClick"
@@ -172,6 +173,8 @@ function handleContextMenu(event: MouseEvent) {
 
       <template v-else>
         <IconButton
+          v-if="!sessionMultiSelectEnabled || collapsed"
+          data-selection-trigger
           size="xs"
           :class="
             props.sessionMultiSelectEnabled

@@ -82,6 +82,7 @@ watch(tabsOpen, (open) => {
     </p>
     <Button
       v-if="browserRequested && !tabs.some((tab) => tab.page_id === helpPage)"
+      data-keyboard-option
       size="sm"
       variant="ghost"
       class="text-primary"

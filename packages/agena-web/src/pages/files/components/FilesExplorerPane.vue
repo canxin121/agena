@@ -6,7 +6,6 @@ import { useI18n } from 'vue-i18n'
 import {
   RiArrowLeftSLine,
   RiArrowUpLine,
-  RiCheckLine,
   RiCloseLine,
   RiDeleteBinLine,
   RiEditLine,
@@ -27,18 +26,18 @@ import {
 
 import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
 import DirectoryPathDialog from '@/components/ui/DirectoryPathDialog.vue'
+import InlineNameEditor from '@/components/ui/InlineNameEditor.vue'
 import OptionMenu from '@/components/ui/OptionMenu.vue'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import SegmentedButton from '@/components/ui/SegmentedButton.vue'
 import SegmentedControl from '@/components/ui/SegmentedControl.vue'
+import SelectionToolbar from '@/components/ui/SelectionToolbar.vue'
 import ListItemSelectionIndicator from '@/components/ui/ListItemSelectionIndicator.vue'
 import SidebarIconButton from '@/components/ui/SidebarIconButton.vue'
 import SidebarListItem from '@/components/ui/SidebarListItem.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 import ScrollArea from '@/components/ui/ScrollArea.vue'
 import { vKeyboardCollection } from '@/lib/keyboardCollection'
-import { isImeComposing } from '@/lib/imeKeyboard'
-import { isTextEditingTarget } from '@/lib/keyboardNavigation'
 import { writeWorkspaceWindowTemplateToDataTransfer } from '@/layout/workspaceWindowDrag'
 
 import { fileIconClass, fileIconComponent } from '../fileKinds'
@@ -111,13 +110,13 @@ const inlineCreateKind = ref<InlineCreateKind | null>(null)
 const inlineCreateParentPath = ref('')
 const inlineCreateName = ref('')
 const inlineCreateBusy = ref(false)
-const inlineCreateInputRef = ref<HTMLInputElement | null>(null)
+const inlineCreateEditor = ref<InstanceType<typeof InlineNameEditor> | null>(null)
 
 const { t } = useI18n()
 const inlineRenamePath = ref('')
 const inlineRenameName = ref('')
 const inlineRenameBusy = ref(false)
-const inlineRenameInputRef = ref<HTMLInputElement | null>(null)
+const inlineRenameEditor = ref<InstanceType<typeof InlineNameEditor> | null>(null)
 const LONG_PRESS_DELAY_TOUCH_MS = 420
 const LONG_PRESS_DELAY_POINTER_MS = 540
 const LONG_PRESS_MOVE_TOLERANCE_PX = 8
@@ -212,7 +211,7 @@ const selectedDirectoryNode = computed<FileNode | null>(() => {
 })
 
 const selectedCount = computed(() => props.selectedPaths.size)
-const selectableRowCount = computed(() => props.flattenedTree.length)
+const selectablePaths = computed(() => props.flattenedTree.map(({ node }) => node.path))
 const hasDeletingSelected = computed(() =>
   Array.from(props.selectedPaths).some((path) => props.deletingPaths.has(path)),
 )
@@ -442,7 +441,7 @@ function flashDragFeedback(kind: 'invalid' | 'success', path: string) {
 function resetInlineCreate() {
   const path = inlineCreateParentPath.value
   const restore = Boolean(
-    inlineCreateInputRef.value?.closest('[data-inline-create-root]')?.contains(document.activeElement),
+    inlineCreateEditor.value?.input?.closest('[data-inline-create-root]')?.contains(document.activeElement),
   )
   inlineCreateKind.value = null
   inlineCreateParentPath.value = ''
@@ -454,7 +453,7 @@ function resetInlineCreate() {
 function resetInlineRename() {
   const path = inlineRenamePath.value
   const restore = Boolean(
-    inlineRenameInputRef.value?.closest('[data-inline-rename-root]')?.contains(document.activeElement),
+    inlineRenameEditor.value?.input?.closest('[data-inline-rename-root]')?.contains(document.activeElement),
   )
   inlineRenamePath.value = ''
   inlineRenameName.value = ''
@@ -473,14 +472,12 @@ function restoreTreeFocus(path: string) {
   })
 }
 
-function setInlineCreateInputRef(el: Element | ComponentPublicInstance | null) {
-  const raw = el instanceof Element ? el : el && '$el' in el ? (el.$el as Element | null) : null
-  inlineCreateInputRef.value = raw instanceof HTMLInputElement ? raw : null
-}
-
-function setInlineRenameInputRef(el: Element | ComponentPublicInstance | null) {
-  const raw = el instanceof Element ? el : el && '$el' in el ? (el.$el as Element | null) : null
-  inlineRenameInputRef.value = raw instanceof HTMLInputElement ? raw : null
+function setInlineEditor(
+  kind: 'create' | 'rename',
+  editor: Element | ComponentPublicInstance | null,
+) {
+  const target = kind === 'create' ? inlineCreateEditor : inlineRenameEditor
+  target.value = editor as InstanceType<typeof InlineNameEditor> | null
 }
 
 function isWithinInlineCreate(target: Node | null): boolean {
@@ -498,6 +495,7 @@ function isWithinInlineRename(target: Node | null): boolean {
 }
 
 async function startCreate(kind: InlineCreateKind) {
+  if (inlineCreateBusy.value || inlineRenameBusy.value) return
   if (props.isCompactLayout) {
     props.openDialog(kind, selectedDirectoryNode.value || undefined)
     return
@@ -518,28 +516,11 @@ async function startCreate(kind: InlineCreateKind) {
 
   await props.expandDirectory(target)
   await nextTick()
-  inlineCreateInputRef.value?.focus()
-  inlineCreateInputRef.value?.select()
-}
-
-function onTreeRowKeydown(event: KeyboardEvent, node: FileNode) {
-  if (
-    event.key !== 'F2' ||
-    event.defaultPrevented ||
-    isImeComposing(event) ||
-    isTextEditingTarget(event.target) ||
-    event.altKey ||
-    event.ctrlKey ||
-    event.metaKey ||
-    event.shiftKey
-  )
-    return
-  event.preventDefault()
-  event.stopPropagation()
-  void startRename(node)
+  inlineCreateEditor.value?.focus(true)
 }
 
 async function startRename(node: FileNode) {
+  if (inlineCreateBusy.value || inlineRenameBusy.value) return
   if (props.isCompactLayout) {
     props.openDialog('rename', node)
     return
@@ -557,8 +538,7 @@ async function startRename(node: FileNode) {
   inlineRenameBusy.value = false
 
   await nextTick()
-  inlineRenameInputRef.value?.focus()
-  inlineRenameInputRef.value?.select()
+  inlineRenameEditor.value?.focus(true)
 }
 
 async function submitInlineCreate() {
@@ -567,7 +547,7 @@ async function submitInlineCreate() {
 
   const name = inlineCreateName.value.trim()
   if (!name) {
-    inlineCreateInputRef.value?.focus()
+    inlineCreateEditor.value?.focus()
     return
   }
 
@@ -581,8 +561,7 @@ async function submitInlineCreate() {
     inlineCreateBusy.value = false
     if (inlineCreateKind.value) {
       await nextTick()
-      inlineCreateInputRef.value?.focus()
-      inlineCreateInputRef.value?.select()
+      inlineCreateEditor.value?.focus(true)
     }
   }
 }
@@ -593,7 +572,7 @@ async function submitInlineRename(node: FileNode) {
 
   const name = inlineRenameName.value.trim()
   if (!name) {
-    inlineRenameInputRef.value?.focus()
+    inlineRenameEditor.value?.focus()
     return
   }
 
@@ -609,8 +588,7 @@ async function submitInlineRename(node: FileNode) {
     inlineRenameBusy.value = false
     if (inlineRenamePath.value === node.path) {
       await nextTick()
-      inlineRenameInputRef.value?.focus()
-      inlineRenameInputRef.value?.select()
+      inlineRenameEditor.value?.focus(true)
     }
   }
 }
@@ -1141,7 +1119,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <section class="oc-vscode-pane" :class="isCompactLayout ? 'border-0 rounded-none' : ''">
+  <section data-selection-context class="flex h-full min-h-0 flex-col overflow-hidden">
     <div class="oc-vscode-pane-header">
       <div class="oc-vscode-pane-title">{{ t('files.explorer.title') }}</div>
       <div class="flex items-center gap-1">
@@ -1161,21 +1139,13 @@ onBeforeUnmount(() => {
         </SidebarIconButton>
 
         <SidebarIconButton
-          :active="multiSelectEnabled"
-          :title="
-            multiSelectEnabled
-              ? t('files.explorer.selection.exitMultiSelect')
-              : t('files.explorer.selection.enterMultiSelect')
-          "
-          :aria-label="
-            multiSelectEnabled
-              ? t('files.explorer.selection.exitMultiSelect')
-              : t('files.explorer.selection.enterMultiSelect')
-          "
+          v-if="!multiSelectEnabled"
+          data-selection-trigger
+          :tooltip="t('files.explorer.selection.enterMultiSelect')"
+          size="sm"
           @click="toggleMultiSelectMode"
         >
-          <RiCloseLine v-if="multiSelectEnabled" class="h-3.5 w-3.5" />
-          <RiListCheck3 v-else class="h-3.5 w-3.5" />
+          <RiListCheck3 class="size-3.5" aria-hidden="true" />
         </SidebarIconButton>
 
         <div class="relative">
@@ -1246,85 +1216,61 @@ onBeforeUnmount(() => {
       @confirm="confirmDirectoryPicker"
     />
 
-    <div v-if="multiSelectEnabled" class="border-b border-sidebar-border/60 px-2 py-1.5">
-      <div class="flex flex-wrap items-center justify-between gap-1.5">
-        <div class="flex min-w-0 items-center">
-          <span
-            class="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-muted px-1 text-[10px] font-medium text-foreground/80"
-            :title="String(t('files.explorer.selection.selectedCount', { count: selectedCount }))"
-            :aria-label="String(t('files.explorer.selection.selectedCount', { count: selectedCount }))"
-          >
-            {{ selectedCount }}
-          </span>
-        </div>
-
-        <div class="flex items-center gap-1">
+    <SelectionToolbar
+      v-if="multiSelectEnabled"
+      class="border-b border-sidebar-border/60"
+      :selectable-ids="selectablePaths"
+      :selected-ids="selectedPaths"
+      :selection-label="t('files.explorer.selection.selectedCount', { count: selectedCount })"
+      :exit-label="t('files.explorer.selection.exitMultiSelect')"
+      @select-all="selectAllVisibleNodes"
+      @invert="invertVisibleNodeSelection"
+      @exit="toggleMultiSelectMode"
+    >
+      <template #default="{ size }">
+        <SidebarIconButton
+          data-keyboard-option
+          :size="size"
+          :tooltip="t('files.explorer.selection.bulkMove')"
+          :disabled="!selectedCount"
+          @click="openMoveSelectedDialog(Array.from(selectedPaths))"
+        >
+          <RiFolderOpenFill class="size-3.5" aria-hidden="true" />
+        </SidebarIconButton>
+        <ConfirmPopover
+          :title="t('files.explorer.selection.bulkDeleteTitle')"
+          :description="
+            t('files.explorer.selection.bulkDeleteDescription', {
+              count: selectedCount,
+            })
+          "
+          :confirm-text="t('files.explorer.selection.bulkDelete')"
+          variant="destructive"
+          @confirm="runDeleteSelected"
+        >
           <SidebarIconButton
-            size="sm"
-            :title="t('common.selectAll')"
-            :aria-label="t('common.selectAll')"
-            :disabled="selectableRowCount === 0 || selectedCount === selectableRowCount"
-            @click="selectAllVisibleNodes"
+            data-keyboard-option
+            :size="size"
+            destructive
+            :tooltip="t('files.explorer.selection.bulkDelete')"
+            :disabled="hasDeletingSelected || !selectedCount"
+            @click.stop
           >
-            <RiListCheck3 class="h-3 w-3" />
+            <RiLoader4Line v-if="hasDeletingSelected" class="size-3.5 animate-spin" aria-hidden="true" />
+            <RiDeleteBinLine v-else class="size-3.5" aria-hidden="true" />
           </SidebarIconButton>
-          <SidebarIconButton
-            size="sm"
-            :title="t('common.invertSelection')"
-            :aria-label="t('common.invertSelection')"
-            :disabled="selectableRowCount === 0"
-            @click="invertVisibleNodeSelection"
-          >
-            <RiRefreshLine class="h-3 w-3" />
-          </SidebarIconButton>
-          <SidebarIconButton
-            size="sm"
-            :title="t('files.explorer.selection.bulkMove')"
-            :aria-label="t('files.explorer.selection.bulkMove')"
-            :disabled="selectedCount === 0"
-            @click="openMoveSelectedDialog(Array.from(selectedPaths))"
-          >
-            <RiFolderOpenFill class="h-3 w-3" />
-          </SidebarIconButton>
-          <ConfirmPopover
-            :title="t('files.explorer.selection.bulkDeleteTitle')"
-            :description="t('files.explorer.selection.bulkDeleteDescription', { count: selectedCount })"
-            :confirm-text="t('files.explorer.selection.bulkDelete')"
-            :cancel-text="t('common.cancel')"
-            variant="destructive"
-            @confirm="runDeleteSelected"
-          >
-            <SidebarIconButton
-              size="sm"
-              destructive
-              :title="t('files.explorer.selection.bulkDelete')"
-              :disabled="hasDeletingSelected || selectedCount === 0"
-              @click.stop
-            >
-              <RiLoader4Line v-if="hasDeletingSelected" class="h-3 w-3 animate-spin" />
-              <RiDeleteBinLine v-else class="h-3 w-3" />
-            </SidebarIconButton>
-          </ConfirmPopover>
-          <SidebarIconButton
-            size="sm"
-            :title="t('files.explorer.selection.clearSelection')"
-            :aria-label="t('files.explorer.selection.clearSelection')"
-            :disabled="selectedCount === 0"
-            @click="clearSelectedPaths"
-          >
-            <RiCloseLine class="h-3 w-3" />
-          </SidebarIconButton>
-          <SidebarIconButton
-            size="sm"
-            :title="t('files.explorer.selection.exitMultiSelect')"
-            :aria-label="t('files.explorer.selection.exitMultiSelect')"
-            @click="toggleMultiSelectMode"
-          >
-            <RiCheckLine class="h-3 w-3" />
-          </SidebarIconButton>
-        </div>
-      </div>
-    </div>
+        </ConfirmPopover>
+        <SidebarIconButton
+          data-keyboard-option
+          :size="size"
+          :tooltip="t('files.explorer.selection.clearSelection')"
+          :disabled="!selectedCount"
+          @click="clearSelectedPaths"
+        >
+          <RiCloseLine class="size-3.5" aria-hidden="true" />
+        </SidebarIconButton>
+      </template>
+    </SelectionToolbar>
 
     <div class="border-b border-sidebar-border/60 px-1.5 py-1">
       <SegmentedControl class="grid-cols-2">
@@ -1391,6 +1337,9 @@ onBeforeUnmount(() => {
                   :indent="8 + entry.row.depth * 14"
                   :actions-always-visible="true"
                   data-inline-rename-root="true"
+                  :data-keyboard-item="entry.row.node.path"
+                  :data-keyboard-label="entry.row.node.name"
+                  :data-keyboard-level="entry.row.depth + 1"
                   class="h-[22px] rounded-sm border border-sidebar-border/60 bg-sidebar-accent/40 !py-0 !pr-1 !text-[12px]"
                   :data-node-path="entry.row.node.path"
                   :data-node-type="entry.row.node.type"
@@ -1428,37 +1377,18 @@ onBeforeUnmount(() => {
                     </template>
                   </template>
 
-                  <input
-                    :ref="setInlineRenameInputRef"
+                  <InlineNameEditor
+                    :ref="(editor) => setInlineEditor('rename', editor)"
                     v-model="inlineRenameName"
-                    class="h-5 min-w-0 flex-1 bg-transparent font-mono text-[12px] text-foreground outline-none placeholder:text-muted-foreground"
+                    compact
+                    monospace
+                    :label="t('files.explorer.actions.rename')"
                     :placeholder="t('files.dialog.namePlaceholder')"
-                    :disabled="inlineRenameBusy"
-                    @keydown.enter.prevent="submitInlineRename(entry.row.node)"
-                    @keydown.esc.prevent.stop="resetInlineRename"
+                    :submit-label="t('files.explorer.actions.rename')"
+                    :busy="inlineRenameBusy"
+                    @submit="submitInlineRename(entry.row.node)"
+                    @cancel="resetInlineRename"
                   />
-
-                  <template #actions>
-                    <SidebarIconButton
-                      size="sm"
-                      :title="t('common.cancel')"
-                      :aria-label="t('common.cancel')"
-                      :disabled="inlineRenameBusy"
-                      @click.stop="resetInlineRename"
-                    >
-                      <RiCloseLine class="h-3 w-3" />
-                    </SidebarIconButton>
-                    <SidebarIconButton
-                      size="sm"
-                      :title="t('files.explorer.actions.rename')"
-                      :aria-label="t('files.explorer.actions.rename')"
-                      :disabled="inlineRenameBusy || !inlineRenameName.trim()"
-                      @click.stop="submitInlineRename(entry.row.node)"
-                    >
-                      <RiLoader4Line v-if="inlineRenameBusy" class="h-3 w-3 animate-spin" />
-                      <RiCheckLine v-else class="h-3 w-3" />
-                    </SidebarIconButton>
-                  </template>
                 </SidebarListItem>
 
                 <SidebarListItem
@@ -1493,7 +1423,7 @@ onBeforeUnmount(() => {
                       ? 'oc-tree-drop-success'
                       : '',
                   ]"
-                  @keydown="onTreeRowKeydown($event, entry.row.node)"
+                  @keyboard-rename.prevent="startRename(entry.row.node)"
                   @click="handleTreeNodeClick($event, entry.row.node)"
                   @pointerdown="onRowPointerDown($event, entry.row.node)"
                   :draggable="entry.row.node.type === 'file'"
@@ -1658,40 +1588,21 @@ onBeforeUnmount(() => {
                   />
                   <RiFileAddLine v-else class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 </template>
-                <input
-                  :ref="setInlineCreateInputRef"
+                <InlineNameEditor
+                  :ref="(editor) => setInlineEditor('create', editor)"
                   v-model="inlineCreateName"
-                  class="h-5 min-w-0 flex-1 bg-transparent font-mono text-[12px] text-foreground outline-none placeholder:text-muted-foreground"
-                  :placeholder="
+                  compact
+                  monospace
+                  :label="
                     entry.createKind === 'createFolder'
                       ? t('files.explorer.inlineCreate.folderName')
                       : t('files.explorer.inlineCreate.fileName')
                   "
-                  :disabled="inlineCreateBusy"
-                  @keydown.enter.prevent="submitInlineCreate"
-                  @keydown.esc.prevent.stop="resetInlineCreate"
+                  :submit-label="t('common.create')"
+                  :busy="inlineCreateBusy"
+                  @submit="submitInlineCreate"
+                  @cancel="resetInlineCreate"
                 />
-                <template #actions>
-                  <SidebarIconButton
-                    size="sm"
-                    :title="t('common.create')"
-                    :aria-label="t('common.create')"
-                    :disabled="inlineCreateBusy || !inlineCreateName.trim()"
-                    @click.stop="submitInlineCreate"
-                  >
-                    <RiLoader4Line v-if="inlineCreateBusy" class="h-3 w-3 animate-spin" />
-                    <RiCheckLine v-else class="h-3 w-3" />
-                  </SidebarIconButton>
-                  <SidebarIconButton
-                    size="sm"
-                    :title="t('common.cancel')"
-                    :aria-label="t('common.cancel')"
-                    :disabled="inlineCreateBusy"
-                    @click.stop="resetInlineCreate"
-                  >
-                    <RiCloseLine class="h-3 w-3" />
-                  </SidebarIconButton>
-                </template>
               </SidebarListItem>
             </li>
           </ul>

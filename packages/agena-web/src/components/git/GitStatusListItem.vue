@@ -10,6 +10,7 @@ import ListItemSelectionIndicator from '@/components/ui/ListItemSelectionIndicat
 import IconButton from '@/components/ui/IconButton.vue'
 import OptionMenu from '@/components/ui/OptionMenu.vue'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
+import type { GitFileActionId } from './gitWorkingTreeActions'
 import { writeWorkspaceWindowTemplateToDataTransfer } from '@/layout/workspaceWindowDrag'
 
 const props = withDefaults(
@@ -21,9 +22,7 @@ const props = withDefaults(
     insertions?: number
     deletions?: number
     isMobileFormFactor?: boolean
-    isCompactTouch?: boolean
-    mobileActionItems?: OptionMenuItem[]
-    mobileActionTitle?: string
+    actions: Array<OptionMenuItem & { id: GitFileActionId }>
     showSelection?: boolean
     selected?: boolean
   }>(),
@@ -34,9 +33,6 @@ const props = withDefaults(
     insertions: 0,
     deletions: 0,
     isMobileFormFactor: false,
-    isCompactTouch: false,
-    mobileActionItems: () => [],
-    mobileActionTitle: '',
     showSelection: false,
     selected: false,
   },
@@ -47,55 +43,32 @@ const gitPane = inject(gitPaneContextKey, null)
 
 const emit = defineEmits<{
   (e: 'select', event: MouseEvent): void
-  (e: 'mobileAction', id: string): void
+  (e: 'action', id: GitFileActionId): void
 }>()
 
 const hasStat = computed(() => (props.insertions ?? 0) > 0 || (props.deletions ?? 0) > 0)
 const fileName = computed(() => props.path.split(/[\\/]/).pop() || props.path)
 const parentPath = computed(() => props.path.slice(0, props.path.length - fileName.value.length).replace(/[\\/]$/, ''))
-const mobileActionMenuOpen = ref(false)
-const mobileActionMenuQuery = ref('')
+const actionMenuOpen = ref(false)
+const actionMenuQuery = ref('')
 const actionAnchor = ref<HTMLElement | null>(null)
-const isMobileFormFactor = computed(() => Boolean(props.isMobileFormFactor ?? props.isCompactTouch))
+const primaryAction = computed(() => props.actions.find((item) => item.id === 'stage' || item.id === 'unstage'))
+const actionTitle = computed(() => t('git.ui.workingTree.fileActionsTitle'))
+const actionGroups = computed<OptionMenuGroup[]>(() => [{ id: 'git-status-item-actions', items: props.actions }])
 
-const hasMobileActions = computed(() => Array.isArray(props.mobileActionItems) && props.mobileActionItems.length > 0)
-const primaryAction = computed(() =>
-  props.mobileActionItems.find((item) => item.id === 'stage' || item.id === 'unstage'),
-)
-
-const mobileActionTitleText = computed(
-  () => (props.mobileActionTitle || '').trim() || t('git.ui.workingTree.fileActionsTitle'),
-)
-
-const mobileActionGroups = computed<OptionMenuGroup[]>(() => {
-  if (!hasMobileActions.value) return []
-  return [
-    {
-      id: 'git-status-item-actions',
-      items: props.mobileActionItems,
-    },
-  ]
-})
-
-function openMobileActionMenu() {
-  if (!hasMobileActions.value) return
-  mobileActionMenuQuery.value = ''
-  mobileActionMenuOpen.value = true
+function openActionMenu() {
+  actionMenuQuery.value = ''
+  actionMenuOpen.value = true
 }
 
-function setMobileActionMenuOpen(open: boolean) {
-  mobileActionMenuOpen.value = open
-  if (!open) {
-    mobileActionMenuQuery.value = ''
-  }
+function setActionMenuOpen(open: boolean) {
+  actionMenuOpen.value = open
+  if (!open) actionMenuQuery.value = ''
 }
 
-function onMobileActionSelect(item: OptionMenuItem) {
-  emit('mobileAction', item.id)
-}
-
-function handleMobileActionTrigger() {
-  openMobileActionMenu()
+function onActionSelect(item: OptionMenuItem) {
+  const action = props.actions.find(({ id }) => id === item.id)
+  if (action) emit('action', action.id)
 }
 
 function handleRowDragStart(event: DragEvent) {
@@ -133,15 +106,19 @@ function handleRowDragStart(event: DragEvent) {
   <ListItemFrame
     :data-keyboard-item="path"
     :data-keyboard-label="path"
+    :data-keyboard-selected="String(showSelection ? selected : active)"
     :data-keyboard-multiselect="String(showSelection)"
-    :primary-attrs="{ 'aria-pressed': showSelection ? selected : undefined }"
+    :primary-attrs="{
+      'aria-pressed': showSelection ? selected : undefined,
+      'aria-current': active ? 'true' : undefined,
+    }"
     draggable="true"
     :active="active"
     :action-visibility="isMobileFormFactor ? 'always' : 'hover'"
     class="git-file-row select-none"
     :title="path"
     @click="emit('select', $event)"
-    @contextmenu.prevent="openMobileActionMenu"
+    @contextmenu.prevent="openActionMenu"
     @dragstart="handleRowDragStart"
   >
     <template #leading>
@@ -167,44 +144,40 @@ function handleRowDragStart(event: DragEvent) {
     </template>
 
     <template #actions>
-      <template v-if="hasMobileActions">
-        <IconButton
-          v-if="primaryAction && !showSelection && !isMobileFormFactor"
-          size="xs"
-          :title="primaryAction.label"
-          :aria-label="primaryAction.label"
-          :disabled="primaryAction.disabled"
-          @click.stop="emit('mobileAction', primaryAction.id)"
-        >
-          <component :is="primaryAction.icon" class="size-3.5" />
-        </IconButton>
-        <span ref="actionAnchor" class="inline-flex">
-          <ListItemOverflowActionButton
-            data-keyboard-menu
-            :mobile="isMobileFormFactor"
-            :label="mobileActionTitleText"
-            @trigger="handleMobileActionTrigger"
-          />
-        </span>
-
-        <OptionMenu
-          :open="mobileActionMenuOpen"
-          :query="mobileActionMenuQuery"
-          :groups="mobileActionGroups"
-          :title="mobileActionTitleText"
-          :mobile-title="mobileActionTitleText"
-          :searchable="true"
-          :is-compact-touch="isMobileFormFactor"
-          :desktop-fixed="true"
-          :desktop-anchor-el="actionAnchor"
-          desktop-placement="bottom-end"
-          @update:open="setMobileActionMenuOpen"
-          @update:query="(v) => (mobileActionMenuQuery = v)"
-          @select="onMobileActionSelect"
+      <IconButton
+        v-if="primaryAction && !showSelection && !isMobileFormFactor"
+        size="xs"
+        :title="primaryAction.label"
+        :aria-label="primaryAction.label"
+        :disabled="primaryAction.disabled"
+        @click.stop="emit('action', primaryAction.id)"
+      >
+        <component :is="primaryAction.icon" class="size-3.5" />
+      </IconButton>
+      <span ref="actionAnchor" class="inline-flex">
+        <ListItemOverflowActionButton
+          data-keyboard-menu
+          :mobile="isMobileFormFactor"
+          :label="actionTitle"
+          @trigger="openActionMenu"
         />
-      </template>
+      </span>
 
-      <slot v-else name="actions" />
+      <OptionMenu
+        :open="actionMenuOpen"
+        :query="actionMenuQuery"
+        :groups="actionGroups"
+        :title="actionTitle"
+        :mobile-title="actionTitle"
+        :searchable="true"
+        :is-compact-touch="isMobileFormFactor"
+        :desktop-fixed="true"
+        :desktop-anchor-el="actionAnchor"
+        desktop-placement="bottom-end"
+        @update:open="setActionMenuOpen"
+        @update:query="(v) => (actionMenuQuery = v)"
+        @select="onActionSelect"
+      />
     </template>
   </ListItemFrame>
 </template>

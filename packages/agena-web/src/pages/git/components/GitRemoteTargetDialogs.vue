@@ -7,6 +7,7 @@ import Input from '@/components/ui/Input.vue'
 import MiniActionButton from '@/components/ui/MiniActionButton.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
 import type { PickerOption } from '@/components/ui/pickerOption.types'
+import GitRemoteBranchInput from './GitRemoteBranchInput.vue'
 
 const { t } = useI18n()
 
@@ -18,9 +19,6 @@ const props = defineProps<{
   remoteInfo: RemoteInfo
   remoteBranchLoading: boolean
   filteredRemoteBranchOptions: string[]
-
-  hideBranchPickSoon: () => void
-  onBranchPickKeydown: (ev: KeyboardEvent) => void
 
   pushToTarget: () => void
   pullFromTarget: () => void
@@ -36,9 +34,6 @@ const targetRemote = defineModel<string>('targetRemote', { required: true })
 const targetBranch = defineModel<string>('targetBranch', { required: true })
 const targetRef = defineModel<string>('targetRef', { required: true })
 const targetSetUpstream = defineModel<boolean>('targetSetUpstream', { required: true })
-
-const branchPickVisible = defineModel<boolean>('branchPickVisible', { required: true })
-const branchPickIndex = defineModel<number>('branchPickIndex', { required: true })
 
 const stashDialogOpen = defineModel<boolean>('stashDialogOpen', { required: true })
 const stashMessage = defineModel<string>('stashMessage', { required: true })
@@ -89,44 +84,11 @@ const remotePickerOptions = computed<PickerOption[]>(() => {
         </div>
 
         <div class="grid gap-1">
-          <div class="text-xs font-medium text-muted-foreground">{{ t('git.fields.branch') }}</div>
-          <Input
+          <GitRemoteBranchInput
             v-model="targetBranch"
-            class="h-9 font-mono text-xs"
-            placeholder="main"
-            @focus="
-              () => {
-                branchPickVisible = true
-                branchPickIndex = 0
-              }
-            "
-            @blur="props.hideBranchPickSoon"
-            @keydown="props.onBranchPickKeydown"
+            :options="filteredRemoteBranchOptions"
+            :loading="remoteBranchLoading"
           />
-          <div v-if="remoteBranchLoading" class="text-[11px] text-muted-foreground">
-            {{ t('git.remoteTargetDialogs.loadingRemoteBranches') }}
-          </div>
-          <div
-            v-else-if="branchPickVisible && filteredRemoteBranchOptions.length"
-            class="mt-1 max-h-28 overflow-auto rounded-md border border-border/50 bg-background/40"
-          >
-            <button
-              v-for="(b, idx) in filteredRemoteBranchOptions.slice(0, 20)"
-              :key="`push-branch:${b}`"
-              type="button"
-              class="w-full text-left px-2 py-1 text-[11px] font-mono hover:bg-muted/30"
-              :class="idx === branchPickIndex ? 'bg-muted/40' : ''"
-              @mouseenter="branchPickIndex = idx"
-              @click="
-                () => {
-                  targetBranch = b
-                  branchPickVisible = false
-                }
-              "
-            >
-              {{ b }}
-            </button>
-          </div>
           <div class="text-[11px] text-muted-foreground">{{ t('git.remoteTargetDialogs.push.advancedHint') }}</div>
         </div>
 
@@ -182,44 +144,11 @@ const remotePickerOptions = computed<PickerOption[]>(() => {
         </div>
 
         <div class="grid gap-1">
-          <div class="text-xs font-medium text-muted-foreground">{{ t('git.fields.branch') }}</div>
-          <Input
+          <GitRemoteBranchInput
             v-model="targetBranch"
-            class="h-9 font-mono text-xs"
-            placeholder="main"
-            @focus="
-              () => {
-                branchPickVisible = true
-                branchPickIndex = 0
-              }
-            "
-            @blur="props.hideBranchPickSoon"
-            @keydown="props.onBranchPickKeydown"
+            :options="filteredRemoteBranchOptions"
+            :loading="remoteBranchLoading"
           />
-          <div v-if="remoteBranchLoading" class="text-[11px] text-muted-foreground">
-            {{ t('git.remoteTargetDialogs.loadingRemoteBranches') }}
-          </div>
-          <div
-            v-else-if="branchPickVisible && filteredRemoteBranchOptions.length"
-            class="mt-1 max-h-28 overflow-auto rounded-md border border-border/50 bg-background/40"
-          >
-            <button
-              v-for="(b, idx) in filteredRemoteBranchOptions.slice(0, 20)"
-              :key="`pull-branch:${b}`"
-              type="button"
-              class="w-full text-left px-2 py-1 text-[11px] font-mono hover:bg-muted/30"
-              :class="idx === branchPickIndex ? 'bg-muted/40' : ''"
-              @mouseenter="branchPickIndex = idx"
-              @click="
-                () => {
-                  targetBranch = b
-                  branchPickVisible = false
-                }
-              "
-            >
-              {{ b }}
-            </button>
-          </div>
           <div class="text-[11px] text-muted-foreground">{{ t('git.remoteTargetDialogs.pull.advancedHint') }}</div>
         </div>
 
@@ -269,44 +198,11 @@ const remotePickerOptions = computed<PickerOption[]>(() => {
         </div>
 
         <div class="grid gap-1">
-          <div class="text-xs font-medium text-muted-foreground">{{ t('git.fields.branch') }}</div>
-          <Input
+          <GitRemoteBranchInput
             v-model="targetBranch"
-            class="h-9 font-mono text-xs"
-            placeholder="main"
-            @focus="
-              () => {
-                branchPickVisible = true
-                branchPickIndex = 0
-              }
-            "
-            @blur="props.hideBranchPickSoon"
-            @keydown="props.onBranchPickKeydown"
+            :options="filteredRemoteBranchOptions"
+            :loading="remoteBranchLoading"
           />
-          <div v-if="remoteBranchLoading" class="text-[11px] text-muted-foreground">
-            {{ t('git.remoteTargetDialogs.loadingRemoteBranches') }}
-          </div>
-          <div
-            v-else-if="branchPickVisible && filteredRemoteBranchOptions.length"
-            class="mt-1 max-h-28 overflow-auto rounded-md border border-border/50 bg-background/40"
-          >
-            <button
-              v-for="(b, idx) in filteredRemoteBranchOptions.slice(0, 20)"
-              :key="`fetch-branch:${b}`"
-              type="button"
-              class="w-full text-left px-2 py-1 text-[11px] font-mono hover:bg-muted/30"
-              :class="idx === branchPickIndex ? 'bg-muted/40' : ''"
-              @mouseenter="branchPickIndex = idx"
-              @click="
-                () => {
-                  targetBranch = b
-                  branchPickVisible = false
-                }
-              "
-            >
-              {{ b }}
-            </button>
-          </div>
           <div class="text-[11px] text-muted-foreground">{{ t('git.remoteTargetDialogs.fetch.advancedHint') }}</div>
         </div>
 

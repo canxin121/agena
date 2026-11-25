@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, type ComponentPublicInstance } from 'vue'
+import { computed } from 'vue'
 import { RiChat3Line } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
@@ -7,7 +7,6 @@ import ListItemOverflowActionButton from '@/components/ui/ListItemOverflowAction
 import SidebarListItem from '@/components/ui/SidebarListItem.vue'
 import { formatTime } from '@/features/sessions/model/labels'
 import type { BotConversation } from '@/features/bots/useBotConversations'
-import type { MenuRefEl } from '@/layout/chatSidebar/sessionMenu.types'
 import type { SessionActionItem } from '@/layout/chatSidebar/useSessionActionMenu'
 import SidebarSessionActionMenu from '@/layout/chatSidebar/components/SidebarSessionActionMenu.vue'
 
@@ -20,7 +19,7 @@ const props = defineProps<{
   menuQuery: string
   menuItems: SessionActionItem[]
   menuAnchorEl: HTMLElement | null
-  setMenuRef: (el: MenuRefEl) => void
+  closeMenu: () => void
 }>()
 
 const emit = defineEmits<{
@@ -38,10 +37,6 @@ const subtitle = computed(() => {
     ? t('bot.conversations.messages', { count: props.conversation.messageCount })
     : t('bot.conversations.empty')
 })
-
-function setMenuRef(el: Element | ComponentPublicInstance | null) {
-  props.setMenuRef(el)
-}
 </script>
 
 <template>
@@ -82,11 +77,11 @@ function setMenuRef(el: Element | ComponentPublicInstance | null) {
       :open="true"
       :query="menuQuery"
       :items="menuItems"
-      :set-menu-ref="setMenuRef"
       :anchor-el="menuAnchorEl"
       :desktop-placement="uiIsCompactLayout ? 'top-end' : 'bottom-end'"
       @update:query="(value) => emit('update:menuQuery', value)"
       @select="(item) => emit('select', item)"
+      @close="closeMenu"
     />
   </li>
 </template>

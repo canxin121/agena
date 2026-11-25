@@ -20,7 +20,7 @@ import {
   isEmbeddedWorkspacePaneContext,
   withEmbeddedWorkspaceScopeQuery,
 } from '@/app/windowScope'
-import { WORKSPACE_SIDEBAR_HOST_ID } from '@/layout/workspaceSidebarHost'
+import { provideWorkspaceSidebarHost, WORKSPACE_SIDEBAR_HOST_ID } from '@/layout/workspaceSidebarHost'
 import { isConversationSettingsPath, isWorkspaceMainTabPath, mainTabFromPath } from '@/app/navigation/mainTabs'
 import type { MainTabId } from '@/app/navigation/mainTabs'
 import {
@@ -36,16 +36,17 @@ import { useI18n } from 'vue-i18n'
 import { useUiStore } from '@/stores/ui'
 import { useToastsStore } from '@/stores/toasts'
 import { useAppRuntime } from '@/app/runtime/useAppRuntime'
-import { useDesktopSidebarResize } from '@/composables/useDesktopSidebarResize'
+import DesktopSidebarResizeHandle from '@/layout/DesktopSidebarResizeHandle.vue'
+import type { DesktopSidebarResizeOptions } from '@/composables/useDesktopSidebarResize'
 
 const ui = useUiStore()
 provideWorkspacePaneHosts()
+provideWorkspaceSidebarHost()
 const toasts = useToastsStore()
 const route = useRoute()
 const router = useRouter()
 const workspaceNavigation = useWorkspaceNavigation()
 const { t } = useI18n()
-const { startDesktopSidebarResize, resizeDesktopSidebarFromKeyboard } = useDesktopSidebarResize()
 // Route ownership belongs to the shell, before runtime hydration or pane mounts.
 // Apply explicit deep links before any saved active window can restore its URL.
 watch(
@@ -259,23 +260,19 @@ function setDesktopSidebarPreviewWidth(width: number) {
   el.style.width = `${Math.round(width)}px`
 }
 
-function handleDesktopSidebarResize(event: PointerEvent) {
-  startDesktopSidebarResize(event, {
-    deferCommit: true,
-    onStart: () => {
-      isLeftSidebarResizing.value = true
-      setDesktopSidebarPreviewWidth(ui.sidebarWidth)
-    },
-    onPreviewWidth: (nextWidth) => {
-      setDesktopSidebarPreviewWidth(nextWidth)
-    },
-    onEnd: (finalWidth) => {
-      setDesktopSidebarPreviewWidth(finalWidth)
-      window.requestAnimationFrame(() => {
-        isLeftSidebarResizing.value = false
-      })
-    },
-  })
+const desktopSidebarResizeOptions: DesktopSidebarResizeOptions = {
+  deferCommit: true,
+  onStart: () => {
+    isLeftSidebarResizing.value = true
+    setDesktopSidebarPreviewWidth(ui.sidebarWidth)
+  },
+  onPreviewWidth: setDesktopSidebarPreviewWidth,
+  onEnd: (finalWidth) => {
+    setDesktopSidebarPreviewWidth(finalWidth)
+    window.requestAnimationFrame(() => {
+      isLeftSidebarResizing.value = false
+    })
+  },
 }
 
 function workspaceDockRequestQuery() {
@@ -704,26 +701,11 @@ watch(
         <aside
           v-if="showDesktopSidebarHost"
           ref="desktopSidebarAsideEl"
-          class="relative h-full overflow-hidden bg-sidebar"
+          class="relative h-full shrink-0 overflow-hidden border-e border-border bg-sidebar"
           :style="{ width: `${desktopSidebarRenderWidth}px` }"
-          :class="[
-            'border-r border-border',
-            isLeftSidebarResizing ? '' : 'transition-[width,border-color] duration-200 ease-out',
-          ]"
+          :class="{ 'transition-[width,border-color] duration-200 ease-out': !isLeftSidebarResizing }"
         >
-          <div
-            v-if="desktopSidebarExpanded"
-            role="separator"
-            aria-orientation="vertical"
-            :aria-label="String(t('header.windowTabs.resizingSidebar'))"
-            :aria-valuenow="Math.round(ui.sidebarWidth)"
-            :aria-valuemin="280"
-            :aria-valuemax="520"
-            tabindex="0"
-            class="absolute right-0 top-0 z-30 h-full w-1 cursor-col-resize hover:bg-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            @pointerdown="handleDesktopSidebarResize"
-            @keydown="resizeDesktopSidebarFromKeyboard"
-          />
+          <DesktopSidebarResizeHandle v-if="desktopSidebarExpanded" class="z-30" :options="desktopSidebarResizeOptions" />
 
           <div
             :id="WORKSPACE_SIDEBAR_HOST_ID"

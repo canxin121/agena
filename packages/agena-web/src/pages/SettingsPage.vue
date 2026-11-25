@@ -59,13 +59,12 @@ import {
   type SettingsSidebarDestination,
   type SettingsTab,
 } from '@/components/settings/sidebar/settingsSidebarNavigation'
-import { useDesktopSidebarResize } from '@/composables/useDesktopSidebarResize'
+import WorkspacePageSidebar from '@/layout/WorkspacePageSidebar.vue'
 import { localStorageKeys } from '@/lib/persistence/storageKeys'
 import { apiJson } from '@/lib/api'
 import { buildLocalePickerOptions } from '@/pages/loginLocaleOptions'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import { usePaneVisibility } from '@/composables/usePaneVisibility'
-import { WORKSPACE_SIDEBAR_PANEL_HOST_SELECTOR } from '@/layout/workspaceSidebarHost'
 import {
   BUILTIN_CHAT_ACTIVITY_KINDS,
   normalizeChatActivityKindCatalog,
@@ -98,7 +97,6 @@ const workspacePane = useWorkspacePaneContext()
 const visible = usePaneVisibility()
 const route = useRoute()
 const router = useRouter()
-const { startDesktopSidebarResize, resizeDesktopSidebarFromKeyboard } = useDesktopSidebarResize()
 const { t, te } = useI18n()
 
 const SETTINGS_LAST_SECTION_KEY = localStorageKeys.settings.lastRoute
@@ -258,22 +256,6 @@ function goToSettingsDestination(destination: SettingsSidebarDestination) {
   void router.push({ path, query })
   if (ui.isCompactLayout) ui.setSessionSwitcherOpen(false)
 }
-
-const isFocusedWorkspacePane = computed(() => !workspacePane || workspacePane.isFocused.value)
-const useDesktopSidebarHost = computed(
-  () => Boolean(workspacePane) && !ui.isCompactLayout && isFocusedWorkspacePane.value,
-)
-const settingsSidebarClass = computed(() =>
-  ui.isCompactLayout || useDesktopSidebarHost.value
-    ? 'relative h-full w-full shrink-0 border-r border-border bg-sidebar'
-    : 'relative h-full w-full shrink-0 bg-sidebar',
-)
-
-const showSidebar = computed(() => {
-  if (ui.isCompactLayout) return ui.isSessionSwitcherOpen
-  if (workspacePane && !isFocusedWorkspacePane.value) return false
-  return true
-})
 
 const tabs = computed(() => buildSettingsNavigationCategories())
 
@@ -623,37 +605,18 @@ const dirtyHint = computed(
 <template>
   <div class="settings-page flex h-full flex-col overflow-hidden bg-background text-foreground">
     <div class="flex flex-1 overflow-hidden">
-      <Teleport :to="WORKSPACE_SIDEBAR_PANEL_HOST_SELECTOR" :disabled="!useDesktopSidebarHost">
-        <aside
-          v-if="showSidebar"
-          :class="settingsSidebarClass"
-          :style="ui.isCompactLayout || useDesktopSidebarHost ? undefined : { width: `${ui.sidebarWidth}px` }"
-        >
-          <div
-            v-if="!ui.isCompactLayout && !useDesktopSidebarHost"
-            class="absolute right-0 top-0 z-10 h-full w-1 cursor-col-resize hover:bg-primary/40"
-            @pointerdown="startDesktopSidebarResize"
-            role="separator"
-            aria-orientation="vertical"
-            :aria-label="String(t('header.windowTabs.resizingSidebar'))"
-            :aria-valuenow="Math.round(ui.sidebarWidth)"
-            :aria-valuemin="280"
-            :aria-valuemax="520"
-            tabindex="0"
-            @keydown="resizeDesktopSidebarFromKeyboard"
-          />
-          <SettingsSidebar
-            :tabs="tabs"
-            :active-tab="activeSection"
-            :active-view="activeView"
-            :active-scope="activeScope"
-            :loading="settings.loading"
-            :is-touch-pointer="ui.isTouchPointer"
-            @refresh="refreshSettingsSidebar"
-            @navigate="goToSettingsDestination"
-          />
-        </aside>
-      </Teleport>
+      <WorkspacePageSidebar panel="settings" :mode="workspacePane ? 'page' : 'local'" local-resizable>
+        <SettingsSidebar
+          :tabs="tabs"
+          :active-tab="activeSection"
+          :active-view="activeView"
+          :active-scope="activeScope"
+          :loading="settings.loading"
+          :is-touch-pointer="ui.isTouchPointer"
+          @refresh="refreshSettingsSidebar"
+          @navigate="goToSettingsDestination"
+        />
+      </WorkspacePageSidebar>
 
       <!-- Content -->
       <main

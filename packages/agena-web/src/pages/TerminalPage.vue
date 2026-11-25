@@ -1,19 +1,14 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { FitAddon } from '@xterm/addon-fit'
-import { Terminal } from '@xterm/xterm'
-import '@xterm/xterm/css/xterm.css'
 import {
   RiPlugLine,
   RiAddLine,
-  RiCheckLine,
   RiListCheck3,
   RiStopCircleLine,
   RiRefreshLine,
   RiDeleteBinLine,
-  RiCloseLine,
   RiStarFill,
   RiStarLine,
   RiEditLine,
@@ -26,10 +21,13 @@ import ListItemOverflowActionButton from '@/components/ui/ListItemOverflowAction
 import ListItemSelectionIndicator from '@/components/ui/ListItemSelectionIndicator.vue'
 import MobileSidebarEmptyState from '@/components/ui/MobileSidebarEmptyState.vue'
 import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
-import FormDialog from '@/components/ui/FormDialog.vue'
-import Input from '@/components/ui/Input.vue'
+import NameInputPrompt from '@/components/ui/NameInputPrompt.vue'
+import InlineNameEditor from '@/components/ui/InlineNameEditor.vue'
+import { vKeyboardCollection } from '@/lib/keyboardCollection'
 import OptionMenu from '@/components/ui/OptionMenu.vue'
 import SearchInput from '@/components/ui/SearchInput.vue'
+import SelectionToolbar from '@/components/ui/SelectionToolbar.vue'
+import SidebarIconButton from '@/components/ui/SidebarIconButton.vue'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import TerminalKeybar from '@/components/TerminalKeybar.vue'
 import { useUnifiedMultiSelect } from '@/composables/useUnifiedMultiSelect'
@@ -37,7 +35,6 @@ import { consumeTrustedTerminalHandoffPayload, type TerminalHandoffTarget } from
 import { getLocalString, removeLocalKey, setLocalString } from '@/lib/persist'
 import { localStorageKeys } from '@/lib/persistence/storageKeys'
 import { ApiError } from '@/lib/api'
-import { copyTextToClipboard, readTextFromClipboard } from '@/lib/clipboard'
 import { connectSse } from '@/lib/sse'
 import {
   createTerminalSession,
@@ -45,7 +42,6 @@ import {
   getTerminalUiState,
   getTerminalSessionInfo,
   putTerminalUiState,
-  resizeTerminal,
   sendTerminalInput,
   startTerminalSession,
   stopTerminalSession,
@@ -60,10 +56,10 @@ import {
   resolveSessionIdByName,
   type TerminalSessionMeta as NameKeyedTerminalSessionMeta,
 } from '@/features/terminal/lib/sessionNameKey'
-import { handleTerminalKeyboardShortcut } from '@/features/terminal/lib/terminalKeyboardShortcuts'
-import { WORKSPACE_SIDEBAR_PANEL_HOST_SELECTOR } from '@/layout/workspaceSidebarHost'
+import { useTerminalViewport } from '@/features/terminal/lib/useTerminalViewport'
+import TerminalViewport from '@/features/terminal/components/TerminalViewport.vue'
+import WorkspacePageSidebar from '@/layout/WorkspacePageSidebar.vue'
 import { isEmbeddedWorkspacePaneContext, withEmbeddedWorkspaceScopeQuery } from '@/app/windowScope'
-import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import { usePaneVisibility } from '@/composables/usePaneVisibility'
 import { limitBackgroundReads } from '@/lib/backgroundReads'
 import { useDirectoryStore } from '@/stores/directory'
@@ -173,7 +169,6 @@ function persistGitHandoffSessionName(next: string | null) {
 }
 
 const ui = useUiStore()
-const workspacePane = useWorkspacePaneContext()
 const terminalVisible = usePaneVisibility()
 let terminalPageMounted = false
 let terminalInitialized = false
@@ -185,7 +180,7 @@ let sessionProbeKey = ''
 let sessionProbesPending = false
 
 function isTerminalVisible() {
-  return terminalPageMounted && terminalVisible.value
+  return terminalVisible.value && terminalPageMounted
 }
 const directoryStore = useDirectoryStore()
 
@@ -229,16 +224,6 @@ function hydratePendingSendFromQuery() {
 }
 
 const isEmbeddedWorkspacePane = computed(() => isEmbeddedWorkspacePaneContext(route.query))
-const isFocusedWorkspacePane = computed(() => !workspacePane || workspacePane.isFocused.value)
-const useDesktopSidebarHost = computed(
-  () => !ui.isCompactLayout && !isEmbeddedWorkspacePane.value && isFocusedWorkspacePane.value,
-)
-const useShellSidebar = computed(() => {
-  if (isEmbeddedWorkspacePane.value) return false
-  if (workspacePane && !isFocusedWorkspacePane.value) return false
-  if (useDesktopSidebarHost.value) return true
-  return ui.isCompactLayout ? ui.isSessionSwitcherOpen : ui.isSidebarOpen
-})
 const sessionId = ref<string | null>(null)
 const sessionList = ref<string[]>([])
 const sessionMetaById = ref<Record<string, TerminalSessionMeta>>({})
@@ -572,7 +557,7 @@ function setActiveSession(next: string | null, opts?: { remote?: boolean }) {
     sessionList.value = [sid, ...sessionList.value]
     persistSessionList({ remote: false })
   }
-  lastSentResizeSig = null
+  resetResize()
   if (opts?.remote !== false) {
     scheduleTerminalStateRemotePersist()
   }
@@ -747,18 +732,12 @@ function handleTerminalUiStateVisibility() {
   if (!isTerminalVisible()) {
     initializationController?.abort()
     sessionProbeController?.abort()
-    if (resizeTimer !== null) {
-      window.clearTimeout(resizeTimer)
-      resizeTimer = null
-    }
-    resizeObserver?.disconnect()
     closeTerminalUiStateEvents()
     // Output buffers live on the server; resume from each saved cursor.
     for (const sid of Array.from(streamSourceById.keys())) closeSessionStream(sid)
     for (const sid of Array.from(streamReconnectTimerById.keys())) clearReconnectTimerForSession(sid)
   } else {
     ensureTerminalMounted()
-    if (el.value) resizeObserver?.observe(el.value)
     if (!terminalInitialized) {
       void initializeTerminal()
       return
@@ -850,7 +829,7 @@ function removeTrackedSession(id: string, opts?: { persist?: boolean }) {
   }
   if (sessionId.value === sid) {
     sessionId.value = null
-    lastSentResizeSig = null
+    resetResize()
     status.value = 'disconnected'
     if (shouldPersist) {
       scheduleTerminalStateRemotePersist()
@@ -873,11 +852,6 @@ const sessionRenameDraft = ref('')
 const mobileSessionActionTargetId = ref<string | null>(null)
 const mobileSessionActionOpen = ref(false)
 const mobileSessionActionQuery = ref('')
-
-const mobileSessionCreateDialogOpen = computed(() => ui.isCompactTouch && sessionCreateOpen.value)
-const mobileSessionRenameDialogOpen = computed(
-  () => ui.isCompactTouch && Boolean(normalizeSessionId(sessionRenamingId.value)),
-)
 
 const terminalMultiSelect = useUnifiedMultiSelect()
 const allTerminalSelectableIds = computed(() => sidebarSessions.value.map((item) => item.id))
@@ -990,6 +964,12 @@ function startSessionRename(id: string) {
   cancelSessionCreate()
   sessionRenamingId.value = sid
   sessionRenameDraft.value = normalizeSessionMetaName(sessionMetaFor(sid).name) || DEFAULT_TERMINAL_SESSION_NAME
+}
+
+function renameSessionFromKeyboard(event: Event, id: string) {
+  if (terminalMultiSelect.enabled.value) return
+  event.preventDefault()
+  startSessionRename(id)
 }
 
 function cancelSessionRename() {
@@ -1336,14 +1316,22 @@ function applyKeyMods(data: string): string {
   return out
 }
 
-const el = ref<HTMLDivElement | null>(null)
-const term = shallowRef<Terminal | null>(null)
-const fit = shallowRef<FitAddon | null>(null)
-
-let resizeObserver: ResizeObserver | null = null
-
-let resizeTimer: number | null = null
-let lastSentResizeSig: string | null = null
+const viewport = ref<InstanceType<typeof TerminalViewport> | null>(null)
+const { term, ensureTerminalMounted, scheduleResize, resetResize } = useTerminalViewport({
+  container: computed(() => viewport.value?.element ?? null),
+  visible: isTerminalVisible,
+  sessionId: () => sessionId.value,
+  fontSize: 13,
+  autoFocus: () => !ui.isTouchPointer,
+  onData: (data) => void sendInput(applyKeyMods(data)),
+  onInterrupt: () => void sendInput('\x03'),
+  onReady: () => {
+    if (sessionId.value) renderSessionOutput(sessionId.value)
+  },
+  onResizeError: (error, id) => {
+    handleTerminalRequestError(String(t('terminal.errors.failedToResize')), error, id)
+  },
+})
 
 type SessionStreamStatus = 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'error' | 'exited'
 type SessionOutputBuffer = { chunks: string[]; bytes: number }
@@ -1683,15 +1671,6 @@ function handleTerminalRequestError(action: string, err: unknown, targetSessionI
   }
 }
 
-function teardownTerminal() {
-  closeAllSessionStreams()
-  if (term.value) {
-    term.value.dispose()
-    term.value = null
-  }
-  fit.value = null
-}
-
 async function getSessionInfo(id: string): Promise<boolean> {
   const info = await getTerminalSessionInfo(id)
   return Boolean(info)
@@ -1705,97 +1684,6 @@ async function sendInput(data: string) {
   } catch (err) {
     handleTerminalRequestError(String(t('terminal.errors.failedToSendInput')), err, id)
   }
-}
-
-async function sendResize() {
-  const id = sessionId.value
-  if (!id || !term.value || !isTerminalVisible()) return
-
-  const cols = term.value.cols
-  const rows = term.value.rows
-  const sig = `${id}:${cols}x${rows}`
-  if (lastSentResizeSig === sig) return
-
-  try {
-    await resizeTerminal(id, cols, rows)
-    lastSentResizeSig = sig
-  } catch (err) {
-    handleTerminalRequestError(String(t('terminal.errors.failedToResize')), err, id)
-  }
-}
-
-function scheduleResize() {
-  if (!isTerminalVisible()) return
-  if (resizeTimer !== null) {
-    window.clearTimeout(resizeTimer)
-  }
-  resizeTimer = window.setTimeout(async () => {
-    resizeTimer = null
-    if (!isTerminalVisible() || !el.value?.clientWidth || !el.value.clientHeight) return
-    ensureTerminalMounted()
-    if (!fit.value || !term.value) return
-    fit.value.fit()
-    // xterm occasionally renders a blank viewport when mounted while hidden or
-    // when the container size changes (tab switch/restart). A refresh after fit
-    // nudges it to paint immediately.
-    try {
-      term.value.refresh(0, Math.max(0, term.value.rows - 1))
-    } catch {
-      // ignore
-    }
-    await sendResize()
-  }, 80)
-}
-
-function ensureTerminalMounted() {
-  if (!isTerminalVisible() || !el.value?.clientWidth || !el.value.clientHeight) return
-  if (term.value) return
-
-  const t = new Terminal({
-    cursorBlink: true,
-    scrollback: 5000,
-    fontFamily: '"IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-    fontSize: 13,
-    theme: {
-      background: '#101415',
-      foreground: '#e9efe7',
-      cursor: '#e9efe7',
-      selectionBackground: 'rgba(111, 176, 255, 0.25)',
-    },
-  })
-  const f = new FitAddon()
-  t.loadAddon(f)
-  t.open(el.value)
-  f.fit()
-
-  // On touch pointers, avoid auto-focus so the IME doesn't pop immediately.
-  if (!ui.isTouchPointer) t.focus()
-
-  // Force an initial paint. Without this, some browsers show a black viewport
-  // until the first input/scroll.
-  try {
-    t.refresh(0, Math.max(0, t.rows - 1))
-  } catch {
-    // ignore
-  }
-
-  t.onData((d) => void sendInput(applyKeyMods(d)))
-  t.attachCustomKeyEventHandler((event) => {
-    if (event.type !== 'keydown') return true
-    const handled = handleTerminalKeyboardShortcut(event, {
-      terminal: t,
-      copyTextToClipboard,
-      readTextFromClipboard,
-      sendInterrupt: () => {
-        void sendInput('\x03')
-      },
-    })
-    return !handled
-  })
-
-  term.value = t
-  fit.value = f
-  if (sessionId.value) renderSessionOutput(sessionId.value)
 }
 
 async function connect() {
@@ -2005,18 +1893,6 @@ onMounted(() => {
   terminalPageMounted = true
   hydratePendingSendFromQuery()
 
-  window.addEventListener('resize', scheduleResize)
-
-  // ResizeObserver catches layout changes that don't trigger window resize
-  // (e.g. switching tabs/panels).
-  if ('ResizeObserver' in window) {
-    try {
-      resizeObserver = new ResizeObserver(() => scheduleResize())
-      if (isTerminalVisible() && el.value) resizeObserver.observe(el.value)
-    } catch {
-      resizeObserver = null
-    }
-  }
   handleTerminalUiStateVisibility()
 })
 
@@ -2054,11 +1930,6 @@ onBeforeUnmount(() => {
   terminalPageMounted = false
   initializationController?.abort()
   sessionProbeController?.abort()
-  if (resizeTimer !== null) {
-    window.clearTimeout(resizeTimer)
-    resizeTimer = null
-  }
-  window.removeEventListener('resize', scheduleResize)
   closeTerminalUiStateEvents()
 
   if (terminalStatePersistTimer !== null) {
@@ -2070,43 +1941,14 @@ onBeforeUnmount(() => {
     void persistTerminalStateRemote()
   }
 
-  if (resizeObserver) {
-    try {
-      resizeObserver.disconnect()
-    } catch {
-      // ignore
-    }
-    resizeObserver = null
-  }
-  teardownTerminal()
-})
-
-watch(el, () => {
-  if (el.value) {
-    ensureTerminalMounted()
-    scheduleResize()
-
-    if (resizeObserver) {
-      try {
-        resizeObserver.disconnect()
-        if (isTerminalVisible()) resizeObserver.observe(el.value)
-      } catch {
-        // ignore
-      }
-    }
-  }
+  closeAllSessionStreams()
 })
 </script>
 
 <template>
   <div class="h-full flex overflow-hidden bg-background">
-    <Teleport :to="WORKSPACE_SIDEBAR_PANEL_HOST_SELECTOR" :disabled="!useDesktopSidebarHost">
-      <aside
-        v-if="useShellSidebar"
-        class="relative flex h-full min-h-0 flex-col overflow-hidden bg-sidebar text-sidebar-foreground"
-        :class="ui.isCompactLayout || useDesktopSidebarHost ? 'w-full' : 'border-r border-sidebar-border/60'"
-        :style="ui.isCompactLayout || useDesktopSidebarHost ? undefined : { width: `${ui.sidebarWidth}px` }"
-      >
+    <WorkspacePageSidebar panel="terminal" data-selection-context>
+      <template #default>
         <div class="h-9 flex-shrink-0 select-none pl-3.5 pr-2 pt-1">
           <div class="flex h-full items-center justify-between gap-2">
             <div class="min-w-0 flex items-center gap-2">
@@ -2147,36 +1989,13 @@ watch(el, () => {
               </IconButton>
 
               <IconButton
-                variant="ghost"
-                size="md"
-                class="h-8 w-8"
-                :class="terminalMultiSelect.enabled.value ? 'bg-primary/10 text-primary hover:bg-primary/15' : ''"
-                :tooltip="
-                  String(
-                    terminalMultiSelect.enabled.value
-                      ? t('terminal.actions.exitMultiSelect')
-                      : t('terminal.actions.enterMultiSelect'),
-                  )
-                "
+                v-if="!terminalMultiSelect.enabled.value"
+                data-selection-trigger
+                :tooltip="t('terminal.actions.enterMultiSelect')"
                 :is-touch-pointer="ui.isTouchPointer"
-                :title="
-                  String(
-                    terminalMultiSelect.enabled.value
-                      ? t('terminal.actions.exitMultiSelect')
-                      : t('terminal.actions.enterMultiSelect'),
-                  )
-                "
-                :aria-label="
-                  String(
-                    terminalMultiSelect.enabled.value
-                      ? t('terminal.actions.exitMultiSelect')
-                      : t('terminal.actions.enterMultiSelect'),
-                  )
-                "
                 @click="toggleTerminalMultiSelectMode"
               >
-                <RiCloseLine v-if="terminalMultiSelect.enabled.value" class="h-4 w-4" />
-                <RiListCheck3 v-else class="h-4 w-4" />
+                <RiListCheck3 class="size-4" aria-hidden="true" />
               </IconButton>
             </div>
           </div>
@@ -2197,135 +2016,64 @@ watch(el, () => {
           />
         </div>
 
-        <div
+        <SelectionToolbar
           v-if="terminalMultiSelect.enabled.value"
-          class="flex-shrink-0 border-b border-sidebar-border/60 px-2.5 py-1.5"
+          class="shrink-0 border-b border-sidebar-border/60"
+          :selectable-ids="visibleTerminalSelectableIds"
+          :selected-ids="terminalMultiSelect.selectedIds.value"
+          :selection-label="
+            t('terminal.sidebar.multiSelect.selectedCount', {
+              count: terminalMultiSelect.selectedCount.value,
+            })
+          "
+          :exit-label="t('terminal.actions.exitMultiSelect')"
+          :is-touch-pointer="ui.isTouchPointer"
+          @select-all="selectAllTerminalSessions"
+          @invert="invertTerminalSessionsSelection"
+          @exit="toggleTerminalMultiSelectMode"
         >
-          <div class="flex flex-wrap items-center justify-between gap-1.5">
-            <div class="flex min-w-0 items-center">
-              <span
-                class="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-muted px-1 text-[10px] font-medium text-foreground/80"
-                :title="
-                  String(
-                    t('terminal.sidebar.multiSelect.selectedCount', { count: terminalMultiSelect.selectedCount.value }),
-                  )
-                "
-                :aria-label="
-                  String(
-                    t('terminal.sidebar.multiSelect.selectedCount', { count: terminalMultiSelect.selectedCount.value }),
-                  )
-                "
-              >
-                {{ terminalMultiSelect.selectedCount.value }}
-              </span>
-            </div>
-
-            <div class="flex items-center gap-1">
-              <IconButton
-                size="xs"
-                :tooltip="String(t('common.selectAll'))"
-                :title="String(t('common.selectAll'))"
-                :aria-label="String(t('common.selectAll'))"
+          <template #default="{ size }">
+            <ConfirmPopover
+              :title="t('terminal.actions.deleteSelectedConfirmTitle')"
+              :description="
+                t('terminal.actions.deleteSelectedConfirmDescription', {
+                  count: terminalMultiSelect.selectedCount.value,
+                })
+              "
+              :confirm-text="t('terminal.actions.deleteSelected')"
+              variant="destructive"
+              @confirm="deleteSelectedTerminalSessions"
+            >
+              <SidebarIconButton
+                data-keyboard-option
+                :size="size"
+                destructive
+                :tooltip="t('terminal.actions.deleteSelected')"
                 :is-touch-pointer="ui.isTouchPointer"
-                :disabled="
-                  visibleTerminalSelectableIds.length === 0 ||
-                  terminalMultiSelect.selectedCount.value === visibleTerminalSelectableIds.length
-                "
-                @click="selectAllTerminalSessions"
+                :disabled="!terminalMultiSelect.selectedCount.value"
+                @click.stop
               >
-                <RiListCheck3 class="h-3.5 w-3.5" />
-              </IconButton>
+                <RiDeleteBinLine class="size-3.5" aria-hidden="true" />
+              </SidebarIconButton>
+            </ConfirmPopover>
+          </template>
+        </SelectionToolbar>
 
-              <IconButton
-                size="xs"
-                :tooltip="String(t('common.invertSelection'))"
-                :title="String(t('common.invertSelection'))"
-                :aria-label="String(t('common.invertSelection'))"
-                :is-touch-pointer="ui.isTouchPointer"
-                :disabled="visibleTerminalSelectableIds.length === 0"
-                @click="invertTerminalSessionsSelection"
-              >
-                <RiRefreshLine class="h-3.5 w-3.5" />
-              </IconButton>
-
-              <ConfirmPopover
-                :title="String(t('terminal.actions.deleteSelectedConfirmTitle'))"
-                :description="
-                  String(
-                    t('terminal.actions.deleteSelectedConfirmDescription', {
-                      count: terminalMultiSelect.selectedCount.value,
-                    }),
-                  )
-                "
-                :confirm-text="String(t('terminal.actions.deleteSelected'))"
-                :cancel-text="String(t('common.cancel'))"
-                variant="destructive"
-                @confirm="deleteSelectedTerminalSessions"
-              >
-                <IconButton
-                  size="xs"
-                  variant="ghost-destructive"
-                  :tooltip="String(t('terminal.actions.deleteSelected'))"
-                  :title="String(t('terminal.actions.deleteSelected'))"
-                  :aria-label="String(t('terminal.actions.deleteSelected'))"
-                  :is-touch-pointer="ui.isTouchPointer"
-                  :disabled="terminalMultiSelect.selectedCount.value === 0"
-                  @click.stop
-                >
-                  <RiDeleteBinLine class="h-3.5 w-3.5" />
-                </IconButton>
-              </ConfirmPopover>
-
-              <IconButton
-                size="xs"
-                :tooltip="String(t('terminal.actions.exitMultiSelect'))"
-                :title="String(t('terminal.actions.exitMultiSelect'))"
-                :aria-label="String(t('terminal.actions.exitMultiSelect'))"
-                :is-touch-pointer="ui.isTouchPointer"
-                @click="toggleTerminalMultiSelectMode"
-              >
-                <RiCloseLine class="h-3.5 w-3.5" />
-              </IconButton>
-            </div>
-          </div>
-        </div>
-
-        <div v-if="!ui.isCompactTouch && sessionCreateOpen" class="flex-shrink-0 px-3 pb-2">
-          <div class="rounded-md border border-sidebar-border/70 bg-sidebar/95 p-2">
-            <div class="mt-1 flex items-center gap-1">
-              <Input
-                v-model="sessionCreateDraft"
-                class="h-7 min-w-0 flex-1 text-xs"
-                :placeholder="String(t('terminal.session.namePlaceholder'))"
-                @keydown.enter.prevent="saveSessionCreate"
-                @keydown.esc.prevent="cancelSessionCreate"
-              />
-              <IconButton
-                size="sm"
-                class="text-muted-foreground hover:bg-primary/6"
-                :title="String(t('common.cancel'))"
-                :aria-label="String(t('common.cancel'))"
-                :disabled="sessionCreateBusy"
-                @click="cancelSessionCreate"
-              >
-                <RiCloseLine class="h-4 w-4" />
-              </IconButton>
-              <IconButton
-                size="sm"
-                class="text-primary hover:bg-primary/10"
-                :title="String(t('terminal.session.create'))"
-                :aria-label="String(t('terminal.session.create'))"
-                :disabled="sessionCreateBusy || !sessionCreateDraft.trim()"
-                @click="saveSessionCreate"
-              >
-                <RiCheckLine class="h-4 w-4" />
-              </IconButton>
-            </div>
-          </div>
+        <div v-if="!ui.isCompactTouch" v-show="sessionCreateOpen" class="shrink-0 px-3 pb-2">
+          <NameInputPrompt
+            v-model="sessionCreateDraft"
+            :open="sessionCreateOpen"
+            :title="t('terminal.dialogs.newTerminal.title')"
+            :placeholder="t('terminal.session.namePlaceholder')"
+            :confirm-label="t(sessionCreateBusy ? 'terminal.session.creating' : 'terminal.session.create')"
+            :busy="sessionCreateBusy"
+            @submit="saveSessionCreate"
+            @cancel="cancelSessionCreate"
+          />
         </div>
 
         <div class="flex-1 min-h-0 overflow-x-hidden overflow-y-auto">
-          <div class="space-y-1 pb-1 pl-2.5 pr-1">
+          <div v-keyboard-collection role="group" :aria-label="t('terminal.sidebar.title')" class="space-y-1 pb-1 pl-2.5 pr-1">
             <div v-if="!visibleSidebarSessions.length" class="px-2 py-6 text-center text-muted-foreground">
               <div class="typography-ui-label font-semibold">{{ t('terminal.sidebar.emptyTitle') }}</div>
               <div class="typography-meta mt-1">{{ t('terminal.sidebar.emptyHint') }}</div>
@@ -2333,6 +2081,14 @@ watch(el, () => {
 
             <div v-for="item in visibleSidebarSessions" :key="item.id" class="relative">
               <ListItemFrame
+                :data-keyboard-item="item.id"
+                :data-keyboard-label="sidebarSessionLabel(item)"
+                :data-keyboard-selected="String(terminalMultiSelect.enabled.value ? terminalMultiSelect.isSelected(item.id) : sessionId === item.id)"
+                :data-keyboard-multiselect="String(terminalMultiSelect.enabled.value)"
+                :primary-attrs="{
+                  'aria-pressed': terminalMultiSelect.enabled.value ? terminalMultiSelect.isSelected(item.id) : undefined,
+                  'aria-current': !terminalMultiSelect.enabled.value && sessionId === item.id && !isSessionRenaming(item.id) ? 'true' : undefined,
+                }"
                 :active="!terminalMultiSelect.enabled.value && sessionId === item.id"
                 :as="isSessionRenaming(item.id) ? 'div' : 'button'"
                 :action-visibility="
@@ -2341,6 +2097,7 @@ watch(el, () => {
                     : 'hover'
                 "
                 @click="handleSidebarSessionClick(item, $event)"
+                @keyboard-rename="renameSessionFromKeyboard($event, item.id)"
               >
                 <template #leading>
                   <div class="flex items-center gap-1.5">
@@ -2355,16 +2112,16 @@ watch(el, () => {
                   </div>
                 </template>
 
-                <template v-if="!ui.isCompactTouch && isSessionRenaming(item.id)">
-                  <Input
-                    v-model="sessionRenameDraft"
-                    class="h-7 min-w-0 flex-1 text-xs"
-                    :placeholder="String(t('terminal.session.namePlaceholder'))"
-                    @keydown.enter.prevent="saveSessionRename"
-                    @keydown.esc.prevent="cancelSessionRename"
-                    @click.stop
-                  />
-                </template>
+                <InlineNameEditor
+                  v-if="!ui.isCompactTouch && isSessionRenaming(item.id)"
+                  v-model="sessionRenameDraft"
+                  :label="t('terminal.session.namePlaceholder')"
+                  :placeholder="t('terminal.session.namePlaceholder')"
+                  :cancel-label="t('terminal.session.cancelRename')"
+                  :submit-label="t('terminal.session.saveRename')"
+                  @submit="saveSessionRename"
+                  @cancel="cancelSessionRename"
+                />
 
                 <template v-else>
                   <div class="flex w-full min-w-0 items-center gap-1">
@@ -2382,6 +2139,7 @@ watch(el, () => {
                     v-if="!terminalMultiSelect.enabled.value && ui.isCompactTouch && !isSessionRenaming(item.id)"
                   >
                     <ListItemOverflowActionButton
+                      data-keyboard-menu
                       mobile
                       :label="String(t('terminal.actions.title'))"
                       @trigger="handleMobileSessionActionTrigger(item.id)"
@@ -2401,28 +2159,7 @@ watch(el, () => {
                     />
                   </template>
 
-                  <template v-if="!ui.isCompactTouch && isSessionRenaming(item.id)">
-                    <IconButton
-                      size="xs"
-                      class="text-muted-foreground hover:bg-primary/6"
-                      :title="String(t('terminal.session.cancelRename'))"
-                      :aria-label="String(t('terminal.session.cancelRename'))"
-                      @click.stop="cancelSessionRename"
-                    >
-                      <RiCloseLine class="h-4 w-4" />
-                    </IconButton>
-                    <IconButton
-                      size="xs"
-                      class="text-primary hover:bg-primary/10"
-                      :title="String(t('terminal.session.saveRename'))"
-                      :aria-label="String(t('terminal.session.saveRename'))"
-                      @click.stop="saveSessionRename"
-                    >
-                      <RiCheckLine class="h-4 w-4" />
-                    </IconButton>
-                  </template>
-
-                  <template v-else-if="!terminalMultiSelect.enabled.value && !ui.isCompactTouch">
+                  <template v-if="!terminalMultiSelect.enabled.value && !ui.isCompactTouch && !isSessionRenaming(item.id)">
                     <IconButton
                       size="xs"
                       class="text-muted-foreground hover:text-foreground hover:dark:bg-accent/40 hover:bg-primary/6"
@@ -2494,8 +2231,8 @@ watch(el, () => {
             </div>
           </div>
         </div>
-      </aside>
-    </Teleport>
+      </template>
+    </WorkspacePageSidebar>
 
     <div class="min-w-0 flex-1 flex flex-col overflow-hidden" v-show="!ui.isCompactLayout || !ui.isSessionSwitcherOpen">
       <MobileSidebarEmptyState
@@ -2595,10 +2332,8 @@ watch(el, () => {
         </div>
 
         <!-- Terminal Area -->
-        <div class="flex-1 bg-[#101415] min-h-[300px] flex flex-col">
-          <div class="relative flex-1 min-h-0">
-            <div ref="el" dir="ltr" class="absolute inset-0" />
-          </div>
+        <div class="flex min-h-[300px] flex-1 flex-col">
+          <TerminalViewport ref="viewport" />
           <TerminalKeybar
             v-if="ui.isCompactTouch"
             :disabled="status !== 'connected'"
@@ -2609,50 +2344,19 @@ watch(el, () => {
       </template>
     </div>
 
-    <FormDialog
-      :open="mobileSessionCreateDialogOpen"
-      :title="String(t('terminal.dialogs.newTerminal.title'))"
-      :description="String(t('terminal.emptyState.description'))"
-      @update:open="(v) => !v && cancelSessionCreate()"
-    >
-      <div class="space-y-3">
-        <Input
-          v-model="sessionCreateDraft"
-          class="h-7 min-w-0 text-xs"
-          :placeholder="String(t('terminal.session.namePlaceholder'))"
-          @keydown.enter.prevent="saveSessionCreate"
-          @keydown.esc.prevent="cancelSessionCreate"
-        />
-        <div class="flex items-center justify-end gap-2">
-          <Button variant="ghost" :disabled="sessionCreateBusy" @click="cancelSessionCreate">{{
-            t('common.cancel')
-          }}</Button>
-          <Button :disabled="sessionCreateBusy || !sessionCreateDraft.trim()" @click="saveSessionCreate">
-            {{ sessionCreateBusy ? t('terminal.session.creating') : t('terminal.session.create') }}
-          </Button>
-        </div>
-      </div>
-    </FormDialog>
-
-    <FormDialog
-      :open="mobileSessionRenameDialogOpen"
-      :title="String(t('terminal.dialogs.renameTerminal.title'))"
-      :description="String(t('terminal.dialogs.renameTerminal.description'))"
-      @update:open="(v) => !v && cancelSessionRename()"
-    >
-      <div class="space-y-3">
-        <Input
-          v-model="sessionRenameDraft"
-          class="h-7 min-w-0 text-xs"
-          :placeholder="String(t('terminal.session.namePlaceholder'))"
-          @keydown.enter.prevent="saveSessionRename"
-          @keydown.esc.prevent="cancelSessionRename"
-        />
-        <div class="flex items-center justify-end gap-2">
-          <Button variant="ghost" @click="cancelSessionRename">{{ t('common.cancel') }}</Button>
-          <Button :disabled="!sessionRenameDraft.trim()" @click="saveSessionRename">{{ t('common.save') }}</Button>
-        </div>
-      </div>
-    </FormDialog>
+    <NameInputPrompt
+      v-if="ui.isCompactTouch"
+      :key="sessionCreateOpen ? 'create' : 'rename'"
+      :open="sessionCreateOpen || Boolean(sessionRenamingId)"
+      :model-value="sessionCreateOpen ? sessionCreateDraft : sessionRenameDraft"
+      :title="t(sessionCreateOpen ? 'terminal.dialogs.newTerminal.title' : 'terminal.dialogs.renameTerminal.title')"
+      :description="t(sessionCreateOpen ? 'terminal.emptyState.description' : 'terminal.dialogs.renameTerminal.description')"
+      :placeholder="t('terminal.session.namePlaceholder')"
+      :confirm-label="t(sessionCreateOpen ? (sessionCreateBusy ? 'terminal.session.creating' : 'terminal.session.create') : 'common.save')"
+      :busy="sessionCreateBusy"
+      @update:model-value="sessionCreateOpen ? (sessionCreateDraft = $event) : (sessionRenameDraft = $event)"
+      @submit="sessionCreateOpen ? saveSessionCreate() : saveSessionRename()"
+      @cancel="sessionCreateOpen ? cancelSessionCreate() : cancelSessionRename()"
+    />
   </div>
 </template>

@@ -121,37 +121,6 @@ function readStoredViewportSize(mode: WorkspacePreviewViewport): { width: number
   }
 }
 
-function basenameFromPath(path: string): string {
-  const normalized = String(path || '')
-    .trim()
-    .replace(/\\/g, '/')
-    .replace(/\/+/g, '/')
-    .replace(/\/+$/g, '')
-  if (!normalized) return ''
-  const parts = normalized.split('/').filter(Boolean)
-  return parts[parts.length - 1] || ''
-}
-
-function hostFromUrl(targetUrl: string): string {
-  const candidate = String(targetUrl || '').trim()
-  if (!candidate) return ''
-  try {
-    const parsed = new URL(candidate)
-    return String(parsed.hostname || parsed.host || '').trim()
-  } catch {
-    return ''
-  }
-}
-
-function previewSessionDisplayName(session: WorkspacePreviewSession): string {
-  return (
-    basenameFromPath(session.runDirectory) ||
-    basenameFromPath(session.directory) ||
-    hostFromUrl(session.targetUrl) ||
-    String(session.command || '').trim()
-  )
-}
-
 const useWorkspacePreviewStoreDefinition = defineStore('workspacePreview', () => {
   const sessions = ref<WorkspacePreviewSession[]>([])
   const activeSessionId = ref(getLocalString(STORAGE_PREVIEW_ACTIVE_SESSION_ID).trim())
@@ -224,10 +193,6 @@ const useWorkspacePreviewStoreDefinition = defineStore('workspacePreview', () =>
     return true
   }
 
-  function sessionLabel(session: WorkspacePreviewSession): string {
-    return previewSessionDisplayName(session)
-  }
-
   const sidebarQueryNorm = computed(() =>
     String(sidebarQuery.value || '')
       .trim()
@@ -239,10 +204,11 @@ const useWorkspacePreviewStoreDefinition = defineStore('workspacePreview', () =>
     if (!q) return sessions.value
     return sessions.value.filter((session) => {
       const haystack = [
-        sessionLabel(session),
         session.id,
         session.state,
         session.directory,
+        session.runDirectory,
+        session.command,
         session.targetUrl,
         session.proxyBasePath,
       ]
@@ -640,7 +606,6 @@ const useWorkspacePreviewStoreDefinition = defineStore('workspacePreview', () =>
     readRefreshTokenForWindow,
     bumpRefreshTokenForWindow,
     selectSession,
-    sessionLabel,
     createSession,
     updateSession,
     deleteSession,

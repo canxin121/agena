@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, useId, watch } from 'vue'
-import { useRoute } from 'vue-router'
-import { PopoverContent, PopoverPortal, PopoverRoot, PopoverTrigger } from 'radix-vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { PopoverTrigger } from 'radix-vue'
+import PopoverSurface from '@/components/ui/PopoverSurface.vue'
 import {
   RiArrowDownSLine,
   RiArrowLeftSLine,
@@ -31,13 +31,19 @@ import PaginationControls from '@/components/ui/PaginationControls.vue'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import ScrollArea from '@/components/ui/ScrollArea.vue'
 import SearchInput from '@/components/ui/SearchInput.vue'
+import SegmentedButton from '@/components/ui/SegmentedButton.vue'
+import SegmentedControl from '@/components/ui/SegmentedControl.vue'
 import SidebarIconButton from '@/components/ui/SidebarIconButton.vue'
+import TabPanel from '@/components/ui/TabPanel.vue'
+import { useTabRelations } from '@/components/ui/useTabRelations'
 import GitCommitBox from '@/components/git/GitCommitBox.vue'
 import GitDiffPane from '@/components/git/GitDiffPane.vue'
-import GitMergeChangesSection from '@/components/git/GitMergeChangesSection.vue'
-import GitStagedChangesSection from '@/components/git/GitStagedChangesSection.vue'
-import GitChangesSection from '@/components/git/GitChangesSection.vue'
-import GitUntrackedSection from '@/components/git/GitUntrackedSection.vue'
+import GitWorkingTreeSection from '@/components/git/GitWorkingTreeSection.vue'
+import type {
+  GitFileActionId,
+  GitSectionActionId,
+  GitWorkingTreeSectionKind,
+} from '@/components/git/gitWorkingTreeActions'
 import GitCloneDialog from '@/components/git/GitCloneDialog.vue'
 import GitInitRepoDialog from '@/components/git/GitInitRepoDialog.vue'
 import GitBranchesDialog from '@/components/git/GitBranchesDialog.vue'
@@ -55,16 +61,13 @@ import GitCreateBranchFromDialog from '@/components/git/GitCreateBranchFromDialo
 import GitRenameDialog from '@/components/git/GitRenameDialog.vue'
 import GitStashPanel from '@/components/git/GitStashPanel.vue'
 import GitStashViewDialog from '@/components/git/GitStashViewDialog.vue'
-import { useDesktopSidebarResize } from '@/composables/useDesktopSidebarResize'
+import WorkspacePageSidebar from '@/layout/WorkspacePageSidebar.vue'
 import { useUnifiedMultiSelect } from '@/composables/useUnifiedMultiSelect'
 
 import GitAuthDialogs from './components/GitAuthDialogs.vue'
 import GitRemoteTargetDialogs from './components/GitRemoteTargetDialogs.vue'
 import GitPageMiscDialogs from './components/GitPageMiscDialogs.vue'
 import { formatDateTimeYMDHM } from '@/i18n/intl'
-import { WORKSPACE_SIDEBAR_PANEL_HOST_SELECTOR } from '@/layout/workspaceSidebarHost'
-import { isEmbeddedWorkspacePaneContext } from '@/app/windowScope'
-import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 
 const props = defineProps({
   ctx: {
@@ -76,12 +79,7 @@ const props = defineProps({
     default: false,
   },
 })
-const { startDesktopSidebarResize, resizeDesktopSidebarFromKeyboard } = useDesktopSidebarResize()
 const { t } = useI18n()
-const route = useRoute()
-const workspacePane = useWorkspacePaneContext()
-const isEmbeddedWorkspacePane = computed(() => isEmbeddedWorkspacePaneContext(route.query))
-const isFocusedWorkspacePane = computed(() => !workspacePane || workspacePane.isFocused.value)
 
 // NOTE: We deliberately destructure refs/functions from ctx so the template can remain
 // close to the original GitPage.vue markup. Values are mostly refs (from parent)
@@ -427,12 +425,8 @@ const {
   targetBranch,
   targetRef,
   targetSetUpstream,
-  branchPickVisible,
-  branchPickIndex,
   remoteBranchLoading,
   filteredRemoteBranchOptions,
-  hideBranchPickSoon,
-  onBranchPickKeydown,
   openPullFrom,
   openPushTo,
   pullFromTarget,
@@ -698,24 +692,7 @@ function onRevertActionMenuSelect(item: OptionMenuItem) {
 type SourceControlView = 'changes' | 'history' | 'historyCommit'
 
 const sourceControlView = ref<SourceControlView>('changes')
-const sourceControlId = useId()
-
-function onSourceControlTabKeydown(event: KeyboardEvent) {
-  const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End']
-  if (!keys.includes(event.key)) return
-  const tabs = Array.from((event.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>('[role="tab"]'))
-  const index = tabs.indexOf(event.target as HTMLButtonElement)
-  if (index < 0 || tabs.length === 0) return
-  event.preventDefault()
-  const next =
-    event.key === 'Home'
-      ? 0
-      : event.key === 'End'
-        ? tabs.length - 1
-        : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length
-  tabs[next]?.focus()
-  tabs[next]?.click()
-}
+const tabRelations = useTabRelations()
 
 const mergeMultiSelect = useUnifiedMultiSelect()
 const stagedMultiSelect = useUnifiedMultiSelect()
@@ -897,9 +874,45 @@ async function deleteSelectedUntrackedPaths() {
   await runForEachPath(targets, (path) => deletePath(path, false))
 }
 
-const isHistoryListView = computed(() => sourceControlView.value === 'history')
-const isHistoryCommitView = computed(() => sourceControlView.value === 'historyCommit')
-const isHistoryView = computed(() => isHistoryListView.value || isHistoryCommitView.value)
+const workingTreeFileActions: Record<GitFileActionId, (path: string) => unknown> = {
+  stage: (path) => stagePaths([path]),
+  unstage: (path) => unstagePaths([path]),
+  history: openFileHistoryWithRefs,
+  rename: openRenameDialog,
+  ignore: ignorePath,
+  discard: revertFile,
+  delete: (path) => deletePath(path, false),
+  deleteUntracked: revertFile,
+}
+
+const workingTreeSectionActions: Record<GitWorkingTreeSectionKind, Partial<Record<GitSectionActionId, () => unknown>>> = {
+  merge: {
+    stageSelected: stageSelectedMergePaths,
+    discardSelected: discardSelectedMergePaths,
+  },
+  staged: {
+    unstageAll,
+    unstageSelected: unstageSelectedStagedPaths,
+    discardSelected: discardSelectedStagedPaths,
+    deleteSelected: deleteSelectedStagedPaths,
+  },
+  changes: {
+    stageAll: stageAllTracked,
+    discardAll: discardAllTracked,
+    stageSelected: stageSelectedChangesPaths,
+    discardSelected: discardSelectedChangesPaths,
+    deleteSelected: deleteSelectedChangesPaths,
+  },
+  untracked: {
+    stageAll: stageAllUntracked,
+    cleanUntracked: () => cleanUntracked(false),
+    stageSelected: stageSelectedUntrackedPaths,
+    ignoreSelected: ignoreSelectedUntrackedPaths,
+    deleteSelected: deleteSelectedUntrackedPaths,
+  },
+}
+
+
 const showSshSigningWarning = computed(() => {
   const info = signingInfo.value
   return Boolean(info?.commitGpgsign && (info.gpgFormat || '').toLowerCase() === 'ssh' && !info.sshSigningAvailable)
@@ -969,9 +982,7 @@ function openHistoryView() {
 
 function openChangesView() {
   sourceControlView.value = 'changes'
-  if (props.embedded && embeddedView.value === 'diff' && !selectedFile.value) {
-    embeddedView.value = 'list'
-  }
+  if (props.embedded) embeddedView.value = 'list'
 }
 
 function openHistoryWithRefs() {
@@ -998,15 +1009,13 @@ function onSelectHistoryCommit(commit: Parameters<typeof selectCommit>[0]) {
 
 function onSelectHistoryCommitFile(file: Parameters<typeof selectCommitFile>[0]) {
   selectCommitFile(file)
-  if (!props.embedded) return
-  embeddedView.value = 'diff'
+  showSelectedDiff()
 }
 
 function onHistoryDiffSelectionUpdate(path: string | null) {
   if (path) return
   clearSelectedFile()
-  if (!props.embedded) return
-  embeddedView.value = 'list'
+  showSourceControlList()
 }
 
 function backToHistoryList() {
@@ -1042,7 +1051,7 @@ watch(
   () => repoRoot.value,
   () => {
     disableAllWorkingTreeMultiSelect()
-    sourceControlView.value = 'changes'
+    openChangesView()
   },
 )
 
@@ -1050,7 +1059,7 @@ watch(
   () => gitReady.value,
   (ready) => {
     if (ready) return
-    sourceControlView.value = 'changes'
+    openChangesView()
   },
 )
 
@@ -1444,24 +1453,9 @@ watch(
   },
 )
 
-watch(
-  () => sourceControlView.value,
-  (view) => {
-    if (view !== 'changes') {
-      disableAllWorkingTreeMultiSelect()
-    }
-    if (!props.embedded) return
-    if (view === 'changes') {
-      embeddedView.value = selectedFile.value ? 'diff' : 'list'
-      return
-    }
-    if (view === 'historyCommit') {
-      embeddedView.value = historyFileSelected.value ? 'diff' : 'list'
-      return
-    }
-    embeddedView.value = 'list'
-  },
-)
+watch(sourceControlView, (view) => {
+  if (view !== 'changes') disableAllWorkingTreeMultiSelect()
+})
 
 watch(
   () => mergeSelectablePaths.value,
@@ -1495,55 +1489,34 @@ watch(
   { immediate: true },
 )
 
-function showEmbeddedList() {
-  if (!props.embedded) return
-  embeddedView.value = 'list'
+function showSourceControlList() {
+  if (props.embedded) embeddedView.value = 'list'
+  else if (ui.isCompactLayout) ui.setSessionSwitcherOpen(true)
+}
+
+function onWorkingDiffSelectionUpdate(path: string | null) {
+  selectedFile.value = path
+  if (!path) showSourceControlList()
+}
+
+function showSelectedDiff() {
+  if (props.embedded) embeddedView.value = 'diff'
+  else if (ui.isCompactLayout) ui.setSessionSwitcherOpen(false)
 }
 
 function selectFileFromSidebar(path: string, source: 'working' | 'staged') {
   selectFile(path, source)
-  if (!props.embedded) return
-  embeddedView.value = 'diff'
+  showSelectedDiff()
 }
 
 function openFirstConflictAndShowDiff() {
   openFirstConflict()
-  if (!props.embedded) return
-  if (!selectedFile.value) return
-  embeddedView.value = 'diff'
+  if (selectedFile.value) showSelectedDiff()
 }
 
-const useShellSidebar = computed(() => {
-  if (isEmbeddedWorkspacePane.value) return false
-  if (workspacePane && !isFocusedWorkspacePane.value) return false
-  if (!props.embedded && !ui.isCompactLayout) return true
-  if (props.embedded) return embeddedView.value === 'list'
-  return ui.isCompactLayout ? ui.isSessionSwitcherOpen : ui.isSidebarOpen
-})
-
-const useDesktopSidebarHost = computed(() => {
-  if (props.embedded) return false
-  if (ui.isCompactLayout) return false
-  return !isEmbeddedWorkspacePane.value && isFocusedWorkspacePane.value
-})
-
-const canResizeSidebar = computed(() => !ui.isCompactLayout && !props.embedded && !useDesktopSidebarHost.value)
-
-const sidebarStyle = computed(() => {
-  if (ui.isCompactLayout || useDesktopSidebarHost.value) return undefined
-  if (props.embedded) {
-    return {
-      width: '100%',
-    }
-  }
-  return { width: `${ui.sidebarWidth}px` }
-})
-
-const showDiffPane = computed(() => {
-  if (props.embedded) return embeddedView.value === 'diff'
-  if (isHistoryView.value) return true
-  return !ui.isCompactLayout || !ui.isSessionSwitcherOpen
-})
+const showDiffPane = computed(() =>
+  props.embedded ? embeddedView.value === 'diff' : !ui.isCompactLayout || !ui.isSessionSwitcherOpen,
+)
 
 // Referenced only by template `ref=` and destructuring, silence noUnusedLocals.
 // vue-tsc does not count template-only usage.
@@ -1553,26 +1526,13 @@ void diffPaneRef
 <template>
   <div class="flex h-full bg-background text-foreground overflow-hidden">
     <!-- Left Sidebar (Source Control) -->
-    <Teleport :to="WORKSPACE_SIDEBAR_PANEL_HOST_SELECTOR" :disabled="!useDesktopSidebarHost">
-      <div
-        v-if="useShellSidebar"
-        class="oc-vscode-pane relative h-full shrink-0"
-        :class="ui.isCompactLayout || useDesktopSidebarHost ? 'w-full' : 'border-r border-sidebar-border/60'"
-        :style="sidebarStyle"
-      >
-        <div
-          v-if="canResizeSidebar"
-          class="absolute right-0 top-0 z-10 h-full w-1 cursor-col-resize hover:bg-primary/40"
-          @pointerdown="startDesktopSidebarResize"
-          role="separator"
-          aria-orientation="vertical"
-          :aria-label="String(t('header.windowTabs.resizingSidebar'))"
-          :aria-valuenow="Math.round(ui.sidebarWidth)"
-          :aria-valuemin="280"
-          :aria-valuemax="520"
-          tabindex="0"
-          @keydown="resizeDesktopSidebarFromKeyboard"
-        />
+    <WorkspacePageSidebar
+      panel="git"
+      :mode="props.embedded ? 'embedded' : 'page'"
+      :visible="!props.embedded || embeddedView === 'list'"
+      local-resizable
+    >
+      <template #default>
         <div class="flex h-11 shrink-0 items-center justify-between gap-2 px-3" data-git-sidebar-header>
           <div class="flex min-w-0 items-center gap-2 text-xs font-semibold tracking-wide">
             <RiGitRepositoryLine class="size-4 text-muted-foreground" />
@@ -1587,39 +1547,36 @@ void diffPaneRef
             >
               <RiRefreshLine class="size-3.5" :class="{ 'animate-spin': loading }" />
             </SidebarIconButton>
-            <PopoverRoot v-if="showSshSigningWarning">
-              <PopoverTrigger as-child>
-                <SidebarIconButton
-                  :tooltip="t('git.ui.signing.sshMayFailTitle')"
-                  :is-touch-pointer="ui.isTouchPointer"
-                  :disable-tooltip="true"
-                  class="text-amber-600 hover:text-amber-700 hover:bg-amber-500/15"
-                  :aria-label="t('git.ui.signing.sshMayFailTitle')"
-                >
-                  <span aria-hidden="true" class="text-[12px] font-bold leading-none">!</span>
-                </SidebarIconButton>
-              </PopoverTrigger>
-              <PopoverPortal>
-                <PopoverContent
-                  class="z-[80] w-72 max-w-[calc(100vw-1rem)] rounded-sm border border-amber-500/40 bg-background/95 p-2 shadow-lg backdrop-blur outline-none"
-                  side="bottom"
-                  align="end"
-                  :side-offset="6"
-                  :avoid-collisions="true"
-                  :collision-padding="8"
-                  sticky="always"
-                  update-position-strategy="always"
-                  :prioritize-position="true"
-                >
-                  <div class="text-[11px] font-medium text-foreground">
-                    {{ t('git.ui.signing.sshMayFailTitle') }}
-                  </div>
-                  <div class="mt-0.5 text-[11px] leading-snug text-muted-foreground">
-                    {{ t('git.ui.signing.sshMayFailDescription') }}
-                  </div>
-                </PopoverContent>
-              </PopoverPortal>
-            </PopoverRoot>
+            <PopoverSurface
+              v-if="showSshSigningWarning"
+              class="w-72 max-w-[calc(100vw-1rem)] overflow-y-auto overscroll-contain border-amber-500/40 p-3"
+              :aria-label="t('git.ui.signing.sshMayFailTitle')"
+              side="bottom"
+              align="end"
+              :side-offset="6"
+              :collision-padding="8"
+              sticky="always"
+              update-position-strategy="always"
+              :prioritize-position="true"
+            >
+              <template #trigger>
+                <PopoverTrigger as-child>
+                  <SidebarIconButton
+                    :tooltip="t('git.ui.signing.sshMayFailTitle')"
+                    :is-touch-pointer="ui.isTouchPointer"
+                    :disable-tooltip="true"
+                    class="text-amber-600 hover:text-amber-700 hover:bg-amber-500/15"
+                    :aria-label="t('git.ui.signing.sshMayFailTitle')"
+                  >
+                    <span aria-hidden="true" class="text-[12px] font-bold leading-none">!</span>
+                  </SidebarIconButton>
+                </PopoverTrigger>
+              </template>
+              <div class="text-xs font-semibold">{{ t('git.ui.signing.sshMayFailTitle') }}</div>
+              <div class="mt-1 text-xs leading-snug text-muted-foreground">
+                {{ t('git.ui.signing.sshMayFailDescription') }}
+              </div>
+            </PopoverSurface>
             <span ref="actionsMenuAnchorEl" class="inline-flex">
               <SidebarIconButton
                 :tooltip="t('git.sidebar.moreActions')"
@@ -1821,57 +1778,33 @@ void diffPaneRef
             </div>
           </template>
         </div>
-        <div
-          v-if="gitReady"
-          class="flex h-10 shrink-0 items-stretch gap-4 border-b border-border/55 px-3"
-          role="tablist"
-          :aria-label="t('git.ui.sourceControl')"
-          @keydown="onSourceControlTabKeydown"
-        >
-          <button
-            :id="`${sourceControlId}-changes`"
-            type="button"
-            role="tab"
-            :aria-controls="`${sourceControlId}-panel`"
-            :tabindex="sourceControlView === 'changes' ? 0 : -1"
-            :aria-selected="sourceControlView === 'changes'"
-            class="flex items-center gap-1.5 border-b-2 px-1 text-xs"
-            :class="
-              sourceControlView === 'changes'
-                ? 'border-primary font-medium text-foreground'
-                : 'border-transparent text-muted-foreground hover:text-foreground'
-            "
+        <SegmentedControl v-if="gitReady" variant="underline" class="px-2" :aria-label="t('git.ui.sourceControl')">
+          <SegmentedButton
+            v-bind="tabRelations.tab('changes')"
+            variant="underline"
+            :active="sourceControlView === 'changes'"
             @click="openChangesView"
           >
-            {{ t('git.sidebar.changes')
-            }}<span class="rounded bg-muted px-1.5 text-[10px] tabular-nums">{{ totalChanges }}</span>
-          </button>
-          <button
-            :id="`${sourceControlId}-history`"
-            type="button"
-            role="tab"
-            :aria-controls="`${sourceControlId}-panel`"
-            :tabindex="sourceControlView !== 'changes' ? 0 : -1"
-            :aria-selected="sourceControlView !== 'changes'"
-            class="border-b-2 px-1 text-xs"
-            :class="
-              sourceControlView !== 'changes'
-                ? 'border-primary font-medium text-foreground'
-                : 'border-transparent text-muted-foreground hover:text-foreground'
-            "
+            {{ t('git.sidebar.changes') }}
+            <span class="rounded bg-muted px-1.5 text-[10px] tabular-nums">{{ totalChanges }}</span>
+          </SegmentedButton>
+          <SegmentedButton
+            v-bind="tabRelations.tab('history')"
+            variant="underline"
+            :active="sourceControlView !== 'changes'"
             @click="openHistoryView"
           >
             {{ t('git.ui.dialogs.history.title') }}
-          </button>
-        </div>
+          </SegmentedButton>
+        </SegmentedControl>
 
-        <ScrollArea
-          :id="`${sourceControlId}-panel`"
-          class="flex-1 min-h-0"
-          role="tabpanel"
-          :aria-labelledby="`${sourceControlId}-${sourceControlView === 'changes' ? 'changes' : 'history'}`"
+        <TabPanel
+          :as="ScrollArea"
+          :active="sourceControlView === 'changes'"
+          v-bind="gitReady ? tabRelations.panel('changes') : {}"
+          class="min-h-0 flex-1"
         >
-          <div v-if="sourceControlView === 'changes'" class="space-y-3 px-2 py-3">
+          <div class="space-y-3 px-2 py-3">
             <!-- Commit Section -->
             <div v-if="gitReady" class="space-y-2">
               <div
@@ -2105,7 +2038,8 @@ void diffPaneRef
             </div>
 
             <div v-if="gitReady" class="space-y-0">
-              <GitMergeChangesSection
+              <GitWorkingTreeSection
+                kind="merge"
                 v-if="mergeCount > 0"
                 v-model:expanded="isMergeExpanded"
                 :count="mergeCount"
@@ -2114,7 +2048,6 @@ void diffPaneRef
                 :diff-source="diffSource"
                 :has-more="hasMoreMerge"
                 :loading="mergeListLoading"
-                :can-operate="!!root"
                 :is-touch-pointer="ui.isTouchPointer"
                 :is-mobile-form-factor="ui.isCompactTouch"
                 :multi-select-mode="mergeMultiSelect.enabled.value"
@@ -2124,14 +2057,13 @@ void diffPaneRef
                 @toggleMultiSelect="toggleMergeMultiSelectMode"
                 @selectAllSelected="selectAllMergePaths"
                 @invertSelected="invertMergePathSelection"
-                @stageSelected="stageSelectedMergePaths"
-                @discardSelected="discardSelectedMergePaths"
-                @history="(p: string) => openFileHistoryWithRefs(p)"
-                @discard="(p: string) => revertFile(p)"
+                @file-action="(action, path) => workingTreeFileActions[action](path)"
+                @section-action="(action) => workingTreeSectionActions.merge[action]?.()"
                 @showMore="showMoreMerge"
               />
 
-              <GitStagedChangesSection
+              <GitWorkingTreeSection
+                kind="staged"
                 v-if="stagedCount > 0 || stagedListLoading"
                 v-model:expanded="isStagedExpanded"
                 :count="stagedCount"
@@ -2140,7 +2072,6 @@ void diffPaneRef
                 :diff-source="diffSource"
                 :has-more="hasMoreStaged"
                 :loading="stagedListLoading"
-                :can-operate="!!root"
                 :is-touch-pointer="ui.isTouchPointer"
                 :is-mobile-form-factor="ui.isCompactTouch"
                 :multi-select-mode="stagedMultiSelect.enabled.value"
@@ -2150,20 +2081,13 @@ void diffPaneRef
                 @toggleMultiSelect="toggleStagedMultiSelectMode"
                 @selectAllSelected="selectAllStagedPaths"
                 @invertSelected="invertStagedPathSelection"
-                @unstageSelected="unstageSelectedStagedPaths"
-                @discardSelected="discardSelectedStagedPaths"
-                @deleteSelected="deleteSelectedStagedPaths"
-                @unstageAll="unstageAll"
-                @unstage="(p: string) => unstagePaths([p])"
-                @rename="openRenameDialog"
-                @history="(p: string) => openFileHistoryWithRefs(p)"
-                @discard="(p: string) => revertFile(p)"
-                @delete="(p: string) => deletePath(p, false)"
-                @deleteForce="(p: string) => deletePath(p, true)"
+                @file-action="(action, path) => workingTreeFileActions[action](path)"
+                @section-action="(action) => workingTreeSectionActions.staged[action]?.()"
                 @showMore="showMoreStaged"
               />
 
-              <GitChangesSection
+              <GitWorkingTreeSection
+                kind="changes"
                 v-if="changesCount > 0 || changesListLoading"
                 v-model:expanded="isChangesExpanded"
                 :count="changesCount"
@@ -2172,7 +2096,6 @@ void diffPaneRef
                 :diff-source="diffSource"
                 :has-more="hasMoreUnstaged"
                 :loading="changesListLoading"
-                :can-operate="!!root"
                 :is-touch-pointer="ui.isTouchPointer"
                 :is-mobile-form-factor="ui.isCompactTouch"
                 :multi-select-mode="changesMultiSelect.enabled.value"
@@ -2182,21 +2105,13 @@ void diffPaneRef
                 @toggleMultiSelect="toggleChangesMultiSelectMode"
                 @selectAllSelected="selectAllChangesPaths"
                 @invertSelected="invertChangesPathSelection"
-                @stageSelected="stageSelectedChangesPaths"
-                @discardSelected="discardSelectedChangesPaths"
-                @deleteSelected="deleteSelectedChangesPaths"
-                @stageAll="stageAllTracked"
-                @discardAll="discardAllTracked"
-                @stage="(p: string) => stagePaths([p])"
-                @rename="openRenameDialog"
-                @history="(p: string) => openFileHistoryWithRefs(p)"
-                @discard="(p: string) => revertFile(p)"
-                @delete="(p: string) => deletePath(p, false)"
-                @deleteForce="(p: string) => deletePath(p, true)"
+                @file-action="(action, path) => workingTreeFileActions[action](path)"
+                @section-action="(action) => workingTreeSectionActions.changes[action]?.()"
                 @showMore="showMoreChanges"
               />
 
-              <GitUntrackedSection
+              <GitWorkingTreeSection
+                kind="untracked"
                 v-if="untrackedCount > 0 || untrackedListLoading"
                 v-model:expanded="isUntrackedExpanded"
                 :count="untrackedCount"
@@ -2205,7 +2120,6 @@ void diffPaneRef
                 :diff-source="diffSource"
                 :has-more="hasMoreUntracked"
                 :loading="untrackedListLoading"
-                :can-operate="!!root"
                 :is-touch-pointer="ui.isTouchPointer"
                 :is-mobile-form-factor="ui.isCompactTouch"
                 :multi-select-mode="untrackedMultiSelect.enabled.value"
@@ -2215,15 +2129,8 @@ void diffPaneRef
                 @toggleMultiSelect="toggleUntrackedMultiSelectMode"
                 @selectAllSelected="selectAllUntrackedPaths"
                 @invertSelected="invertUntrackedPathSelection"
-                @stageSelected="stageSelectedUntrackedPaths"
-                @ignoreSelected="ignoreSelectedUntrackedPaths"
-                @deleteSelected="deleteSelectedUntrackedPaths"
-                @stageAll="stageAllUntracked"
-                @discardAll="() => cleanUntracked(false)"
-                @stage="(p: string) => stagePaths([p])"
-                @rename="openRenameDialog"
-                @discard="(p: string) => revertFile(p)"
-                @ignore="(p: string) => ignorePath(p)"
+                @file-action="(action, path) => workingTreeFileActions[action](path)"
+                @section-action="(action) => workingTreeSectionActions.untracked[action]?.()"
                 @showMore="showMoreUntracked"
               />
               <div
@@ -2255,8 +2162,16 @@ void diffPaneRef
               />
             </div>
           </div>
+        </TabPanel>
 
-          <div v-else-if="sourceControlView === 'history'" class="space-y-3 px-2 py-3">
+        <TabPanel
+          v-if="gitReady"
+          :as="ScrollArea"
+          :active="sourceControlView !== 'changes'"
+          v-bind="tabRelations.panel('history')"
+          class="min-h-0 flex-1"
+        >
+          <div v-if="sourceControlView === 'history'" class="space-y-3 px-2 py-3">
             <div
               v-if="!projectRoot"
               class="mx-1 rounded-sm border border-sidebar-border/60 bg-sidebar-accent/10 p-3 text-center"
@@ -2515,9 +2430,9 @@ void diffPaneRef
               </div>
             </template>
           </div>
-        </ScrollArea>
-      </div>
-    </Teleport>
+        </TabPanel>
+      </template>
+    </WorkspacePageSidebar>
 
     <div class="min-w-0 flex flex-1 flex-col overflow-hidden" v-show="showDiffPane">
       <div v-if="props.embedded" class="flex items-center gap-2 border-b border-sidebar-border/50 px-2 py-1.5">
@@ -2525,7 +2440,7 @@ void diffPaneRef
           size="sm"
           :tooltip="t('git.ui.sourceControl')"
           :aria-label="t('git.ui.sourceControl')"
-          @click="showEmbeddedList"
+          @click="showSourceControlList"
         >
           <RiArrowLeftSLine class="h-4 w-4" />
         </IconButton>
@@ -2570,8 +2485,9 @@ void diffPaneRef
           ref="diffPaneRef"
           :directory="root || ''"
           :visible="showDiffPane"
-          v-model:selectedFile="selectedFile"
+          :selected-file="selectedFile"
           :diff-source="diffSource"
+          @update:selectedFile="onWorkingDiffSelectionUpdate"
           :is-compact-layout="ui.isCompactLayout"
           :selected-is-conflict="selectedIsConflict"
           :conflict-paths="conflictPaths"
@@ -3004,8 +2920,6 @@ void diffPaneRef
       v-model:targetBranch="targetBranch"
       v-model:targetRef="targetRef"
       v-model:targetSetUpstream="targetSetUpstream"
-      v-model:branchPickVisible="branchPickVisible"
-      v-model:branchPickIndex="branchPickIndex"
       v-model:stashDialogOpen="stashDialogOpen"
       v-model:stashMessage="stashMessage"
       v-model:stashIncludeUntracked="stashIncludeUntracked"
@@ -3014,8 +2928,6 @@ void diffPaneRef
       :remoteInfo="remoteInfo"
       :remoteBranchLoading="remoteBranchLoading"
       :filteredRemoteBranchOptions="filteredRemoteBranchOptions"
-      :hideBranchPickSoon="hideBranchPickSoon"
-      :onBranchPickKeydown="onBranchPickKeydown"
       :pushToTarget="pushToTarget"
       :pullFromTarget="pullFromTarget"
       :fetchFromTarget="fetchFromTarget"

@@ -40,6 +40,7 @@ const { data: image, error } = useVisibleResource({
   <button
     ref="trigger"
     type="button"
+    data-keyboard-option
     class="flex min-h-11 w-full items-center gap-2 rounded px-2 py-1 text-start hover:bg-secondary/50 focus-visible:ring-2 focus-visible:ring-ring"
     :title="title"
     :aria-label="`${t('open')} · ${title}`"

@@ -1,4 +1,4 @@
-import { computed, nextTick, onBeforeUnmount, ref, watch, type Component, type ComponentPublicInstance } from 'vue'
+import { computed, ref, type Component } from 'vue'
 import {
   RiArchiveLine,
   RiClipboardLine,
@@ -14,7 +14,7 @@ import { useI18n } from 'vue-i18n'
 import { settingsText as st } from '@/i18n/settingsText'
 
 import type { DirectoryEntry } from '@/features/sessions/model/types'
-import type { SessionMenuTarget, MenuRefEl } from './sessionMenu.types'
+import type { SessionMenuTarget } from './sessionMenu.types'
 
 type SessionLike = SessionMenuTarget['session']
 
@@ -131,19 +131,15 @@ export function useSessionActionMenu(opts: {
 }) {
   const { t } = useI18n()
 
-  type MenuRefLike = { containsTarget: (target: Node | null) => boolean; focusSearch?: () => void }
-  type MaybeMenuComponent = ComponentPublicInstance<{ $el?: Element | null }> &
-    Partial<{ containsTarget: (target: Node | null) => boolean; focusSearch: () => void }>
-
-  // Session action menu (desktop-only trigger)
   const sessionActionMenuTarget = ref<SessionMenuTarget | null>(null)
   const sessionActionMenuQuery = ref('')
-  const sessionActionMenuRef = ref<MenuRefLike | null>(null)
   const sessionActionMenuAnchorRef = ref<HTMLElement | null>(null)
-  const sessionActionMenuOpen = computed(() => Boolean(sessionActionMenuTarget.value))
 
-  let sessionActionMenuPointerHandler: ((event: MouseEvent | TouchEvent) => void) | null = null
-  let sessionActionMenuClickHandler: ((event: MouseEvent) => void) | null = null
+  function closeSessionActionMenu() {
+    sessionActionMenuTarget.value = null
+    sessionActionMenuAnchorRef.value = null
+    sessionActionMenuQuery.value = ''
+  }
 
   const sessionActionItems = computed<SessionActionItem[]>(() =>
     buildSessionActionItemsForSessionI18n(t, sessionActionMenuTarget.value?.session),
@@ -168,59 +164,18 @@ export function useSessionActionMenu(opts: {
     const sid = String(session?.id || '').trim()
     if (!sid) return
     if (sessionActionMenuTarget.value?.session?.id === sid) {
-      sessionActionMenuTarget.value = null
-      sessionActionMenuAnchorRef.value = null
+      closeSessionActionMenu()
       return
     }
     sessionActionMenuTarget.value = { directory, session }
     sessionActionMenuAnchorRef.value = event?.currentTarget instanceof HTMLElement ? event.currentTarget : null
     sessionActionMenuQuery.value = ''
-    void nextTick(() => sessionActionMenuRef.value?.focusSearch?.())
-  }
-
-  function setSessionActionMenuRef(el: MenuRefEl) {
-    if (!el) {
-      sessionActionMenuRef.value = null
-      return
-    }
-
-    const maybeComponent = el as MaybeMenuComponent
-    const containsTarget = maybeComponent?.containsTarget
-    const focusSearch = maybeComponent?.focusSearch
-
-    if (typeof containsTarget === 'function') {
-      sessionActionMenuRef.value = {
-        containsTarget: (target: Node | null) => Boolean(containsTarget(target)),
-        focusSearch:
-          typeof focusSearch === 'function'
-            ? () => {
-                focusSearch()
-              }
-            : undefined,
-      }
-      return
-    }
-
-    const dom = el instanceof HTMLElement ? el : maybeComponent?.$el instanceof HTMLElement ? maybeComponent.$el : null
-    sessionActionMenuRef.value = dom
-      ? {
-          containsTarget: (target: Node | null) => Boolean(target && dom.contains(target)),
-          focusSearch: () => {
-            const input = dom.querySelector('input')
-            if (input instanceof HTMLElement) {
-              input.focus()
-            }
-          },
-        }
-      : null
   }
 
   async function runSessionActionMenu(item: SessionActionItem) {
     if (item.disabled) return
     const target = sessionActionMenuTarget.value
-    sessionActionMenuTarget.value = null
-    sessionActionMenuAnchorRef.value = null
-    sessionActionMenuQuery.value = ''
+    closeSessionActionMenu()
     // A caller that owns the action (a Bot row acting on its own conversation)
     // handles it and reports whether the shared dispatch should stop here.
     if (target && opts.runAction && (await opts.runAction(item, target))) return
@@ -231,57 +186,13 @@ export function useSessionActionMenu(opts: {
     opts.ui.requestSessionAction(item.id, targetSessionId)
   }
 
-  watch(sessionActionMenuOpen, (open) => {
-    if (!open) {
-      if (sessionActionMenuPointerHandler) {
-        document.removeEventListener('pointerdown', sessionActionMenuPointerHandler, true)
-        sessionActionMenuPointerHandler = null
-      }
-      if (sessionActionMenuClickHandler) {
-        document.removeEventListener('click', sessionActionMenuClickHandler, true)
-        sessionActionMenuClickHandler = null
-      }
-      return
-    }
-
-    const closeIfOutside = (target: Node | null) => {
-      if (!target) return
-      if (sessionActionMenuRef.value?.containsTarget(target)) return
-      if (sessionActionMenuAnchorRef.value && sessionActionMenuAnchorRef.value.contains(target)) return
-      sessionActionMenuTarget.value = null
-      sessionActionMenuAnchorRef.value = null
-    }
-
-    sessionActionMenuPointerHandler = (event: MouseEvent | TouchEvent) => {
-      closeIfOutside(event.target as Node | null)
-    }
-    sessionActionMenuClickHandler = (event: MouseEvent) => {
-      closeIfOutside(event.target as Node | null)
-    }
-    document.addEventListener('pointerdown', sessionActionMenuPointerHandler, true)
-    document.addEventListener('click', sessionActionMenuClickHandler, true)
-  })
-
-  onBeforeUnmount(() => {
-    if (sessionActionMenuPointerHandler) {
-      document.removeEventListener('pointerdown', sessionActionMenuPointerHandler, true)
-      sessionActionMenuPointerHandler = null
-    }
-    if (sessionActionMenuClickHandler) {
-      document.removeEventListener('click', sessionActionMenuClickHandler, true)
-      sessionActionMenuClickHandler = null
-    }
-  })
-
   return {
     sessionActionMenuAnchorRef,
-    sessionActionMenuOpen,
     sessionActionMenuQuery,
-    sessionActionMenuRef,
     sessionActionMenuTarget,
     filteredSessionActionItems,
     openSessionActionMenu,
     runSessionActionMenu,
-    setSessionActionMenuRef,
+    closeSessionActionMenu,
   }
 }

@@ -7,7 +7,6 @@ import SidebarListItem from '@/components/ui/SidebarListItem.vue'
 import SidebarTextButton from '@/components/ui/SidebarTextButton.vue'
 import BotConversationRow from '@/features/bots/BotConversationRow.vue'
 import type { BotConversation, BotConversationGroup } from '@/features/bots/useBotConversations'
-import type { MenuRefEl } from '@/layout/chatSidebar/sessionMenu.types'
 import type { SessionActionItem } from '@/layout/chatSidebar/useSessionActionMenu'
 import SidebarSectionSkeleton from '@/layout/chatSidebar/components/SidebarSectionSkeleton.vue'
 
@@ -22,7 +21,7 @@ const props = defineProps<{
   menuQuery: string
   menuItems: SessionActionItem[]
   menuAnchorEl: HTMLElement | null
-  setMenuRef: (el: MenuRefEl) => void
+  closeMenu: () => void
 }>()
 
 const emit = defineEmits<{
@@ -81,7 +80,7 @@ const count = computed(() => (props.group.surface === 'local' ? props.group.conv
             :menu-query="menuQuery"
             :menu-items="menuItems"
             :menu-anchor-el="menuAnchorEl"
-            :set-menu-ref="setMenuRef"
+            :close-menu="closeMenu"
             @open="(value) => emit('open', value)"
             @open-action-menu="(value, event) => emit('open-action-menu', value, event)"
             @update:menu-query="(value) => emit('update:menuQuery', value)"

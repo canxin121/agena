@@ -1,41 +1,46 @@
-import { useUiStore } from '@/stores/ui'
+import { onBeforeUnmount } from 'vue'
+import { clampDesktopSidebarWidth, DESKTOP_SIDEBAR_MAX_WIDTH, DESKTOP_SIDEBAR_MIN_WIDTH, useUiStore } from '@/stores/ui'
 import { isPlainNavigationKey } from '@/lib/keyboardNavigation'
 
-const SIDEBAR_MIN_WIDTH = 280
-const SIDEBAR_MAX_WIDTH = 520
-
-type DesktopSidebarResizeOptions = {
+export type DesktopSidebarResizeOptions = {
   deferCommit?: boolean
   onStart?: () => void
   onPreviewWidth?: (width: number) => void
   onEnd?: (finalWidth: number) => void
 }
 
+function inlineDirection(target: Element | null): number {
+  return target && getComputedStyle(target).direction === 'rtl' ? -1 : 1
+}
+
 export function useDesktopSidebarResize() {
   const ui = useUiStore()
+  let finishResize: (() => void) | undefined
+  onBeforeUnmount(() => finishResize?.())
 
   function resizeDesktopSidebarFromKeyboard(event: KeyboardEvent) {
-    if (ui.isCompactLayout || !ui.isSidebarOpen || !isPlainNavigationKey(event)) return
-    const step = event.shiftKey ? 64 : 16
+    if (ui.isCompactLayout || !isPlainNavigationKey(event)) return
+    const step = (event.shiftKey ? 64 : 16) * inlineDirection(event.currentTarget as Element | null)
     let width: number | null = null
     if (event.key === 'ArrowLeft') width = ui.sidebarWidth - step
     if (event.key === 'ArrowRight') width = ui.sidebarWidth + step
-    if (event.key === 'Home') width = SIDEBAR_MIN_WIDTH
-    if (event.key === 'End') width = SIDEBAR_MAX_WIDTH
+    if (event.key === 'Home') width = DESKTOP_SIDEBAR_MIN_WIDTH
+    if (event.key === 'End') width = DESKTOP_SIDEBAR_MAX_WIDTH
     if (width === null) return
     event.preventDefault()
     event.stopPropagation()
-    ui.sidebarWidth = Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, width))
+    ui.sidebarWidth = clampDesktopSidebarWidth(width)
   }
 
   function startDesktopSidebarResize(e: PointerEvent, options?: DesktopSidebarResizeOptions) {
-    if (ui.isCompactLayout || !ui.isSidebarOpen) return
+    if (ui.isCompactLayout || e.button !== 0 || finishResize) return
 
     const target = e.currentTarget as HTMLElement | null
     if (!target) return
 
     const startX = e.clientX
     const startW = ui.sidebarWidth
+    const direction = inlineDirection(target)
     const deferCommit = Boolean(options?.deferCommit)
     let previewWidth = startW
 
@@ -43,11 +48,15 @@ export function useDesktopSidebarResize() {
     options?.onStart?.()
     options?.onPreviewWidth?.(startW)
 
-    document.body.style.cursor = 'col-resize'
-    document.body.style.userSelect = 'none'
+    const style = document.body.style
+    const previousCursor = style.cursor
+    const previousUserSelect = style.userSelect
+    style.cursor = 'col-resize'
+    style.userSelect = 'none'
 
     const move = (ev: PointerEvent) => {
-      const next = Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, startW + (ev.clientX - startX)))
+      if (ev.pointerId !== e.pointerId) return
+      const next = clampDesktopSidebarWidth(startW + (ev.clientX - startX) * direction)
       previewWidth = next
 
       options?.onPreviewWidth?.(next)
@@ -56,10 +65,16 @@ export function useDesktopSidebarResize() {
       }
     }
 
-    const up = () => {
+    const up = (ev: PointerEvent) => {
+      if (ev.pointerId === e.pointerId) finishResize?.()
+    }
+
+    finishResize = () => {
+      finishResize = undefined
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', up)
       window.removeEventListener('pointercancel', up)
+      target.removeEventListener('lostpointercapture', up)
 
       if (deferCommit) {
         ui.sidebarWidth = previewWidth
@@ -67,8 +82,8 @@ export function useDesktopSidebarResize() {
 
       options?.onEnd?.(previewWidth)
 
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
+      style.cursor = previousCursor
+      style.userSelect = previousUserSelect
 
       try {
         if (target.hasPointerCapture(e.pointerId)) {
@@ -82,6 +97,7 @@ export function useDesktopSidebarResize() {
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', up)
     window.addEventListener('pointercancel', up)
+    target.addEventListener('lostpointercapture', up)
   }
 
   return { startDesktopSidebarResize, resizeDesktopSidebarFromKeyboard }

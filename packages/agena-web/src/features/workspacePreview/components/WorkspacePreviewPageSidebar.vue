@@ -1,16 +1,11 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, reactive, ref, useId, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   RiAddLine,
-  RiArrowDownSLine,
-  RiArrowRightSLine,
-  RiCheckLine,
-  RiCloseLine,
   RiDeleteBinLine,
   RiEditLine,
   RiListCheck3,
-  RiLoader4Line,
   RiPlayLine,
   RiPencilLine,
   RiRefreshLine,
@@ -22,19 +17,18 @@ import FormDialog from '@/components/ui/FormDialog.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import Input from '@/components/ui/Input.vue'
 import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
-import ListItemOverflowActionButton from '@/components/ui/ListItemOverflowActionButton.vue'
-import ListItemSelectionIndicator from '@/components/ui/ListItemSelectionIndicator.vue'
 import OptionMenu from '@/components/ui/OptionMenu.vue'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import SearchInput from '@/components/ui/SearchInput.vue'
-import SidebarListItem from '@/components/ui/SidebarListItem.vue'
+import SelectionToolbar from '@/components/ui/SelectionToolbar.vue'
+import SidebarIconButton from '@/components/ui/SidebarIconButton.vue'
 import { useUnifiedMultiSelect } from '@/composables/useUnifiedMultiSelect'
 import type { WorkspacePreviewSession } from '@/features/workspacePreview/api/workspacePreviewApi'
-import { usePreviewSessionForm } from '../model/usePreviewSessionForm'
+import PreviewCreateSessionDialog from './PreviewCreateSessionDialog.vue'
+import PreviewSessionRow from './PreviewSessionRow.vue'
+import SidebarPagedSection from '@/layout/SidebarPagedSection.vue'
 import { usePreviewHealth, type PreviewHealthState } from '../model/usePreviewHealth'
 import { normalizeDirForCompare } from '@/features/sessions/model/labels'
-import SidebarPager from '@/layout/chatSidebar/components/SidebarPager.vue'
-import SidebarSectionSkeleton from '@/layout/chatSidebar/components/SidebarSectionSkeleton.vue'
 import { writeWorkspaceWindowTemplateToDataTransfer } from '@/layout/workspaceWindowDrag'
 import { usePaneVisibility } from '@/composables/usePaneVisibility'
 import { useVisibleSubscription } from '@/composables/useVisibleSubscription'
@@ -62,29 +56,14 @@ const sidebarQueryNorm = computed(() =>
     .toLowerCase(),
 )
 
-const {
-  createDialogOpen,
-  createPreviewId,
-  createRunDirectory,
-  createCommand,
-  createArgsText,
-  createArgsError,
-  createLogsPath,
-  createTargetUrl,
-  actionLoading,
-  actionError,
-  canCreateSession,
-  createManagedSession,
-  openCreateDialog,
-} = usePreviewSessionForm({
-  directory: currentDirectory,
-  createSession: (input) => preview.createSession(input),
-  onCreated: () => {
-    clearSessionHealth()
-    probeVisibleSessions()
-  },
-})
+const createDialog = ref<InstanceType<typeof PreviewCreateSessionDialog> | null>(null)
 
+function onSessionCreated() {
+  clearSessionHealth()
+  probeVisibleSessions()
+}
+
+const editFormId = useId()
 const editDialogOpen = ref(false)
 const editSessionId = ref('')
 const editTargetUrl = ref('')
@@ -100,11 +79,11 @@ const rowMenuScope = ref<PreviewSidebarScope>('directory')
 
 const renamingSessionId = ref('')
 const renamingScope = ref<PreviewSidebarScope>('directory')
+const renameFormId = useId()
 const renameDialogOpen = ref(false)
 const renameDraft = ref('')
 const renameBusy = ref(false)
 const renameError = ref('')
-const renameInputEl = ref<HTMLInputElement | null>(null)
 
 const renameDraftNorm = computed(() => String(renameDraft.value || '').trim())
 const renameDraftValid = computed(() => /^[A-Za-z0-9_-]+$/.test(renameDraftNorm.value))
@@ -184,94 +163,54 @@ function sessionDotLabel(session: WorkspacePreviewSession): string {
 
 const SECTION_PAGE_SIZE = 4
 
-const chatSectionOpen = ref(Boolean(currentChatSessionId.value))
-const chatSectionPage = ref(0)
-const directorySectionOpen = ref(true)
-const directorySectionPage = ref(0)
-const allSectionOpen = ref(false)
-const allSectionPage = ref(0)
+const sectionScopes = ['chat', 'directory', 'all'] as const
+const sectionOpen = reactive({ chat: Boolean(currentChatSessionId.value), directory: true, all: false })
+const sectionPage = reactive({ chat: 0, directory: 0, all: 0 })
 
-function clampPage(page: number, pageCount: number): number {
-  const max = Math.max(0, Math.floor(pageCount || 1) - 1)
-  return Math.max(0, Math.min(max, Math.floor(page || 0)))
-}
-
-const chatSessionsAll = computed(() => {
-  const sid = currentChatSessionId.value
-  if (!sid) return []
-  return previewSessions.value.filter((session) => String(session.agenaSessionId || '').trim() === sid)
-})
-
-const chatSessionsFiltered = computed(() => {
-  const sid = currentChatSessionId.value
-  if (!sid) return []
-  return previewFilteredSessions.value.filter((session) => String(session.agenaSessionId || '').trim() === sid)
-})
-
-const directorySessionsAll = computed(() => {
-  const dir = currentDirectoryNorm.value
-  if (!dir) return []
-  return previewSessions.value.filter((session) => normalizeDirForCompare(session.directory) === dir)
-})
-
-const directorySessionsFiltered = computed(() => {
-  const dir = currentDirectoryNorm.value
-  if (!dir) return []
-  return previewFilteredSessions.value.filter((session) => normalizeDirForCompare(session.directory) === dir)
-})
-
-const allSessionsAll = computed(() => previewSessions.value)
-const allSessionsFiltered = computed(() => previewFilteredSessions.value)
-
-const chatCount = computed(() => Math.max(0, chatSessionsFiltered.value.length))
-const directoryCount = computed(() => Math.max(0, directorySessionsFiltered.value.length))
-const allCount = computed(() => Math.max(0, allSessionsFiltered.value.length))
-
-const chatPageCount = computed(() => Math.max(1, Math.ceil(chatCount.value / SECTION_PAGE_SIZE)))
-const directoryPageCount = computed(() => Math.max(1, Math.ceil(directoryCount.value / SECTION_PAGE_SIZE)))
-const allPageCount = computed(() => Math.max(1, Math.ceil(allCount.value / SECTION_PAGE_SIZE)))
-
-const chatPageClamped = computed(() => clampPage(chatSectionPage.value, chatPageCount.value))
-const directoryPageClamped = computed(() => clampPage(directorySectionPage.value, directoryPageCount.value))
-const allPageClamped = computed(() => clampPage(allSectionPage.value, allPageCount.value))
-
-const pagedChatSessions = computed(() => {
-  const start = chatPageClamped.value * SECTION_PAGE_SIZE
-  return chatSessionsFiltered.value.slice(start, start + SECTION_PAGE_SIZE)
-})
-
-const pagedDirectorySessions = computed(() => {
-  const start = directoryPageClamped.value * SECTION_PAGE_SIZE
-  return directorySessionsFiltered.value.slice(start, start + SECTION_PAGE_SIZE)
-})
-
-const pagedAllSessions = computed(() => {
-  const start = allPageClamped.value * SECTION_PAGE_SIZE
-  return allSessionsFiltered.value.slice(start, start + SECTION_PAGE_SIZE)
-})
+const sections = computed(() =>
+  sectionScopes.map((scope) => {
+    const context = scope === 'chat' ? currentChatSessionId.value : currentDirectoryNorm.value
+    const matchesScope = (session: WorkspacePreviewSession) => {
+      if (scope === 'all') return true
+      if (!context) return false
+      return scope === 'chat'
+        ? String(session.agenaSessionId || '').trim() === context
+        : normalizeDirForCompare(session.directory) === context
+    }
+    const rows = previewFilteredSessions.value.filter(matchesScope)
+    const count = rows.length
+    const pageCount = Math.max(1, Math.ceil(count / SECTION_PAGE_SIZE))
+    const page = Math.max(0, Math.min(pageCount - 1, sectionPage[scope]))
+    let emptyMessage = ''
+    if (scope === 'chat' && !context) emptyMessage = t('workspaceDock.preview.sidebar.sections.chat.emptyNoSession')
+    else if (scope === 'directory' && !context) emptyMessage = t('workspaceDock.preview.sidebar.sections.directory.emptyNoDirectory')
+    else if (!count) {
+      emptyMessage = sidebarQueryNorm.value && previewSessions.value.some(matchesScope)
+        ? t('workspaceDock.preview.sidebar.noMatchingSessions')
+        : t(`workspaceDock.preview.sidebar.sections.${scope}.empty`)
+    }
+    return {
+      scope,
+      open: sectionOpen[scope],
+      title: t(`workspaceDock.preview.sidebar.sections.${scope}.title`),
+      count,
+      pageCount,
+      page,
+      emptyMessage,
+      rows: rows.slice(page * SECTION_PAGE_SIZE, (page + 1) * SECTION_PAGE_SIZE),
+    }
+  }),
+)
 
 const visibleSessionsForHealth = computed(() => {
-  const dedupe = new Set<string>()
-  const out: WorkspacePreviewSession[] = []
-
-  function push(session: WorkspacePreviewSession) {
-    if (!session?.id) return
-    if (dedupe.has(session.id)) return
-    dedupe.add(session.id)
-    out.push(session)
+  const sessions = new Map<string, WorkspacePreviewSession>()
+  for (const section of sections.value) {
+    if (!section.open) continue
+    for (const session of section.rows) {
+      if (session.id) sessions.set(session.id, session)
+    }
   }
-
-  if (chatSectionOpen.value) {
-    for (const session of pagedChatSessions.value) push(session)
-  }
-  if (directorySectionOpen.value) {
-    for (const session of pagedDirectorySessions.value) push(session)
-  }
-  if (allSectionOpen.value) {
-    for (const session of pagedAllSessions.value) push(session)
-  }
-
-  return out
+  return Array.from(sessions.values())
 })
 
 const {
@@ -369,6 +308,7 @@ function isInlineRenameSession(session: WorkspacePreviewSession, scope: PreviewS
 }
 
 function startRenameSession(sessionId: string, scope: PreviewSidebarScope) {
+  if (renameBusy.value) return
   const session = previewSessions.value.find((item) => item.id === sessionId)
   if (!session) return
 
@@ -378,9 +318,7 @@ function startRenameSession(sessionId: string, scope: PreviewSidebarScope) {
   renameBusy.value = false
   renameError.value = ''
 
-  if (scope === 'chat') chatSectionOpen.value = true
-  if (scope === 'directory') directorySectionOpen.value = true
-  if (scope === 'all') allSectionOpen.value = true
+  sectionOpen[scope] = true
 
   if (ui.isCompactLayout) {
     renameDialogOpen.value = true
@@ -396,6 +334,7 @@ function cancelRenameSession() {
 }
 
 async function saveRenameSession() {
+  if (renameBusy.value) return
   const sessionId = String(renamingSessionId.value || '').trim()
   if (!sessionId) return
 
@@ -422,25 +361,6 @@ async function saveRenameSession() {
     renameBusy.value = false
   }
 }
-
-function onRenameDraftInput(event: Event) {
-  const target = event.target as HTMLInputElement | null
-  renameDraft.value = target?.value || ''
-}
-
-watch(
-  () => ({ id: renamingSessionId.value, scope: renamingScope.value, isCompactLayout: ui.isCompactLayout }),
-  (next) => {
-    if (!next.id) return
-    if (next.isCompactLayout) return
-    void nextTick(() => {
-      const el = renameInputEl.value
-      if (!el) return
-      el.focus()
-      el.select()
-    })
-  },
-)
 
 function openRowMenu(sessionId: string, scope: PreviewSidebarScope, event: MouseEvent) {
   rowMenuSessionId.value = sessionId
@@ -470,6 +390,7 @@ function openEditDialog(sessionId: string) {
 }
 
 async function saveEditDialog() {
+  if (editBusy.value) return
   const sessionId = String(editSessionId.value || '').trim()
   const targetUrl = String(editTargetUrl.value || '').trim()
   if (!sessionId || !targetUrl) return
@@ -596,7 +517,7 @@ function handlePreviewSessionRowDragStart(
   transfer.effectAllowed = 'copyMove'
   const ok = writeWorkspaceWindowTemplateToDataTransfer(transfer, {
     tab: 'preview',
-    title: String(preview.sessionLabel(session) || '').trim() || undefined,
+    title: session.id,
   })
   if (!ok) {
     event.preventDefault()
@@ -645,52 +566,21 @@ watch(
   { immediate: true },
 )
 
-watch(
-  chatPageCount,
-  () => {
-    const clamped = chatPageClamped.value
-    if (clamped !== chatSectionPage.value) chatSectionPage.value = clamped
-  },
-  { immediate: true },
-)
-
-watch(
-  directoryPageCount,
-  () => {
-    const clamped = directoryPageClamped.value
-    if (clamped !== directorySectionPage.value) directorySectionPage.value = clamped
-  },
-  { immediate: true },
-)
-
-watch(
-  allPageCount,
-  () => {
-    const clamped = allPageClamped.value
-    if (clamped !== allSectionPage.value) allSectionPage.value = clamped
-  },
-  { immediate: true },
-)
-
-watch(
-  sidebarQueryNorm,
-  () => {
-    chatSectionPage.value = 0
-    directorySectionPage.value = 0
-    allSectionPage.value = 0
-  },
-  { immediate: true },
-)
-
-watch(currentChatSessionId, (next, prev) => {
-  if (next === prev) return
-  chatSectionPage.value = 0
-  if (next) chatSectionOpen.value = true
+watch(sections, (items) => {
+  for (const item of items) sectionPage[item.scope] = item.page
 })
 
-watch(currentDirectoryNorm, (next, prev) => {
-  if (next === prev) return
-  directorySectionPage.value = 0
+watch(sidebarQueryNorm, () => {
+  for (const scope of sectionScopes) sectionPage[scope] = 0
+})
+
+watch(currentChatSessionId, (next) => {
+  sectionPage.chat = 0
+  if (next) sectionOpen.chat = true
+})
+
+watch(currentDirectoryNorm, () => {
+  sectionPage.directory = 0
 })
 
 function selectSession(sessionId: string) {
@@ -702,6 +592,7 @@ function selectSession(sessionId: string) {
 
 <template>
   <section
+    data-selection-context
     class="flex h-full min-h-0 flex-col bg-sidebar text-sidebar-foreground"
     :class="ui.isCompactLayout ? '' : 'border-r border-border'"
   >
@@ -721,8 +612,8 @@ function selectSession(sessionId: string) {
             :tooltip="String(t('workspaceDock.preview.emptyState.addAction'))"
             :aria-label="String(t('workspaceDock.preview.emptyState.addAction'))"
             :is-touch-pointer="ui.isTouchPointer"
-            :disabled="actionLoading"
-            @click="openCreateDialog"
+            :disabled="createDialog?.busy"
+            @click="createDialog?.open()"
           >
             <RiAddLine class="h-4 w-4" />
           </IconButton>
@@ -738,33 +629,13 @@ function selectSession(sessionId: string) {
           </IconButton>
 
           <IconButton
-            :tooltip="
-              String(
-                previewMultiSelect.enabled.value
-                  ? t('workspaceDock.preview.sidebar.actions.exitMultiSelect')
-                  : t('workspaceDock.preview.sidebar.actions.enterMultiSelect'),
-              )
-            "
-            :title="
-              String(
-                previewMultiSelect.enabled.value
-                  ? t('workspaceDock.preview.sidebar.actions.exitMultiSelect')
-                  : t('workspaceDock.preview.sidebar.actions.enterMultiSelect'),
-              )
-            "
-            :aria-label="
-              String(
-                previewMultiSelect.enabled.value
-                  ? t('workspaceDock.preview.sidebar.actions.exitMultiSelect')
-                  : t('workspaceDock.preview.sidebar.actions.enterMultiSelect'),
-              )
-            "
+            v-if="!previewMultiSelect.enabled.value"
+            data-selection-trigger
+            :tooltip="t('workspaceDock.preview.sidebar.actions.enterMultiSelect')"
             :is-touch-pointer="ui.isTouchPointer"
-            :class="previewMultiSelect.enabled.value ? 'bg-primary/10 text-primary hover:bg-primary/15' : ''"
             @click="togglePreviewMultiSelectMode"
           >
-            <RiCloseLine v-if="previewMultiSelect.enabled.value" class="h-4 w-4" />
-            <RiListCheck3 v-else class="h-4 w-4" />
+            <RiListCheck3 class="size-4" aria-hidden="true" />
           </IconButton>
         </div>
       </div>
@@ -789,556 +660,89 @@ function selectSession(sessionId: string) {
       />
     </div>
 
-    <div v-if="previewMultiSelect.enabled.value" class="flex-shrink-0 border-b border-sidebar-border/60 px-2.5 py-1.5">
-      <div class="flex flex-wrap items-center justify-between gap-1.5">
-        <div class="flex min-w-0 items-center">
-          <span
-            class="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-muted px-1 text-[10px] font-medium text-foreground/80"
-            :title="
-              String(
-                t('workspaceDock.preview.sidebar.multiSelect.selectedCount', {
-                  count: previewMultiSelect.selectedCount.value,
-                }),
-              )
-            "
-            :aria-label="
-              String(
-                t('workspaceDock.preview.sidebar.multiSelect.selectedCount', {
-                  count: previewMultiSelect.selectedCount.value,
-                }),
-              )
-            "
-          >
-            {{ previewMultiSelect.selectedCount.value }}
-          </span>
-        </div>
-
-        <div class="flex items-center gap-1">
-          <IconButton
-            size="xs"
-            :tooltip="String(t('common.selectAll'))"
-            :title="String(t('common.selectAll'))"
-            :aria-label="String(t('common.selectAll'))"
-            :is-touch-pointer="ui.isTouchPointer"
-            :disabled="
-              filteredPreviewSessionIds.length === 0 ||
-              previewMultiSelect.selectedCount.value === filteredPreviewSessionIds.length
-            "
-            @click="selectAllPreviewSessions"
-          >
-            <RiListCheck3 class="h-3.5 w-3.5" />
-          </IconButton>
-
-          <IconButton
-            size="xs"
-            :tooltip="String(t('common.invertSelection'))"
-            :title="String(t('common.invertSelection'))"
-            :aria-label="String(t('common.invertSelection'))"
-            :is-touch-pointer="ui.isTouchPointer"
-            :disabled="filteredPreviewSessionIds.length === 0"
-            @click="invertPreviewSessionsSelection"
-          >
-            <RiRefreshLine class="h-3.5 w-3.5" />
-          </IconButton>
-
-          <ConfirmPopover
-            :title="String(t('workspaceDock.preview.sidebar.confirmDeleteSelected.title'))"
-            :description="
-              String(
-                t('workspaceDock.preview.sidebar.confirmDeleteSelected.description', {
-                  count: previewMultiSelect.selectedCount.value,
-                }),
-              )
-            "
-            :confirm-text="String(t('workspaceDock.preview.sidebar.actions.deleteSelected'))"
-            :cancel-text="String(t('common.cancel'))"
-            variant="destructive"
-            @confirm="deleteSelectedPreviewSessions"
-          >
-            <IconButton
-              size="xs"
-              variant="ghost-destructive"
-              :tooltip="String(t('workspaceDock.preview.sidebar.actions.deleteSelected'))"
-              :title="String(t('workspaceDock.preview.sidebar.actions.deleteSelected'))"
-              :aria-label="String(t('workspaceDock.preview.sidebar.actions.deleteSelected'))"
-              :is-touch-pointer="ui.isTouchPointer"
-              :disabled="previewMultiSelect.selectedCount.value === 0"
-              @click.stop
-            >
-              <RiDeleteBinLine class="h-3.5 w-3.5" />
-            </IconButton>
-          </ConfirmPopover>
-
-          <IconButton
-            size="xs"
-            :tooltip="String(t('workspaceDock.preview.sidebar.actions.exitMultiSelect'))"
-            :title="String(t('workspaceDock.preview.sidebar.actions.exitMultiSelect'))"
-            :aria-label="String(t('workspaceDock.preview.sidebar.actions.exitMultiSelect'))"
-            :is-touch-pointer="ui.isTouchPointer"
-            @click="togglePreviewMultiSelectMode"
-          >
-            <RiCloseLine class="h-3.5 w-3.5" />
-          </IconButton>
-        </div>
-      </div>
-    </div>
-
-    <div class="flex-1 min-h-0 overflow-x-hidden overflow-y-auto pb-2">
-      <div class="flex-shrink-0 border-t border-sidebar-border/60 bg-sidebar/95">
-        <div
-          :class="[
-            'group h-10 px-3 flex items-center justify-between gap-2 rounded-md transition-colors',
-            chatSectionOpen ? 'bg-secondary/30' : 'hover:bg-secondary/30 focus-within:bg-secondary/30',
-          ]"
+    <SelectionToolbar
+      v-if="previewMultiSelect.enabled.value"
+      class="shrink-0 border-b border-sidebar-border/60"
+      :selectable-ids="filteredPreviewSessionIds"
+      :selected-ids="previewMultiSelect.selectedIds.value"
+      :selection-label="
+        t('workspaceDock.preview.sidebar.multiSelect.selectedCount', {
+          count: previewMultiSelect.selectedCount.value,
+        })
+      "
+      :exit-label="t('workspaceDock.preview.sidebar.actions.exitMultiSelect')"
+      :is-touch-pointer="ui.isTouchPointer"
+      @select-all="selectAllPreviewSessions"
+      @invert="invertPreviewSessionsSelection"
+      @exit="togglePreviewMultiSelectMode"
+    >
+      <template #default="{ size }">
+        <ConfirmPopover
+          :title="t('workspaceDock.preview.sidebar.confirmDeleteSelected.title')"
+          :description="
+            t('workspaceDock.preview.sidebar.confirmDeleteSelected.description', {
+              count: previewMultiSelect.selectedCount.value,
+            })
+          "
+          :confirm-text="t('workspaceDock.preview.sidebar.actions.deleteSelected')"
+          variant="destructive"
+          @confirm="deleteSelectedPreviewSessions"
         >
-          <button
-            type="button"
-            class="flex-1 h-full min-w-0 flex items-center gap-2 text-left rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
-            :aria-expanded="chatSectionOpen"
-            :aria-label="String(t('workspaceDock.preview.sidebar.sections.chat.title'))"
-            @click="chatSectionOpen = !chatSectionOpen"
+          <SidebarIconButton
+            data-keyboard-option
+            :size="size"
+            destructive
+            :tooltip="t('workspaceDock.preview.sidebar.actions.deleteSelected')"
+            :is-touch-pointer="ui.isTouchPointer"
+            :disabled="!previewMultiSelect.selectedCount.value"
+            @click.stop
           >
-            <component
-              :is="chatSectionOpen ? RiArrowDownSLine : RiArrowRightSLine"
-              class="h-4 w-4 text-muted-foreground"
-            />
-            <span class="typography-ui-label font-medium text-muted-foreground">{{
-              t('workspaceDock.preview.sidebar.sections.chat.title')
-            }}</span>
-          </button>
-          <div class="flex items-center gap-2 flex-shrink-0">
-            <span class="text-[11px] font-mono text-muted-foreground/70">{{ chatCount }}</span>
-            <SidebarPager
-              v-if="chatSectionOpen && chatPageCount > 1"
-              :page="chatSectionPage"
-              :page-count="chatPageCount"
-              :disabled="preview.loading"
-              :prev-label="String(t('common.previousPage'))"
-              :next-label="String(t('common.nextPage'))"
-              @update:page="(v) => (chatSectionPage = v)"
-            />
-          </div>
-        </div>
+            <RiDeleteBinLine class="size-3.5" aria-hidden="true" />
+          </SidebarIconButton>
+        </ConfirmPopover>
+      </template>
+    </SelectionToolbar>
 
-        <div v-if="chatSectionOpen" class="px-2 pb-2 animate-in fade-in-0 slide-in-from-top-1 duration-200">
-          <SidebarSectionSkeleton v-if="preview.loading && previewSessions.length === 0" :rows="3" compact />
-          <div
-            v-else-if="!currentChatSessionId"
-            class="px-2 py-2 text-xs text-muted-foreground animate-in fade-in-0 duration-150"
-          >
-            {{ t('workspaceDock.preview.sidebar.sections.chat.emptyNoSession') }}
-          </div>
-          <div
-            v-else-if="sidebarQueryNorm && chatSessionsAll.length > 0 && chatCount === 0"
-            class="px-2 py-2 text-xs text-muted-foreground animate-in fade-in-0 duration-150"
-          >
-            {{ t('workspaceDock.preview.sidebar.noMatchingSessions') }}
-          </div>
-          <div
-            v-else-if="chatSessionsAll.length === 0"
-            class="px-2 py-2 text-xs text-muted-foreground animate-in fade-in-0 duration-150"
-          >
-            {{ t('workspaceDock.preview.sidebar.sections.chat.empty') }}
-          </div>
-          <div v-else class="space-y-1 pt-1 animate-in fade-in-0 duration-150">
-            <SidebarListItem
-              v-for="session in pagedChatSessions"
-              :key="session.id"
-              :active="!previewMultiSelect.enabled.value && preview.activeSessionId === session.id"
-              :as="isInlineRenameSession(session, 'chat') ? 'div' : 'button'"
-              density="compact"
-              :draggable="canDragPreviewSession(session, 'chat')"
-              :actions-always-visible="
-                !previewMultiSelect.enabled.value && (ui.isCompactTouch || isInlineRenameSession(session, 'chat'))
-              "
-              @click="handlePreviewSessionRowClick(session, 'chat', $event)"
-              @dragstart="handlePreviewSessionRowDragStart($event, session, 'chat')"
-            >
-              <template #icon>
-                <div class="flex items-center gap-1.5">
-                  <ListItemSelectionIndicator
-                    v-if="previewMultiSelect.enabled.value"
-                    :selected="previewMultiSelect.isSelected(session.id)"
-                  />
-                  <span
-                    class="inline-flex h-1.5 w-1.5 rounded-full flex-shrink-0"
-                    :class="sessionDotClass(session)"
-                    :title="sessionDotLabel(session)"
-                    :aria-label="sessionDotLabel(session)"
-                  />
-                </div>
-              </template>
-
-              <div class="flex w-full items-center min-w-0 gap-2">
-                <template v-if="!isInlineRenameSession(session, 'chat')">
-                  <div class="flex-1 min-w-0 flex flex-col justify-center">
-                    <span class="truncate typography-ui-label w-full text-left" :title="preview.sessionLabel(session)">
-                      {{ preview.sessionLabel(session) }}
-                    </span>
-                    <span
-                      class="truncate typography-micro font-mono text-left text-muted-foreground/60 w-full"
-                      :title="previewSessionSubtitle(session)"
-                    >
-                      {{ previewSessionSubtitle(session) }}
-                    </span>
-                  </div>
-                </template>
-
-                <template v-else>
-                  <input
-                    ref="renameInputEl"
-                    type="text"
-                    :value="renameDraft"
-                    class="h-7 min-w-0 flex-1 rounded-md border border-input bg-background/95 px-2 text-xs font-mono text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                    :placeholder="String(t('workspaceDock.preview.emptyState.sessionIdPlaceholder'))"
-                    @click.stop
-                    @input="onRenameDraftInput"
-                    @keydown.enter.prevent.stop="saveRenameSession"
-                    @keydown.esc.prevent.stop="cancelRenameSession"
-                  />
-                </template>
-              </div>
-
-              <template #actions>
-                <template v-if="isInlineRenameSession(session, 'chat')">
-                  <IconButton
-                    size="xs"
-                    class="text-muted-foreground hover:text-foreground hover:bg-primary/6"
-                    :title="String(t('common.cancel'))"
-                    :aria-label="String(t('common.cancel'))"
-                    :disabled="renameBusy"
-                    @click.stop="cancelRenameSession"
-                  >
-                    <RiCloseLine class="h-3.5 w-3.5" />
-                  </IconButton>
-
-                  <IconButton
-                    size="xs"
-                    class="text-primary hover:bg-primary/12"
-                    :title="String(t(renameBusy ? 'common.saving' : 'common.save'))"
-                    :aria-label="String(t(renameBusy ? 'common.saving' : 'common.save'))"
-                    :disabled="!canSaveRename"
-                    @click.stop="saveRenameSession"
-                  >
-                    <RiLoader4Line v-if="renameBusy" class="h-3.5 w-3.5 animate-spin" />
-                    <RiCheckLine v-else class="h-3.5 w-3.5" />
-                  </IconButton>
-                </template>
-
-                <template v-else-if="!previewMultiSelect.enabled.value">
-                  <ListItemOverflowActionButton
-                    :mobile="ui.isCompactTouch"
-                    :label="String(t('common.actions'))"
-                    @trigger="(event) => openRowMenu(session.id, 'chat', event)"
-                  />
-                </template>
-              </template>
-            </SidebarListItem>
-          </div>
-        </div>
-      </div>
-
-      <div class="flex-shrink-0 border-t border-sidebar-border/60 bg-sidebar/95">
-        <div
-          :class="[
-            'group h-10 px-3 flex items-center justify-between gap-2 rounded-md transition-colors',
-            directorySectionOpen ? 'bg-secondary/30' : 'hover:bg-secondary/30 focus-within:bg-secondary/30',
-          ]"
-        >
-          <button
-            type="button"
-            class="flex-1 h-full min-w-0 flex items-center gap-2 text-left rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
-            :aria-expanded="directorySectionOpen"
-            :aria-label="String(t('workspaceDock.preview.sidebar.sections.directory.title'))"
-            @click="directorySectionOpen = !directorySectionOpen"
-          >
-            <component
-              :is="directorySectionOpen ? RiArrowDownSLine : RiArrowRightSLine"
-              class="h-4 w-4 text-muted-foreground"
-            />
-            <span class="typography-ui-label font-medium text-muted-foreground">{{
-              t('workspaceDock.preview.sidebar.sections.directory.title')
-            }}</span>
-          </button>
-          <div class="flex items-center gap-2 flex-shrink-0">
-            <span class="text-[11px] font-mono text-muted-foreground/70">{{ directoryCount }}</span>
-            <SidebarPager
-              v-if="directorySectionOpen && directoryPageCount > 1"
-              :page="directorySectionPage"
-              :page-count="directoryPageCount"
-              :disabled="preview.loading"
-              :prev-label="String(t('common.previousPage'))"
-              :next-label="String(t('common.nextPage'))"
-              @update:page="(v) => (directorySectionPage = v)"
-            />
-          </div>
-        </div>
-
-        <div v-if="directorySectionOpen" class="px-2 pb-2 animate-in fade-in-0 slide-in-from-top-1 duration-200">
-          <SidebarSectionSkeleton v-if="preview.loading && previewSessions.length === 0" :rows="3" compact />
-          <div
-            v-else-if="!currentDirectoryNorm"
-            class="px-2 py-2 text-xs text-muted-foreground animate-in fade-in-0 duration-150"
-          >
-            {{ t('workspaceDock.preview.sidebar.sections.directory.emptyNoDirectory') }}
-          </div>
-          <div
-            v-else-if="sidebarQueryNorm && directorySessionsAll.length > 0 && directoryCount === 0"
-            class="px-2 py-2 text-xs text-muted-foreground animate-in fade-in-0 duration-150"
-          >
-            {{ t('workspaceDock.preview.sidebar.noMatchingSessions') }}
-          </div>
-          <div
-            v-else-if="directorySessionsAll.length === 0"
-            class="px-2 py-2 text-xs text-muted-foreground animate-in fade-in-0 duration-150"
-          >
-            {{ t('workspaceDock.preview.sidebar.sections.directory.empty') }}
-          </div>
-          <div v-else class="space-y-1 pt-1 animate-in fade-in-0 duration-150">
-            <SidebarListItem
-              v-for="session in pagedDirectorySessions"
-              :key="session.id"
-              :active="!previewMultiSelect.enabled.value && preview.activeSessionId === session.id"
-              :as="isInlineRenameSession(session, 'directory') ? 'div' : 'button'"
-              density="compact"
-              :draggable="canDragPreviewSession(session, 'directory')"
-              :actions-always-visible="
-                !previewMultiSelect.enabled.value && (ui.isCompactTouch || isInlineRenameSession(session, 'directory'))
-              "
-              @click="handlePreviewSessionRowClick(session, 'directory', $event)"
-              @dragstart="handlePreviewSessionRowDragStart($event, session, 'directory')"
-            >
-              <template #icon>
-                <div class="flex items-center gap-1.5">
-                  <ListItemSelectionIndicator
-                    v-if="previewMultiSelect.enabled.value"
-                    :selected="previewMultiSelect.isSelected(session.id)"
-                  />
-                  <span
-                    class="inline-flex h-1.5 w-1.5 rounded-full flex-shrink-0"
-                    :class="sessionDotClass(session)"
-                    :title="sessionDotLabel(session)"
-                    :aria-label="sessionDotLabel(session)"
-                  />
-                </div>
-              </template>
-
-              <div class="flex w-full items-center min-w-0 gap-2">
-                <template v-if="!isInlineRenameSession(session, 'directory')">
-                  <div class="flex-1 min-w-0 flex flex-col justify-center">
-                    <span class="truncate typography-ui-label w-full text-left" :title="preview.sessionLabel(session)">
-                      {{ preview.sessionLabel(session) }}
-                    </span>
-                    <span
-                      class="truncate typography-micro font-mono text-left text-muted-foreground/60 w-full"
-                      :title="previewSessionSubtitle(session)"
-                    >
-                      {{ previewSessionSubtitle(session) }}
-                    </span>
-                  </div>
-                </template>
-
-                <template v-else>
-                  <input
-                    ref="renameInputEl"
-                    type="text"
-                    :value="renameDraft"
-                    class="h-7 min-w-0 flex-1 rounded-md border border-input bg-background/95 px-2 text-xs font-mono text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                    :placeholder="String(t('workspaceDock.preview.emptyState.sessionIdPlaceholder'))"
-                    @click.stop
-                    @input="onRenameDraftInput"
-                    @keydown.enter.prevent.stop="saveRenameSession"
-                    @keydown.esc.prevent.stop="cancelRenameSession"
-                  />
-                </template>
-              </div>
-
-              <template #actions>
-                <template v-if="isInlineRenameSession(session, 'directory')">
-                  <IconButton
-                    size="xs"
-                    class="text-muted-foreground hover:text-foreground hover:bg-primary/6"
-                    :title="String(t('common.cancel'))"
-                    :aria-label="String(t('common.cancel'))"
-                    :disabled="renameBusy"
-                    @click.stop="cancelRenameSession"
-                  >
-                    <RiCloseLine class="h-3.5 w-3.5" />
-                  </IconButton>
-
-                  <IconButton
-                    size="xs"
-                    class="text-primary hover:bg-primary/12"
-                    :title="String(t(renameBusy ? 'common.saving' : 'common.save'))"
-                    :aria-label="String(t(renameBusy ? 'common.saving' : 'common.save'))"
-                    :disabled="!canSaveRename"
-                    @click.stop="saveRenameSession"
-                  >
-                    <RiLoader4Line v-if="renameBusy" class="h-3.5 w-3.5 animate-spin" />
-                    <RiCheckLine v-else class="h-3.5 w-3.5" />
-                  </IconButton>
-                </template>
-
-                <template v-else-if="!previewMultiSelect.enabled.value">
-                  <ListItemOverflowActionButton
-                    :mobile="ui.isCompactTouch"
-                    :label="String(t('common.actions'))"
-                    @trigger="(event) => openRowMenu(session.id, 'directory', event)"
-                  />
-                </template>
-              </template>
-            </SidebarListItem>
-          </div>
-        </div>
-      </div>
-
-      <div class="flex-shrink-0 border-t border-sidebar-border/60 bg-sidebar/95">
-        <div
-          :class="[
-            'group h-10 px-3 flex items-center justify-between gap-2 rounded-md transition-colors',
-            allSectionOpen ? 'bg-secondary/30' : 'hover:bg-secondary/30 focus-within:bg-secondary/30',
-          ]"
-        >
-          <button
-            type="button"
-            class="flex-1 h-full min-w-0 flex items-center gap-2 text-left rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
-            :aria-expanded="allSectionOpen"
-            :aria-label="String(t('workspaceDock.preview.sidebar.sections.all.title'))"
-            @click="allSectionOpen = !allSectionOpen"
-          >
-            <component
-              :is="allSectionOpen ? RiArrowDownSLine : RiArrowRightSLine"
-              class="h-4 w-4 text-muted-foreground"
-            />
-            <span class="typography-ui-label font-medium text-muted-foreground">{{
-              t('workspaceDock.preview.sidebar.sections.all.title')
-            }}</span>
-          </button>
-          <div class="flex items-center gap-2 flex-shrink-0">
-            <span class="text-[11px] font-mono text-muted-foreground/70">{{ allCount }}</span>
-            <SidebarPager
-              v-if="allSectionOpen && allPageCount > 1"
-              :page="allSectionPage"
-              :page-count="allPageCount"
-              :disabled="preview.loading"
-              :prev-label="String(t('common.previousPage'))"
-              :next-label="String(t('common.nextPage'))"
-              @update:page="(v) => (allSectionPage = v)"
-            />
-          </div>
-        </div>
-
-        <div v-if="allSectionOpen" class="px-2 pb-2 animate-in fade-in-0 slide-in-from-top-1 duration-200">
-          <SidebarSectionSkeleton v-if="preview.loading && previewSessions.length === 0" :rows="3" compact />
-          <div
-            v-else-if="sidebarQueryNorm && allSessionsAll.length > 0 && allCount === 0"
-            class="px-2 py-2 text-xs text-muted-foreground animate-in fade-in-0 duration-150"
-          >
-            {{ t('workspaceDock.preview.sidebar.noMatchingSessions') }}
-          </div>
-          <div
-            v-else-if="allSessionsAll.length === 0"
-            class="px-2 py-2 text-xs text-muted-foreground animate-in fade-in-0 duration-150"
-          >
-            {{ t('workspaceDock.preview.sidebar.sections.all.empty') }}
-          </div>
-          <div v-else class="space-y-1 pt-1 animate-in fade-in-0 duration-150">
-            <SidebarListItem
-              v-for="session in pagedAllSessions"
-              :key="session.id"
-              :active="!previewMultiSelect.enabled.value && preview.activeSessionId === session.id"
-              :as="isInlineRenameSession(session, 'all') ? 'div' : 'button'"
-              density="compact"
-              :draggable="canDragPreviewSession(session, 'all')"
-              :actions-always-visible="
-                !previewMultiSelect.enabled.value && (ui.isCompactTouch || isInlineRenameSession(session, 'all'))
-              "
-              @click="handlePreviewSessionRowClick(session, 'all', $event)"
-              @dragstart="handlePreviewSessionRowDragStart($event, session, 'all')"
-            >
-              <template #icon>
-                <div class="flex items-center gap-1.5">
-                  <ListItemSelectionIndicator
-                    v-if="previewMultiSelect.enabled.value"
-                    :selected="previewMultiSelect.isSelected(session.id)"
-                  />
-                  <span
-                    class="inline-flex h-1.5 w-1.5 rounded-full flex-shrink-0"
-                    :class="sessionDotClass(session)"
-                    :title="sessionDotLabel(session)"
-                    :aria-label="sessionDotLabel(session)"
-                  />
-                </div>
-              </template>
-
-              <div class="flex w-full items-center min-w-0 gap-2">
-                <template v-if="!isInlineRenameSession(session, 'all')">
-                  <div class="flex-1 min-w-0 flex flex-col justify-center">
-                    <span class="truncate typography-ui-label w-full text-left" :title="preview.sessionLabel(session)">
-                      {{ preview.sessionLabel(session) }}
-                    </span>
-                    <span
-                      class="truncate typography-micro font-mono text-left text-muted-foreground/60 w-full"
-                      :title="previewSessionSubtitle(session)"
-                    >
-                      {{ previewSessionSubtitle(session) }}
-                    </span>
-                  </div>
-                </template>
-
-                <template v-else>
-                  <input
-                    ref="renameInputEl"
-                    type="text"
-                    :value="renameDraft"
-                    class="h-7 min-w-0 flex-1 rounded-md border border-input bg-background/95 px-2 text-xs font-mono text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                    :placeholder="String(t('workspaceDock.preview.emptyState.sessionIdPlaceholder'))"
-                    @click.stop
-                    @input="onRenameDraftInput"
-                    @keydown.enter.prevent.stop="saveRenameSession"
-                    @keydown.esc.prevent.stop="cancelRenameSession"
-                  />
-                </template>
-              </div>
-
-              <template #actions>
-                <template v-if="isInlineRenameSession(session, 'all')">
-                  <IconButton
-                    size="xs"
-                    class="text-muted-foreground hover:text-foreground hover:bg-primary/6"
-                    :title="String(t('common.cancel'))"
-                    :aria-label="String(t('common.cancel'))"
-                    :disabled="renameBusy"
-                    @click.stop="cancelRenameSession"
-                  >
-                    <RiCloseLine class="h-3.5 w-3.5" />
-                  </IconButton>
-
-                  <IconButton
-                    size="xs"
-                    class="text-primary hover:bg-primary/12"
-                    :title="String(t(renameBusy ? 'common.saving' : 'common.save'))"
-                    :aria-label="String(t(renameBusy ? 'common.saving' : 'common.save'))"
-                    :disabled="!canSaveRename"
-                    @click.stop="saveRenameSession"
-                  >
-                    <RiLoader4Line v-if="renameBusy" class="h-3.5 w-3.5 animate-spin" />
-                    <RiCheckLine v-else class="h-3.5 w-3.5" />
-                  </IconButton>
-                </template>
-
-                <template v-else-if="!previewMultiSelect.enabled.value">
-                  <ListItemOverflowActionButton
-                    :mobile="ui.isCompactTouch"
-                    :label="String(t('common.actions'))"
-                    @trigger="(event) => openRowMenu(session.id, 'all', event)"
-                  />
-                </template>
-              </template>
-            </SidebarListItem>
-          </div>
-        </div>
-      </div>
+    <div class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto pb-2">
+      <SidebarPagedSection
+        v-for="section in sections"
+        :key="section.scope"
+        :title="section.title"
+        :open="section.open"
+        :count="section.count"
+        :page="section.page"
+        :page-count="section.pageCount"
+        :paging="preview.loading"
+        :loading="preview.loading && !previewSessions.length"
+        :empty-message="section.emptyMessage"
+        @update:open="sectionOpen[section.scope] = $event"
+        @update:page="sectionPage[section.scope] = $event"
+      >
+        <PreviewSessionRow
+          v-for="session in section.rows"
+          :key="session.id"
+          v-model:draft="renameDraft"
+          :session-id="session.id"
+          :subtitle="previewSessionSubtitle(session)"
+          :status-class="sessionDotClass(session)"
+          :status-label="sessionDotLabel(session)"
+          :active="!previewMultiSelect.enabled.value && preview.activeSessionId === session.id"
+          :multi-select="previewMultiSelect.enabled.value"
+          :selected="previewMultiSelect.isSelected(session.id)"
+          :renaming="isInlineRenameSession(session, section.scope)"
+          :rename-busy="renameBusy"
+          :rename-error="renameError"
+          :can-save-rename="canSaveRename"
+          :compact-touch="ui.isCompactTouch"
+          :draggable="canDragPreviewSession(session, section.scope)"
+          @click="handlePreviewSessionRowClick(session, section.scope, $event)"
+          @dragstart="handlePreviewSessionRowDragStart($event, session, section.scope)"
+          @menu="openRowMenu(session.id, section.scope, $event)"
+          @rename="startRenameSession(session.id, section.scope)"
+          @save="saveRenameSession"
+          @cancel="cancelRenameSession"
+        />
+      </SidebarPagedSection>
     </div>
 
     <OptionMenu
@@ -1355,181 +759,43 @@ function selectSession(sessionId: string) {
       @select="onRowMenuSelect"
     />
 
-    <FormDialog
-      :open="createDialogOpen"
-      :title="String(t('workspaceDock.preview.addDialog.title'))"
-      :description="String(t('workspaceDock.preview.addDialog.description'))"
-      max-width="max-w-md"
-      @close="createDialogOpen = false"
-      @update:open="createDialogOpen = $event"
-    >
-      <div class="space-y-3">
-        <div class="space-y-1">
-          <label
-            class="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
-            for="workspace-preview-id-sidebar-dialog"
-          >
-            {{ t('workspaceDock.preview.emptyState.sessionIdLabel') }}
-          </label>
-          <Input
-            id="workspace-preview-id-sidebar-dialog"
-            v-model="createPreviewId"
-            type="text"
-            autocapitalize="off"
-            autocomplete="off"
-            spellcheck="false"
-            :placeholder="String(t('workspaceDock.preview.emptyState.sessionIdPlaceholder'))"
-            :disabled="actionLoading"
-            class="h-8 bg-background/80 text-xs font-mono"
-            @keydown.enter.prevent="createManagedSession"
-          />
-          <p class="text-[11px] text-muted-foreground">
-            {{ t('workspaceDock.preview.emptyState.sessionIdHelp') }}
-          </p>
-        </div>
-
-        <div class="space-y-1">
-          <label
-            class="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
-            for="workspace-preview-run-dir-sidebar-dialog"
-          >
-            {{ t('workspaceDock.preview.emptyState.runDirectoryLabel') }}
-          </label>
-          <Input
-            id="workspace-preview-run-dir-sidebar-dialog"
-            v-model="createRunDirectory"
-            type="text"
-            :placeholder="String(t('workspaceDock.preview.emptyState.runDirectoryPlaceholder'))"
-            :disabled="actionLoading"
-            class="h-8 bg-background/80 text-xs font-mono"
-          />
-        </div>
-
-        <div class="space-y-1">
-          <label
-            class="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
-            for="workspace-preview-command-sidebar-dialog"
-          >
-            {{ t('workspaceDock.preview.emptyState.commandLabel') }}
-          </label>
-          <Input
-            id="workspace-preview-command-sidebar-dialog"
-            v-model="createCommand"
-            type="text"
-            :placeholder="String(t('workspaceDock.preview.emptyState.commandPlaceholder'))"
-            :disabled="actionLoading"
-            class="h-8 bg-background/80 text-xs font-mono"
-          />
-        </div>
-
-        <div class="space-y-1">
-          <label
-            class="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
-            for="workspace-preview-args-sidebar-dialog"
-          >
-            {{ t('workspaceDock.preview.emptyState.argsLabel') }}
-          </label>
-          <Input
-            id="workspace-preview-args-sidebar-dialog"
-            v-model="createArgsText"
-            type="text"
-            placeholder='["--host", "127.0.0.1", "--name", "My app"]'
-            :disabled="actionLoading"
-            class="h-8 bg-background/80 text-xs font-mono"
-          />
-          <p v-if="createArgsError" class="text-xs text-destructive" role="alert">{{ createArgsError }}</p>
-        </div>
-
-        <div class="space-y-1">
-          <label
-            class="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
-            for="workspace-preview-logs-sidebar-dialog"
-          >
-            {{ t('workspaceDock.preview.emptyState.logsPathLabel') }}
-          </label>
-          <Input
-            id="workspace-preview-logs-sidebar-dialog"
-            v-model="createLogsPath"
-            type="text"
-            :placeholder="String(t('workspaceDock.preview.emptyState.logsPathPlaceholder'))"
-            :disabled="actionLoading"
-            class="h-8 bg-background/80 text-xs font-mono"
-          />
-        </div>
-
-        <div class="space-y-1">
-          <label
-            class="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
-            for="workspace-preview-target-url-sidebar-dialog"
-          >
-            {{ t('workspaceDock.preview.emptyState.targetUrlLabel') }}
-          </label>
-          <Input
-            id="workspace-preview-target-url-sidebar-dialog"
-            v-model="createTargetUrl"
-            type="url"
-            :placeholder="String(t('workspaceDock.preview.emptyState.targetUrlPlaceholder'))"
-            :disabled="actionLoading"
-            class="h-8 bg-background/80 text-xs"
-            @keydown.enter.prevent="createManagedSession"
-          />
-        </div>
-
-        <p class="truncate text-[11px] text-muted-foreground">
-          {{ t('workspaceDock.preview.directoryLabel') }}
-          <span class="font-mono">{{ currentDirectory || t('workspaceDock.preview.emptyState.directoryEmpty') }}</span>
-        </p>
-
-        <p v-if="actionError" class="text-xs text-destructive">{{ actionError }}</p>
-
-        <div class="flex items-center justify-end gap-2 pt-1">
-          <Button size="sm" variant="outline" :disabled="actionLoading" @click="createDialogOpen = false">
-            {{ t('common.cancel') }}
-          </Button>
-          <Button size="sm" :disabled="!canCreateSession" @click="createManagedSession">
-            {{ t('workspaceDock.preview.emptyState.addAction') }}
-          </Button>
-        </div>
-      </div>
-    </FormDialog>
+    <PreviewCreateSessionDialog ref="createDialog" :directory="currentDirectory" @created="onSessionCreated" />
 
     <FormDialog
       :open="editDialogOpen"
       :title="String(t('workspaceDock.preview.editDialog.title'))"
       :description="String(t('workspaceDock.preview.editDialog.description'))"
       max-width="max-w-md"
-      @close="editDialogOpen = false"
+      initial-focus="[data-preview-target-url]"
       @update:open="editDialogOpen = $event"
     >
-      <div class="space-y-3">
-        <div class="space-y-1">
-          <label
-            class="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
-            for="workspace-preview-edit-target-url"
-          >
-            {{ t('workspaceDock.preview.emptyState.targetUrlLabel') }}
-          </label>
+      <form :id="editFormId" class="grid gap-3" novalidate @submit.prevent="saveEditDialog">
+        <label class="grid gap-1 text-xs font-medium">
+          {{ t('workspaceDock.preview.emptyState.targetUrlLabel') }}
           <Input
-            id="workspace-preview-edit-target-url"
             v-model="editTargetUrl"
+            data-preview-target-url
             type="url"
-            :disabled="editBusy"
-            class="h-8 bg-background/80 text-xs"
-            @keydown.enter.prevent="saveEditDialog"
+            :readonly="editBusy"
+            :aria-invalid="editError ? true : undefined"
+            :aria-describedby="editError ? `${editFormId}-error` : undefined"
+            class="font-mono text-xs"
           />
-        </div>
-
-        <p v-if="editError" class="text-xs text-destructive">{{ editError }}</p>
-
-        <div class="flex items-center justify-end gap-2 pt-1">
-          <Button size="sm" variant="outline" :disabled="editBusy" @click="editDialogOpen = false">
+        </label>
+        <p v-if="editError" :id="`${editFormId}-error`" class="text-xs text-destructive" role="alert">
+          {{ editError }}
+        </p>
+      </form>
+      <template #footer>
+        <div class="flex w-full flex-wrap items-center justify-end gap-2">
+          <Button type="button" size="sm" variant="outline" :disabled="editBusy" @click="editDialogOpen = false">
             {{ t('common.cancel') }}
           </Button>
-          <Button size="sm" :disabled="editBusy || !editTargetUrl.trim()" @click="saveEditDialog">
+          <Button type="submit" :form="editFormId" size="sm" :disabled="editBusy || !editTargetUrl.trim()">
             {{ t('common.save') }}
           </Button>
         </div>
-      </div>
+      </template>
     </FormDialog>
 
     <FormDialog
@@ -1537,50 +803,45 @@ function selectSession(sessionId: string) {
       :title="String(t('workspaceDock.preview.renameDialog.title'))"
       :description="String(t('workspaceDock.preview.renameDialog.description'))"
       max-width="max-w-md"
-      @close="cancelRenameSession"
-      @update:open="
-        (v) => {
-          renameDialogOpen = v
-          if (!v) cancelRenameSession()
-        }
-      "
+      initial-focus="[data-preview-rename-name]"
+      @update:open="(open) => !open && cancelRenameSession()"
     >
-      <div class="space-y-3">
-        <div class="space-y-1">
-          <label
-            class="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
-            for="workspace-preview-rename-id"
-          >
+      <form :id="renameFormId" class="grid gap-3" novalidate @submit.prevent="saveRenameSession">
+        <div class="grid gap-1">
+          <label :for="`${renameFormId}-name`" class="text-xs font-medium">
             {{ t('workspaceDock.preview.emptyState.sessionIdLabel') }}
           </label>
           <Input
-            id="workspace-preview-rename-id"
+            :id="`${renameFormId}-name`"
             v-model="renameDraft"
-            type="text"
+            data-preview-rename-name
             autocapitalize="off"
             autocomplete="off"
-            spellcheck="false"
-            :placeholder="String(t('workspaceDock.preview.emptyState.sessionIdPlaceholder'))"
-            :disabled="renameBusy"
-            class="h-8 bg-background/80 text-xs font-mono"
-            @keydown.enter.prevent="saveRenameSession"
+            :spellcheck="false"
+            :placeholder="t('workspaceDock.preview.emptyState.sessionIdPlaceholder')"
+            :readonly="renameBusy"
+            :aria-invalid="renameError ? true : undefined"
+            :aria-describedby="renameError ? `${renameFormId}-error` : `${renameFormId}-help`"
+            class="font-mono text-xs"
           />
-          <p class="text-[11px] text-muted-foreground">
+          <p :id="`${renameFormId}-help`" class="text-xs text-muted-foreground">
             {{ t('workspaceDock.preview.emptyState.sessionIdHelp') }}
           </p>
         </div>
-
-        <p v-if="renameError" class="text-xs text-destructive">{{ renameError }}</p>
-
-        <div class="flex items-center justify-end gap-2 pt-1">
-          <Button size="sm" variant="outline" :disabled="renameBusy" @click="cancelRenameSession">
+        <p v-if="renameError" :id="`${renameFormId}-error`" class="text-xs text-destructive" role="alert">
+          {{ renameError }}
+        </p>
+      </form>
+      <template #footer>
+        <div class="flex w-full flex-wrap items-center justify-end gap-2">
+          <Button type="button" size="sm" variant="outline" :disabled="renameBusy" @click="cancelRenameSession">
             {{ t('common.cancel') }}
           </Button>
-          <Button size="sm" :disabled="!canSaveRename" @click="saveRenameSession">
+          <Button type="submit" :form="renameFormId" size="sm" :disabled="renameBusy">
             {{ renameBusy ? t('common.saving') : t('common.save') }}
           </Button>
         </div>
-      </div>
+      </template>
     </FormDialog>
   </section>
 </template>

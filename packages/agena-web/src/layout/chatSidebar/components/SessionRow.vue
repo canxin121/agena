@@ -1,12 +1,9 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch, type ComponentPublicInstance } from 'vue'
+import { computed, ref } from 'vue'
 import {
   RiArrowDownSLine,
   RiArrowRightSLine,
-  RiCheckLine,
-  RiCloseLine,
   RiDeleteBinLine,
-  RiLoader4Line,
   RiPushpinFill,
   RiPushpinLine,
   RiStarFill,
@@ -16,6 +13,7 @@ import { useI18n } from 'vue-i18n'
 
 import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
 import IconButton from '@/components/ui/IconButton.vue'
+import InlineNameEditor from '@/components/ui/InlineNameEditor.vue'
 import ListItemSelectionIndicator from '@/components/ui/ListItemSelectionIndicator.vue'
 import ListItemOverflowActionButton from '@/components/ui/ListItemOverflowActionButton.vue'
 import { directoryEntryLabel, formatTime, sessionLabel } from '@/features/sessions/model/labels'
@@ -70,6 +68,7 @@ const props = withDefaults(
     canDelete?: boolean
 
     renaming?: boolean
+    renameOrigin?: HTMLElement | null
     renameDraft?: string
     renameBusy?: boolean
 
@@ -77,7 +76,7 @@ const props = withDefaults(
     sessionActionMenuAnchorEl?: HTMLElement | null
     sessionActionMenuQuery?: string
     filteredSessionActionItems?: SessionActionItem[]
-    setSessionActionMenuRef?: (el: Element | ComponentPublicInstance | null) => void
+    closeSessionActionMenu?: () => void
     runSessionActionMenu?: (item: SessionActionItem) => Promise<void>
     menuPlacement?: 'top-start' | 'top-end' | 'bottom-start' | 'bottom-end'
   }>(),
@@ -122,6 +121,7 @@ const emit = defineEmits<{
   (e: 'toggle-favorite', currentFavorite: boolean): void
   (e: 'delete'): void
   (e: 'update:renameDraft', v: string): void
+  (e: 'rename', row: HTMLElement): void
   (e: 'rename-save'): void
   (e: 'rename-cancel'): void
   (e: 'update:sessionActionMenuQuery', v: string): void
@@ -147,12 +147,11 @@ const statusLabelText = computed(() => {
 
 const canShowActions = computed(() => props.actionsEnabled && hasSessionContext.value)
 const canDragToWorkspace = computed(() => hasSessionContext.value && !props.multiSelectEnabled && !isInlineRename.value)
-const renameInputEl = ref<HTMLInputElement | null>(null)
-
-const isInlineRename = computed(() => props.renaming && !props.uiIsCompactLayout && hasSessionContext.value)
+const isInlineRename = computed(
+  () => props.renaming && !props.uiIsCompactLayout && hasSessionContext.value && props.renameOrigin === rowRootEl.value,
+)
 const actionsAlwaysVisible = computed(() => isInlineRename.value || (props.uiIsCompactLayout && canShowActions.value))
 const renameDraftText = computed(() => String(props.renameDraft || ''))
-const canSaveRename = computed(() => !props.renameBusy && renameDraftText.value.trim().length > 0)
 
 const shouldRenderSessionActionMenu = computed(() => {
   if (props.multiSelectEnabled) return false
@@ -198,29 +197,16 @@ const updatedAt = computed(() => {
   return Number.isFinite(next) ? next : 0
 })
 
-watch(isInlineRename, (active) => {
-  if (!active) return
-  void nextTick(() => {
-    const input = renameInputEl.value
-    if (!input) return
-    input.focus()
-    input.select()
-  })
-})
-
-function onRenameInput(event: Event) {
-  const target = event.target as HTMLInputElement | null
-  emit('update:renameDraft', target?.value || '')
+function requestRename(event: Event) {
+  const origin = rowRootEl.value
+  if (!origin || !canShowActions.value || props.multiSelectEnabled || props.renaming) return
+  event.preventDefault()
+  emit('rename', origin)
 }
 
 function onActionMenuSelect(item: SessionActionItem) {
   if (!props.runSessionActionMenu) return
   void props.runSessionActionMenu(item)
-}
-
-function setMenuRef(el: Element | ComponentPublicInstance | null) {
-  if (!props.setSessionActionMenuRef) return
-  props.setSessionActionMenuRef(el)
 }
 
 function handleMobileOpenActionsClick() {
@@ -281,6 +267,7 @@ function handleRowDragStart(event: DragEvent) {
 <template>
   <div
     ref="rowRootEl"
+    data-chat-session-row
     class="group relative"
     style="content-visibility: auto; contain-intrinsic-size: auto 36px"
     @focusin="hasRowFocus = true"
@@ -301,6 +288,7 @@ function handleRowDragStart(event: DragEvent) {
       class="gap-2 relative"
       :class="highlighted ? 'ring-2 ring-primary/40 ring-inset' : ''"
       @click="handleRowClick($event)"
+      @keyboard-rename="requestRename"
       @contextmenu="handleRowContextMenu"
       @dragstart="handleRowDragStart"
     >
@@ -379,19 +367,19 @@ function handleRowDragStart(event: DragEvent) {
           </span>
         </template>
 
-        <template v-else>
-          <input
-            ref="renameInputEl"
-            type="text"
-            :value="renameDraftText"
-            class="h-7 min-w-0 flex-1 rounded-md border border-input bg-background/95 px-2 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-            :placeholder="String(t('chat.sidebar.sessionRow.placeholders.sessionTitle'))"
-            @click.stop
-            @input="onRenameInput"
-            @keydown.enter.prevent.stop="emit('rename-save')"
-            @keydown.esc.prevent.stop="emit('rename-cancel')"
-          />
-        </template>
+        <InlineNameEditor
+          v-else
+          :model-value="renameDraftText"
+          :label="t('chat.sidebar.sessionActions.rename.label')"
+          :placeholder="t('chat.sidebar.sessionRow.placeholders.sessionTitle')"
+          :busy="renameBusy"
+          :busy-label="t('chat.sidebar.sessionRow.rename.saving')"
+          :submit-label="t('chat.sidebar.sessionRow.rename.save')"
+          :cancel-label="t('chat.sidebar.sessionRow.rename.cancel')"
+          @update:model-value="emit('update:renameDraft', $event)"
+          @submit="emit('rename-save')"
+          @cancel="emit('rename-cancel')"
+        />
       </div>
 
       <!-- Always provide the actions slot so SidebarListItem renders a neutral
@@ -400,36 +388,8 @@ function handleRowDragStart(event: DragEvent) {
            the thread button inside the row's native button, which is invalid
            interactive markup and behaves inconsistently across browsers. -->
       <template #actions>
-        <template v-if="actionControlsVisible">
-          <template v-if="isInlineRename">
-            <IconButton
-              size="xs"
-              class="text-muted-foreground hover:text-foreground hover:bg-primary/6"
-              :title="String(t('chat.sidebar.sessionRow.rename.cancel'))"
-              :aria-label="String(t('chat.sidebar.sessionRow.rename.cancel'))"
-              :disabled="renameBusy"
-              @click.stop="emit('rename-cancel')"
-            >
-              <RiCloseLine class="h-3.5 w-3.5" />
-            </IconButton>
-            <IconButton
-              size="xs"
-              class="text-primary hover:bg-primary/12"
-              :title="
-                String(t(renameBusy ? 'chat.sidebar.sessionRow.rename.saving' : 'chat.sidebar.sessionRow.rename.save'))
-              "
-              :aria-label="
-                String(t(renameBusy ? 'chat.sidebar.sessionRow.rename.saving' : 'chat.sidebar.sessionRow.rename.save'))
-              "
-              :disabled="!canSaveRename"
-              @click.stop="emit('rename-save')"
-            >
-              <RiLoader4Line v-if="renameBusy" class="h-3.5 w-3.5 animate-spin" />
-              <RiCheckLine v-else class="h-3.5 w-3.5" />
-            </IconButton>
-          </template>
-
-          <template v-else-if="uiIsCompactLayout && canShowActions">
+        <template v-if="actionControlsVisible && !isInlineRename">
+          <template v-if="uiIsCompactLayout && canShowActions">
             <ListItemOverflowActionButton
               data-keyboard-menu
               mobile
@@ -526,11 +486,11 @@ function handleRowDragStart(event: DragEvent) {
       :open="true"
       :query="sessionActionMenuQuery"
       :items="filteredSessionActionItems"
-      :set-menu-ref="setMenuRef"
       :anchor-el="sessionActionMenuAnchorEl"
       :desktop-placement="menuPlacement"
       @update:query="(v) => emit('update:sessionActionMenuQuery', v)"
       @select="onActionMenuSelect"
+      @close="closeSessionActionMenu"
     />
   </div>
 </template>

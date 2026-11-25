@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { DialogContent, DialogOverlay, DialogPortal, DialogRoot, DialogTitle } from 'radix-vue'
+import { DialogTitle } from 'radix-vue'
 import { RiAddLine, RiArrowLeftSLine, RiArrowRightSLine, RiCloseLine, RiSubtractLine } from '@remixicon/vue'
 
 import IconButton from '@/components/ui/IconButton.vue'
+import ModalSurface from '@/components/ui/ModalSurface.vue'
 import { useUiStore } from '@/stores/ui'
-import { isImeComposing } from '@/lib/imeKeyboard'
+import { isPlainNavigationKey } from '@/lib/keyboardNavigation'
 import { useAuthenticatedResource } from '@/lib/useAuthenticatedResource'
 
 const ui = useUiStore()
@@ -320,15 +321,7 @@ function onImageLoaded() {
 }
 
 function onKeydown(event: KeyboardEvent) {
-  if (
-    !ui.isImageViewerOpen ||
-    event.defaultPrevented ||
-    isImeComposing(event) ||
-    event.ctrlKey ||
-    event.metaKey ||
-    event.altKey
-  )
-    return
+  if (!ui.isImageViewerOpen || !isPlainNavigationKey(event)) return
 
   if (event.shiftKey && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
     event.preventDefault()
@@ -340,11 +333,6 @@ function onKeydown(event: KeyboardEvent) {
     return
   }
 
-  if (event.key === 'Escape') {
-    event.preventDefault()
-    close()
-    return
-  }
   if (event.key === 'ArrowLeft') {
     event.preventDefault()
     prev()
@@ -376,14 +364,12 @@ watch(
   (open) => {
     if (open) {
       resetPanPosition()
-      window.addEventListener('keydown', onKeydown, true)
       void nextTick(() => clampPanPosition())
       return
     }
     endMouseDrag()
     touchMode.value = 'none'
     resetPanPosition()
-    window.removeEventListener('keydown', onKeydown, true)
   },
 )
 
@@ -406,155 +392,154 @@ watch(
   },
 )
 
-onBeforeUnmount(() => {
-  endMouseDrag()
-  window.removeEventListener('keydown', onKeydown, true)
-})
+onBeforeUnmount(endMouseDrag)
 </script>
 
 <template>
-  <DialogRoot :open="ui.isImageViewerOpen" @update:open="(open) => !open && close()">
-    <DialogPortal>
-      <DialogOverlay
-        class="fixed inset-0 z-[80] bg-black/85 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
-      />
-      <DialogContent
-        class="fixed inset-0 z-[81] flex min-h-0 flex-col bg-black/20 pt-[var(--oc-safe-area-top,0px)] pr-[var(--oc-safe-area-right,0px)] pb-[var(--oc-safe-area-bottom,0px)] pl-[var(--oc-safe-area-left,0px)] text-white outline-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
-      >
-        <DialogTitle class="sr-only">{{ t('ui.imageViewer.title') }}</DialogTitle>
-        <div class="flex flex-wrap items-center gap-2 border-b border-white/15 bg-black/40 px-3 py-2">
-          <div class="min-w-0 flex-1">
-            <div class="truncate text-sm font-medium">{{ activeItem?.title || activeItem?.alt || '' }}</div>
-            <div class="text-xs text-white/70">{{ total ? `${activeIndex + 1} / ${total}` : '' }}</div>
-          </div>
+  <ModalSurface
+    :open="ui.isImageViewerOpen"
+    :layer="85"
+    backdrop-class="bg-black/85 backdrop-blur-sm"
+    class="fixed inset-0 flex min-h-0 flex-col bg-black/20 pt-[var(--oc-safe-area-top,0px)] pr-[var(--oc-safe-area-right,0px)] pb-[var(--oc-safe-area-bottom,0px)] pl-[var(--oc-safe-area-left,0px)] text-white"
+    :aria-describedby="undefined"
+    initial-focus="[data-image-viewer-viewport]"
+    @keydown="onKeydown"
+    @update:open="!$event && close()"
+  >
+    <DialogTitle class="sr-only">{{ t('ui.imageViewer.title') }}</DialogTitle>
+    <div class="flex flex-wrap items-center gap-2 border-b border-white/15 bg-black/40 px-3 py-2">
+      <div class="min-w-0 flex-1">
+        <div class="truncate text-sm font-medium">{{ activeItem?.title || activeItem?.alt || '' }}</div>
+        <div class="text-xs text-white/70">{{ total ? `${activeIndex + 1} / ${total}` : '' }}</div>
+      </div>
 
-          <div class="inline-flex items-center gap-1">
-            <IconButton
-              v-if="!isTouchDevice"
-              size="xs"
-              :tooltip="String(t('common.previous'))"
-              :aria-label="String(t('common.previous'))"
-              :disabled="!canNavigate"
-              @click="prev"
-            >
-              <RiArrowLeftSLine class="h-4 w-4" />
-            </IconButton>
-            <IconButton
-              v-if="!isTouchDevice"
-              size="xs"
-              :tooltip="String(t('common.next'))"
-              :aria-label="String(t('common.next'))"
-              :disabled="!canNavigate"
-              @click="next"
-            >
-              <RiArrowRightSLine class="h-4 w-4" />
-            </IconButton>
-            <IconButton
-              size="xs"
-              :tooltip="String(t('workspaceDock.preview.zoomOut'))"
-              :aria-label="String(t('workspaceDock.preview.zoomOut'))"
-              :disabled="!canZoomOut"
-              @click="zoomOutFromToolbar"
-            >
-              <RiSubtractLine class="h-4 w-4" />
-            </IconButton>
-            <button
-              type="button"
-              class="h-6 rounded-sm border border-white/20 bg-white/10 px-1.5 text-[11px] font-mono text-white/80 transition-colors hover:bg-white/20"
-              :title="String(t('workspaceDock.preview.zoomReset'))"
-              :aria-label="String(t('workspaceDock.preview.zoomReset'))"
-              @click="resetZoomFromToolbar"
-            >
-              {{ zoomPercent }}%
-            </button>
-            <IconButton
-              size="xs"
-              :tooltip="String(t('workspaceDock.preview.zoomIn'))"
-              :aria-label="String(t('workspaceDock.preview.zoomIn'))"
-              :disabled="!canZoomIn"
-              @click="zoomInFromToolbar"
-            >
-              <RiAddLine class="h-4 w-4" />
-            </IconButton>
-            <IconButton
-              size="xs"
-              :tooltip="String(t('common.close'))"
-              :aria-label="String(t('common.close'))"
-              @click="close"
-            >
-              <RiCloseLine class="h-4 w-4" />
-            </IconButton>
-          </div>
-        </div>
-
-        <div
-          class="flex flex-wrap items-center justify-center gap-1 border-b border-white/15 bg-black/40 px-3 py-1 text-xs"
+      <div class="inline-flex items-center gap-1">
+        <IconButton
+          v-if="!isTouchDevice"
+          size="xs"
+          :tooltip="String(t('common.previous'))"
+          :aria-label="String(t('common.previous'))"
+          :disabled="!canNavigate"
+          @click="prev"
         >
-          <span class="mr-2 text-white/70">{{ t('keyboard.panHint') }}</span>
-          <button
-            v-for="control in panControls"
-            :key="control.label"
-            type="button"
-            class="rounded px-2 py-1 hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
-            :aria-label="String(t(control.label))"
-            @click="panBy(control.x, control.y)"
-          >
-            {{ control.symbol }}
-          </button>
+          <RiArrowLeftSLine class="h-4 w-4" />
+        </IconButton>
+        <IconButton
+          v-if="!isTouchDevice"
+          size="xs"
+          :tooltip="String(t('common.next'))"
+          :aria-label="String(t('common.next'))"
+          :disabled="!canNavigate"
+          @click="next"
+        >
+          <RiArrowRightSLine class="h-4 w-4" />
+        </IconButton>
+        <IconButton
+          size="xs"
+          :tooltip="String(t('workspaceDock.preview.zoomOut'))"
+          :aria-label="String(t('workspaceDock.preview.zoomOut'))"
+          :disabled="!canZoomOut"
+          @click="zoomOutFromToolbar"
+        >
+          <RiSubtractLine class="h-4 w-4" />
+        </IconButton>
+        <button
+          type="button"
+          class="h-6 rounded-sm border border-white/20 bg-white/10 px-1.5 text-[11px] font-mono text-white/80 transition-colors hover:bg-white/20"
+          :title="String(t('workspaceDock.preview.zoomReset'))"
+          :aria-label="String(t('workspaceDock.preview.zoomReset'))"
+          @click="resetZoomFromToolbar"
+        >
+          {{ zoomPercent }}%
+        </button>
+        <IconButton
+          size="xs"
+          :tooltip="String(t('workspaceDock.preview.zoomIn'))"
+          :aria-label="String(t('workspaceDock.preview.zoomIn'))"
+          :disabled="!canZoomIn"
+          @click="zoomInFromToolbar"
+        >
+          <RiAddLine class="h-4 w-4" />
+        </IconButton>
+        <IconButton
+          size="xs"
+          :tooltip="String(t('common.close'))"
+          :aria-label="String(t('common.close'))"
+          @click="close"
+        >
+          <RiCloseLine class="h-4 w-4" />
+        </IconButton>
+      </div>
+    </div>
+
+    <div
+      class="flex flex-wrap items-center justify-center gap-1 border-b border-white/15 bg-black/40 px-3 py-1 text-xs"
+    >
+      <span class="mr-2 text-white/70">{{ t('keyboard.panHint') }}</span>
+      <button
+        v-for="control in panControls"
+        :key="control.label"
+        type="button"
+        class="rounded px-2 py-1 hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+        :aria-label="String(t(control.label))"
+        @click="panBy(control.x, control.y)"
+      >
+        {{ control.symbol }}
+      </button>
+    </div>
+
+    <div class="relative min-h-0 flex-1">
+      <button
+        v-if="canNavigate"
+        type="button"
+        class="absolute inset-y-0 left-0 z-10 my-auto ml-2 h-11 w-11 rounded-full border border-white/20 bg-black/45 text-white/80 transition-colors hover:bg-black/70 hover:text-white"
+        :title="String(t('common.previous'))"
+        :aria-label="String(t('common.previous'))"
+        @click="prev"
+      >
+        <RiArrowLeftSLine class="mx-auto h-6 w-6" />
+      </button>
+
+      <button
+        v-if="canNavigate"
+        type="button"
+        class="absolute inset-y-0 right-0 z-10 my-auto mr-2 h-11 w-11 rounded-full border border-white/20 bg-black/45 text-white/80 transition-colors hover:bg-black/70 hover:text-white"
+        :title="String(t('common.next'))"
+        :aria-label="String(t('common.next'))"
+        @click="next"
+      >
+        <RiArrowRightSLine class="mx-auto h-6 w-6" />
+      </button>
+
+      <div
+        ref="viewportEl"
+        data-image-viewer-viewport
+        tabindex="-1"
+        class="h-full overflow-hidden outline-none"
+        :class="isTouchDevice ? 'touch-none' : ''"
+        @wheel="onWheel"
+        @mousedown="startMouseDrag"
+        @touchstart="onTouchStart"
+        @touchmove="onTouchMove"
+        @touchend="onTouchEnd"
+        @touchcancel="onTouchEnd"
+      >
+        <div class="flex h-full min-h-0 w-full items-center justify-center p-4 sm:p-6">
+          <p v-if="activeImageError" class="text-sm text-destructive" role="alert">{{ activeImageError }}</p>
+          <img
+            v-if="activeItem && activeImageUrl"
+            ref="imageEl"
+            :key="activeItem.key || activeItem.src"
+            :src="activeImageUrl"
+            :alt="activeItem.alt || activeItem.title || ''"
+            class="max-h-full max-w-full select-none object-contain"
+            :style="activeImageStyle"
+            draggable="false"
+            @load="onImageLoaded"
+            @dblclick="onImageDoubleClick"
+          />
         </div>
-
-        <div class="relative min-h-0 flex-1">
-          <button
-            v-if="canNavigate"
-            type="button"
-            class="absolute inset-y-0 left-0 z-10 my-auto ml-2 h-11 w-11 rounded-full border border-white/20 bg-black/45 text-white/80 transition-colors hover:bg-black/70 hover:text-white"
-            :title="String(t('common.previous'))"
-            :aria-label="String(t('common.previous'))"
-            @click="prev"
-          >
-            <RiArrowLeftSLine class="mx-auto h-6 w-6" />
-          </button>
-
-          <button
-            v-if="canNavigate"
-            type="button"
-            class="absolute inset-y-0 right-0 z-10 my-auto mr-2 h-11 w-11 rounded-full border border-white/20 bg-black/45 text-white/80 transition-colors hover:bg-black/70 hover:text-white"
-            :title="String(t('common.next'))"
-            :aria-label="String(t('common.next'))"
-            @click="next"
-          >
-            <RiArrowRightSLine class="mx-auto h-6 w-6" />
-          </button>
-
-          <div
-            ref="viewportEl"
-            class="h-full overflow-hidden"
-            :class="isTouchDevice ? 'touch-none' : ''"
-            @wheel="onWheel"
-            @mousedown="startMouseDrag"
-            @touchstart="onTouchStart"
-            @touchmove="onTouchMove"
-            @touchend="onTouchEnd"
-            @touchcancel="onTouchEnd"
-          >
-            <div class="flex h-full min-h-0 w-full items-center justify-center p-4 sm:p-6">
-              <p v-if="activeImageError" class="text-sm text-destructive" role="alert">{{ activeImageError }}</p>
-              <img
-                v-if="activeItem && activeImageUrl"
-                ref="imageEl"
-                :key="activeItem.key || activeItem.src"
-                :src="activeImageUrl"
-                :alt="activeItem.alt || activeItem.title || ''"
-                class="max-h-full max-w-full select-none object-contain"
-                :style="activeImageStyle"
-                draggable="false"
-                @load="onImageLoaded"
-                @dblclick="onImageDoubleClick"
-              />
-            </div>
-          </div>
-        </div>
-      </DialogContent>
-    </DialogPortal>
-  </DialogRoot>
+      </div>
+    </div>
+  </ModalSurface>
 </template>

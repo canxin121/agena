@@ -2,6 +2,7 @@
 import { computed, defineAsyncComponent } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { RiInformationLine, RiAlertLine, RiArrowUpLine, RiArrowDownLine } from '@remixicon/vue'
+import { handleTabKeydown } from '@/lib/keyboardNavigation'
 import { containerKinds, uiDisplay, type UiResolvedNode } from './program'
 import type { ChartSpec } from './charts'
 const InlineChart = defineAsyncComponent(() => import('./InlineChart.vue'))
@@ -42,20 +43,6 @@ function checked(id: unknown) {
 function toggleTask(id: unknown) {
   const current = Array.isArray(props.node.value) ? props.node.value : []
   emit('input', props.node.id, checked(id) ? current.filter((v) => v !== id) : [...current, id])
-}
-function tabKey(event: KeyboardEvent) {
-  const options = props.node.field?.options || []
-  if (!options.length || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
-  event.preventDefault()
-  const current = options.findIndex((o) => o.value === props.node.value)
-  const index =
-    event.key === 'Home'
-      ? 0
-      : event.key === 'End'
-        ? options.length - 1
-        : (current + (event.key === 'ArrowRight' ? 1 : -1) + options.length) % options.length
-  emit('input', props.node.id, options[index]!.value)
-  ;(event.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>('button')[index]?.focus()
 }
 </script>
 
@@ -124,7 +111,7 @@ function tabKey(event: KeyboardEvent) {
     role="tablist"
     :aria-label="display('label')"
     :data-ui-node="node.id"
-    @keydown="tabKey"
+    @keydown="handleTabKeydown($event)"
   >
     <button
       v-for="option in node.field?.options || []"

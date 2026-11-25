@@ -7,6 +7,7 @@ import Button from '@/components/ui/Button.vue'
 import Dialog from '@/components/ui/Dialog.vue'
 import OptionMenu from '@/components/ui/OptionMenu.vue'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
+import { handleOptionKeydown } from '@/lib/keyboardNavigation'
 
 const { t } = useI18n()
 
@@ -605,6 +606,7 @@ function runSourceControlAction(item: OptionMenuItem) {
     :title="commitErrorTitle"
     :description="t('git.ui.dialogs.commitErrorDescription')"
     maxWidth="max-w-2xl"
+    initial-focus="[data-keyboard-option]"
     @update:open="
       (v: boolean) => {
         commitErrorOpen = v
@@ -617,9 +619,15 @@ function runSourceControlAction(item: OptionMenuItem) {
       >
         {{ commitErrorOutput }}
       </div>
-      <div class="flex flex-wrap justify-end gap-2">
-        <Button variant="secondary" size="sm" @click="commitErrorOpen = false">{{ t('common.close') }}</Button>
+      <div
+        class="flex flex-wrap justify-end gap-2"
+        @keydown="handleOptionKeydown($event, $event.currentTarget as HTMLElement)"
+      >
+        <Button data-keyboard-option variant="secondary" size="sm" @click="commitErrorOpen = false">{{
+          t('common.close')
+        }}</Button>
         <Button
+          data-keyboard-option
           size="sm"
           @click="
             () => {
@@ -640,6 +648,7 @@ function runSourceControlAction(item: OptionMenuItem) {
     :title="postCommitTitle"
     :description="t('git.ui.postCommit.description')"
     maxWidth="max-w-md"
+    initial-focus="[data-keyboard-option]"
     @update:open="
       (v: boolean) => {
         if (!v) postCommitRememberChoice = false
@@ -658,9 +667,15 @@ function runSourceControlAction(item: OptionMenuItem) {
         <input v-model="postCommitRememberChoice" type="checkbox" class="accent-primary" />
         {{ t('git.ui.postCommit.rememberChoice') }}
       </label>
-      <div class="flex flex-wrap justify-end gap-2">
-        <Button variant="secondary" size="sm" @click="props.dismissPostCommitPrompt">{{ t('common.later') }}</Button>
+      <div
+        class="flex flex-wrap justify-end gap-2"
+        @keydown="handleOptionKeydown($event, $event.currentTarget as HTMLElement)"
+      >
+        <Button data-keyboard-option variant="secondary" size="sm" @click="props.dismissPostCommitPrompt">{{
+          t('common.later')
+        }}</Button>
         <Button
+          data-keyboard-option
           variant="secondary"
           size="sm"
           @click="
@@ -671,6 +686,7 @@ function runSourceControlAction(item: OptionMenuItem) {
           >{{ t('git.actions.sync') }}</Button
         >
         <Button
+          data-keyboard-option
           size="sm"
           @click="
             () => {

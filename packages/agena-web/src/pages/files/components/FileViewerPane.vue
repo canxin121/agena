@@ -28,8 +28,7 @@ import { buildUnifiedDiffModel, resolveInitialTopLineFromTextPair } from '@/feat
 import { formatDateTimeYMDHM, formatDateYMDShort2DigitYear } from '@/i18n/intl'
 import { useUiStore, type ImageViewerItem } from '@/stores/ui'
 
-import { isImagePath } from '../fileKinds'
-import { isMermaidPath } from '../previewKinds'
+import { isImagePath, isMermaidPath } from '../fileKinds'
 import type { FileNode, MarkdownViewMode, SelectionRange, ViewerMode } from '../types'
 import type { GitBlameLine, GitDiffMeta, GitLogCommit } from '@/types/git'
 
@@ -1155,6 +1154,7 @@ function handleHeaderBackClick() {
     return
   }
   showMobileViewer.value = false
+  if (props.isCompactLayout) void props.openSidebar()
 }
 </script>
 

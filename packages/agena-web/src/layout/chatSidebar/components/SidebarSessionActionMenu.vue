@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, type ComponentPublicInstance } from 'vue'
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import OptionMenu from '@/components/ui/OptionMenu.vue'
@@ -13,7 +13,6 @@ const props = withDefaults(
     open: boolean
     query: string
     items: SessionActionItem[]
-    setMenuRef: (el: Element | ComponentPublicInstance | null) => void
     anchorEl?: HTMLElement | null
     desktopPlacement?: 'top-start' | 'top-end' | 'bottom-start' | 'bottom-end'
     desktopClass?: string
@@ -28,6 +27,7 @@ const props = withDefaults(
 const emit = defineEmits<{
   (e: 'update:query', v: string): void
   (e: 'select', item: SessionActionItem): void
+  (e: 'close'): void
 }>()
 
 const groups = computed<OptionMenuGroup[]>(() => [
@@ -40,7 +40,6 @@ const groups = computed<OptionMenuGroup[]>(() => [
 
 <template>
   <OptionMenu
-    :ref="setMenuRef"
     :open="open"
     :query="query"
     :groups="groups"
@@ -55,5 +54,6 @@ const groups = computed<OptionMenuGroup[]>(() => [
     filter-mode="external"
     @update:query="(v) => emit('update:query', v)"
     @select="(item) => emit('select', item as SessionActionItem)"
+    @close="emit('close')"
   />
 </template>

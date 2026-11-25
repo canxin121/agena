@@ -21,11 +21,11 @@ import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import Input from '@/components/ui/Input.vue'
 import OptionMenu from '@/components/ui/OptionMenu.vue'
-import FormDialog from '@/components/ui/FormDialog.vue'
+import PickerTrigger from '@/components/ui/PickerTrigger.vue'
+import { usePickerMenu } from '@/components/ui/usePickerMenu'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import { waitForPreviewProxyReady } from '@/features/workspacePreview/api/previewProxyProbe'
-import type { WorkspacePreviewSession } from '@/features/workspacePreview/api/workspacePreviewApi'
-import { usePreviewSessionForm } from '../model/usePreviewSessionForm'
+import PreviewCreateSessionDialog from './PreviewCreateSessionDialog.vue'
 import { usePreviewAccess } from '../model/usePreviewAccess'
 import { buildPreviewFrameSrc } from '@/features/workspacePreview/model/previewUrl'
 import { useChatStore } from '@/stores/chat'
@@ -750,8 +750,14 @@ const frameDocumentVisible = ref(typeof document === 'undefined' || document.vis
 const frameVisible = computed(() => visible.value && frameDocumentVisible.value)
 const iframeLoading = ref(false)
 const iframeError = ref('')
-const sessionMenuOpen = ref(false)
-const sessionMenuQuery = ref('')
+const {
+  trigger: sessionTrigger,
+  open: sessionMenuOpen,
+  openAt: sessionMenuEdge,
+  query: sessionMenuQuery,
+  setOpen: setSessionMenuOpen,
+  openFrom: openSessionMenuFrom,
+} = usePickerMenu()
 
 const FRAME_UPDATE_THROTTLE_MS = 220
 
@@ -788,30 +794,7 @@ const agenaSessionId = computed(() => {
   return String(chat.selectedSessionId || '').trim()
 })
 
-const {
-  createDialogOpen,
-  createPreviewId,
-  createRunDirectory,
-  createCommand,
-  createArgsText,
-  createArgsError,
-  createLogsPath,
-  createTargetUrl,
-  actionLoading,
-  actionError,
-  canCreateSession,
-  createManagedSession,
-  openCreateDialog,
-} = usePreviewSessionForm({
-  directory: currentDirectory,
-  createSession: (input) => preview.createSession(input),
-  agenaSessionId,
-})
-
-const actionLoadingMessage = computed(() => {
-  if (actionLoading.value) return String(t('workspaceDock.preview.emptyState.createLoading'))
-  return ''
-})
+const createDialog = ref<InstanceType<typeof PreviewCreateSessionDialog> | null>(null)
 
 const effectiveError = computed(() => {
   if (preview.error) {
@@ -843,14 +826,8 @@ const emptyStateDescription = computed(() => String(t('workspaceDock.preview.sta
 
 const sessionPickerLabel = computed(() => String(t('workspaceDock.preview.sessionsTitle')))
 
-function resolveSessionLabel(session: WorkspacePreviewSession): string {
-  return String(preview.sessionLabel(session) || '').trim() || String(t('nav.preview'))
-}
-
 const activeSessionLabel = computed(() => {
-  const active = preview.sessions.find((session) => session.id === preview.activeSessionId)
-  if (active) return resolveSessionLabel(active)
-  return String(t('workspaceDock.preview.urlEmpty'))
+  return preview.activeSession?.id || t('workspaceDock.preview.urlEmpty')
 })
 
 const topBarSessionLabel = computed(() =>
@@ -862,12 +839,10 @@ const sessionMenuGroups = computed<OptionMenuGroup[]>(() => [
     id: 'workspace-preview-sessions',
     items: preview.sessions.map((session) => ({
       id: session.id,
-      label: resolveSessionLabel(session),
+      label: session.id,
       description: String(session.state || ''),
       checked: preview.activeSessionId === session.id,
-      keywords: `${resolveSessionLabel(session)} ${session.id} ${session.state || ''} ${session.directory || ''} ${
-        session.targetUrl || ''
-      }`,
+      keywords: `${session.id} ${session.state} ${session.directory} ${session.runDirectory} ${session.targetUrl}`,
     })),
   },
 ])
@@ -993,15 +968,6 @@ async function refreshPreview(opts?: { forceFrameReload?: boolean }) {
   if (opts?.forceFrameReload) {
     preview.bumpRefreshToken()
   }
-}
-
-function setSessionMenuOpen(open: boolean) {
-  sessionMenuOpen.value = Boolean(open)
-  if (!open) sessionMenuQuery.value = ''
-}
-
-function setSessionMenuQuery(value: string) {
-  sessionMenuQuery.value = String(value || '')
 }
 
 function onSessionMenuSelect(item: OptionMenuItem) {
@@ -1166,24 +1132,27 @@ onBeforeUnmount(() => {
     </div>
     <div v-if="controlsVisible" class="rounded-md border border-sidebar-border/70 bg-sidebar-accent/20 p-2">
       <div v-if="controlsVariant === 'full'" class="relative flex items-center gap-1.5">
-        <button
-          type="button"
-          class="inline-flex h-8 min-w-0 flex-1 items-center justify-between gap-2 rounded-md border-0 bg-transparent px-1.5 text-xs text-foreground transition-colors hover:bg-sidebar-accent/35 disabled:cursor-not-allowed disabled:opacity-60"
+        <PickerTrigger
+          ref="sessionTrigger"
+          size="sm"
+          class="flex-1 border-0 px-1.5 shadow-none hover:bg-sidebar-accent/35"
+          :open="sessionMenuOpen"
           :disabled="preview.loading || preview.sessions.length === 0"
-          :aria-label="sessionPickerLabel"
-          @click.stop="setSessionMenuOpen(!sessionMenuOpen)"
+          :label="topBarSessionLabel"
+          :aria-label="`${sessionPickerLabel}: ${activeSessionLabel}`"
+          @toggle="setSessionMenuOpen(!sessionMenuOpen)"
+          @open-at="openSessionMenuFrom"
         >
-          <span class="min-w-0 truncate text-left text-xs font-medium">{{ topBarSessionLabel }}</span>
-          <RiArrowDownSLine class="h-4 w-4 shrink-0 text-muted-foreground" />
-        </button>
+          <RiArrowDownSLine class="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+        </PickerTrigger>
 
         <div class="flex h-8 items-center gap-0.5">
           <IconButton
             size="sm"
             :tooltip="String(t('workspaceDock.preview.emptyState.addAction'))"
             :aria-label="String(t('workspaceDock.preview.emptyState.addAction'))"
-            :disabled="Boolean(actionLoading)"
-            @click="openCreateDialog"
+            :disabled="createDialog?.busy"
+            @click="createDialog?.open()"
           >
             <RiAddLine class="h-4 w-4" />
           </IconButton>
@@ -1260,8 +1229,10 @@ onBeforeUnmount(() => {
         </div>
 
         <OptionMenu
+          v-model:query="sessionMenuQuery"
           :open="sessionMenuOpen"
-          :query="sessionMenuQuery"
+          :open-at="sessionMenuEdge"
+          :desktop-anchor-el="sessionTrigger?.triggerEl"
           :groups="sessionMenuGroups"
           :title="sessionPickerLabel"
           :mobile-title="sessionPickerLabel"
@@ -1271,10 +1242,10 @@ onBeforeUnmount(() => {
           :paginated="true"
           :page-size="18"
           :loading="preview.loading"
+          pagination-mode="item"
           desktop-placement="bottom-start"
           desktop-class="w-72"
           @update:open="setSessionMenuOpen"
-          @update:query="setSessionMenuQuery"
           @select="onSessionMenuSelect"
         />
       </div>
@@ -1408,148 +1379,7 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <FormDialog
-      :open="createDialogOpen"
-      :title="String(t('workspaceDock.preview.addDialog.title'))"
-      :description="String(t('workspaceDock.preview.addDialog.description'))"
-      max-width="max-w-md"
-      @close="createDialogOpen = false"
-      @update:open="createDialogOpen = $event"
-    >
-      <div class="space-y-3">
-        <div class="space-y-1">
-          <label
-            class="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
-            for="workspace-preview-id-dialog"
-          >
-            {{ t('workspaceDock.preview.emptyState.sessionIdLabel') }}
-          </label>
-          <Input
-            id="workspace-preview-id-dialog"
-            v-model="createPreviewId"
-            type="text"
-            autocapitalize="off"
-            autocomplete="off"
-            spellcheck="false"
-            :placeholder="String(t('workspaceDock.preview.emptyState.sessionIdPlaceholder'))"
-            :disabled="Boolean(actionLoading)"
-            class="h-8 bg-background/80 text-xs font-mono"
-            @keydown.enter.prevent="createManagedSession"
-          />
-          <p class="text-[11px] text-muted-foreground">
-            {{ t('workspaceDock.preview.emptyState.sessionIdHelp') }}
-          </p>
-        </div>
-
-        <div class="space-y-1">
-          <label
-            class="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
-            for="workspace-preview-run-dir-dialog"
-          >
-            {{ t('workspaceDock.preview.emptyState.runDirectoryLabel') }}
-          </label>
-          <Input
-            id="workspace-preview-run-dir-dialog"
-            v-model="createRunDirectory"
-            type="text"
-            :placeholder="String(t('workspaceDock.preview.emptyState.runDirectoryPlaceholder'))"
-            :disabled="Boolean(actionLoading)"
-            class="h-8 bg-background/80 text-xs font-mono"
-          />
-        </div>
-
-        <div class="space-y-1">
-          <label
-            class="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
-            for="workspace-preview-command-dialog"
-          >
-            {{ t('workspaceDock.preview.emptyState.commandLabel') }}
-          </label>
-          <Input
-            id="workspace-preview-command-dialog"
-            v-model="createCommand"
-            type="text"
-            :placeholder="String(t('workspaceDock.preview.emptyState.commandPlaceholder'))"
-            :disabled="Boolean(actionLoading)"
-            class="h-8 bg-background/80 text-xs font-mono"
-          />
-        </div>
-
-        <div class="space-y-1">
-          <label
-            class="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
-            for="workspace-preview-args-dialog"
-          >
-            {{ t('workspaceDock.preview.emptyState.argsLabel') }}
-          </label>
-          <Input
-            id="workspace-preview-args-dialog"
-            v-model="createArgsText"
-            type="text"
-            placeholder='["--host", "127.0.0.1", "--name", "My app"]'
-            :disabled="Boolean(actionLoading)"
-            class="h-8 bg-background/80 text-xs font-mono"
-          />
-          <p v-if="createArgsError" class="text-xs text-destructive" role="alert">{{ createArgsError }}</p>
-        </div>
-
-        <div class="space-y-1">
-          <label
-            class="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
-            for="workspace-preview-logs-dialog"
-          >
-            {{ t('workspaceDock.preview.emptyState.logsPathLabel') }}
-          </label>
-          <Input
-            id="workspace-preview-logs-dialog"
-            v-model="createLogsPath"
-            type="text"
-            :placeholder="String(t('workspaceDock.preview.emptyState.logsPathPlaceholder'))"
-            :disabled="Boolean(actionLoading)"
-            class="h-8 bg-background/80 text-xs font-mono"
-          />
-        </div>
-
-        <div class="space-y-1">
-          <label
-            class="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground"
-            for="workspace-preview-target-url-dialog"
-          >
-            {{ t('workspaceDock.preview.emptyState.targetUrlLabel') }}
-          </label>
-          <Input
-            id="workspace-preview-target-url-dialog"
-            v-model="createTargetUrl"
-            type="url"
-            :placeholder="String(t('workspaceDock.preview.emptyState.targetUrlPlaceholder'))"
-            :disabled="Boolean(actionLoading)"
-            class="h-8 bg-background/80 text-xs"
-            @keydown.enter.prevent="createManagedSession"
-          />
-        </div>
-
-        <p class="truncate text-[11px] text-muted-foreground">
-          {{ t('workspaceDock.preview.directoryLabel') }}
-          <span class="font-mono">{{ currentDirectory || t('workspaceDock.preview.emptyState.directoryEmpty') }}</span>
-        </p>
-
-        <p v-if="actionError" class="text-xs text-destructive">{{ actionError }}</p>
-
-        <div class="flex items-center justify-end gap-2 pt-1">
-          <Button size="sm" variant="outline" :disabled="Boolean(actionLoading)" @click="createDialogOpen = false">
-            {{ t('common.cancel') }}
-          </Button>
-          <Button size="sm" :disabled="!canCreateSession" @click="createManagedSession">
-            {{ t('workspaceDock.preview.emptyState.addAction') }}
-          </Button>
-        </div>
-
-        <p v-if="actionLoadingMessage" class="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-          <RiLoader4Line class="h-3.5 w-3.5 animate-spin" />
-          {{ actionLoadingMessage }}
-        </p>
-      </div>
-    </FormDialog>
+    <PreviewCreateSessionDialog ref="createDialog" :directory="currentDirectory" :agena-session-id="agenaSessionId" />
 
     <div class="relative min-h-0 flex-1 overflow-hidden rounded-md border border-sidebar-border/65 bg-background/80">
       <div v-if="showEmptyState" class="flex h-full items-center justify-center p-4 text-center">

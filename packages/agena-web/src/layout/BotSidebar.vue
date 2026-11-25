@@ -13,6 +13,7 @@ import { useBotConversations, type BotConversation } from '@/features/bots/useBo
 import { useBotSidebarState } from '@/features/bots/useBotSidebarState'
 import { vKeyboardCollection } from '@/lib/keyboardCollection'
 import { copyTextToClipboard } from '@/lib/clipboard'
+import { promptForText } from '@/lib/appTextPrompt'
 import { getLocalString, setLocalString } from '@/lib/persist'
 import { localStorageKeys } from '@/lib/persistence/storageKeys'
 import { createRevalidator } from '@/lib/revalidation'
@@ -71,8 +72,7 @@ const menu = useSessionActionMenu({
 })
 
 function closeMenu() {
-  menu.sessionActionMenuTarget.value = null
-  menu.sessionActionMenuAnchorRef.value = null
+  menu.closeSessionActionMenu()
   conversationMenuTarget.value = null
 }
 watch(query, () => {
@@ -275,7 +275,11 @@ async function runMenuAction(item: SessionActionItem, target: { session: { id: s
         if (item.id === 'toggle-favorite') {
           await chat.updateSessionMetadata(conversation.id, { favorite: !conversation.favorite })
         } else if (item.id === 'rename') {
-          const title = window.prompt(String(t('bot.conversations.renamePrompt')), conversation.title)?.trim()
+          const title = await promptForText({
+            title: t('bot.conversations.renamePrompt'),
+            initialValue: conversation.title,
+            confirmText: t('common.save'),
+          })
           if (!title || title === conversation.title) return true
           await chat.renameSession(conversation.id, title)
         } else if (item.id === 'delete-conversation') {
@@ -335,7 +339,7 @@ async function runMenuAction(item: SessionActionItem, target: { session: { id: s
               :menu-query="menu.sessionActionMenuQuery.value"
               :menu-items="menuItems"
               :menu-anchor-el="menu.sessionActionMenuAnchorRef.value"
-              :set-menu-ref="menu.setSessionActionMenuRef"
+              :close-menu="closeMenu"
               :menu-placement="ui.isCompactLayout ? 'top-end' : 'bottom-end'"
               @open="openLocal(profile)"
               @toggle-collapse="toggleBot(profile)"
@@ -357,7 +361,7 @@ async function runMenuAction(item: SessionActionItem, target: { session: { id: s
                 :menu-query="menu.sessionActionMenuQuery.value"
                 :menu-items="menuItems"
                 :menu-anchor-el="menu.sessionActionMenuAnchorRef.value"
-                :set-menu-ref="menu.setSessionActionMenuRef"
+                :close-menu="closeMenu"
                 @update:open="
                   (open) => {
                     tree.setGroupOpen(profile.id, group.surface, open)

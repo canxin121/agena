@@ -9,6 +9,7 @@ import Input from '@/components/ui/Input.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
 import type { PickerOption } from '@/components/ui/pickerOption.types'
 import ScrollArea from '@/components/ui/ScrollArea.vue'
+import { handleOptionKeydown } from '@/lib/keyboardNavigation'
 import Skeleton from '@/components/ui/Skeleton.vue'
 
 import type { GitRemoteInfo } from '@/types/git'
@@ -71,6 +72,7 @@ const selectedInfo = computed(() => props.remotes.find((r) => r.name === props.s
     :open="open"
     :title="t('git.ui.dialogs.remotes.title')"
     :description="t('git.ui.dialogs.remotes.description')"
+    initial-focus="[data-git-remote-choices]"
     maxWidth="max-w-2xl"
     @update:open="onUpdateOpen"
   >
@@ -172,7 +174,12 @@ const selectedInfo = computed(() => props.remotes.find((r) => r.name === props.s
         </div>
       </div>
 
-      <div class="rounded-md border border-border/50 overflow-hidden">
+      <div
+        data-git-remote-choices
+        tabindex="-1"
+        class="rounded-md border border-border/50 overflow-hidden focus-visible:outline-2 focus-visible:outline-ring"
+        @keydown="handleOptionKeydown($event, $event.currentTarget as HTMLElement)"
+      >
         <div v-if="remotesError" class="p-3 text-xs text-red-500">{{ remotesError }}</div>
         <div v-else-if="remotesLoading" class="space-y-2 p-3">
           <div
@@ -193,7 +200,9 @@ const selectedInfo = computed(() => props.remotes.find((r) => r.name === props.s
               v-for="r in remotes"
               :key="`${r.name}:${r.url}`"
               type="button"
-              class="w-full text-left p-3 hover:bg-muted/40"
+              data-keyboard-option
+              :aria-pressed="selectedRemote === r.name"
+              class="w-full text-left p-3 hover:bg-muted/40 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring"
               :class="selectedRemote === r.name ? 'bg-muted/50' : ''"
               @click="$emit('update:selectedRemote', r.name)"
             >

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { RiRobot2Line } from '@remixicon/vue'
-import { computed, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch, type Component, type ComponentPublicInstance } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
@@ -17,7 +17,7 @@ import {
 import ChatSidebar from '@/layout/ChatSidebar.vue'
 import BotSidebar from '@/layout/BotSidebar.vue'
 import { PRIMARY_MAIN_TABS, mainTabFromPath, type MainTabId, type PrimaryMainTabId } from '@/app/navigation/mainTabs'
-import { WORKSPACE_SIDEBAR_PANEL_HOST_ID } from '@/layout/workspaceSidebarHost'
+import { useWorkspaceSidebarHost, WORKSPACE_SIDEBAR_PANEL_HOST_ID } from '@/layout/workspaceSidebarHost'
 import { cn } from '@/lib/utils'
 import { useUiStore } from '@/stores/ui'
 import { useDirectoryStore } from '@/stores/directory'
@@ -54,6 +54,11 @@ const settings = useSettingsStore()
 const route = useRoute()
 const workspaceNavigation = useWorkspaceNavigation()
 const { t } = useI18n()
+const sidebarHost = useWorkspaceSidebarHost()
+
+function registerSidebarHost(element: Element | ComponentPublicInstance | null) {
+  if (sidebarHost) sidebarHost.value = element instanceof HTMLElement ? element : null
+}
 
 const SETTINGS_LAST_ROUTE_KEY = localStorageKeys.settings.lastRoute
 
@@ -205,7 +210,7 @@ async function activateRailItem(tabId: MainTabId) {
 
 <template>
   <div class="flex h-full min-h-0 overflow-hidden bg-sidebar text-sidebar-foreground">
-    <div class="flex h-full w-[76px] shrink-0 flex-col border-r border-sidebar-border/70 bg-sidebar/95 px-2 py-3">
+    <div class="flex h-full w-[76px] shrink-0 flex-col border-e border-sidebar-border/70 bg-sidebar/95 px-2 py-3">
       <div v-if="activeTab !== 'plugins'" class="mb-3 flex justify-center">
         <button
           type="button"
@@ -296,6 +301,7 @@ async function activateRailItem(tabId: MainTabId) {
       <!-- Keep teleport target stable to avoid non-chat sidebar blanking on route switches. -->
       <div
         :id="WORKSPACE_SIDEBAR_PANEL_HOST_ID"
+        :ref="registerSidebarHost"
         class="h-full min-h-0 flex-1 overflow-hidden"
         :class="activeTab === 'chat' || activeTab === 'bot' ? 'hidden' : ''"
       />

@@ -693,11 +693,7 @@
     @apply disabled:pointer-events-none disabled:opacity-50;
   }
 
-  /* VS Code-like sidebar primitives (Explorer / Source Control). */
-  .oc-vscode-pane {
-    @apply flex h-full min-h-0 flex-col overflow-hidden border-r border-sidebar-border/70 bg-sidebar text-sidebar-foreground;
-  }
-
+  /* Explorer sidebar header and toolbar. */
   .oc-vscode-pane-header {
     @apply flex h-8 items-center justify-between border-b border-sidebar-border/70 px-2.5;
   }

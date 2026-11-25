@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // Bot roots share the project tree's disclosure and anchored menu primitives.
-import { computed, type ComponentPublicInstance } from 'vue'
+import { computed } from 'vue'
 import { RiArrowDownSLine, RiArrowRightSLine } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
@@ -11,7 +11,6 @@ import { formatTime } from '@/features/sessions/model/labels'
 import type { BotProfile } from '@/lib/bots'
 import SidebarSessionActionMenu from '@/layout/chatSidebar/components/SidebarSessionActionMenu.vue'
 import type { SessionActionItem } from '@/layout/chatSidebar/useSessionActionMenu'
-import type { MenuRefEl } from '@/layout/chatSidebar/sessionMenu.types'
 
 const props = withDefaults(
   defineProps<{
@@ -24,7 +23,7 @@ const props = withDefaults(
     menuQuery?: string
     menuItems?: SessionActionItem[]
     menuAnchorEl?: HTMLElement | null
-    setMenuRef?: (el: MenuRefEl) => void
+    closeMenu?: () => void
     menuPlacement?: 'top-start' | 'top-end' | 'bottom-start' | 'bottom-end'
   }>(),
   {
@@ -63,10 +62,6 @@ const updatedAt = computed(() => {
 })
 const actionsAlwaysVisible = computed(() => props.uiIsCompactLayout)
 const menuLabel = computed(() => String(t('bot.profiles.actions', { name: props.profile.name })))
-
-function setMenuRef(el: Element | ComponentPublicInstance | null) {
-  props.setMenuRef?.(el)
-}
 
 function onMenuSelect(item: SessionActionItem) {
   emit('select', item)
@@ -131,11 +126,11 @@ function handleClick() {
       :open="true"
       :query="menuQuery"
       :items="menuItems"
-      :set-menu-ref="setMenuRef"
       :anchor-el="menuAnchorEl"
       :desktop-placement="menuPlacement"
       @update:query="(v) => emit('update:menuQuery', v)"
       @select="onMenuSelect"
+      @close="closeMenu"
     />
   </div>
 </template>

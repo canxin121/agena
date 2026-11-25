@@ -248,6 +248,12 @@ function arePaneRatiosEqualByIds(
 
 const STORAGE_SIDEBAR_OPEN = localStorageKeys.ui.sidebarOpen
 const STORAGE_SIDEBAR_WIDTH = localStorageKeys.ui.sidebarWidth
+export const DESKTOP_SIDEBAR_MIN_WIDTH = 280
+export const DESKTOP_SIDEBAR_MAX_WIDTH = 520
+
+export function clampDesktopSidebarWidth(width: number): number {
+  return Math.min(DESKTOP_SIDEBAR_MAX_WIDTH, Math.max(DESKTOP_SIDEBAR_MIN_WIDTH, width))
+}
 const STORAGE_GIT_HISTORY_SEARCH_EXPANDED = localStorageKeys.ui.gitHistorySearchExpanded
 const STORAGE_ACTIVE_TAB = localStorageKeys.ui.activeMainTab
 const STORAGE_WORKSPACE_GROUPS = localStorageKeys.ui.workspaceGroups
@@ -279,7 +285,7 @@ export const useUiStore = defineStore('ui', () => {
     (() => {
       const raw = getLocalString(STORAGE_SIDEBAR_WIDTH)
       const n = raw ? Number(raw) : NaN
-      return Number.isFinite(n) ? Math.min(520, Math.max(280, n)) : 320
+      return Number.isFinite(n) ? clampDesktopSidebarWidth(n) : 320
     })(),
   )
   const hasManuallyResizedLeftSidebar = ref(false)
@@ -1325,7 +1331,7 @@ export const useUiStore = defineStore('ui', () => {
     if (isSidebarOpen.value && typeof window !== 'undefined') {
       // When opening and not manually resized, use proportional width.
       if (!hasManuallyResizedLeftSidebar.value) {
-        sidebarWidth.value = Math.min(520, Math.max(280, Math.floor(window.innerWidth * 0.24)))
+        sidebarWidth.value = clampDesktopSidebarWidth(Math.floor(window.innerWidth * 0.24))
       }
     }
   }
@@ -1335,7 +1341,7 @@ export const useUiStore = defineStore('ui', () => {
     isSidebarOpen.value = open
     if (!open || opts?.preserveWidth || wasOpen) return
     if (typeof window !== 'undefined' && !hasManuallyResizedLeftSidebar.value) {
-      sidebarWidth.value = Math.min(520, Math.max(280, Math.floor(window.innerWidth * 0.24)))
+      sidebarWidth.value = clampDesktopSidebarWidth(Math.floor(window.innerWidth * 0.24))
     }
   }
 

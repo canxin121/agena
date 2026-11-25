@@ -8,6 +8,7 @@ import FormDialog from '@/components/ui/FormDialog.vue'
 import Input from '@/components/ui/Input.vue'
 import PathPicker from '@/components/ui/PathPicker.vue'
 import ScrollArea from '@/components/ui/ScrollArea.vue'
+import { handleOptionKeydown } from '@/lib/keyboardNavigation'
 import Skeleton from '@/components/ui/Skeleton.vue'
 
 import type { GitWorktreeInfo } from '@/types/git'
@@ -71,6 +72,7 @@ function isCurrentWorktree(path: string): boolean {
     :open="open"
     :title="t('git.ui.dialogs.worktrees.title')"
     :description="t('git.ui.dialogs.worktrees.description')"
+    initial-focus="[data-git-worktree-choices]"
     maxWidth="max-w-3xl"
     @update:open="onUpdateOpen"
   >
@@ -140,7 +142,12 @@ function isCurrentWorktree(path: string): boolean {
         </div>
       </div>
 
-      <div class="rounded-md border border-border/50 overflow-hidden">
+      <div
+        data-git-worktree-choices
+        tabindex="-1"
+        class="rounded-md border border-border/50 overflow-hidden focus-visible:outline-2 focus-visible:outline-ring"
+        @keydown="handleOptionKeydown($event, $event.currentTarget as HTMLElement)"
+      >
         <div v-if="worktreesError" class="p-3 text-xs text-red-500">{{ worktreesError }}</div>
         <div v-else-if="worktreesLoading" class="space-y-2 p-3">
           <div
@@ -183,10 +190,12 @@ function isCurrentWorktree(path: string): boolean {
                 </div>
                 <div class="flex flex-wrap items-center gap-2 sm:justify-end">
                   <Button
+                    data-keyboard-option
                     variant="secondary"
                     size="sm"
                     class="h-7"
                     :disabled="wt.prunable"
+                    :aria-label="t('common.open') + ' ' + wt.worktree"
                     @click="$emit('openWorktree', wt.worktree)"
                   >
                     {{ t('common.open') }}

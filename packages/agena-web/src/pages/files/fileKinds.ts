@@ -197,6 +197,7 @@ export const DOCUMENT_EXTENSIONS = new Set([
 ])
 
 export const MARKDOWN_EXTENSIONS = new Set(['md', 'mdx', 'markdown', 'mdown', 'mkd'])
+const MERMAID_EXTENSIONS = new Set(['mermaid', 'mmd'])
 
 export const PDF_EXTENSIONS = new Set(['pdf'])
 
@@ -204,8 +205,10 @@ export const AUDIO_EXTENSIONS = new Set(['mp3', 'wav', 'ogg', 'oga', 'm4a', 'aac
 
 export const VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'ogv', 'mov', 'm4v', 'mkv'])
 
+export type PreviewMode = 'text' | 'markdown' | 'image' | 'pdf' | 'audio' | 'video'
+
 export function extensionFromPath(path: string): string {
-  const base = path.split('/').pop() || path
+  const base = path.split(/[\\/]/).pop() || ''
   const idx = base.lastIndexOf('.')
   return idx >= 0 ? base.slice(idx + 1).toLowerCase() : ''
 }
@@ -224,28 +227,21 @@ export function shouldIgnorePath(path: string): boolean {
 }
 
 export function isImagePath(path: string): boolean {
-  const ext = extensionFromPath(path)
-  return ext ? IMAGE_EXTENSIONS.has(ext) : false
+  return IMAGE_EXTENSIONS.has(extensionFromPath(path))
 }
 
-export function isMarkdownPath(path: string): boolean {
-  const ext = extensionFromPath(path)
-  return ext ? MARKDOWN_EXTENSIONS.has(ext) : false
+export function isMermaidPath(path: string): boolean {
+  return MERMAID_EXTENSIONS.has(extensionFromPath(path))
 }
 
-export function isPdfPath(path: string): boolean {
+export function detectPreviewMode(path: string): PreviewMode {
   const ext = extensionFromPath(path)
-  return ext ? PDF_EXTENSIONS.has(ext) : false
-}
-
-export function isAudioPath(path: string): boolean {
-  const ext = extensionFromPath(path)
-  return ext ? AUDIO_EXTENSIONS.has(ext) : false
-}
-
-export function isVideoPath(path: string): boolean {
-  const ext = extensionFromPath(path)
-  return ext ? VIDEO_EXTENSIONS.has(ext) : false
+  if (IMAGE_EXTENSIONS.has(ext)) return 'image'
+  if (PDF_EXTENSIONS.has(ext)) return 'pdf'
+  if (AUDIO_EXTENSIONS.has(ext)) return 'audio'
+  if (VIDEO_EXTENSIONS.has(ext)) return 'video'
+  if (MARKDOWN_EXTENSIONS.has(ext) || MERMAID_EXTENSIONS.has(ext)) return 'markdown'
+  return 'text'
 }
 
 export function fileIconComponent(ext?: string) {

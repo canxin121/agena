@@ -29,13 +29,11 @@ import { useDirectorySessionStore } from '@/stores/directorySessionStore'
 import AddDirectoryDialog from '@/layout/chatSidebar/components/AddDirectoryDialog.vue'
 import ChatSidebarHeader from '@/layout/chatSidebar/components/ChatSidebarHeader.vue'
 import DirectoriesList from '@/layout/chatSidebar/components/DirectoriesList.vue'
-import FavoriteSessionsFooter from '@/layout/chatSidebar/components/FavoriteSessionsFooter.vue'
-import PinnedSessionsFooter from '@/layout/chatSidebar/components/PinnedSessionsFooter.vue'
-import RecentSessionsFooter from '@/layout/chatSidebar/components/RecentSessionsFooter.vue'
-import RunningSessionsFooter from '@/layout/chatSidebar/components/RunningSessionsFooter.vue'
+import SidebarSessionSection from '@/layout/chatSidebar/components/SidebarSessionSection.vue'
 import OptionMenu from '@/components/ui/OptionMenu.vue'
 import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
-import IconButton from '@/components/ui/IconButton.vue'
+import SelectionToolbar from '@/components/ui/SelectionToolbar.vue'
+import SidebarIconButton from '@/components/ui/SidebarIconButton.vue'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import {
   buildSessionActionItemsForSessionI18n,
@@ -53,6 +51,7 @@ import { useUnifiedMultiSelect } from '@/composables/useUnifiedMultiSelect'
 import type {
   SessionToggleSelectionOptions,
   DirectoryToggleSelectionOptions,
+  ThreadSessionRow,
 } from '@/layout/chatSidebar/sessionMenu.types'
 
 const props = withDefaults(
@@ -335,7 +334,7 @@ const {
   filteredSessionActionItems,
   openSessionActionMenu,
   runSessionActionMenu: runSessionActionMenuBase,
-  setSessionActionMenuRef,
+  closeSessionActionMenu: closeDesktopSessionActionMenu,
 } = useSessionActionMenu({ chat, ui, selectSession })
 type SessionDialogActionItem = SessionActionItem &
   Pick<OptionMenuItem, 'variant' | 'confirmTitle' | 'confirmDescription' | 'confirmText' | 'cancelText'>
@@ -666,6 +665,7 @@ const sessionActionsOpen = ref(false)
 const sessionActionsTarget = ref<{ directory: DirectoryEntry; session: SessionLike } | null>(null)
 const sessionActionsDialogQuery = ref('')
 const sessionActionsAnchorRef = ref<ContextMenuAnchor>(null)
+let sessionActionsOrigin: HTMLElement | null = null
 
 const sidebarActionsOpen = ref(false)
 const sidebarActionsAnchorRef = ref<ContextMenuAnchor>(null)
@@ -674,15 +674,18 @@ const renameDialogOpen = ref(false)
 const renameBusy = ref(false)
 const renameDraft = ref('')
 const renameTargetSessionId = ref('')
+const renameOrigin = ref<HTMLElement | null>(null)
 
 function resetRenameState() {
   renameDialogOpen.value = false
   renameBusy.value = false
   renameDraft.value = ''
   renameTargetSessionId.value = ''
+  renameOrigin.value = null
 }
 
-function beginRenameForSession(session: SessionLike, mode: 'dialog' | 'inline') {
+function beginRenameForSession(session: SessionLike, origin: HTMLElement | null = null) {
+  if (renameBusy.value) return
   const sid = readSessionId(session)
   if (!sid) return
   const title = typeof session?.title === 'string' ? session.title.trim() : ''
@@ -690,7 +693,8 @@ function beginRenameForSession(session: SessionLike, mode: 'dialog' | 'inline') 
   renameTargetSessionId.value = sid
   renameDraft.value = title || slug || sid
   renameBusy.value = false
-  renameDialogOpen.value = mode === 'dialog'
+  renameOrigin.value = origin
+  renameDialogOpen.value = !origin
 }
 
 function isRenamingSession(sessionId: string): boolean {
@@ -702,12 +706,6 @@ function isRenamingSession(sessionId: string): boolean {
 
 function updateRenameDraft(next: string) {
   renameDraft.value = String(next || '')
-}
-
-function closeDesktopSessionActionMenu() {
-  sessionActionMenuTarget.value = null
-  sessionActionMenuAnchorRef.value = null
-  sessionActionMenuQuery.value = ''
 }
 
 // Defensive: if a dialog stacks under the scroll container on some mobile browsers,
@@ -921,6 +919,7 @@ function openSessionActions(directory: DirectoryEntry, session: SessionLike, eve
   sessionActionsTarget.value = { directory, session }
   sessionActionsDialogQuery.value = ''
   sessionActionsAnchorRef.value = contextMenuAnchorFromEvent(event)
+  sessionActionsOrigin = sessionRowOrigin(event?.currentTarget)
   sessionActionsOpen.value = true
 }
 
@@ -1046,11 +1045,15 @@ async function sessionActionDelete() {
 }
 
 function openRenameDialogForSession(session: SessionLike) {
-  beginRenameForSession(session, 'dialog')
+  beginRenameForSession(session)
 }
 
-function openInlineRenameForSession(session: SessionLike) {
-  beginRenameForSession(session, 'inline')
+function sessionRowOrigin(target?: EventTarget | null) {
+  return target instanceof HTMLElement ? target.closest<HTMLElement>('[data-chat-session-row]') : null
+}
+
+function requestRenameSession(session: SessionLike, origin: HTMLElement | null) {
+  beginRenameForSession(session, props.mobileVariant || ui.isCompactLayout || !origin?.isConnected ? null : origin)
 }
 
 function cancelRenameFromSidebar() {
@@ -1060,7 +1063,7 @@ function cancelRenameFromSidebar() {
 async function saveRenameFromSidebar() {
   const sid = renameTargetSessionId.value.trim()
   const next = renameDraft.value.trim()
-  if (!sid) return
+  if (!sid || renameBusy.value) return
   if (!next) {
     toasts.push('error', t('chat.toasts.titleCannotBeEmpty'))
     return
@@ -1093,8 +1096,9 @@ async function runSessionActionMenu(item: SessionActionItem) {
     return
   }
   if (!props.mobileVariant && item.id === 'rename') {
+    const origin = sessionRowOrigin(sessionActionMenuAnchorRef.value)
     closeDesktopSessionActionMenu()
-    openInlineRenameForSession(target.session)
+    requestRenameSession(target.session, origin)
     return
   }
   await runSessionActionMenuBase(item)
@@ -1132,7 +1136,8 @@ async function runSessionDialogAction(item: SessionDialogActionItem) {
   if (!props.mobileVariant && item.id === 'rename') {
     const target = sessionActionsTarget.value
     sessionActionsOpen.value = false
-    if (target) openInlineRenameForSession(target.session)
+    if (target) requestRenameSession(target.session, sessionActionsOrigin)
+    sessionActionsOrigin = null
     return
   }
 
@@ -1308,19 +1313,6 @@ function hasAttention(sessionId: string): 'permission' | 'question' | null {
   return null
 }
 
-type ThreadSessionRow = {
-  id: string
-  session: SessionLike | null
-  directory: DirectoryEntry | null
-  renderKey: string
-  depth: number
-  parentId: string | null
-  rootId: string
-  isParent: boolean
-  isExpanded: boolean
-  childPage?: number
-  childPageCount?: number
-}
 const statusLabelForSessionId = (sessionId: string): { label: string; dotClass: string } =>
   directorySessions.statusLabelForSessionId(sessionId)
 
@@ -1507,7 +1499,6 @@ const pagedRunningSessionRows = computed<ThreadSessionRow[]>(() =>
 )
 // Running footer rows already encode parent/child state (isParent/isExpanded/depth).
 // Avoid re-deriving it client-side, otherwise parents with collapsed children lose the disclosure toggle.
-const runningSessionRows = computed<ThreadSessionRow[]>(() => pagedRunningSessionRows.value)
 
 const chatDirectorySelectableIds = computed(() => {
   const ids = new Set<string>()
@@ -1590,15 +1581,6 @@ const chatSelectedSessionIds = computed(() =>
 )
 
 const chatSelectedDirectoryCount = computed(() => chatSelectedDirectoryIds.value.length)
-const chatSelectedSessionCount = computed(() => chatSelectedSessionIds.value.length)
-
-function selectedSessionCountForDirectory(directoryId: string): number {
-  return isSessionMultiSelectEnabledForDirectory(directoryId) ? chatSelectedSessionCount.value : 0
-}
-
-function sessionSelectableCountForDirectory(directoryId: string): number {
-  return sessionSelectionIdsForDirectory(directoryId).length
-}
 
 function selectAllSessionsForDirectory(directoryId: string) {
   if (!isSessionMultiSelectEnabledForDirectory(directoryId)) return
@@ -1834,29 +1816,61 @@ async function requestRunningSessionsPage(nextPage: number) {
   }
 }
 
-async function openRunningSession(sessionId: string) {
-  const sid = (sessionId || '').trim()
-  if (!sid) return
-  await selectSession(sid)
+async function openFooterSession(sessionId: string) {
+  const id = (sessionId || '').trim()
+  if (id) await selectSession(id)
 }
 
-async function openPinnedSession(sessionId: string) {
-  const sid = (sessionId || '').trim()
-  if (!sid) return
-  await selectSession(sid)
-}
-
-async function openFavoriteSession(sessionId: string) {
-  const sid = (sessionId || '').trim()
-  if (!sid) return
-  await selectSession(sid)
-}
-
-async function openRecentSession(sessionId: string) {
-  const sid = (sessionId || '').trim()
-  if (!sid) return
-  await selectSession(sid)
-}
+const sessionSections = computed(() => [
+  {
+    kind: 'favorites',
+    open: favoriteSessionsOpen.value,
+    page: favoriteSessionsPage.value,
+    paging: favoriteSessionsPaging.value,
+    loading: favoriteFooterLoading.value,
+    rows: pagedFavoriteSessionRows.value,
+    total: favoriteSessionsTotal.value,
+    pageCount: favoriteSessionsPageCount.value,
+    setOpen: requestFavoriteSessionsOpen,
+    setPage: requestFavoriteSessionsPage,
+  },
+  {
+    kind: 'pinned',
+    open: pinnedSessionsOpen.value,
+    page: pinnedSessionsPage.value,
+    paging: pinnedSessionsPaging.value,
+    loading: pinnedFooterLoading.value,
+    rows: pagedPinnedSessionRows.value,
+    total: pinnedSessionsTotal.value,
+    pageCount: pinnedSessionsPageCount.value,
+    setOpen: requestPinnedSessionsOpen,
+    setPage: requestPinnedSessionsPage,
+  },
+  {
+    kind: 'recent',
+    open: recentSessionsOpen.value,
+    page: recentSessionsPage.value,
+    paging: recentSessionsPaging.value,
+    loading: recentFooterLoading.value,
+    rows: pagedRecentSessionRows.value,
+    total: recentSessionsTotal.value,
+    pageCount: recentSessionsPageCount.value,
+    setOpen: requestRecentSessionsOpen,
+    setPage: requestRecentSessionsPage,
+  },
+  {
+    kind: 'running',
+    open: runningSessionsOpen.value,
+    page: runningSessionsPage.value,
+    paging: runningSessionsPaging.value,
+    loading: runningFooterLoading.value,
+    rows: pagedRunningSessionRows.value,
+    total: runningSessionsTotal.value,
+    pageCount: runningSessionsPageCount.value,
+    setOpen: requestRunningSessionsOpen,
+    setPage: requestRunningSessionsPage,
+  },
+] as const)
 
 function directoryActivityState(p: DirectoryEntry): DirectoryActivityState {
   const pid = (p.id || '').trim()
@@ -2340,7 +2354,7 @@ const { locatedSessionId, locateFromSearch, searchWarming, sessionSearchHits, se
 </script>
 
 <template>
-  <div class="oc-chat-sidebar flex h-full flex-col bg-sidebar overflow-hidden">
+  <div data-selection-context class="oc-chat-sidebar flex h-full flex-col bg-sidebar overflow-hidden">
     <AddDirectoryDialog v-model:open="isAddDirectoryOpen" v-model:path="newDirectoryPath" @add="addDirectoryEntry" />
 
     <OptionMenu
@@ -2447,102 +2461,48 @@ const { locatedSessionId, locateFromSearch, searchWarming, sessionSearchHits, se
         @toggle-multi-select="toggleChatMultiSelectMode"
       />
 
-      <div v-if="chatDirectoryMultiSelect.enabled.value" class="border-b border-sidebar-border/60 px-2 py-1.5">
-        <div class="flex flex-wrap items-center justify-between gap-1.5">
-          <div class="flex min-w-0 items-center gap-1.5">
-            <span
-              class="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-muted px-1 text-[10px] font-medium text-foreground/80"
-              :title="
-                String(
-                  t('chat.sidebar.multiSelect.selectedCount', { count: chatDirectoryMultiSelect.selectedCount.value }),
-                )
-              "
-              :aria-label="
-                String(
-                  t('chat.sidebar.multiSelect.selectedCount', { count: chatDirectoryMultiSelect.selectedCount.value }),
-                )
-              "
-            >
-              {{ chatDirectoryMultiSelect.selectedCount.value }}
-            </span>
-
-            <span
-              class="inline-flex h-4 items-center gap-1 rounded-full bg-muted px-1 text-[10px] text-foreground/80"
-              :title="String(t('chat.sidebar.multiSelect.directoryCount', { count: chatSelectedDirectoryCount }))"
-              :aria-label="String(t('chat.sidebar.multiSelect.directoryCount', { count: chatSelectedDirectoryCount }))"
-            >
-              <RiFolder6Line class="h-3 w-3" />
-              {{ chatSelectedDirectoryCount }}
-            </span>
-          </div>
-
-          <div class="flex items-center gap-1">
-            <IconButton
-              size="xs"
-              :tooltip="String(t('common.selectAll'))"
-              :title="String(t('common.selectAll'))"
-              :aria-label="String(t('common.selectAll'))"
+      <SelectionToolbar
+        v-if="chatDirectoryMultiSelect.enabled.value"
+        class="border-b border-sidebar-border/60"
+        :selectable-ids="chatDirectorySelectableIds"
+        :selected-ids="chatDirectoryMultiSelect.selectedIds.value"
+        :selection-label="
+          t('chat.sidebar.multiSelect.directoryCount', {
+            count: chatSelectedDirectoryCount,
+          })
+        "
+        :exit-label="t('chat.sidebar.multiSelect.actions.exitMultiSelect')"
+        :is-touch-pointer="ui.isTouchPointer"
+        @select-all="selectAllChatMultiSelected"
+        @invert="invertChatMultiSelected"
+        @exit="toggleChatMultiSelectMode"
+      >
+        <template #default="{ size }">
+          <ConfirmPopover
+            :title="t('chat.sidebar.multiSelect.confirmDelete.title')"
+            :description="
+              t('chat.sidebar.multiSelect.confirmDelete.directoriesDescription', {
+                directories: chatSelectedDirectoryCount,
+              })
+            "
+            :confirm-text="t('chat.sidebar.multiSelect.actions.deleteSelected')"
+            variant="destructive"
+            @confirm="deleteChatMultiSelected"
+          >
+            <SidebarIconButton
+              data-keyboard-option
+              :size="size"
+              destructive
+              :tooltip="t('chat.sidebar.multiSelect.actions.deleteSelected')"
               :is-touch-pointer="ui.isTouchPointer"
-              :disabled="
-                chatDirectorySelectableIds.length === 0 ||
-                chatDirectoryMultiSelect.selectedCount.value === chatDirectorySelectableIds.length
-              "
-              @click="selectAllChatMultiSelected"
+              :disabled="!chatSelectedDirectoryCount"
+              @click.stop
             >
-              <RiListCheck3 class="h-3.5 w-3.5" />
-            </IconButton>
-
-            <IconButton
-              size="xs"
-              :tooltip="String(t('common.invertSelection'))"
-              :title="String(t('common.invertSelection'))"
-              :aria-label="String(t('common.invertSelection'))"
-              :is-touch-pointer="ui.isTouchPointer"
-              :disabled="chatDirectorySelectableIds.length === 0"
-              @click="invertChatMultiSelected"
-            >
-              <RiRefreshLine class="h-3.5 w-3.5" />
-            </IconButton>
-
-            <ConfirmPopover
-              :title="t('chat.sidebar.multiSelect.confirmDelete.title')"
-              :description="
-                t('chat.sidebar.multiSelect.confirmDelete.directoriesDescription', {
-                  directories: chatSelectedDirectoryCount,
-                })
-              "
-              :confirm-text="t('chat.sidebar.multiSelect.actions.deleteSelected')"
-              :cancel-text="t('common.cancel')"
-              variant="destructive"
-              @confirm="deleteChatMultiSelected"
-            >
-              <IconButton
-                size="xs"
-                variant="ghost-destructive"
-                :tooltip="String(t('chat.sidebar.multiSelect.actions.deleteSelected'))"
-                :title="String(t('chat.sidebar.multiSelect.actions.deleteSelected'))"
-                :aria-label="String(t('chat.sidebar.multiSelect.actions.deleteSelected'))"
-                :is-touch-pointer="ui.isTouchPointer"
-                :disabled="chatSelectedDirectoryCount === 0"
-                @click.stop
-              >
-                <RiDeleteBinLine class="h-3.5 w-3.5" />
-              </IconButton>
-            </ConfirmPopover>
-
-            <IconButton
-              size="xs"
-              :tooltip="String(t('chat.sidebar.multiSelect.actions.exitMultiSelect'))"
-              :title="String(t('chat.sidebar.multiSelect.actions.exitMultiSelect'))"
-              :aria-label="String(t('chat.sidebar.multiSelect.actions.exitMultiSelect'))"
-              :is-touch-pointer="ui.isTouchPointer"
-              @click="toggleChatMultiSelectMode"
-            >
-              <RiCloseLine class="h-3.5 w-3.5" />
-            </IconButton>
-          </div>
-        </div>
-      </div>
+              <RiDeleteBinLine class="size-3.5" aria-hidden="true" />
+            </SidebarIconButton>
+          </ConfirmPopover>
+        </template>
+      </SelectionToolbar>
 
       <div class="flex-1 min-h-0 overflow-x-hidden overflow-y-auto pb-2" @contextmenu="openSidebarContextMenu">
         <div class="flex min-h-full flex-col">
@@ -2565,8 +2525,8 @@ const { locatedSessionId, locateFromSearch, searchWarming, sessionSearchHits, se
             :isDirectorySelected="isDirectoryMultiSelected"
             :isSessionMultiSelectEnabledForDirectory="isSessionMultiSelectEnabledForDirectory"
             :toggleDirectorySessionMultiSelect="toggleDirectorySessionMultiSelect"
-            :selectedSessionCountForDirectory="selectedSessionCountForDirectory"
-            :sessionSelectableCountForDirectory="sessionSelectableCountForDirectory"
+            :selectable-session-ids="activeDirectorySessionSelectableIds"
+            :selected-session-ids="chatSessionMultiSelect.selectedIds.value"
             :selectAllSessionsForDirectory="selectAllSessionsForDirectory"
             :invertSessionsForDirectory="invertSessionsForDirectory"
             :deleteSelectedSessionsForDirectory="deleteSelectedSessionsForDirectory"
@@ -2599,9 +2559,11 @@ const { locatedSessionId, locateFromSearch, searchWarming, sessionSearchHits, se
             :sessionActionMenuQuery="sessionActionMenuQuery"
             @update:sessionActionMenuQuery="(v) => (sessionActionMenuQuery = v)"
             :filteredSessionActionItems="filteredSessionActionItems"
-            :setSessionActionMenuRef="setSessionActionMenuRef"
+            :close-session-action-menu="closeDesktopSessionActionMenu"
             :runSessionActionMenu="runSessionActionMenu"
             :isSessionRenaming="isRenamingSession"
+            :rename-origin="renameOrigin"
+            :request-rename-session="requestRenameSession"
             :renameDraft="renameDraft"
             :renameBusy="renameBusy"
             :updateRenameDraft="updateRenameDraft"
@@ -2625,19 +2587,19 @@ const { locatedSessionId, locateFromSearch, searchWarming, sessionSearchHits, se
           />
 
           <div class="mt-auto">
-            <FavoriteSessionsFooter
-              :open="favoriteSessionsOpen"
-              :page="favoriteSessionsPage"
-              :paging="favoriteSessionsPaging"
-              :loading="favoriteFooterLoading"
-              :favoriteSessionRows="pagedFavoriteSessionRows"
-              :favoriteSessionsTotal="favoriteSessionsTotal"
-              :favoriteSessionsPageCount="favoriteSessionsPageCount"
+            <SidebarSessionSection
+              v-for="section in sessionSections"
+              :key="section.kind"
+              :kind="section.kind"
+              :open="section.open"
+              :page="section.page"
+              :paging="section.paging"
+              :loading="section.loading"
+              :rows="section.rows"
+              :total="section.total"
+              :page-count="section.pageCount"
               :selectedSessionId="chat.selectedSessionId"
               :ui-is-compact-layout="ui.isCompactLayout"
-              :multiSelectEnabled="false"
-              :isSessionSelected="isSessionMultiSelected"
-              :toggleSessionSelected="toggleSessionMultiSelected"
               :pinnedSessionIds="pinnedSessionIds"
               :hasAttention="hasAttention"
               :statusLabelForSessionId="statusLabelForSessionId"
@@ -2651,140 +2613,19 @@ const { locatedSessionId, locateFromSearch, searchWarming, sessionSearchHits, se
               :sessionActionMenuQuery="sessionActionMenuQuery"
               @update:sessionActionMenuQuery="(v) => (sessionActionMenuQuery = v)"
               :filteredSessionActionItems="filteredSessionActionItems"
-              :setSessionActionMenuRef="setSessionActionMenuRef"
+              :close-session-action-menu="closeDesktopSessionActionMenu"
               :runSessionActionMenu="runSessionActionMenu"
               :isSessionRenaming="isRenamingSession"
+              :rename-origin="renameOrigin"
+              :request-rename-session="requestRenameSession"
               :renameDraft="renameDraft"
               :renameBusy="renameBusy"
               :updateRenameDraft="updateRenameDraft"
               :saveRename="saveRenameFromSidebar"
               :cancelRename="cancelRenameFromSidebar"
-              @update:open="(v) => void requestFavoriteSessionsOpen(v)"
-              @update:page="(v) => void requestFavoriteSessionsPage(v)"
-              @open-session="openFavoriteSession"
-              @toggle-thread="toggleExpandedParent"
-              @child-page="(id, page) => directorySessions.setChildSessionPage('', id, page)"
-            />
-
-            <PinnedSessionsFooter
-              :open="pinnedSessionsOpen"
-              :page="pinnedSessionsPage"
-              :paging="pinnedSessionsPaging"
-              :loading="pinnedFooterLoading"
-              :pinnedSessionRows="pagedPinnedSessionRows"
-              :pinnedSessionsTotal="pinnedSessionsTotal"
-              :pinnedSessionsPageCount="pinnedSessionsPageCount"
-              :selectedSessionId="chat.selectedSessionId"
-              :ui-is-compact-layout="ui.isCompactLayout"
-              :multiSelectEnabled="false"
-              :isSessionSelected="isSessionMultiSelected"
-              :toggleSessionSelected="toggleSessionMultiSelected"
-              :pinnedSessionIds="pinnedSessionIds"
-              :hasAttention="hasAttention"
-              :statusLabelForSessionId="statusLabelForSessionId"
-              :openSessionActions="openSessionActions"
-              :openSessionActionMenu="openSessionActionMenu"
-              :togglePin="togglePin"
-              :toggleFavorite="toggleFavorite"
-              :deleteSession="deleteSession"
-              :sessionActionMenuTarget="sessionActionMenuTarget"
-              :sessionActionMenuAnchorEl="sessionActionMenuAnchorRef"
-              :sessionActionMenuQuery="sessionActionMenuQuery"
-              @update:sessionActionMenuQuery="(v) => (sessionActionMenuQuery = v)"
-              :filteredSessionActionItems="filteredSessionActionItems"
-              :setSessionActionMenuRef="setSessionActionMenuRef"
-              :runSessionActionMenu="runSessionActionMenu"
-              :isSessionRenaming="isRenamingSession"
-              :renameDraft="renameDraft"
-              :renameBusy="renameBusy"
-              :updateRenameDraft="updateRenameDraft"
-              :saveRename="saveRenameFromSidebar"
-              :cancelRename="cancelRenameFromSidebar"
-              @update:open="(v) => void requestPinnedSessionsOpen(v)"
-              @update:page="(v) => void requestPinnedSessionsPage(v)"
-              @open-session="openPinnedSession"
-              @toggle-thread="toggleExpandedParent"
-              @child-page="(id, page) => directorySessions.setChildSessionPage('', id, page)"
-            />
-
-            <RecentSessionsFooter
-              :open="recentSessionsOpen"
-              :page="recentSessionsPage"
-              :paging="recentSessionsPaging"
-              :loading="recentFooterLoading"
-              :recentSessionRows="pagedRecentSessionRows"
-              :recentSessionsTotal="recentSessionsTotal"
-              :recentSessionsPageCount="recentSessionsPageCount"
-              :selectedSessionId="chat.selectedSessionId"
-              :ui-is-compact-layout="ui.isCompactLayout"
-              :multiSelectEnabled="false"
-              :isSessionSelected="isSessionMultiSelected"
-              :toggleSessionSelected="toggleSessionMultiSelected"
-              :pinnedSessionIds="pinnedSessionIds"
-              :hasAttention="hasAttention"
-              :statusLabelForSessionId="statusLabelForSessionId"
-              :openSessionActions="openSessionActions"
-              :openSessionActionMenu="openSessionActionMenu"
-              :togglePin="togglePin"
-              :toggleFavorite="toggleFavorite"
-              :deleteSession="deleteSession"
-              :sessionActionMenuTarget="sessionActionMenuTarget"
-              :sessionActionMenuAnchorEl="sessionActionMenuAnchorRef"
-              :sessionActionMenuQuery="sessionActionMenuQuery"
-              @update:sessionActionMenuQuery="(v) => (sessionActionMenuQuery = v)"
-              :filteredSessionActionItems="filteredSessionActionItems"
-              :setSessionActionMenuRef="setSessionActionMenuRef"
-              :runSessionActionMenu="runSessionActionMenu"
-              :isSessionRenaming="isRenamingSession"
-              :renameDraft="renameDraft"
-              :renameBusy="renameBusy"
-              :updateRenameDraft="updateRenameDraft"
-              :saveRename="saveRenameFromSidebar"
-              :cancelRename="cancelRenameFromSidebar"
-              @update:open="(v) => void requestRecentSessionsOpen(v)"
-              @update:page="(v) => void requestRecentSessionsPage(v)"
-              @open-session="openRecentSession"
-              @toggle-thread="toggleExpandedParent"
-              @child-page="(id, page) => directorySessions.setChildSessionPage('', id, page)"
-            />
-
-            <RunningSessionsFooter
-              :open="runningSessionsOpen"
-              :page="runningSessionsPage"
-              :paging="runningSessionsPaging"
-              :loading="runningFooterLoading"
-              :runningSessionRows="runningSessionRows"
-              :runningSessionsTotal="runningSessionsTotal"
-              :runningSessionsPageCount="runningSessionsPageCount"
-              :selectedSessionId="chat.selectedSessionId"
-              :statusLabelForSessionId="statusLabelForSessionId"
-              :multiSelectEnabled="false"
-              :isSessionSelected="isSessionMultiSelected"
-              :toggleSessionSelected="toggleSessionMultiSelected"
-              @open-session="openRunningSession"
-              :ui-is-compact-layout="ui.isCompactLayout"
-              :pinnedSessionIds="pinnedSessionIds"
-              :hasAttention="hasAttention"
-              :openSessionActions="openSessionActions"
-              :openSessionActionMenu="openSessionActionMenu"
-              :togglePin="togglePin"
-              :toggleFavorite="toggleFavorite"
-              :deleteSession="deleteSession"
-              :sessionActionMenuTarget="sessionActionMenuTarget"
-              :sessionActionMenuAnchorEl="sessionActionMenuAnchorRef"
-              :sessionActionMenuQuery="sessionActionMenuQuery"
-              @update:sessionActionMenuQuery="(v) => (sessionActionMenuQuery = v)"
-              :filteredSessionActionItems="filteredSessionActionItems"
-              :setSessionActionMenuRef="setSessionActionMenuRef"
-              :runSessionActionMenu="runSessionActionMenu"
-              :isSessionRenaming="isRenamingSession"
-              :renameDraft="renameDraft"
-              :renameBusy="renameBusy"
-              :updateRenameDraft="updateRenameDraft"
-              :saveRename="saveRenameFromSidebar"
-              :cancelRename="cancelRenameFromSidebar"
-              @update:open="(v) => void requestRunningSessionsOpen(v)"
-              @update:page="(v) => void requestRunningSessionsPage(v)"
+              @update:open="section.setOpen"
+              @update:page="section.setPage"
+              @open-session="openFooterSession"
               @toggle-thread="toggleExpandedParent"
               @child-page="(id, page) => directorySessions.setChildSessionPage('', id, page)"
             />

@@ -20,13 +20,14 @@ import FilesExplorerPane from './files/components/FilesExplorerPane.vue'
 import FilesMoveDialog from './files/components/FilesMoveDialog.vue'
 
 import {
+  detectPreviewMode,
   extensionFromPath,
   isHiddenName,
+  isMermaidPath,
   languageForPath,
   shouldIgnoreEntryName,
   shouldIgnorePath,
 } from './files/fileKinds'
-import { detectPreviewMode, isMermaidPath } from './files/previewKinds'
 import type {
   DialogKind,
   FileNode,
@@ -105,7 +106,7 @@ import { useUnifiedMultiSelect } from '@/composables/useUnifiedMultiSelect'
 import { isEmbeddedWorkspacePaneContext } from '@/app/windowScope'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
-import { WORKSPACE_SIDEBAR_PANEL_HOST_SELECTOR } from '@/layout/workspaceSidebarHost'
+import WorkspacePageSidebar from '@/layout/WorkspacePageSidebar.vue'
 import { localStorageKeys } from '@/lib/persistence/storageKeys'
 import { useChatStore } from '@/stores/chat'
 import { useSettingsStore } from '@/stores/settings'
@@ -451,16 +452,6 @@ const showMobileViewer = ref(false)
 const isEmbeddedWorkspacePane = computed(() => isEmbeddedWorkspacePaneContext(route.query))
 const isFocusedWorkspacePane = computed(() => !workspacePane || workspacePane.isFocused.value)
 const embeddedMode = computed(() => props.embedded || isEmbeddedWorkspacePane.value)
-const useDesktopSidebarHost = computed(
-  () => !embeddedMode.value && !isCompactLayout.value && !isEmbeddedWorkspacePane.value && isFocusedWorkspacePane.value,
-)
-const showFilesSidebar = computed(() => {
-  if (isEmbeddedWorkspacePane.value) return false
-  if (workspacePane && !isFocusedWorkspacePane.value) return false
-  if (embeddedMode.value) return embeddedView.value === 'list'
-  if (useDesktopSidebarHost.value) return true
-  return isCompactLayout.value ? ui.isSessionSwitcherOpen : ui.isSidebarOpen
-})
 
 const blameEnabled = ref(localStorage.getItem(STORAGE_FILES_VIEWER_BLAME_VISIBLE) === 'true')
 const timelineVisibilityPreference = ref(localStorage.getItem(STORAGE_FILES_VIEWER_TIMELINE_VISIBLE) === 'true')
@@ -3167,6 +3158,11 @@ async function openFileInWorkspaceWindow(path: string) {
   })
 }
 
+function openFileFromExplorer(node: FileNode) {
+  if (isCompactLayout.value && !embeddedMode.value) ui.setSessionSwitcherOpen(false)
+  return openFile(node)
+}
+
 async function requestFileSelect(node: FileNode) {
   if (node.type === 'file' && shouldOpenFileInNewWorkspaceWindow()) {
     await openFileInWorkspaceWindow(node.path)
@@ -3182,7 +3178,7 @@ async function requestFileSelect(node: FileNode) {
     if (autoSaveEnabled.value) {
       const ok = await save({ silent: true })
       if (ok) {
-        await openFile(node)
+        await openFileFromExplorer(node)
         return
       }
     }
@@ -3190,7 +3186,7 @@ async function requestFileSelect(node: FileNode) {
     confirmDiscardOpen.value = true
     return
   }
-  await openFile(node)
+  await openFileFromExplorer(node)
 }
 
 async function handleNodeClick(node: FileNode, options: ExplorerNodeClickOptions) {
@@ -3908,7 +3904,7 @@ async function discardAndContinue() {
   draftContent.value = displayedContent.value
   if (nextRoot) applyExplorerRoot(nextRoot)
   else if (next) {
-    await openFile(next)
+    await openFileFromExplorer(next)
   }
 }
 
@@ -3921,7 +3917,7 @@ async function saveAndContinue() {
   const ok = await save()
   if (ok && nextRoot) applyExplorerRoot(nextRoot)
   else if (ok && next) {
-    await openFile(next)
+    await openFileFromExplorer(next)
   }
 }
 
@@ -4371,7 +4367,7 @@ onMounted(async () => {
 
     <div class="flex-1 min-h-0 m-0 p-0">
       <div v-if="!root" class="h-full">
-        <Teleport v-if="useDesktopSidebarHost" :to="WORKSPACE_SIDEBAR_PANEL_HOST_SELECTOR">
+        <WorkspacePageSidebar panel="files" mode="hosted-only" :visible="!embeddedMode">
           <div class="flex h-full min-h-0 items-center justify-center p-3 text-sidebar-foreground">
             <div class="w-full rounded-md border border-sidebar-border/60 bg-sidebar-accent/10 p-3">
               <div class="text-sm font-medium">{{ t('files.empty.noProject.title') }}</div>
@@ -4380,7 +4376,7 @@ onMounted(async () => {
               </div>
             </div>
           </div>
-        </Teleport>
+        </WorkspacePageSidebar>
         <div v-if="isCompactLayout && ui.isSessionSwitcherOpen" class="h-full p-3">
           <div class="rounded-sm border border-sidebar-border/60 bg-sidebar-accent/10 p-3">
             <div class="text-sm font-medium">{{ t('files.empty.noProject.title') }}</div>
@@ -4397,17 +4393,13 @@ onMounted(async () => {
       <div v-else class="h-full m-0 p-0">
         <div class="flex h-full min-h-0 flex-col m-0 p-0">
           <div class="flex min-h-0 flex-1 gap-0" :class="isCompactLayout ? 'flex-col' : ''">
-            <Teleport :to="WORKSPACE_SIDEBAR_PANEL_HOST_SELECTOR" :disabled="!useDesktopSidebarHost">
-              <div
-                class="relative h-full min-h-0 overflow-hidden m-0 p-0"
-                :class="isCompactLayout || embeddedMode || useDesktopSidebarHost ? 'flex-1' : 'flex-shrink-0'"
-                :style="
-                  isCompactLayout || embeddedMode || useDesktopSidebarHost
-                    ? undefined
-                    : { width: `${ui.sidebarWidth}px` }
-                "
-                v-show="showFilesSidebar"
-              >
+            <WorkspacePageSidebar
+              panel="files"
+              :mode="embeddedMode ? 'embedded' : 'page'"
+              :visible="!embeddedMode || embeddedView === 'list'"
+              keep-mounted
+            >
+              <template #default>
                 <FilesExplorerPane
                   v-model:view-mode="explorerSidebarMode"
                   v-model:showHidden="showHidden"
@@ -4739,8 +4731,8 @@ onMounted(async () => {
                     </div>
                   </template>
                 </FilesExplorerPane>
-              </div>
-            </Teleport>
+              </template>
+            </WorkspacePageSidebar>
 
             <div
               class="flex-1 min-h-0 overflow-hidden m-0 p-0"

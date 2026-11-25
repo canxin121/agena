@@ -49,53 +49,6 @@ export function useGitRemoteBranchPicker(opts: {
     return list.filter((b) => b.toLowerCase().includes(q))
   })
 
-  const branchPickVisible = ref(false)
-  const branchPickIndex = ref(0)
-
-  function clampBranchPickIndex() {
-    const max = Math.min(20, filteredRemoteBranchOptions.value.length) - 1
-    if (max < 0) {
-      branchPickIndex.value = 0
-      return
-    }
-    if (branchPickIndex.value < 0) branchPickIndex.value = 0
-    if (branchPickIndex.value > max) branchPickIndex.value = max
-  }
-
-  function onBranchPickKeydown(ev: KeyboardEvent) {
-    if (!branchPickVisible.value) return
-    const list = filteredRemoteBranchOptions.value.slice(0, 20)
-    if (!list.length) return
-
-    if (ev.key === 'ArrowDown') {
-      ev.preventDefault()
-      branchPickIndex.value = Math.min(list.length - 1, branchPickIndex.value + 1)
-      return
-    }
-    if (ev.key === 'ArrowUp') {
-      ev.preventDefault()
-      branchPickIndex.value = Math.max(0, branchPickIndex.value - 1)
-      return
-    }
-    if (ev.key === 'Enter') {
-      ev.preventDefault()
-      const b = list[branchPickIndex.value]
-      if (b) targetBranch.value = b
-      branchPickVisible.value = false
-      return
-    }
-    if (ev.key === 'Escape') {
-      ev.preventDefault()
-      branchPickVisible.value = false
-    }
-  }
-
-  function hideBranchPickSoon() {
-    window.setTimeout(() => {
-      branchPickVisible.value = false
-    }, 100)
-  }
-
   async function loadRemoteBranches(directory: string, remote: string) {
     const r = (remote || '').trim()
     if (!r) return
@@ -222,21 +175,9 @@ export function useGitRemoteBranchPicker(opts: {
     })
   }
 
-  watch(
-    () => [filteredRemoteBranchOptions.value.length, branchPickVisible.value] as const,
-    () => {
-      if (!branchPickVisible.value) return
-      clampBranchPickIndex()
-    },
-  )
-
   return {
     remoteBranchLoading,
     filteredRemoteBranchOptions,
-    branchPickVisible,
-    branchPickIndex,
-    onBranchPickKeydown,
-    hideBranchPickSoon,
     clearRemoteBranchOptions,
     prefetchRemoteBranches,
   }

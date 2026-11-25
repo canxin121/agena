@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import {
   RiAddLine,
-  RiCloseLine,
   RiListCheck3,
   RiRefreshLine,
 } from '@remixicon/vue'
@@ -78,33 +77,13 @@ const emit = defineEmits<{
         </IconButton>
 
         <IconButton
-          :tooltip="
-            String(
-              props.multiSelectEnabled
-                ? t('chat.sidebar.multiSelect.actions.exitMultiSelect')
-                : t('chat.sidebar.multiSelect.actions.enterMultiSelect'),
-            )
-          "
+          v-if="!props.multiSelectEnabled"
+          data-selection-trigger
+          :tooltip="t('chat.sidebar.multiSelect.actions.enterMultiSelect')"
           :is-touch-pointer="isTouchPointer"
-          :title="
-            String(
-              props.multiSelectEnabled
-                ? t('chat.sidebar.multiSelect.actions.exitMultiSelect')
-                : t('chat.sidebar.multiSelect.actions.enterMultiSelect'),
-            )
-          "
-          :aria-label="
-            String(
-              props.multiSelectEnabled
-                ? t('chat.sidebar.multiSelect.actions.exitMultiSelect')
-                : t('chat.sidebar.multiSelect.actions.enterMultiSelect'),
-            )
-          "
-          :class="props.multiSelectEnabled ? 'bg-primary/10 text-primary hover:bg-primary/15' : ''"
           @click="emit('toggle-multi-select')"
         >
-          <RiCloseLine v-if="props.multiSelectEnabled" class="h-4 w-4" />
-          <RiListCheck3 v-else class="h-4 w-4" />
+          <RiListCheck3 class="size-4" aria-hidden="true" />
         </IconButton>
       </div>
     </div>

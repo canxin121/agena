@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { nextTick, ref, useId, watch } from 'vue'
 import Button from '@/components/ui/Button.vue'
+import Input from '@/components/ui/Input.vue'
+import { handleOptionKeydown, isPlainNavigationKey } from '@/lib/keyboardNavigation'
 import type { BrowserFrame, BrowserInput } from './api'
 import { useBrowserCopy } from './copy'
 
@@ -9,6 +11,8 @@ const emit = defineEmits<{ input: [event: BrowserInput] }>()
 const t = useBrowserCopy()
 const viewport = ref<HTMLImageElement>()
 const keyboard = ref<HTMLTextAreaElement>()
+const dialogPanel = ref<HTMLElement>()
+const dialogId = useId()
 const dialogValue = ref('')
 let composing = false
 let pointer: number | undefined
@@ -80,7 +84,14 @@ function wheel(event: WheelEvent) {
 }
 
 function keydown(event: KeyboardEvent) {
-  if (!props.interactive || composing || event.isComposing || event.key === 'Process' || event.key === 'Unidentified')
+  if (
+    !props.interactive ||
+    props.frame?.dialog ||
+    composing ||
+    event.isComposing ||
+    event.key === 'Process' ||
+    event.key === 'Unidentified'
+  )
     return
   event.stopPropagation()
   const paste = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'v'
@@ -122,7 +133,7 @@ function releaseKeyboard() {
 }
 
 function text(value: string) {
-  if (!props.interactive || !value) return
+  if (!props.interactive || props.frame?.dialog || !value) return
   // Bound each message without splitting a Unicode code point.
   const characters = Array.from(value).slice(0, 16384)
   for (let i = 0; i < characters.length; i += 4096) {
@@ -163,6 +174,35 @@ function resolveDialog(accept: boolean) {
   dialogValue.value = ''
 }
 
+function onDialogKeydown(event: KeyboardEvent) {
+  if (!props.interactive || !isPlainNavigationKey(event) || event.shiftKey) return
+  const textInput = event.target instanceof HTMLInputElement ? event.target : null
+  if (handleOptionKeydown(event, dialogPanel.value ?? null, textInput)) return
+  const cancel = event.key === 'Escape'
+  if (!cancel && (event.key !== 'Enter' || !textInput)) return
+  event.preventDefault()
+  event.stopPropagation()
+  if (!event.repeat) resolveDialog(!cancel)
+}
+
+watch(
+  () => props.interactive && Boolean(props.frame?.dialog),
+  (open) => {
+    const active = document.activeElement
+    if (open && active === keyboard.value) {
+      void nextTick(() => {
+        if (document.activeElement === active) {
+          dialogPanel.value?.querySelector<HTMLElement>('[data-browser-dialog-initial]')?.focus({ preventScroll: true })
+        }
+      })
+    } else if (!open && active && dialogPanel.value?.contains(active)) {
+      void nextTick(() => {
+        if (document.activeElement === document.body) focusKeyboard()
+      })
+    }
+  },
+)
+
 watch(
   () => props.interactive,
   (interactive) => {
@@ -196,19 +236,37 @@ watch(
       />
       <p v-else-if="!frame?.dialog" role="status" class="px-4 py-8 text-sm text-muted-foreground">{{ t('loading') }}</p>
       <div v-if="frame?.dialog" class="absolute inset-0 grid place-items-center bg-background/95 p-3">
-        <div class="w-full max-w-sm space-y-2 rounded-md border border-border bg-background p-3 shadow-sm">
-          <p class="text-sm font-semibold">{{ t('dialog') }}</p>
-          <p class="max-h-24 overflow-auto whitespace-pre-wrap break-words text-sm">{{ frame.dialog.message }}</p>
-          <input
+        <div
+          ref="dialogPanel"
+          role="dialog"
+          :aria-labelledby="dialogId"
+          :aria-describedby="`${dialogId}-message`"
+          :data-keyboard-overlay="interactive ? 'true' : undefined"
+          class="oc-overlay-panel max-h-full w-full max-w-sm space-y-2 overflow-y-auto overscroll-contain p-3"
+          @keydown="onDialogKeydown"
+        >
+          <p :id="dialogId" class="text-sm font-semibold">{{ t('dialog') }}</p>
+          <p :id="`${dialogId}-message`" class="whitespace-pre-wrap break-words text-xs text-muted-foreground">
+            {{ frame.dialog.message }}
+          </p>
+          <Input
             v-if="interactive && frame.dialog.kind === 'prompt'"
             v-model="dialogValue"
+            data-browser-dialog-initial
             :aria-label="t('dialog')"
             autocomplete="off"
-            class="w-full rounded-md border bg-background px-2 py-1 text-sm"
+            class="h-8 text-xs"
           />
           <div v-if="interactive" class="flex flex-wrap justify-end gap-2">
-            <Button size="sm" variant="outline" @click="resolveDialog(false)">{{ t('cancel') }}</Button>
-            <Button size="sm" @click="resolveDialog(true)">{{ t('confirm') }}</Button>
+            <Button
+              data-keyboard-option
+              :data-browser-dialog-initial="frame.dialog.kind !== 'prompt' ? '' : undefined"
+              size="sm"
+              variant="outline"
+              @click="resolveDialog(false)"
+              >{{ t('cancel') }}</Button
+            >
+            <Button data-keyboard-option size="sm" @click="resolveDialog(true)">{{ t('confirm') }}</Button>
           </div>
         </div>
       </div>

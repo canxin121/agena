@@ -95,6 +95,7 @@ watch(
               v-for="file in files"
               :key="file.path"
               type="button"
+              data-keyboard-option
               class="flex min-h-8 min-w-0 items-center gap-2 rounded px-2 text-left font-mono text-xs hover:bg-secondary/50 focus-visible:ring-2 focus-visible:ring-ring"
               :title="file.path"
               @click="select(file)"

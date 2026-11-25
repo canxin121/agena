@@ -1,10 +1,12 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import Button from '@/components/ui/Button.vue'
 import FormDialog from '@/components/ui/FormDialog.vue'
 import Input from '@/components/ui/Input.vue'
 import ScrollArea from '@/components/ui/ScrollArea.vue'
+import { handleOptionKeydown } from '@/lib/keyboardNavigation'
 
 type BranchOption = { label: string; value: string }
 
@@ -25,6 +27,11 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+const branchChoices = ref<HTMLElement | null>(null)
+
+function branchInput() {
+  return branchChoices.value?.querySelector<HTMLInputElement>('input') || null
+}
 
 function onUpdateOpen(v: boolean) {
   emit('update:open', v)
@@ -40,8 +47,21 @@ function chooseBranch(value: string) {
 </script>
 
 <template>
-  <FormDialog :open="open" :title="title" :description="description" maxWidth="max-w-md" @update:open="onUpdateOpen">
-    <div class="space-y-3">
+  <FormDialog
+    :open="open"
+    :title="title"
+    :description="description"
+    maxWidth="max-w-md"
+    initial-focus="[data-git-branch-choices]"
+    @update:open="onUpdateOpen"
+  >
+    <div
+      ref="branchChoices"
+      data-git-branch-choices
+      tabindex="-1"
+      class="space-y-3 focus-visible:outline-2 focus-visible:outline-ring"
+      @keydown="handleOptionKeydown($event, branchChoices, branchInput())"
+    >
       <Input
         :model-value="branch"
         class="h-9 font-mono text-xs"
@@ -56,7 +76,8 @@ function chooseBranch(value: string) {
             v-for="b in branches"
             :key="b.value"
             type="button"
-            class="w-full text-left px-3 py-2 rounded-sm text-xs font-mono hover:bg-muted/50"
+            data-keyboard-option
+            class="w-full text-left px-3 py-2 rounded-sm text-xs font-mono hover:bg-muted/50 focus-visible:outline-2 focus-visible:outline-ring"
             @click="chooseBranch(b.value)"
           >
             {{ b.label }}

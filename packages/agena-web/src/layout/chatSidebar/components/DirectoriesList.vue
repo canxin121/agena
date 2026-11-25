@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import type { SidebarSession as SessionLike, SessionMenuTarget, MenuRefEl, SessionToggleSelectionOptions, DirectoryToggleSelectionOptions } from '@/layout/chatSidebar/sessionMenu.types'
 import { vKeyboardCollection } from '@/lib/keyboardCollection'
-import { RiCloseLine, RiDeleteBinLine, RiFileList2Line, RiListCheck3, RiRefreshLine } from '@remixicon/vue'
+import { RiDeleteBinLine } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
 
 import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
-import IconButton from '@/components/ui/IconButton.vue'
+import SelectionToolbar from '@/components/ui/SelectionToolbar.vue'
+import SidebarIconButton from '@/components/ui/SidebarIconButton.vue'
 import SidebarTextButton from '@/components/ui/SidebarTextButton.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 import { directoryEntryLabel, sessionLabel } from '@/features/sessions/model/labels'
@@ -62,8 +63,8 @@ const props = defineProps<{
   isDirectorySelected: (directoryId: string) => boolean
   isSessionMultiSelectEnabledForDirectory: (directoryId: string) => boolean
   toggleDirectorySessionMultiSelect: (directoryId: string) => void
-  selectedSessionCountForDirectory: (directoryId: string) => number
-  sessionSelectableCountForDirectory: (directoryId: string) => number
+  selectableSessionIds: string[]
+  selectedSessionIds: ReadonlySet<string>
   selectAllSessionsForDirectory: (directoryId: string) => void
   invertSessionsForDirectory: (directoryId: string) => void
   deleteSelectedSessionsForDirectory: (directoryId: string) => Promise<void>
@@ -103,10 +104,12 @@ const props = defineProps<{
   sessionActionMenuAnchorEl: HTMLElement | null
   sessionActionMenuQuery: string
   filteredSessionActionItems: SessionActionItem[]
-  setSessionActionMenuRef: (el: MenuRefEl) => void
+  closeSessionActionMenu: () => void
   runSessionActionMenu: (item: SessionActionItem) => Promise<void>
 
   isSessionRenaming: (sessionId: string) => boolean
+  renameOrigin: HTMLElement | null
+  requestRenameSession: (session: SessionLike, row: HTMLElement) => void
   renameDraft: string
   renameBusy: boolean
   updateRenameDraft: (value: string) => void
@@ -148,14 +151,6 @@ function orderedDirectoryIds(): string[] {
 
 function statusMeta(sessionId: string) {
   return props.statusLabelForSessionId(sessionId)
-}
-
-function selectedSessionCount(directoryId: string): number {
-  return Math.max(0, Math.floor(props.selectedSessionCountForDirectory(directoryId) || 0))
-}
-
-function sessionSelectableCount(directoryId: string): number {
-  return Math.max(0, Math.floor(props.sessionSelectableCountForDirectory(directoryId) || 0))
 }
 </script>
 
@@ -219,7 +214,7 @@ function sessionSelectableCount(directoryId: string): number {
         </div>
 
         <div v-else class="space-y-0.5">
-          <div v-for="directory in pagedDirectories" :key="directory.id" class="relative">
+          <div v-for="directory in pagedDirectories" :key="directory.id" data-selection-context class="relative">
             <div
               class="sticky top-0 z-20 w-full border-b bg-sidebar pt-1.5 pb-1 select-none group"
               :class="
@@ -260,117 +255,48 @@ function sessionSelectableCount(directoryId: string): number {
 
             <div v-if="!props.isDirectoryCollapsed(directory.id)" class="py-0.5 pl-1">
               <div class="space-y-0.5">
-                <div
+                <SelectionToolbar
                   v-if="props.isSessionMultiSelectEnabledForDirectory(directory.id)"
-                  class="mx-1.5 mb-1 mt-0.5 rounded-md border border-sidebar-border/50 bg-muted/20 px-1.5 py-1"
+                  class="mx-1.5 mt-0.5 mb-1 rounded-md border border-sidebar-border/50 bg-muted/20"
+                  :selectable-ids="props.selectableSessionIds"
+                  :selected-ids="props.selectedSessionIds"
+                  :selection-label="
+                    t('chat.sidebar.multiSelect.sessionCount', {
+                      count: props.selectedSessionIds.size,
+                    })
+                  "
+                  :exit-label="t('chat.sidebar.multiSelect.actions.exitSessionMultiSelect')"
+                  :is-touch-pointer="props.uiIsTouchPointer"
+                  @select-all="props.selectAllSessionsForDirectory(directory.id)"
+                  @invert="props.invertSessionsForDirectory(directory.id)"
+                  @exit="props.toggleDirectorySessionMultiSelect(directory.id)"
                 >
-                  <div class="flex flex-wrap items-center justify-between gap-1.5">
-                    <div class="flex min-w-0 items-center gap-1.5">
-                      <span
-                        class="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-muted px-1 text-[10px] font-medium text-foreground/80"
-                        :title="
-                          String(
-                            t('chat.sidebar.multiSelect.selectedCount', {
-                              count: selectedSessionCount(directory.id),
-                            }),
-                          )
-                        "
-                        :aria-label="
-                          String(
-                            t('chat.sidebar.multiSelect.selectedCount', {
-                              count: selectedSessionCount(directory.id),
-                            }),
-                          )
-                        "
-                      >
-                        {{ selectedSessionCount(directory.id) }}
-                      </span>
-
-                      <span
-                        class="inline-flex h-4 items-center gap-1 rounded-full bg-muted px-1 text-[10px] text-foreground/80"
-                        :title="
-                          String(
-                            t('chat.sidebar.multiSelect.sessionCount', { count: selectedSessionCount(directory.id) }),
-                          )
-                        "
-                        :aria-label="
-                          String(
-                            t('chat.sidebar.multiSelect.sessionCount', { count: selectedSessionCount(directory.id) }),
-                          )
-                        "
-                      >
-                        <RiFileList2Line class="h-3 w-3" />
-                        {{ selectedSessionCount(directory.id) }}
-                      </span>
-                    </div>
-
-                    <div class="flex items-center gap-1">
-                      <IconButton
-                        size="xs"
-                        :tooltip="String(t('common.selectAll'))"
-                        :title="String(t('common.selectAll'))"
-                        :aria-label="String(t('common.selectAll'))"
+                  <template #default="{ size }">
+                    <ConfirmPopover
+                      :title="t('chat.sidebar.multiSelect.confirmDelete.title')"
+                      :description="
+                        t('chat.sidebar.multiSelect.confirmDelete.sessionsDescription', {
+                          sessions: props.selectedSessionIds.size,
+                        })
+                      "
+                      :confirm-text="t('chat.sidebar.multiSelect.actions.deleteSelected')"
+                      variant="destructive"
+                      @confirm="props.deleteSelectedSessionsForDirectory(directory.id)"
+                    >
+                      <SidebarIconButton
+                        data-keyboard-option
+                        :size="size"
+                        destructive
+                        :tooltip="t('chat.sidebar.multiSelect.actions.deleteSelected')"
                         :is-touch-pointer="props.uiIsTouchPointer"
-                        :disabled="
-                          sessionSelectableCount(directory.id) === 0 ||
-                          selectedSessionCount(directory.id) === sessionSelectableCount(directory.id)
-                        "
-                        @click="props.selectAllSessionsForDirectory(directory.id)"
+                        :disabled="!props.selectedSessionIds.size"
+                        @click.stop
                       >
-                        <RiListCheck3 class="h-3.5 w-3.5" />
-                      </IconButton>
-
-                      <IconButton
-                        size="xs"
-                        :tooltip="String(t('common.invertSelection'))"
-                        :title="String(t('common.invertSelection'))"
-                        :aria-label="String(t('common.invertSelection'))"
-                        :is-touch-pointer="props.uiIsTouchPointer"
-                        :disabled="sessionSelectableCount(directory.id) === 0"
-                        @click="props.invertSessionsForDirectory(directory.id)"
-                      >
-                        <RiRefreshLine class="h-3.5 w-3.5" />
-                      </IconButton>
-
-                      <ConfirmPopover
-                        :title="t('chat.sidebar.multiSelect.confirmDelete.title')"
-                        :description="
-                          t('chat.sidebar.multiSelect.confirmDelete.sessionsDescription', {
-                            sessions: selectedSessionCount(directory.id),
-                          })
-                        "
-                        :confirm-text="t('chat.sidebar.multiSelect.actions.deleteSelected')"
-                        :cancel-text="t('common.cancel')"
-                        variant="destructive"
-                        @confirm="props.deleteSelectedSessionsForDirectory(directory.id)"
-                      >
-                        <IconButton
-                          size="xs"
-                          variant="ghost-destructive"
-                          :tooltip="String(t('chat.sidebar.multiSelect.actions.deleteSelected'))"
-                          :title="String(t('chat.sidebar.multiSelect.actions.deleteSelected'))"
-                          :aria-label="String(t('chat.sidebar.multiSelect.actions.deleteSelected'))"
-                          :is-touch-pointer="props.uiIsTouchPointer"
-                          :disabled="selectedSessionCount(directory.id) === 0"
-                          @click.stop
-                        >
-                          <RiDeleteBinLine class="h-3.5 w-3.5" />
-                        </IconButton>
-                      </ConfirmPopover>
-
-                      <IconButton
-                        size="xs"
-                        :tooltip="String(t('chat.sidebar.multiSelect.actions.exitSessionMultiSelect'))"
-                        :title="String(t('chat.sidebar.multiSelect.actions.exitSessionMultiSelect'))"
-                        :aria-label="String(t('chat.sidebar.multiSelect.actions.exitSessionMultiSelect'))"
-                        :is-touch-pointer="props.uiIsTouchPointer"
-                        @click="props.toggleDirectorySessionMultiSelect(directory.id)"
-                      >
-                        <RiCloseLine class="h-3.5 w-3.5" />
-                      </IconButton>
-                    </div>
-                  </div>
-                </div>
+                        <RiDeleteBinLine class="size-3.5" aria-hidden="true" />
+                      </SidebarIconButton>
+                    </ConfirmPopover>
+                  </template>
+                </SelectionToolbar>
 
                 <div
                   v-if="
@@ -464,9 +390,10 @@ function sessionSelectableCount(directoryId: string): number {
                         :session-action-menu-anchor-el="sessionActionMenuAnchorEl"
                         :session-action-menu-query="sessionActionMenuQuery"
                         :filtered-session-action-items="filteredSessionActionItems"
-                        :set-session-action-menu-ref="props.setSessionActionMenuRef"
+                        :close-session-action-menu="props.closeSessionActionMenu"
                         :run-session-action-menu="props.runSessionActionMenu"
                         :renaming="props.isSessionRenaming(row.id)"
+                        :rename-origin="props.renameOrigin"
                         :rename-draft="props.renameDraft"
                         :rename-busy="props.renameBusy"
                         @open="
@@ -504,6 +431,7 @@ function sessionSelectableCount(directoryId: string): number {
                         @toggle-favorite="(favorite) => props.toggleFavorite(row.id, favorite)"
                         @delete="props.deleteSession(row.id)"
                         @update:renameDraft="props.updateRenameDraft"
+                        @rename="(origin) => row.session && props.requestRenameSession(row.session, origin)"
                         @rename-save="props.saveRename"
                         @rename-cancel="props.cancelRename"
                         @update:sessionActionMenuQuery="(v) => emit('update:sessionActionMenuQuery', v)"
@@ -560,9 +488,10 @@ function sessionSelectableCount(directoryId: string): number {
                         :session-action-menu-anchor-el="sessionActionMenuAnchorEl"
                         :session-action-menu-query="sessionActionMenuQuery"
                         :filtered-session-action-items="filteredSessionActionItems"
-                        :set-session-action-menu-ref="props.setSessionActionMenuRef"
+                        :close-session-action-menu="props.closeSessionActionMenu"
                         :run-session-action-menu="props.runSessionActionMenu"
                         :renaming="props.isSessionRenaming(row.id)"
+                        :rename-origin="props.renameOrigin"
                         :rename-draft="props.renameDraft"
                         :rename-busy="props.renameBusy"
                         @open="
@@ -591,6 +520,7 @@ function sessionSelectableCount(directoryId: string): number {
                         @toggle-favorite="(favorite) => props.toggleFavorite(row.id, favorite)"
                         @delete="props.deleteSession(row.id)"
                         @update:renameDraft="props.updateRenameDraft"
+                        @rename="(origin) => row.session && props.requestRenameSession(row.session, origin)"
                         @rename-save="props.saveRename"
                         @rename-cancel="props.cancelRename"
                         @update:sessionActionMenuQuery="(v) => emit('update:sessionActionMenuQuery', v)"

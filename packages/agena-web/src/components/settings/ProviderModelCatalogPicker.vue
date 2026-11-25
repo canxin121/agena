@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RiArrowLeftSLine, RiArrowRightSLine, RiBookOpenLine, RiCloseLine } from '@remixicon/vue'
 
 import IconButton from '@/components/ui/IconButton.vue'
 import SearchInput from '@/components/ui/SearchInput.vue'
 import { settingsText as st } from '@/i18n/settingsText'
 import { apiJson } from '@/lib/api'
+import { handleOptionKeydown, isPlainNavigationKey, isVisibleKeyboardTarget } from '@/lib/keyboardNavigation'
 import type { CatalogPickerModel } from '@/components/settings/providerModelCatalogTypes'
 
 const props = defineProps<{
@@ -20,6 +21,8 @@ const emit = defineEmits<{
 }>()
 
 const PAGE_SIZE = 20
+const panelEl = ref<HTMLElement | null>(null)
+let returnFocus: HTMLElement | null = null
 const query = ref(props.initialQuery)
 const appliedQuery = ref(props.initialQuery)
 const offset = ref(0)
@@ -37,6 +40,10 @@ function formatLimit(value: number | null | undefined): string {
 }
 
 async function load(nextOffset = 0) {
+  const active = document.activeElement
+  if (active instanceof HTMLButtonElement && panelEl.value?.contains(active)) {
+    panelEl.value.focus({ preventScroll: true })
+  }
   const request = ++generation
   offset.value = nextOffset
   loading.value = true
@@ -62,15 +69,42 @@ function search(value: string) {
   void load(0)
 }
 
-onMounted(() => void load())
-onBeforeUnmount(() => ++generation)
+function onKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && isPlainNavigationKey(event) && !event.shiftKey && !props.disabled) {
+    event.preventDefault()
+    event.stopPropagation()
+    emit('close')
+    return
+  }
+  handleOptionKeydown(event, panelEl.value, panelEl.value?.querySelector('input'))
+}
+
+onMounted(() => {
+  if (document.activeElement instanceof HTMLElement) returnFocus = document.activeElement
+  panelEl.value?.focus({ preventScroll: true })
+  void load()
+})
+onBeforeUnmount(() => {
+  generation++
+  const source = returnFocus
+  if (!source || source === document.body) return
+  if (document.activeElement !== document.body && !panelEl.value?.contains(document.activeElement)) return
+  void nextTick(() => {
+    if (document.activeElement === document.body && isVisibleKeyboardTarget(source)) {
+      source.focus({ preventScroll: true })
+    }
+  })
+})
 </script>
 
 <template>
   <section
-    class="rounded-lg border border-primary/25 bg-background/90 shadow-sm"
+    ref="panelEl"
+    tabindex="-1"
+    class="rounded-lg border border-primary/25 bg-background/90 shadow-sm focus-visible:outline-2 focus-visible:outline-ring"
     :aria-label="st('Choose catalog model')"
-    :aria-busy="disabled"
+    :aria-busy="loading || disabled"
+    @keydown="onKeydown"
   >
     <div class="flex items-start justify-between gap-3 border-b border-border/60 px-3 py-2.5">
       <div class="flex min-w-0 items-start gap-2.5">
@@ -120,6 +154,7 @@ onBeforeUnmount(() => ++generation)
           v-for="item in items"
           :key="item.model_id"
           type="button"
+          data-keyboard-option
           :disabled="disabled"
           class="flex w-full items-start justify-between gap-3 rounded-md border px-3 py-2 text-left transition-colors hover:border-primary/50 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           :class="item.model_id === selectedId ? 'border-primary/55 bg-primary/5' : 'border-border/60'"

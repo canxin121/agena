@@ -148,7 +148,12 @@ const own = (value, key) => Object.prototype.hasOwnProperty.call(value, key)
 function createFixture() {
   const builtins = {
     main: { title: 'Main', description: 'Coordinate general tasks and delegate focused work.', mode: 'primary' },
-    explore: { title: 'Explore', description: 'Read the project and report focused evidence.', mode: 'subagent' },
+    explore: {
+      title: 'Explore',
+      description: 'Read the project and report focused evidence.',
+      mode: 'subagent',
+      read_only: true,
+    },
     worker: { title: 'Worker', description: 'Implement a bounded task and verify the result.', mode: 'subagent' },
     reviewer: { title: 'Reviewer', description: 'Review correctness and report actionable findings.', mode: 'all' },
   }
@@ -295,6 +300,21 @@ function createFixture() {
       if (p === '/auth/session') return json({ authenticated: true, disabled: true })
       if (p === '/api/v1/health') return json({ status: 'ok', database_connected: true })
       if (p === '/api/v1/runtime') return json({ default_selection: selection, workspace: null })
+      if (p === '/api/v1/prompts/builtins') return json([])
+      if (p === '/api/v1/skills')
+        return json({
+          skills: [
+            {
+              name: 'verify-work',
+              description: 'Verify the completed work',
+              scope: 'global',
+              enabled: true,
+              valid: true,
+            },
+          ],
+          diagnostics: [],
+          roots: [],
+        })
       if (p === '/api/v1/providers') return json([{ provider_id: 'fixture' }])
       if (p.endsWith('/configured-models'))
         return json([
@@ -417,7 +437,7 @@ async function main() {
         return Date.now() - since >= 300
       }, variant.name + ' settled active composer')
     }
-    const chooseNative = async (selector, value) => {
+    const chooseNative = async (selector, value, keepsValue = true) => {
       const index = await cdp.evaluate(
         `Array.from((${live(selector)}).options).findIndex(option=>option.value===${JSON.stringify(value)})`,
       )
@@ -426,10 +446,11 @@ async function main() {
       await cdp.key('Home', 'Home', 36)
       for (let i = 0; i < index; i++) await cdp.key('ArrowDown', 'ArrowDown', 40)
       await cdp.key('Enter', 'Enter', 13)
-      await wait(
-        () => cdp.evaluate(`(${live(selector)})?.value===${JSON.stringify(value)}`),
-        'native selection ' + value,
-      )
+      if (keepsValue)
+        await wait(
+          () => cdp.evaluate(`(${live(selector)})?.value===${JSON.stringify(value)}`),
+          'native selection ' + value,
+        )
     }
     const layout = async (label, selector, fullHeight) => {
       const result = await cdp.evaluate(
@@ -605,6 +626,48 @@ async function main() {
           variant.name + ' reopens with persisted ' + kind + ' default visible',
         )
       }
+      await navigate('/settings/runtime-session?view=agent-profiles&scope=' + variant.scope)
+      const worker = '[data-agent-profile="worker"]'
+      await wait(() => visible(worker), 'worker profile settings')
+      check(
+        (await text('[data-agent-profile="explore"]')).includes('Read only'),
+        variant.name + ' identifies read-only profiles in the list',
+      )
+      await cdp.click(worker + ' button[aria-expanded]')
+      const access = worker + ' select[aria-label="Execution access"]'
+      const checkout = worker + ' select[aria-label="Subagent workspace"]'
+      await chooseNative(access, 'true')
+      check(
+        await cdp.evaluate(`(() => { const select = ${live(checkout)}; return select.disabled && select.value === 'shared' })()`),
+        variant.name + ' uses the shared checkout for a read-only role',
+      )
+      await chooseNative(access, '')
+      await chooseNative(checkout, 'worktree')
+      await chooseNative(worker + ' select[aria-label="Project instructions"]', 'on_demand')
+      await cdp.click(worker + ' fieldset input[type="checkbox"]')
+      const skillSelect = worker + ' select[aria-label="Select a skill"]'
+      await wait(() => cdp.evaluate(`(${live(skillSelect)})?.options?.length > 1`), 'available startup skill')
+      await chooseNative(skillSelect, 'verify-work', false)
+      await wait(
+        async () => (await text(worker + ' fieldset li')).includes('Verify the completed work'),
+        'ordered preload',
+      )
+      await layout(variant.name + ' startup context editor', worker + ' fieldset', false)
+      await cdp.screenshot(path.join(evidence, variant.name + '-startup-context.png'))
+      const before = fixture.writes.length
+      await cdp.clickText('[data-profile-savebar] button', 'Save override', true)
+      await wait(() => fixture.writes.length > before, 'saved startup context')
+      const profile = fixture.values[variant.scope].profiles.worker
+      check(
+        profile.isolation === 'worktree' &&
+          profile.context.project_instructions === 'on_demand' &&
+          profile.context.preload_skills.join(',') === 'verify-work',
+        variant.name + ' saves workspace isolation and the ordered startup context',
+      )
+      await wait(
+        () => cdp.evaluate("!document.querySelector('[data-profile-savebar]')"),
+        'startup context save completed',
+      )
     }
     await navigate('/settings/runtime-session?view=agent-profiles&scope=workspace#default-agent-profiles')
     await wait(

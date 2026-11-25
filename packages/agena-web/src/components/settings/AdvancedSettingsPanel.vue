@@ -1,6 +1,6 @@
 <script setup lang="ts">
+import { useSettingsDraftGuard } from './useSettingsDraftGuard'
 import { computed, onMounted, ref, watch } from 'vue'
-import { onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
 import { RiRefreshLine, RiCodeSSlashLine, RiShieldCheckLine } from '@remixicon/vue'
 
 import SettingsCard from './SettingsCard.vue'
@@ -308,15 +308,12 @@ async function save() {
   }
 }
 
-async function canLeave() {
-  if (busy.value) return false
-  if (!dirty.value) return true
-  return confirmAction({
-    title: st('Discard unsaved changes?'),
-    confirmText: st('Discard changes'),
-    cancelText: st('Keep editing'),
-  })
-}
+const { canDiscard: canLeave } = useSettingsDraftGuard({
+  dirty: () => dirty.value,
+  busy: () => busy.value,
+  unload: false,
+  sameTarget: (to, from) => to.path === from.path && to.query.view === from.query.view && to.query.scope === from.query.scope,
+})
 async function choosePath(value: string) {
   if (value === settingPath.value || !(await canLeave())) return
   settingPath.value = value
@@ -327,11 +324,6 @@ async function refresh() {
   await load({ preserveDraft: dirty.value })
 }
 defineExpose({ refresh })
-onBeforeRouteUpdate((to, from) => {
-  if (to.path === from.path && to.query.view === from.query.view && to.query.scope === from.query.scope) return true
-  return canLeave()
-})
-onBeforeRouteLeave(canLeave)
 
 watch(
   () => props.scope,

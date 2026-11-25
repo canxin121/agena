@@ -337,8 +337,8 @@ async function attachSkill(skillKey: string) {
   const sessionId = chat.selectedSessionId
   const directory = sessionDirectory.value
   if (skillCatalogDirectory !== directory || skillCatalogLoading.value) return
-  const command = skillCatalog.value.find((item) => skillCatalogKey(item) === skillKey)
-  if (!command) return
+  const skill = skillCatalog.value.find((item) => skillCatalogKey(item) === skillKey)
+  if (!skill) return
   if (attachedFiles.value.some((file) => skillReferenceKeyFromAttachment(file) === skillKey)) {
     await nextTick()
     getComposerInput(composerRef.value)?.focus()
@@ -350,7 +350,7 @@ async function attachSkill(skillKey: string) {
     return
   }
   try {
-    const reference = await createSkillReferenceAttachment(command)
+    const reference = createSkillReferenceAttachment(skill)
     if (chat.selectedSessionId !== sessionId || sessionDirectory.value !== directory) return
     if (attachedFiles.value.some((file) => skillReferenceKeyFromAttachment(file) === skillKey)) return
     attachedFiles.value = [...attachedFiles.value, reference]

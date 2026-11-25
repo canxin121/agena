@@ -12,6 +12,7 @@ const rootFiles = [
   'src/components/McpDialog.vue',
   'src/components/MemoryMetadataView.vue',
   'src/features/bots/BotManagerHost.vue',
+  'src/features/bots/BotPromptEditor.vue',
   // The composer's context-usage popover renders the same usage labels the
   // settings usage report does, so both catalogs are checked together.
   'src/components/chat/ContextUsageChip.vue',

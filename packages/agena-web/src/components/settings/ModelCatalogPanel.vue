@@ -3,6 +3,7 @@ import { computed, onMounted, onScopeDispose, ref, watch } from 'vue'
 import { RiArrowLeftSLine, RiArrowRightSLine, RiRefreshLine, RiRestartLine } from '@remixicon/vue'
 
 import SettingsCard from './SettingsCard.vue'
+import SettingsListDetail from './workbench/SettingsListDetail.vue'
 import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
@@ -415,22 +416,21 @@ defineExpose({ refresh: () => load() })
       </div>
     </section>
 
-    <div
-      class="settings-master-detail settings-viewport-region"
+    <SettingsListDetail
+      :list-label="$st('Catalog models')"
+      :detail-label="selectedModel?.display_name || selectedModel?.model_id || $st('Catalog models')"
+      :list-busy="loading"
+      detail-class="rounded-none border-0 bg-transparent"
+      list-scroll-class="p-0"
     >
-      <section
-        class="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-border/70 bg-card/30"
-        :aria-label="$st('Catalog models')"
-      >
-        <div
-          class="settings-toolbar justify-between border-b border-border/60 bg-muted/20 px-2.5 py-2 text-xs"
-        >
+      <template #list-header>
+        <div class="settings-toolbar justify-between text-xs">
           <span class="font-medium">{{ $st('Catalog models') }}</span
           ><span class="tabular-nums text-muted-foreground">{{
             $st('{count} shown', { count: visibleItems.length })
           }}</span>
         </div>
-        <div class="settings-stacked-only min-w-0 p-2.5">
+        <div class="settings-stacked-only min-w-0">
           <OptionPicker
             :model-value="selectedModel?.model_id || ''"
             :options="mobileModelOptions"
@@ -441,7 +441,9 @@ defineExpose({ refresh: () => load() })
             @update:model-value="selectedModelId = $event"
           />
         </div>
-        <div class="settings-split-only settings-viewport-scroll p-1.5">
+      </template>
+      <template #list>
+        <div class="settings-split-only p-1.5">
           <button
             v-for="model in visibleItems"
             :key="model.model_id"
@@ -453,6 +455,9 @@ defineExpose({ refresh: () => load() })
                 : 'border-transparent hover:bg-muted/40'
             "
             :aria-current="selectedModel?.model_id === model.model_id ? 'true' : undefined"
+            :data-keyboard-item="model.model_id"
+            :data-keyboard-label="model.display_name || model.model_id"
+            :data-keyboard-selected="String(selectedModel?.model_id === model.model_id)"
             @click="selectedModelId = model.model_id"
           >
             <span class="truncate text-sm font-medium">{{ model.display_name || model.model_id }}</span>
@@ -471,6 +476,8 @@ defineExpose({ refresh: () => load() })
             $st('Clear filters')
           }}</Button>
         </div>
+      </template>
+      <template #list-footer>
         <div class="flex items-center justify-between gap-1 border-t border-border/60 p-2">
           <IconButton
             variant="ghost"
@@ -494,197 +501,275 @@ defineExpose({ refresh: () => load() })
             ><RiArrowRightSLine class="h-4 w-4"
           /></IconButton>
         </div>
-      </section>
-      <article
-        v-if="selectedModel"
-        :key="selectedModel.model_id"
-        class="settings-stack settings-viewport-scroll"
-        :aria-label="selectedModel.display_name || selectedModel.model_id"
-      >
-        <header class="rounded-lg border border-border/70 bg-card/30 p-3">
-          <div class="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            <span v-if="selectedModel.origin">{{ selectedModel.origin }}</span
-            ><span v-if="selectedModel.lifecycle" class="rounded-md bg-muted/60 px-2 py-0.5">{{
-              selectedModel.lifecycle
-            }}</span>
-          </div>
-          <h2 class="break-words text-xl font-semibold">{{ selectedModel.display_name || selectedModel.model_id }}</h2>
-          <code class="mt-1 block break-all font-mono text-xs text-muted-foreground">{{ selectedModel.model_id }}</code>
-          <p
-            v-if="selectedModel.description"
-            class="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground"
-          >
-            {{ selectedModel.description }}
-          </p>
-          <dl class="settings-control-grid mt-3 border-t border-border/60 pt-2.5">
-            <div
-              v-for="item in [
-                { label: $st('Context window'), value: selectedModel.context_window_tokens },
-                { label: $st('Max input'), value: selectedModel.max_input_tokens },
-                { label: $st('Max output'), value: selectedModel.max_output_tokens },
-              ]"
-              :key="item.label"
-              class="min-w-0"
+      </template>
+      <template #detail>
+        <article
+          v-if="selectedModel"
+          :key="selectedModel.model_id"
+          class="settings-stack settings-viewport-scroll"
+          :aria-label="selectedModel.display_name || selectedModel.model_id"
+        >
+          <header class="rounded-lg border border-border/70 bg-card/30 p-3">
+            <div class="mb-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <span v-if="selectedModel.origin">{{ selectedModel.origin }}</span
+              ><span v-if="selectedModel.lifecycle" class="rounded-md bg-muted/60 px-2 py-0.5">{{
+                selectedModel.lifecycle
+              }}</span>
+            </div>
+            <h2 data-settings-detail-heading tabindex="-1" class="break-words text-xl font-semibold outline-none">
+              {{ selectedModel.display_name || selectedModel.model_id }}
+            </h2>
+            <code class="mt-1 block break-all font-mono text-xs text-muted-foreground">{{ selectedModel.model_id }}</code>
+            <p
+              v-if="selectedModel.description"
+              class="mt-3 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground"
             >
-              <dt class="text-xs leading-relaxed text-muted-foreground">{{ item.label }}</dt>
-              <dd
-                class="mt-1 text-lg font-semibold tabular-nums sm:text-xl"
-                :title="item.value == null ? '' : String(item.value)"
+              {{ selectedModel.description }}
+            </p>
+            <dl class="settings-control-grid mt-3 border-t border-border/60 pt-2.5">
+              <div
+                v-for="item in [
+                  {
+                    label: $st('Context window'),
+                    value: selectedModel.context_window_tokens,
+                  },
+                  {
+                    label: $st('Max input'),
+                    value: selectedModel.max_input_tokens,
+                  },
+                  {
+                    label: $st('Max output'),
+                    value: selectedModel.max_output_tokens,
+                  },
+                ]"
+                :key="item.label"
+                class="min-w-0"
               >
-                {{ compactNumber(item.value) }}
-              </dd>
-            </div>
-          </dl>
-        </header>
-        <SettingsCard :title="$st('Capabilities')">
-          <div class="grid gap-4">
-            <div
-              v-for="group in [
-                { label: $st('Features'), value: selectedModel.features },
-                { label: $st('Input modalities'), value: selectedModel.input },
-              ]"
-              :key="group.label"
-              class="grid gap-2"
-            >
-              <h3 class="text-xs text-muted-foreground">{{ group.label }}</h3>
-              <div class="flex flex-wrap gap-1.5">
-                <span
-                  v-for="capability in capabilities(group.value)"
-                  :key="capability.key"
-                  class="rounded-md border px-2 py-1 text-xs"
-                  :class="
-                    capability.supported ? 'border-border/60 bg-muted/30' : 'border-border/40 text-muted-foreground'
-                  "
-                  >{{ capabilityLabels[capability.key] || capability.key
-                  }}<span v-if="!capability.supported"> · {{ $st('Not supported') }}</span></span
+                <dt class="text-xs leading-relaxed text-muted-foreground">
+                  {{ item.label }}
+                </dt>
+                <dd
+                  class="mt-1 text-lg font-semibold tabular-nums sm:text-xl"
+                  :title="item.value == null ? '' : String(item.value)"
                 >
-                <span v-if="!capabilities(group.value).length" class="text-xs text-muted-foreground">{{
-                  $st('Not reported')
-                }}</span>
-              </div>
-            </div>
-            <dl class="settings-control-grid border-t border-border/50 pt-2.5">
-              <div>
-                <dt class="text-xs text-muted-foreground">{{ $st('Output modalities') }}</dt>
-                <dd class="mt-1 text-sm">
-                  {{ selectedModel.output_modalities?.map((key) => capabilityLabels[key] || key).join(', ') || '—' }}
+                  {{ compactNumber(item.value) }}
                 </dd>
               </div>
-              <div>
-                <dt class="text-xs text-muted-foreground">{{ $st('Parallel tools') }}</dt>
-                <dd class="mt-1 text-sm">{{ yesNo(selectedModel.supports_parallel_tool_calls) }}</dd>
-              </div>
-              <div>
-                <dt class="text-xs text-muted-foreground">{{ $st('Open weights') }}</dt>
-                <dd class="mt-1 text-sm">{{ yesNo(selectedModel.open_weights) }}</dd>
-              </div>
             </dl>
-          </div>
-        </SettingsCard>
-        <SettingsCard :title="$st('Response modes')">
-          <div class="settings-control-grid">
-            <div
-              v-for="group in [
-                { label: $st('Thinking modes'), items: modes(selectedModel.thinking_modes, true) },
-                { label: $st('Speed modes'), items: modes(selectedModel.speed_modes) },
-              ]"
-              :key="group.label"
-              class="min-w-0"
-            >
-              <h3 class="mb-2 text-xs text-muted-foreground">{{ group.label }}</h3>
-              <div class="flex flex-wrap gap-1.5">
-                <span
-                  v-for="mode in group.items"
-                  :key="mode.key"
-                  :title="typeof mode.description === 'string' ? mode.description : undefined"
-                  class="max-w-full break-words rounded-md border border-border/60 bg-muted/20 px-2 py-1 text-xs"
-                  >{{ mode.label
-                  }}<span v-if="mode.isDefault" class="ml-1 text-primary">· {{ $st('Default') }}</span></span
-                ><span v-if="!group.items.length" class="text-xs text-muted-foreground">{{ $st('Not reported') }}</span>
+          </header>
+          <SettingsCard :title="$st('Capabilities')">
+            <div class="grid gap-4">
+              <div
+                v-for="group in [
+                  { label: $st('Features'), value: selectedModel.features },
+                  { label: $st('Input modalities'), value: selectedModel.input },
+                ]"
+                :key="group.label"
+                class="grid gap-2"
+              >
+                <h3 class="text-xs text-muted-foreground">{{ group.label }}</h3>
+                <div class="flex flex-wrap gap-1.5">
+                  <span
+                    v-for="capability in capabilities(group.value)"
+                    :key="capability.key"
+                    class="rounded-md border px-2 py-1 text-xs"
+                    :class="
+                      capability.supported ? 'border-border/60 bg-muted/30' : 'border-border/40 text-muted-foreground'
+                    "
+                    >{{ capabilityLabels[capability.key] || capability.key
+                    }}<span v-if="!capability.supported"> · {{ $st('Not supported') }}</span></span
+                  >
+                  <span v-if="!capabilities(group.value).length" class="text-xs text-muted-foreground">{{
+                    $st('Not reported')
+                  }}</span>
+                </div>
               </div>
-            </div>
-          </div>
-        </SettingsCard>
-        <SettingsCard
-          :title="$st('Pricing')"
-          :description="$st('USD per million tokens. Missing prices are not reported by the catalog.')"
-        >
-          <dl class="settings-control-grid">
-            <div v-for="price in priceLabels" :key="price.key" class="min-w-0">
-              <dt class="text-xs text-muted-foreground">{{ price.label }}</dt>
-              <dd class="mt-1 break-all text-base font-medium tabular-nums">
-                {{ text(pricing[price.key]) === '—' ? '—' : '$' + text(pricing[price.key]) }}
-              </dd>
-            </div>
-          </dl>
-          <details v-if="pricingTiers.length" class="mt-4 border-t border-border/60 pt-3">
-            <summary class="cursor-pointer text-xs font-medium">{{ $st('Pricing tiers') }}</summary>
-            <div v-for="(tier, index) in pricingTiers" :key="index" class="mt-3 rounded-lg bg-muted/20 p-3">
-              <div class="mb-2 text-xs font-medium">
-                {{ text(tier.tier_type) }} · {{ compactNumber(tier.size_tokens) }} {{ $st('tokens') }}
-              </div>
-              <dl class="grid grid-cols-2 gap-3">
-                <div v-for="price in priceLabels" :key="price.key">
-                  <dt class="text-xs text-muted-foreground">{{ price.label }}</dt>
-                  <dd class="text-sm">{{ text(tier[price.key]) === '—' ? '—' : '$' + text(tier[price.key]) }}</dd>
+              <dl class="settings-control-grid border-t border-border/50 pt-2.5">
+                <div>
+                  <dt class="text-xs text-muted-foreground">
+                    {{ $st('Output modalities') }}
+                  </dt>
+                  <dd class="mt-1 text-sm">
+                    {{ selectedModel.output_modalities?.map((key) => capabilityLabels[key] || key).join(', ') || '—' }}
+                  </dd>
+                </div>
+                <div>
+                  <dt class="text-xs text-muted-foreground">
+                    {{ $st('Parallel tools') }}
+                  </dt>
+                  <dd class="mt-1 text-sm">
+                    {{ yesNo(selectedModel.supports_parallel_tool_calls) }}
+                  </dd>
+                </div>
+                <div>
+                  <dt class="text-xs text-muted-foreground">
+                    {{ $st('Open weights') }}
+                  </dt>
+                  <dd class="mt-1 text-sm">
+                    {{ yesNo(selectedModel.open_weights) }}
+                  </dd>
                 </div>
               </dl>
             </div>
-          </details>
-        </SettingsCard>
-        <SettingsCard :title="$st('Model information')">
-          <dl class="settings-control-grid">
-            <div
-              v-for="item in [
-                { label: $st('Source'), value: selectedModel.source_label || selectedModel.source },
-                { label: $st('Knowledge cutoff'), value: selectedModel.knowledge_cutoff },
-                { label: $st('Release date'), value: selectedModel.release_date },
-                { label: $st('Last updated'), value: selectedModel.last_updated },
-              ]"
-              :key="item.label"
-              class="min-w-0"
-            >
-              <dt class="text-xs text-muted-foreground">{{ item.label }}</dt>
-              <dd class="mt-1 break-words text-sm">{{ text(item.value) }}</dd>
+          </SettingsCard>
+          <SettingsCard :title="$st('Response modes')">
+            <div class="settings-control-grid">
+              <div
+                v-for="group in [
+                  {
+                    label: $st('Thinking modes'),
+                    items: modes(selectedModel.thinking_modes, true),
+                  },
+                  {
+                    label: $st('Speed modes'),
+                    items: modes(selectedModel.speed_modes),
+                  },
+                ]"
+                :key="group.label"
+                class="min-w-0"
+              >
+                <h3 class="mb-2 text-xs text-muted-foreground">
+                  {{ group.label }}
+                </h3>
+                <div class="flex flex-wrap gap-1.5">
+                  <span
+                    v-for="mode in group.items"
+                    :key="mode.key"
+                    :title="typeof mode.description === 'string' ? mode.description : undefined"
+                    class="max-w-full break-words rounded-md border border-border/60 bg-muted/20 px-2 py-1 text-xs"
+                    >{{ mode.label
+                    }}<span v-if="mode.isDefault" class="ml-1 text-primary">· {{ $st('Default') }}</span></span
+                  ><span v-if="!group.items.length" class="text-xs text-muted-foreground">{{ $st('Not reported') }}</span>
+                </div>
+              </div>
             </div>
-          </dl>
-        </SettingsCard>
-        <details class="min-w-0 rounded-xl border border-border/70 bg-card/30">
-          <summary class="cursor-pointer px-4 py-3 text-sm font-medium">{{ $st('Advanced model details') }}</summary>
-          <div class="grid min-w-0 gap-4 border-t border-border/60 p-4">
+          </SettingsCard>
+          <SettingsCard
+            :title="$st('Pricing')"
+            :description="$st('USD per million tokens. Missing prices are not reported by the catalog.')"
+          >
+            <dl class="settings-control-grid">
+              <div v-for="price in priceLabels" :key="price.key" class="min-w-0">
+                <dt class="text-xs text-muted-foreground">{{ price.label }}</dt>
+                <dd class="mt-1 break-all text-base font-medium tabular-nums">
+                  {{ text(pricing[price.key]) === '—' ? '—' : '$' + text(pricing[price.key]) }}
+                </dd>
+              </div>
+            </dl>
+            <details v-if="pricingTiers.length" class="mt-4 border-t border-border/60 pt-3">
+              <summary class="cursor-pointer text-xs font-medium">
+                {{ $st('Pricing tiers') }}
+              </summary>
+              <div v-for="(tier, index) in pricingTiers" :key="index" class="mt-3 rounded-lg bg-muted/20 p-3">
+                <div class="mb-2 text-xs font-medium">
+                  {{ text(tier.tier_type) }} · {{ compactNumber(tier.size_tokens) }} {{ $st('tokens') }}
+                </div>
+                <dl class="grid grid-cols-2 gap-3">
+                  <div v-for="price in priceLabels" :key="price.key">
+                    <dt class="text-xs text-muted-foreground">
+                      {{ price.label }}
+                    </dt>
+                    <dd class="text-sm">
+                      {{ text(tier[price.key]) === '—' ? '—' : '$' + text(tier[price.key]) }}
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+            </details>
+          </SettingsCard>
+          <SettingsCard :title="$st('Model information')">
             <dl class="settings-control-grid">
               <div
                 v-for="item in [
-                  { label: $st('Verbosity'), value: yesNo(selectedModel.supports_verbosity) },
-                  { label: $st('Default verbosity'), value: selectedModel.default_verbosity },
-                  { label: $st('Provider sources'), value: selectedModel.provider_sources?.join(', ') },
-                  { label: $st('Verbosity by provider'), value: pretty(selectedModel.verbosity_by_provider ?? null) },
-                  { label: $st('Temperature'), value: selectedModel.default_temperature },
-                  { label: 'Top P', value: selectedModel.default_top_p },
-                  { label: 'Top K', value: selectedModel.default_top_k },
-                  { label: $st('Reasoning interleaved'), value: yesNo(selectedModel.assistant_reasoning_interleaved) },
-                  { label: $st('Reasoning field'), value: selectedModel.assistant_reasoning_field },
+                  {
+                    label: $st('Source'),
+                    value: selectedModel.source_label || selectedModel.source,
+                  },
+                  {
+                    label: $st('Knowledge cutoff'),
+                    value: selectedModel.knowledge_cutoff,
+                  },
+                  {
+                    label: $st('Release date'),
+                    value: selectedModel.release_date,
+                  },
+                  {
+                    label: $st('Last updated'),
+                    value: selectedModel.last_updated,
+                  },
                 ]"
                 :key="item.label"
                 class="min-w-0"
               >
                 <dt class="text-xs text-muted-foreground">{{ item.label }}</dt>
-                <dd class="mt-1 break-all font-mono text-xs">{{ text(item.value) }}</dd>
+                <dd class="mt-1 break-words text-sm">{{ text(item.value) }}</dd>
               </div>
             </dl>
-            <h3 class="text-xs text-muted-foreground">{{ $st('Raw catalog entry') }}</h3>
-            <pre class="max-h-96 min-w-0 overflow-auto rounded-lg bg-muted/25 p-3 font-mono text-xs leading-5">{{
-              pretty(selectedModel)
-            }}</pre>
-          </div>
-        </details>
-      </article>
-      <div
-        v-else
-        class="grid min-h-48 place-content-center rounded-xl border border-dashed border-border/70 p-6 text-center text-sm text-muted-foreground"
-      >
-        {{ $st('Select a catalog model to inspect it.') }}
-      </div>
-    </div>
+          </SettingsCard>
+          <details class="min-w-0 rounded-xl border border-border/70 bg-card/30">
+            <summary class="cursor-pointer px-4 py-3 text-sm font-medium">
+              {{ $st('Advanced model details') }}
+            </summary>
+            <div class="grid min-w-0 gap-4 border-t border-border/60 p-4">
+              <dl class="settings-control-grid">
+                <div
+                  v-for="item in [
+                    {
+                      label: $st('Verbosity'),
+                      value: yesNo(selectedModel.supports_verbosity),
+                    },
+                    {
+                      label: $st('Default verbosity'),
+                      value: selectedModel.default_verbosity,
+                    },
+                    {
+                      label: $st('Provider sources'),
+                      value: selectedModel.provider_sources?.join(', '),
+                    },
+                    {
+                      label: $st('Verbosity by provider'),
+                      value: pretty(selectedModel.verbosity_by_provider ?? null),
+                    },
+                    {
+                      label: $st('Temperature'),
+                      value: selectedModel.default_temperature,
+                    },
+                    { label: 'Top P', value: selectedModel.default_top_p },
+                    { label: 'Top K', value: selectedModel.default_top_k },
+                    {
+                      label: $st('Reasoning interleaved'),
+                      value: yesNo(selectedModel.assistant_reasoning_interleaved),
+                    },
+                    {
+                      label: $st('Reasoning field'),
+                      value: selectedModel.assistant_reasoning_field,
+                    },
+                  ]"
+                  :key="item.label"
+                  class="min-w-0"
+                >
+                  <dt class="text-xs text-muted-foreground">{{ item.label }}</dt>
+                  <dd class="mt-1 break-all font-mono text-xs">
+                    {{ text(item.value) }}
+                  </dd>
+                </div>
+              </dl>
+              <h3 class="text-xs text-muted-foreground">
+                {{ $st('Raw catalog entry') }}
+              </h3>
+              <pre class="max-h-96 min-w-0 overflow-auto rounded-lg bg-muted/25 p-3 font-mono text-xs leading-5">{{
+                pretty(selectedModel)
+              }}</pre>
+            </div>
+          </details>
+        </article>
+        <div
+          v-else
+          class="grid min-h-48 place-content-center rounded-xl border border-dashed border-border/70 p-6 text-center text-sm text-muted-foreground"
+        >
+          {{ $st('Select a catalog model to inspect it.') }}
+        </div>
+      </template>
+    </SettingsListDetail>
   </div>
 </template>

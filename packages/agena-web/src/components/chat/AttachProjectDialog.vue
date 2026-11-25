@@ -29,6 +29,7 @@ function onUpdatePath(v: string | number) {
     :open="open"
     :title="t('chat.attachProjectDialog.title')"
     :description="t('chat.attachProjectDialog.description')"
+    initial-focus="[data-path-picker-browser]"
     @update:open="$emit('update:open', $event)"
   >
     <div class="space-y-3">

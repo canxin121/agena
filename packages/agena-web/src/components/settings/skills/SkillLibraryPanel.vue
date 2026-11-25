@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
-import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from 'vue-router'
+import { useRoute } from 'vue-router'
+import { useSettingsDraftGuard } from '../useSettingsDraftGuard'
 import {
   RiAddLine,
-  RiArrowLeftLine,
   RiBookOpenLine,
   RiDeleteBinLine,
   RiDownloadCloud2Line,
@@ -12,6 +12,7 @@ import {
 } from '@remixicon/vue'
 import MarkdownRenderer from '@/components/markdown/MarkdownRenderer.vue'
 import SettingsSaveBar from '../SettingsSaveBar.vue'
+import SettingsListDetail from '../workbench/SettingsListDetail.vue'
 import Button from '@/components/ui/Button.vue'
 import Dialog from '@/components/ui/Dialog.vue'
 import IconButton from '@/components/ui/IconButton.vue'
@@ -574,30 +575,25 @@ async function closeCopy() {
   copyOpen.value = false
 }
 
-async function canLeave() {
-  if (busy.value) return false
-  rememberDraft()
-  if (!cachedDrafts.value.size && !createOpen.value && !fileOpen.value && !copyOpen.value) return true
-  return confirmAction({
-    title: st('Discard unsaved changes?'),
-    description: st('You have unsaved changes.'),
-    confirmText: st('Discard changes'),
-    cancelText: st('Keep editing'),
-  })
+function hasDrafts() {
+  return cachedDrafts.value.size > 0 || createOpen.value || fileOpen.value || copyOpen.value
 }
-onBeforeRouteLeave(canLeave)
-onBeforeRouteUpdate(async (to, from) => {
-  if (to.query.view === from.query.view && to.query.skill === from.query.skill) return true
-  if (!(await canLeave())) return false
-  cachedDrafts.value = new Map()
-  discardDraft()
-  return true
+
+useSettingsDraftGuard({
+  dirty: () => {
+    rememberDraft()
+    return hasDrafts()
+  },
+  busy: () => busy.value,
+  unload: () => dirty.value || hasDrafts(),
+  dialog: () => ({ description: st('You have unsaved changes.') }),
+  sameTarget: (to, from) => to.query.view === from.query.view && to.query.skill === from.query.skill,
+  afterRouteUpdate: () => {
+    cachedDrafts.value = new Map()
+    discardDraft()
+  },
 })
-function beforeUnload(event: BeforeUnloadEvent) {
-  if (!dirty.value && !cachedDrafts.value.size && !createOpen.value && !fileOpen.value && !copyOpen.value) return
-  event.preventDefault()
-  event.returnValue = ''
-}
+
 function keydown(event: KeyboardEvent) {
   if (
     (event.ctrlKey || event.metaKey) &&
@@ -624,14 +620,12 @@ watch(
 )
 onMounted(() => {
   void refresh()
-  window.addEventListener('beforeunload', beforeUnload)
   window.addEventListener('keydown', keydown)
 })
 onBeforeUnmount(() => {
   disposed = true
   listController?.abort()
   detailController?.abort()
-  window.removeEventListener('beforeunload', beforeUnload)
   window.removeEventListener('keydown', keydown)
 })
 defineExpose({ refresh })
@@ -681,307 +675,329 @@ defineExpose({ refresh })
         </li>
       </ul>
     </details>
-    <div class="settings-master-detail settings-viewport-region">
-      <aside
-        class="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-border/60 bg-background"
-        :class="{ 'settings-hide-stacked': showDetail }"
-      >
-        <div class="space-y-2 border-b border-border/60 p-2.5">
-          <SearchInput v-model="query" :placeholder="$st('Search skills')" :aria-label="$st('Search skills')" />
-          <div class="grid grid-cols-2 gap-2">
-            <OptionPicker
-              v-model="scopeFilter"
-              :options="scopeOptions"
-              :include-empty="false"
-              :title="$st('Scope')"
-              size="sm"
-            />
-            <OptionPicker
-              v-model="statusFilter"
-              :options="statusOptions"
-              :include-empty="false"
-              :title="$st('Status')"
-              size="sm"
-            />
-          </div>
+    <SettingsListDetail
+      v-model:detail-open="showDetail"
+      :list-label="$st('Skills')"
+      :back-label="$st('Skills')"
+      :detail-label="detail?.name || $st('Skills')"
+      :list-busy="loading"
+      :detail-loading="detailLoading"
+      detail-class="bg-background"
+    >
+      <template #list-header>
+        <SearchInput v-model="query" :placeholder="$st('Search skills')" :aria-label="$st('Search skills')" />
+        <div class="grid grid-cols-2 gap-2">
+          <OptionPicker
+            v-model="scopeFilter"
+            :options="scopeOptions"
+            :include-empty="false"
+            :title="$st('Scope')"
+            size="sm"
+          />
+          <OptionPicker
+            v-model="statusFilter"
+            :options="statusOptions"
+            :include-empty="false"
+            :title="$st('Status')"
+            size="sm"
+          />
         </div>
-        <div class="settings-viewport-scroll p-1.5" :aria-busy="loading">
-          <div v-if="loading && !catalog" role="status" class="px-4 py-10 text-center text-sm text-muted-foreground">
-            {{ $st('Loading…') }}
-          </div>
-          <div v-else-if="!items.length" class="px-4 py-10 text-center">
-            <RiBookOpenLine class="mx-auto mb-3 h-8 w-8 text-muted-foreground/50" />
-            <p class="text-sm font-medium">
-              {{ catalog?.skills.length ? $st('No matching skills') : $st('No skills installed') }}
-            </p>
-            <p class="mt-2 text-xs leading-relaxed text-muted-foreground">
-              {{ $st('Create a skill or install one from GitHub, an archive, or a folder.') }}
-            </p>
-          </div>
-          <button
-            v-for="skill in items"
-            :key="skill.id"
-            type="button"
-            class="mb-1 w-full rounded-lg p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            :class="selectedId === skill.id ? 'bg-primary/10 ring-1 ring-inset ring-primary/20' : 'hover:bg-muted/50'"
-            :aria-current="selectedId === skill.id ? 'true' : undefined"
-            :disabled="busy"
-            @click="selectSkill(skill.id)"
-          >
-            <div class="flex items-start justify-between gap-2">
-              <span class="min-w-0 break-words text-sm font-medium">{{ skill.name }}</span>
-              <span
-                class="mt-1.5 h-2 w-2 shrink-0 rounded-full"
-                :class="
-                  !skill.valid
-                    ? 'bg-amber-500'
-                    : skill.enabled && !skill.shadowed
-                      ? 'bg-emerald-500'
-                      : 'bg-muted-foreground/40'
-                "
-              />
-            </div>
-            <p class="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
-              {{ skill.description || $st('No description') }}
-            </p>
-            <div class="mt-2 flex flex-wrap gap-1.5 text-[10px] text-muted-foreground">
-              <span class="rounded border border-border/60 px-1.5 py-0.5">{{ scopeLabel(skill.scope) }}</span>
-              <span
-                v-if="!skill.valid"
-                class="rounded bg-amber-500/10 px-1.5 py-0.5 text-amber-800 dark:text-amber-200"
-                >{{ $st('Needs attention') }}</span
-              >
-              <span v-else-if="skill.shadowed" class="rounded bg-muted px-1.5 py-0.5">{{ $st('Overridden') }}</span>
-              <span v-else-if="!skill.enabled" class="rounded bg-muted px-1.5 py-0.5">{{ $st('Disabled') }}</span>
-              <span v-if="!skill.editable" class="rounded bg-muted px-1.5 py-0.5">{{ $st('Read only') }}</span>
-            </div>
-          </button>
+      </template>
+      <template #list>
+        <div v-if="loading && !catalog" role="status" class="px-4 py-10 text-center text-sm text-muted-foreground">
+          {{ $st('Loading…') }}
         </div>
+        <div v-else-if="!items.length" class="px-4 py-10 text-center">
+          <RiBookOpenLine class="mx-auto mb-3 h-8 w-8 text-muted-foreground/50" />
+          <p class="text-sm font-medium">
+            {{ catalog?.skills.length ? $st('No matching skills') : $st('No skills installed') }}
+          </p>
+          <p class="mt-2 text-xs leading-relaxed text-muted-foreground">
+            {{ $st('Create a skill or install one from GitHub, an archive, or a folder.') }}
+          </p>
+        </div>
+        <button
+          v-for="skill in items"
+          :key="skill.id"
+          type="button"
+          class="mb-1 w-full rounded-lg p-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          :class="selectedId === skill.id ? 'bg-primary/10 ring-1 ring-inset ring-primary/20' : 'hover:bg-muted/50'"
+          :aria-current="selectedId === skill.id ? 'true' : undefined"
+          :data-keyboard-item="skill.id"
+          :data-keyboard-label="skill.name"
+          :data-keyboard-selected="String(selectedId === skill.id)"
+          :disabled="busy"
+          @click="selectSkill(skill.id)"
+        >
+          <div class="flex items-start justify-between gap-2">
+            <span class="min-w-0 break-words text-sm font-medium">{{ skill.name }}</span>
+            <span
+              class="mt-1.5 h-2 w-2 shrink-0 rounded-full"
+              :class="
+                !skill.valid
+                  ? 'bg-amber-500'
+                  : skill.enabled && !skill.shadowed
+                    ? 'bg-emerald-500'
+                    : 'bg-muted-foreground/40'
+              "
+            />
+          </div>
+          <p class="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
+            {{ skill.description || $st('No description') }}
+          </p>
+          <div class="mt-2 flex flex-wrap gap-1.5 text-[10px] text-muted-foreground">
+            <span class="rounded border border-border/60 px-1.5 py-0.5">{{ scopeLabel(skill.scope) }}</span>
+            <span v-if="!skill.valid" class="rounded bg-amber-500/10 px-1.5 py-0.5 text-amber-800 dark:text-amber-200">{{
+              $st('Needs attention')
+            }}</span>
+            <span v-else-if="skill.shadowed" class="rounded bg-muted px-1.5 py-0.5">{{ $st('Overridden') }}</span>
+            <span v-else-if="!skill.enabled" class="rounded bg-muted px-1.5 py-0.5">{{ $st('Disabled') }}</span>
+            <span v-if="!skill.editable" class="rounded bg-muted px-1.5 py-0.5">{{ $st('Read only') }}</span>
+          </div>
+        </button>
+      </template>
+      <template #list-footer>
         <details v-if="catalog?.roots.length" class="shrink-0 border-t border-border/60 px-3 py-2 text-xs">
-          <summary class="cursor-pointer text-muted-foreground">{{ $st('Skill locations') }}</summary>
+          <summary class="cursor-pointer text-muted-foreground">
+            {{ $st('Skill locations') }}
+          </summary>
           <ul class="max-h-40 space-y-2 overflow-auto py-2">
             <li v-for="root in catalog.roots" :key="root.path" class="break-all">
               <span class="font-medium">{{ scopeLabel(root.scope) }}</span>
-              <p class="mt-0.5 font-mono text-[10px] text-muted-foreground">{{ root.path }}</p>
+              <p class="mt-0.5 font-mono text-[10px] text-muted-foreground">
+                {{ root.path }}
+              </p>
             </li>
           </ul>
         </details>
-      </aside>
-
-      <section
-        class="settings-skill-detail flex min-h-0 min-w-0 flex-col rounded-lg border border-border/60 bg-background"
-        :class="{ 'settings-hide-stacked': !showDetail }"
-      >
-        <div class="settings-stacked-only border-b border-border/60 px-2 py-1">
-          <Button variant="ghost" size="sm" @click="showDetail = false"
-            ><RiArrowLeftLine class="mr-1 h-4 w-4" />{{ $st('Skills') }}</Button
+      </template>
+      <template #detail>
+        <div class="settings-skill-detail flex min-h-0 min-w-0 flex-1 flex-col">
+          <div
+            v-if="detailLoading"
+            role="status"
+            class="grid min-h-64 flex-1 place-content-center text-sm text-muted-foreground"
           >
-        </div>
-        <div
-          v-if="detailLoading"
-          role="status"
-          class="grid min-h-64 flex-1 place-content-center text-sm text-muted-foreground"
-        >
-          {{ $st('Loading…') }}
-        </div>
-        <div v-else-if="!detail" class="grid min-h-64 flex-1 place-content-center px-6 text-center">
-          <RiBookOpenLine class="mx-auto mb-3 h-9 w-9 text-muted-foreground/40" />
-          <p class="text-sm text-muted-foreground">
-            {{ editorError || $st('Select a skill to inspect its instructions and files.') }}
-          </p>
-        </div>
-        <template v-else>
-          <header class="shrink-0 space-y-2 border-b border-border/60 p-2.5">
-            <div class="flex flex-wrap items-start justify-between gap-3">
-              <div class="min-w-0">
-                <h2 class="break-words text-base font-semibold">{{ detail.name }}</h2>
-                <p class="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">{{ detail.description }}</p>
+            {{ $st('Loading…') }}
+          </div>
+          <div v-else-if="!detail" class="grid min-h-64 flex-1 place-content-center px-6 text-center">
+            <RiBookOpenLine class="mx-auto mb-3 h-9 w-9 text-muted-foreground/40" />
+            <p class="text-sm text-muted-foreground">
+              {{ editorError || $st('Select a skill to inspect its instructions and files.') }}
+            </p>
+          </div>
+          <template v-else>
+            <header class="shrink-0 space-y-2 border-b border-border/60 p-2.5">
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <h2 data-settings-detail-heading tabindex="-1" class="break-words text-base font-semibold outline-none">
+                    {{ detail.name }}
+                  </h2>
+                  <p class="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">
+                    {{ detail.description }}
+                  </p>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    :disabled="!canManage || dirty || (!detail.valid && !detail.enabled)"
+                    @click="toggleEnabled"
+                  >
+                    {{ detail.enabled ? $st('Disable') : $st('Enable') }}
+                  </Button>
+                  <Button v-if="!detail.editable" size="sm" variant="outline" :disabled="busy" @click="copySkill">{{
+                    $st('Create editable copy')
+                  }}</Button>
+                  <Button
+                    v-if="sourceInstall"
+                    size="sm"
+                    variant="outline"
+                    :disabled="busy || dirty"
+                    @click="
+                      emit('install-from-source', {
+                        source: sourceInstall,
+                        scope: detail.scope,
+                      })
+                    "
+                    >{{ $st('Update from source') }}</Button
+                  >
+                  <IconButton
+                    :title="$st('Delete skill')"
+                    :aria-label="$st('Delete skill')"
+                    :disabled="!canManage || dirty"
+                    @click="deleteSelected"
+                  >
+                    <RiDeleteBinLine class="h-4 w-4 text-destructive" />
+                  </IconButton>
+                </div>
               </div>
-              <div class="flex flex-wrap gap-2">
-                <Button
+              <details class="text-xs">
+                <summary class="cursor-pointer text-muted-foreground">
+                  {{ $st('Details and source') }} · {{ scopeLabel(detail.scope) }}
+                </summary>
+                <dl class="settings-control-grid mt-2 max-h-48 overflow-auto">
+                  <div class="min-w-0 sm:col-span-2">
+                    <dt class="text-muted-foreground">{{ $st('Path') }}</dt>
+                    <dd class="mt-1 break-all font-mono">{{ detail.path }}</dd>
+                  </div>
+                  <div v-if="detail.source" class="min-w-0 sm:col-span-2">
+                    <dt class="text-muted-foreground">{{ $st('Source') }}</dt>
+                    <dd class="mt-1 break-all">{{ detail.source.location }}</dd>
+                    <dd
+                      v-if="detail.source.reference || detail.source.subpath"
+                      class="mt-1 break-all text-muted-foreground"
+                    >
+                      {{ [detail.source.reference, detail.source.subpath].filter(Boolean).join(' · ') }}
+                    </dd>
+                    <dd v-if="detail.source.revision" class="mt-1 break-all font-mono text-[10px] text-muted-foreground">
+                      {{ detail.source.revision }}
+                    </dd>
+                  </div>
+                  <div v-if="detail.metadata?.license">
+                    <dt class="text-muted-foreground">{{ $st('License') }}</dt>
+                    <dd class="mt-1">{{ detail.metadata.license }}</dd>
+                  </div>
+                  <div v-if="detail.metadata?.compatibility">
+                    <dt class="text-muted-foreground">
+                      {{ $st('Compatibility') }}
+                    </dt>
+                    <dd class="mt-1">{{ detail.metadata.compatibility }}</dd>
+                  </div>
+                  <div v-if="detail.metadata?.allowed_tools" class="sm:col-span-2">
+                    <dt class="text-muted-foreground">
+                      {{ $st('Allowed tools') }}
+                    </dt>
+                    <dd class="mt-1 break-words font-mono">
+                      {{ detail.metadata.allowed_tools }}
+                    </dd>
+                  </div>
+                  <div v-for="(value, key) in detail.metadata?.metadata || {}" :key="key">
+                    <dt class="text-muted-foreground">{{ key }}</dt>
+                    <dd class="mt-1 break-words">{{ value }}</dd>
+                  </div>
+                </dl>
+              </details>
+              <p v-if="detail.shadowed" class="rounded-md bg-muted/50 p-2 text-xs text-muted-foreground">
+                {{ $st('A higher-priority skill with the same name is active.') }}
+              </p>
+              <ul
+                v-if="detail.diagnostics.length"
+                class="max-h-28 space-y-1 overflow-auto rounded-md border border-amber-500/25 bg-amber-500/5 p-2 text-xs text-amber-900 dark:text-amber-200"
+              >
+                <li v-for="(issue, index) in detail.diagnostics" :key="index">
+                  {{ issue }}
+                </li>
+              </ul>
+            </header>
+            <div
+              class="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 bg-muted/10 px-3 py-2"
+            >
+              <div class="flex min-w-0 flex-1 items-center gap-1.5">
+                <RiFileTextLine class="h-4 w-4 shrink-0 text-muted-foreground" />
+                <OptionPicker
+                  :model-value="path"
+                  :options="fileOptions"
+                  :include-empty="false"
+                  :title="$st('Skill files')"
+                  :disabled="busy"
+                  monospace
                   size="sm"
-                  variant="outline"
-                  :disabled="!canManage || dirty || (!detail.valid && !detail.enabled)"
-                  @click="toggleEnabled"
-                >
-                  {{ detail.enabled ? $st('Disable') : $st('Enable') }}
-                </Button>
-                <Button v-if="!detail.editable" size="sm" variant="outline" :disabled="busy" @click="copySkill">{{
-                  $st('Create editable copy')
+                  trigger-class="max-w-full"
+                  @update:model-value="selectResource"
+                />
+                <IconButton
+                  :title="$st('Add file')"
+                  :aria-label="$st('Add file')"
+                  :disabled="!canManage"
+                  @click="openNewFile"
+                  ><RiAddLine class="h-4 w-4"
+                /></IconButton>
+                <IconButton
+                  v-if="path !== 'SKILL.md'"
+                  :title="$st('Delete file')"
+                  :aria-label="$st('Delete file')"
+                  :disabled="!canDeleteFile"
+                  @click="deleteResource"
+                  ><RiDeleteBinLine class="h-4 w-4"
+                /></IconButton>
+              </div>
+              <div class="flex items-center gap-1">
+                <Button v-if="path === 'SKILL.md'" size="sm" variant="ghost" :disabled="busy" @click="validateDocument">{{
+                  $st('Validate')
                 }}</Button>
                 <Button
-                  v-if="sourceInstall"
                   size="sm"
-                  variant="outline"
-                  :disabled="busy || dirty"
-                  @click="emit('install-from-source', { source: sourceInstall, scope: detail.scope })"
-                  >{{ $st('Update from source') }}</Button
+                  :variant="preview ? 'ghost' : 'secondary'"
+                  :aria-pressed="!preview"
+                  @click="preview = false"
+                  >{{ $st('Edit') }}</Button
                 >
-                <IconButton
-                  :title="$st('Delete skill')"
-                  :aria-label="$st('Delete skill')"
-                  :disabled="!canManage || dirty"
-                  @click="deleteSelected"
+                <Button
+                  size="sm"
+                  :variant="preview ? 'secondary' : 'ghost'"
+                  :aria-pressed="preview"
+                  @click="preview = true"
+                  >{{ $st('Preview') }}</Button
                 >
-                  <RiDeleteBinLine class="h-4 w-4 text-destructive" />
-                </IconButton>
               </div>
             </div>
-            <details class="text-xs">
-              <summary class="cursor-pointer text-muted-foreground">
-                {{ $st('Details and source') }} · {{ scopeLabel(detail.scope) }}
-              </summary>
-              <dl class="settings-control-grid mt-2 max-h-48 overflow-auto">
-                <div class="min-w-0 sm:col-span-2">
-                  <dt class="text-muted-foreground">{{ $st('Path') }}</dt>
-                  <dd class="mt-1 break-all font-mono">{{ detail.path }}</dd>
-                </div>
-                <div v-if="detail.source" class="min-w-0 sm:col-span-2">
-                  <dt class="text-muted-foreground">{{ $st('Source') }}</dt>
-                  <dd class="mt-1 break-all">{{ detail.source.location }}</dd>
-                  <dd
-                    v-if="detail.source.reference || detail.source.subpath"
-                    class="mt-1 break-all text-muted-foreground"
-                  >
-                    {{ [detail.source.reference, detail.source.subpath].filter(Boolean).join(' · ') }}
-                  </dd>
-                  <dd v-if="detail.source.revision" class="mt-1 break-all font-mono text-[10px] text-muted-foreground">
-                    {{ detail.source.revision }}
-                  </dd>
-                </div>
-                <div v-if="detail.metadata?.license">
-                  <dt class="text-muted-foreground">{{ $st('License') }}</dt>
-                  <dd class="mt-1">{{ detail.metadata.license }}</dd>
-                </div>
-                <div v-if="detail.metadata?.compatibility">
-                  <dt class="text-muted-foreground">{{ $st('Compatibility') }}</dt>
-                  <dd class="mt-1">{{ detail.metadata.compatibility }}</dd>
-                </div>
-                <div v-if="detail.metadata?.allowed_tools" class="sm:col-span-2">
-                  <dt class="text-muted-foreground">{{ $st('Allowed tools') }}</dt>
-                  <dd class="mt-1 break-words font-mono">{{ detail.metadata.allowed_tools }}</dd>
-                </div>
-                <div v-for="(value, key) in detail.metadata?.metadata || {}" :key="key">
-                  <dt class="text-muted-foreground">{{ key }}</dt>
-                  <dd class="mt-1 break-words">{{ value }}</dd>
-                </div>
-              </dl>
-            </details>
-            <p v-if="detail.shadowed" class="rounded-md bg-muted/50 p-2 text-xs text-muted-foreground">
-              {{ $st('A higher-priority skill with the same name is active.') }}
-            </p>
-            <ul
-              v-if="detail.diagnostics.length"
-              class="max-h-28 space-y-1 overflow-auto rounded-md border border-amber-500/25 bg-amber-500/5 p-2 text-xs text-amber-900 dark:text-amber-200"
+            <div v-if="validation" class="shrink-0 space-y-1 border-b border-border/60 px-4 py-2 text-xs" role="status">
+              <p :class="validation.valid ? 'text-emerald-700 dark:text-emerald-300' : 'text-destructive'">
+                {{ validation.valid ? $st('Skill validation passed') : $st('Skill validation failed') }}
+              </p>
+              <p v-for="issue in validation.errors" :key="issue" class="text-destructive">
+                {{ issue }}
+              </p>
+              <p v-for="issue in validation.warnings" :key="issue" class="text-amber-800 dark:text-amber-200">
+                {{ issue }}
+              </p>
+            </div>
+            <div
+              v-if="resourceUnavailable"
+              class="grid min-h-64 flex-1 place-content-center p-4 text-sm text-muted-foreground"
             >
-              <li v-for="(issue, index) in detail.diagnostics" :key="index">{{ issue }}</li>
-            </ul>
-          </header>
-          <div
-            class="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 bg-muted/10 px-3 py-2"
-          >
-            <div class="flex min-w-0 flex-1 items-center gap-1.5">
-              <RiFileTextLine class="h-4 w-4 shrink-0 text-muted-foreground" />
-              <OptionPicker
-                :model-value="path"
-                :options="fileOptions"
-                :include-empty="false"
-                :title="$st('Skill files')"
-                :disabled="busy"
-                monospace
-                size="sm"
-                trigger-class="max-w-full"
-                @update:model-value="selectResource"
+              {{ $st('This file cannot be opened as text. Choose another skill file.') }}
+            </div>
+            <div v-else-if="preview" class="settings-skill-file min-h-80 flex-1 overflow-auto p-3">
+              <MarkdownRenderer
+                v-if="isMarkdown"
+                :content="path === 'SKILL.md' ? skillMarkdownBody(content) : content"
+                :stream="false"
+                :allow-inline-ui="false"
+                source-path=""
               />
-              <IconButton
-                :title="$st('Add file')"
-                :aria-label="$st('Add file')"
-                :disabled="!canManage"
-                @click="openNewFile"
-                ><RiAddLine class="h-4 w-4"
-              /></IconButton>
-              <IconButton
-                v-if="path !== 'SKILL.md'"
-                :title="$st('Delete file')"
-                :aria-label="$st('Delete file')"
-                :disabled="!canDeleteFile"
-                @click="deleteResource"
-                ><RiDeleteBinLine class="h-4 w-4"
-              /></IconButton>
+              <pre v-else class="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed">{{ content }}</pre>
             </div>
-            <div class="flex items-center gap-1">
-              <Button v-if="path === 'SKILL.md'" size="sm" variant="ghost" :disabled="busy" @click="validateDocument">{{
-                $st('Validate')
-              }}</Button>
-              <Button
-                size="sm"
-                :variant="preview ? 'ghost' : 'secondary'"
-                :aria-pressed="!preview"
-                @click="preview = false"
-                >{{ $st('Edit') }}</Button
-              >
-              <Button
-                size="sm"
-                :variant="preview ? 'secondary' : 'ghost'"
-                :aria-pressed="preview"
-                @click="preview = true"
-                >{{ $st('Preview') }}</Button
-              >
+            <textarea
+              v-else
+              v-model="content"
+              :aria-label="$st('Skill file contents')"
+              :readonly="!detail.editable"
+              :disabled="busy"
+              spellcheck="false"
+              class="settings-skill-file min-h-80 w-full flex-1 resize-y bg-transparent p-3 font-mono text-xs leading-6 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:opacity-60"
+            />
+            <div class="shrink-0 space-y-2 border-t border-border/60 p-3">
+              <p v-if="editorError" role="alert" class="whitespace-pre-wrap break-words text-xs text-destructive">
+                {{ editorError }}
+              </p>
+              <SettingsSaveBar
+                v-if="detail.editable && ready"
+                :dirty="dirty"
+                :saving="action === 'save'"
+                :disabled="busy && action !== 'save'"
+                @save="save"
+                @discard="discardAndReload"
+              />
+              <p v-else-if="!detail.editable" class="text-xs text-muted-foreground">
+                {{ $st('This skill is read only. Install a copy into Global or Workspace to edit it.') }}
+              </p>
             </div>
-          </div>
-          <div v-if="validation" class="shrink-0 space-y-1 border-b border-border/60 px-4 py-2 text-xs" role="status">
-            <p :class="validation.valid ? 'text-emerald-700 dark:text-emerald-300' : 'text-destructive'">
-              {{ validation.valid ? $st('Skill validation passed') : $st('Skill validation failed') }}
-            </p>
-            <p v-for="issue in validation.errors" :key="issue" class="text-destructive">{{ issue }}</p>
-            <p v-for="issue in validation.warnings" :key="issue" class="text-amber-800 dark:text-amber-200">
-              {{ issue }}
-            </p>
-          </div>
-          <div
-            v-if="resourceUnavailable"
-            class="grid min-h-64 flex-1 place-content-center p-4 text-sm text-muted-foreground"
-          >
-            {{ $st('This file cannot be opened as text. Choose another skill file.') }}
-          </div>
-          <div v-else-if="preview" class="settings-skill-file min-h-80 flex-1 overflow-auto p-3">
-            <MarkdownRenderer
-              v-if="isMarkdown"
-              :content="path === 'SKILL.md' ? skillMarkdownBody(content) : content"
-              :stream="false"
-              :allow-inline-ui="false"
-              source-path=""
-            />
-            <pre v-else class="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed">{{ content }}</pre>
-          </div>
-          <textarea
-            v-else
-            v-model="content"
-            :aria-label="$st('Skill file contents')"
-            :readonly="!detail.editable"
-            :disabled="busy"
-            spellcheck="false"
-            class="settings-skill-file min-h-80 w-full flex-1 resize-y bg-transparent p-3 font-mono text-xs leading-6 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:opacity-60"
-          />
-          <div class="shrink-0 space-y-2 border-t border-border/60 p-3">
-            <p v-if="editorError" role="alert" class="whitespace-pre-wrap break-words text-xs text-destructive">
-              {{ editorError }}
-            </p>
-            <SettingsSaveBar
-              v-if="detail.editable && ready"
-              :dirty="dirty"
-              :saving="action === 'save'"
-              :disabled="busy && action !== 'save'"
-              @save="save"
-              @discard="discardAndReload"
-            />
-            <p v-else-if="!detail.editable" class="text-xs text-muted-foreground">
-              {{ $st('This skill is read only. Install a copy into Global or Workspace to edit it.') }}
-            </p>
-          </div>
-        </template>
-      </section>
-    </div>
+          </template>
+        </div>
+      </template>
+    </SettingsListDetail>
 
     <Dialog
       :open="createOpen"

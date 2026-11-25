@@ -665,6 +665,7 @@ export type BotPersona = {
 }
 
 export type BotProfile = {
+  agent_profile?: string | null
   archived: boolean
   avatar?: string | null
   created_at_ms: number
@@ -682,6 +683,7 @@ export type BotList = {
 }
 
 export type BotCreate = {
+  agent_profile?: string | null
   avatar?: string | null
   name: string
   persona?: BotPersona
@@ -689,6 +691,7 @@ export type BotCreate = {
 }
 
 export type BotUpdate = {
+  agent_profile?: string | null
   avatar?: string | null
   expected_revision: number
   name: string

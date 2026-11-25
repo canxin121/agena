@@ -32,14 +32,54 @@ export type PromptScopeConfig = PromptLayer & {
 
 export type PromptLayerScope = 'effective' | 'global' | 'workspace' | 'session'
 
+export type BuiltinPrompt = {
+  id: string
+  title: string
+  body: string
+  when: 'always' | 'user_facing' | 'subagent' | 'tools' | 'user_facing_tools'
+  aliases?: string[]
+  reusable?: boolean
+}
+
 export type PromptResolutionFragment = {
   id: string
   title: string
-  scope: 'global' | 'workspace' | 'model' | 'profile' | 'session' | 'request'
+  scope: 'builtin' | 'global' | 'workspace' | 'model' | 'profile' | 'session' | 'bot' | 'request' | 'runtime'
   position: number
   bytes: number
   sha256: string
   text: string
+}
+
+/** The editable list at this scope contains required and locally selected prompts. */
+export function systemPromptOrder(
+  builtins: readonly BuiltinPrompt[],
+  inherited: readonly PromptLayer[],
+  layer: PromptLayer,
+): string[] {
+  const required = new Set<string>()
+  const aliases = new Map<string, string>()
+  for (const prompt of builtins) {
+    if (prompt.reusable) continue
+    required.add(prompt.id)
+    for (const alias of prompt.aliases ?? []) aliases.set(alias, prompt.id)
+  }
+  const order = new Set(required)
+  for (const parent of inherited) {
+    for (const value of parent.order) {
+      const id = aliases.get(value) ?? value
+      if (required.has(id)) {
+        order.delete(id)
+        order.add(id)
+      }
+    }
+  }
+  for (const value of layer.order) {
+    const id = aliases.get(value) ?? value
+    order.delete(id)
+    order.add(id)
+  }
+  return [...order]
 }
 
 export type PromptResolutionWarning = {

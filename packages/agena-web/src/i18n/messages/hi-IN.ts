@@ -2452,8 +2452,6 @@ export default {
     composer: {
       actions: {
         compact: { label: 'सेशन संक्षिप्त करें', description: 'चुने हुए मॉडल से सारांश बनाएँ' },
-        init: { label: 'AGENTS.md शुरू करें', description: 'चैट इनपुट में /init कमांड डालें' },
-        review: { label: 'बदलावों की समीक्षा करें', description: 'चैट इनपुट में /review कमांड डालें' },
       },
       picker: {
         modelTitle: 'मॉडल',
@@ -2650,6 +2648,12 @@ export default {
       sideDescription: 'मौजूदा संदर्भ के साथ एक अलग शाखा खोलें',
       sectionTitle: 'BTW',
       sideChip: 'साइड',
+    },
+    mcpApp: {
+      open: 'ऐप खोलें',
+      loading: 'MCP ऐप लोड हो रहा है…',
+      timeout: 'MCP ऐप ने जवाब नहीं दिया।',
+      unavailable: 'MCP ऐप उपलब्ध नहीं है।',
     },
     toolDetails: {
       errorUnavailable: 'यह टूल विफल हुआ, लेकिन सर्वर ने त्रुटि का कारण नहीं दिया।',
@@ -3036,8 +3040,8 @@ export default {
           },
           resource: { label: 'संसाधन', description: 'file_ref भागों की फ़ाइलें, छवियाँ और अन्य संसाधन।' },
           skill_reference: {
-            label: 'कमांड संदर्भ',
-            description: 'skill_ref भागों के कमांड नाम, विवरण और संदर्भ मेटाडेटा।',
+            label: 'स्किल संदर्भ',
+            description: 'स्किल के नाम, विवरण और संदर्भ मेटाडेटा।',
           },
           interaction: { label: 'उपयोगकर्ता संवाद', description: 'संवाद भाग; लंबित अनुरोध हमेशा खुले रहते हैं।' },
           hook: { label: 'हुक', description: 'hook भागों से प्लगइन जीवनचक्र की जानकारी।' },

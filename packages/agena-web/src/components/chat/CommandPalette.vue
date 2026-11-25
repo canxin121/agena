@@ -1,161 +1,77 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, useId, watch, type Component } from 'vue'
-import { RiRefreshLine } from '@remixicon/vue'
+import type { Component } from 'vue'
 import { useI18n } from 'vue-i18n'
-import ListRowButton from '@/components/ui/ListRowButton.vue'
 import type { Command } from '@/pages/chat/useChatCommands'
-import { useComposerPaletteFocus } from '@/composables/useComposerPaletteFocus'
+import ComposerPalette from './ComposerPalette.vue'
 
-// Intentionally UI-only; ChatPage keeps state + keyboard navigation.
-
-/** The palette renders the shared command contract; it must not fork it. */
-type CommandItem = Command
-
-const props = defineProps<{
+defineProps<{
   open: boolean
   autoFocus: boolean
   loading: boolean
   query: string
-  commands: CommandItem[]
+  commands: Command[]
   activeIndex: number
-  commandIcon: (cmd: CommandItem) => Component
+  commandIcon: (command: Command) => Component
   listId?: string
 }>()
-
 const emit = defineEmits<{
-  (e: 'update:activeIndex', value: number): void
-  (e: 'update:query', value: string): void
-  (e: 'keydown', event: KeyboardEvent): void
-  (e: 'select', cmd: CommandItem): void
-  (e: 'dismiss'): void
+  'update:activeIndex': [index: number]
+  'update:query': [query: string]
+  keydown: [event: KeyboardEvent]
+  select: [command: Command]
+  dismiss: []
 }>()
-
-const rootEl = ref<HTMLDivElement | null>(null)
-const searchInput = ref<HTMLInputElement | null>(null)
 const { t } = useI18n()
-const fallbackId = useId()
-const resultsId = computed(() => props.listId || `commands-${fallbackId}`)
-const activeId = computed(() =>
-  props.commands[props.activeIndex] ? `${resultsId.value}-${props.activeIndex}` : undefined,
-)
-
-function containsTarget(target: Node | null): boolean {
-  if (!target) return false
-  return Boolean(rootEl.value && rootEl.value.contains(target))
-}
-
-defineExpose({ rootEl, containsTarget })
-
-useComposerPaletteFocus(
-  rootEl,
-  searchInput,
-  () => props.open,
-  () => props.autoFocus,
-  () => emit('dismiss'),
-)
-
-function setIndex(i: number) {
-  emit('update:activeIndex', i)
-}
-
-watch(
-  () => [props.open, props.activeIndex, props.commands] as const,
-  async () => {
-    if (!props.open) return
-    await nextTick()
-    rootEl.value?.querySelector('[data-command-active="true"]')?.scrollIntoView({ block: 'nearest' })
-  },
-  { flush: 'post' },
-)
 </script>
 
 <template>
-  <div
-    v-if="open"
-    ref="rootEl"
-    data-command-palette="true"
-    class="absolute bottom-full mb-2 left-0 w-full max-w-[520px] rounded-xl border border-border bg-background/95 shadow-lg z-20"
+  <ComposerPalette
+    kind="command"
+    :open="open"
+    :auto-focus="autoFocus"
+    :loading="loading"
+    :query="query"
+    :items="commands"
+    :item-key="(command) => command.name"
+    :active-index="activeIndex"
+    :list-id="listId"
+    :search-label="t('chat.commandPalette.search')"
+    :list-label="t('chat.commandPalette.search')"
+    :empty-text="t('chat.commandPalette.empty')"
+    :hint="t('chat.commandPalette.hint')"
+    @update:query="emit('update:query', $event)"
+    @update:active-index="emit('update:activeIndex', $event)"
+    @keydown="emit('keydown', $event)"
+    @select="emit('select', $event)"
+    @dismiss="emit('dismiss')"
   >
-    <div class="flex items-center gap-2 border-b border-border/60 px-3 py-2">
-      <span class="font-mono text-sm text-primary">/</span>
-      <input
-        ref="searchInput"
-        :value="query"
-        type="text"
-        class="h-7 min-w-0 flex-1 border-0 bg-transparent font-mono text-sm outline-none placeholder:text-muted-foreground"
-        :placeholder="t('chat.commandPalette.search')"
-        autocomplete="off"
-        spellcheck="false"
-        :aria-label="t('chat.commandPalette.search')"
-        role="combobox"
-        aria-autocomplete="list"
-        aria-expanded="true"
-        :aria-controls="resultsId"
-        :aria-activedescendant="activeId"
-        @input="$emit('update:query', ($event.target as HTMLInputElement).value)"
-        @keydown="$emit('keydown', $event)"
-      />
-    </div>
-    <div
-      :id="resultsId"
-      role="listbox"
-      tabindex="-1"
-      :aria-label="t('chat.commandPalette.search')"
-      :aria-busy="loading"
-      class="max-h-64 overflow-auto px-2 py-2"
-    >
-      <div v-if="loading && !commands.length" class="flex items-center justify-center py-4 text-muted-foreground">
-        <RiRefreshLine class="h-4 w-4 animate-spin" />
+    <template #icon><span class="font-mono text-sm text-primary" aria-hidden="true">/</span></template>
+    <template #item="{ item: cmd }">
+      <component :is="commandIcon(cmd)" class="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+      <div class="min-w-0 flex-1">
+        <div class="flex min-w-0 flex-wrap items-baseline gap-x-2">
+          <span class="min-w-0 truncate font-mono text-sm">/{{ cmd.name }}</span>
+          <span v-if="cmd.arguments" class="min-w-0 truncate font-mono text-[11px] text-muted-foreground">{{
+            cmd.arguments
+          }}</span>
+          <span
+            v-if="cmd.kind === 'builtin'"
+            class="text-[10px] uppercase font-bold tracking-tight rounded border border-amber-300/40 bg-amber-200/10 text-amber-600 px-1.5 py-0.5"
+          >
+            {{ t('chat.roles.system') }}
+          </span>
+          <span
+            v-else-if="cmd.scope"
+            class="text-[10px] uppercase font-bold tracking-tight rounded border border-emerald-300/40 bg-emerald-200/10 text-emerald-600 px-1.5 py-0.5"
+          >
+            {{ cmd.scope }}
+          </span>
+        </div>
+        <div v-if="cmd.description" class="text-xs text-muted-foreground truncate">{{ cmd.description }}</div>
+        <div v-if="cmd.aliases?.length" class="text-xs text-muted-foreground truncate">
+          {{ t('chat.commandPalette.aliases') }}: /{{ cmd.aliases.join(' /') }}
+        </div>
       </div>
-      <div v-else-if="commands.length === 0" class="px-3 py-2 text-sm text-muted-foreground">
-        {{ t('chat.commandPalette.empty') }}
-      </div>
-      <div v-else class="space-y-1">
-        <ListRowButton
-          v-for="(cmd, idx) in commands"
-          :key="cmd.name"
-          :active="idx === activeIndex"
-          :data-command-active="idx === activeIndex"
-          :id="`${resultsId}-${idx}`"
-          role="option"
-          :aria-selected="idx === activeIndex"
-          :tabindex="-1"
-          size="sm"
-          @mousedown.prevent
-          @click="$emit('select', cmd)"
-          @mouseenter="setIndex(idx)"
-        >
-          <component :is="commandIcon(cmd)" class="h-4 w-4 text-muted-foreground mt-0.5" />
-          <div class="min-w-0 flex-1">
-            <div class="flex items-center gap-2">
-              <span class="font-mono text-sm">/{{ cmd.name }}</span>
-              <span v-if="cmd.arguments" class="font-mono text-[11px] text-muted-foreground">{{ cmd.arguments }}</span>
-              <span
-                v-if="cmd.kind === 'builtin'"
-                class="text-[10px] uppercase font-bold tracking-tight rounded border border-amber-300/40 bg-amber-200/10 text-amber-600 px-1.5 py-0.5"
-              >
-                {{ t('chat.roles.system') }}
-              </span>
-              <span
-                v-else-if="cmd.scope"
-                class="text-[10px] uppercase font-bold tracking-tight rounded border border-emerald-300/40 bg-emerald-200/10 text-emerald-600 px-1.5 py-0.5"
-              >
-                {{ cmd.scope }}
-              </span>
-            </div>
-            <div v-if="cmd.description" class="text-xs text-muted-foreground truncate">{{ cmd.description }}</div>
-            <div v-if="cmd.aliases?.length" class="text-xs text-muted-foreground truncate">
-              {{ t('chat.commandPalette.aliases') }}: /{{ cmd.aliases.join(' /') }}
-            </div>
-            <div v-if="!cmd.description && !cmd.aliases?.length" class="text-xs text-muted-foreground truncate">
-              /{{ cmd.name }}
-            </div>
-          </div>
-        </ListRowButton>
-      </div>
-    </div>
-    <div class="px-3 py-1.5 border-t border-border/60 text-[11px] text-muted-foreground">
-      {{ t('chat.commandPalette.hint') }}
-    </div>
-  </div>
+    </template>
+  </ComposerPalette>
 </template>

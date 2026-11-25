@@ -1,27 +1,28 @@
 <script setup lang="ts">
-import { readViewportRect, useViewportObserver } from '@/composables/useViewportObserver'
-import { computed, isRef, nextTick, onBeforeUnmount, ref, watch, type CSSProperties } from 'vue'
+import { useMobileSheetLayout } from '@/composables/useMobileSheetLayout'
+import { createReusableTemplate } from '@vueuse/core'
+import { rememberKeyboardOverlaySource } from '@/composables/useDialogReturnFocus'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { RiAttachmentLine, RiCloseLine, RiFileLine, RiFileUploadLine, RiLoader4Line } from '@remixicon/vue'
 import { useI18n } from 'vue-i18n'
-import { DialogContent, DialogOverlay, DialogPortal, DialogRoot, DialogTitle } from 'radix-vue'
+import { DialogTitle } from 'radix-vue'
 
 import Button from '@/components/ui/Button.vue'
 import { escapeBelongsToPanel } from '@/components/chat/attachmentsPanelScope'
 import IconButton from '@/components/ui/IconButton.vue'
+import ModalSurface from '@/components/ui/ModalSurface.vue'
+import PopoverSurface from '@/components/ui/PopoverSurface.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 import { useUiStore, type ImageViewerItem } from '@/stores/ui'
 import type { AttachedFile } from '@/pages/chat/useChatAttachments'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
-import { isImeComposing } from '@/lib/imeKeyboard'
-
-type DesktopAnchorLike =
-  | HTMLElement
-  | {
-      triggerEl?: unknown
-      $el?: unknown
-      getBoundingClientRect?: () => DOMRect | undefined
-    }
-  | null
+import { resolveOverlayAnchorElement, type OverlayAnchor } from '@/lib/overlayAnchor'
+import {
+  enabledKeyboardItems,
+  focusKeyboardItem,
+  handleOptionKeydown,
+  isVisibleKeyboardTarget,
+} from '@/lib/keyboardNavigation'
 
 const props = withDefaults(
   defineProps<{
@@ -30,7 +31,7 @@ const props = withDefaults(
     formatBytes: (bytes: number) => string
     busy?: boolean
     isCompactTouch?: boolean
-    desktopAnchorEl?: DesktopAnchorLike
+    desktopAnchorEl?: OverlayAnchor
     desktopPlacement?: 'top-start' | 'top-end' | 'bottom-start' | 'bottom-end'
     desktopGapPx?: number
     desktopViewportMarginPx?: number
@@ -51,6 +52,7 @@ const props = withDefaults(
 )
 
 const { t } = useI18n()
+const [DefineAttachmentsBody, AttachmentsBody] = createReusableTemplate()
 const ui = useUiStore()
 const workspacePane = useWorkspacePaneContext()
 
@@ -67,10 +69,38 @@ const emit = defineEmits<{
 
 const panelEl = ref<HTMLElement | null>(null)
 let returnFocusEl: HTMLElement | null = null
+let lastPanelFocus: HTMLElement | null = null
+let unmounting = false
 
 const isMobileSheet = computed(() => Boolean(props.isCompactTouch))
+const mobileSheetStyle = useMobileSheetLayout(() => props.open && isMobileSheet.value)
+const toolbarSize = computed(() => (isMobileSheet.value ? 'sm' : 'xs'))
+const panelClass = 'oc-overlay-panel fixed flex flex-col overflow-hidden'
 
 const fileCount = computed(() => (Array.isArray(props.attachedFiles) ? props.attachedFiles.length : 0))
+watch(
+  [() => props.open, panelEl],
+  ([open, panel]) => {
+    if (open && panel && returnFocusEl) rememberKeyboardOverlaySource(panel, returnFocusEl)
+    if (!open) lastPanelFocus = null
+  },
+  { flush: 'post' },
+)
+watch(
+  fileCount,
+  () => {
+    if (!props.open || !lastPanelFocus || document.activeElement !== document.body) return
+    if (lastPanelFocus.isConnected && !lastPanelFocus.matches(':disabled')) return
+    const [first] = enabledKeyboardItems(panelEl.value)
+    focusKeyboardItem(first)
+  },
+  { flush: 'post' },
+)
+
+function onPanelFocusin(event: FocusEvent) {
+  if (event.target instanceof HTMLElement) lastPanelFocus = event.target
+}
+
 const countLabel = computed(() => {
   const n = fileCount.value
   if (n === 1) return String(t('chat.attachments.countLabelOne'))
@@ -134,757 +164,292 @@ function close() {
   emit('update:open', false)
 }
 
-function captureReturnFocus() {
-  if (typeof document === 'undefined') return
-  const active = document.activeElement
-  returnFocusEl = active instanceof HTMLElement ? active : null
-}
-
-async function restoreReturnFocus() {
-  const target = returnFocusEl
-  returnFocusEl = null
-  if (!target || typeof document === 'undefined') return
-  await nextTick()
-  if (!target.isConnected) return
-  const active = document.activeElement
-  if (active instanceof HTMLElement && active !== document.body && active !== document.documentElement) return
-  target.focus({ preventScroll: true })
-}
-
-function onCloseAutoFocus(event: Event) {
-  event.preventDefault()
-  void restoreReturnFocus()
-}
-
-async function focusDesktopPanel() {
-  await syncDesktopPosition()
-  await nextTick()
-  if (!props.open || isMobileSheet.value) return
-  const target = panelEl.value?.querySelector<HTMLElement>('[data-attachment-first]')
-  if (!target) return
-  // Button's transition-all can animate inherited visibility after positioning.
-  // Wait for that transition before focusing; focusing a hidden child is ignored.
-  void getComputedStyle(target).visibility
-  await Promise.allSettled(target.getAnimations().map((animation) => animation.finished))
-  if (!props.open || (document.activeElement !== returnFocusEl && document.activeElement !== document.body)) return
-  target.focus({ preventScroll: true })
-}
-
-let focusOutTimer: ReturnType<typeof setTimeout> | undefined
-function onDesktopFocusOut(event: FocusEvent) {
-  if (focusOutTimer) clearTimeout(focusOutTimer)
-  if (event.relatedTarget instanceof Node && panelEl.value?.contains(event.relatedTarget)) return
-  if (
-    event.relatedTarget instanceof Element &&
-    event.relatedTarget.closest('[role="dialog"], [role="alertdialog"], [data-keyboard-overlay]')
-  )
-    return
-  // A microtask can run between native focusout and focusin. Wait until the
-  // browser completes the focus move before deciding that the panel was left.
-  focusOutTimer = setTimeout(() => {
-    if (!props.open || isMobileSheet.value || ui.isImageViewerOpen) return
-    const active = document.activeElement
-    if (!active || active === document.body) return
-    if (active instanceof Element && active.closest('[role="dialog"], [role="alertdialog"], [data-keyboard-overlay]'))
-      return
-    if (!panelEl.value?.contains(active)) close()
-  }, 0)
-}
-
-function unwrapRefCandidate(value: unknown): unknown {
-  let current = value
-  for (let i = 0; i < 4; i += 1) {
-    if (!isRef(current)) return current
-    current = current.value
-  }
-  return current
-}
-
-function resolveAnchorElCandidate(value: unknown): HTMLElement | null {
-  const raw = unwrapRefCandidate(value)
-  if (raw instanceof HTMLElement) return raw
-  if (!raw || typeof raw !== 'object') return null
-
-  const triggerEl = unwrapRefCandidate((raw as { triggerEl?: unknown }).triggerEl)
-  if (triggerEl instanceof HTMLElement) return triggerEl
-
-  if (triggerEl && typeof triggerEl === 'object') {
-    const triggerHostEl = unwrapRefCandidate((triggerEl as { $el?: unknown }).$el)
-    if (triggerHostEl instanceof HTMLElement) return triggerHostEl
-  }
-
-  const hostEl = unwrapRefCandidate((raw as { $el?: unknown }).$el)
-  if (hostEl instanceof HTMLElement) return hostEl
-
-  return null
-}
-
-function resolveAnchorRectCandidate(value: unknown): DOMRect | null {
-  const anchorEl = resolveAnchorElCandidate(value)
-  if (anchorEl) return anchorEl.getBoundingClientRect()
-
-  const raw = unwrapRefCandidate(value)
-  if (!raw || typeof raw !== 'object') return null
-
-  const getRect = (raw as { getBoundingClientRect?: () => DOMRect | undefined }).getBoundingClientRect
-  if (typeof getRect === 'function') {
-    const rect = getRect()
-    if (rect) return rect
-  }
-
-  const triggerEl = unwrapRefCandidate((raw as { triggerEl?: unknown }).triggerEl)
-  if (triggerEl && typeof triggerEl === 'object') {
-    const triggerGetRect = (triggerEl as { getBoundingClientRect?: () => DOMRect | undefined }).getBoundingClientRect
-    if (typeof triggerGetRect === 'function') {
-      const rect = triggerGetRect()
-      if (rect) return rect
-    }
-  }
-
-  return null
-}
-
-function toNonNegativePx(value: unknown, fallback: number): number {
-  const n = Number(value)
-  if (!Number.isFinite(n)) return fallback
-  return Math.max(0, Math.round(n))
-}
-
-async function waitForAnimationFrame(): Promise<void> {
-  if (typeof window === 'undefined' || typeof window.requestAnimationFrame !== 'function') return
-  await new Promise<void>((resolve) => {
-    window.requestAnimationFrame(() => resolve())
-  })
-}
-
-// Desktop fixed positioning (anchored popover).
-const panelGapPx = computed(() => toNonNegativePx(props.desktopGapPx, 8))
-const viewportMarginPx = computed(() => toNonNegativePx(props.desktopViewportMarginPx, 8))
-
-const desktopStyle = ref<CSSProperties>({
-  left: `${viewportMarginPx.value}px`,
-  top: `${viewportMarginPx.value}px`,
-  visibility: 'hidden',
-})
-
-async function syncDesktopPosition() {
-  if (!props.open || isMobileSheet.value) return
-  if (typeof window === 'undefined') return
-
-  await nextTick()
-
-  const firstPass = computeDesktopStyle()
-  if (!firstPass) return
-  desktopStyle.value = firstPass
-
-  await waitForAnimationFrame()
-  if (!props.open || isMobileSheet.value) return
-  const secondPass = computeDesktopStyle()
-  if (!secondPass) return
-  desktopStyle.value = secondPass
-}
-
-function computeDesktopStyle(): CSSProperties | null {
-  if (typeof window === 'undefined') return null
-
-  const panel = panelEl.value
-  if (!panel) return null
-
-  const panelRect = panel.getBoundingClientRect()
-  const anchorRect = resolveDesktopAnchorRect()
-  if (!anchorRect) return null
-  const viewportWidth = window.innerWidth
-  const viewportHeight = window.innerHeight
-  const gap = panelGapPx.value
-  const margin = viewportMarginPx.value
-  const alignEnd = props.desktopPlacement.endsWith('end')
-  const placeTop = props.desktopPlacement.startsWith('top')
-
-  let left = alignEnd ? anchorRect.right - panelRect.width : anchorRect.left
-  let top = placeTop ? anchorRect.top - panelRect.height - gap : anchorRect.bottom + gap
-
-  if (!placeTop && top + panelRect.height > viewportHeight - margin) {
-    top = anchorRect.top - panelRect.height - gap
-  } else if (placeTop && top < margin) {
-    top = anchorRect.bottom + gap
-  }
-
-  left = Math.max(margin, Math.min(left, viewportWidth - panelRect.width - margin))
-  top = Math.max(margin, Math.min(top, viewportHeight - panelRect.height - margin))
-
-  return {
-    left: `${Math.round(left)}px`,
-    top: `${Math.round(top)}px`,
-    visibility: 'visible',
-  }
-}
-
-function resolveDesktopAnchorEl(): HTMLElement | null {
-  return resolveAnchorElCandidate(props.desktopAnchorEl as unknown)
-}
-
-function resolveDesktopAnchorRect(): DOMRect | null {
-  return resolveAnchorRectCandidate(props.desktopAnchorEl as unknown)
-}
-
-function onDesktopViewportChange() {
-  void syncDesktopPosition()
-}
-
-function onDocumentClick(event: MouseEvent) {
-  if (!props.open || isMobileSheet.value) return
-  const target = event.target as Node | null
-  if (!target) return
-  if (panelEl.value?.contains(target)) return
-  if (target instanceof Element && target.closest('[role="dialog"], [role="alertdialog"], [data-keyboard-overlay]'))
-    return
-  const anchor = resolveDesktopAnchorEl()
-  if (anchor?.contains(target)) return
-  close()
-}
-
-function onDocumentKeydown(event: KeyboardEvent) {
-  if (event.defaultPrevented || isImeComposing(event) || ui.isImageViewerOpen) return
-  if (!props.open || isMobileSheet.value) return
-  if (event.key !== 'Escape') return
-  const surface =
-    event.target instanceof Element
-      ? event.target.closest('[role="dialog"], [role="alertdialog"], [data-keyboard-overlay]')
-      : null
-  if (surface && surface !== panelEl.value && !panelEl.value?.contains(surface)) return
-  if (!escapeBelongsToThisPane(event.target as Node | null)) return
-  event.preventDefault()
-  event.stopPropagation()
-  close()
-}
-
-/**
- * Every pane keeps its own panel in the same document, so Escape may only close
- * the one the user is working in.  Without a pane wrapper (compact layout) the
- * previous behaviour stands.
- */
-function escapeBelongsToThisPane(target: Node | null): boolean {
-  const element = target instanceof Element ? target : target instanceof Node ? target.parentElement : null
-  return escapeBelongsToPanel({
-    panel: panelEl.value,
-    target: element,
-    paneFocused: !workspacePane || workspacePane.isFocused.value,
-  })
-}
-
-function onMobileDialogOpenChange(next: boolean) {
-  if (!next && props.open) close()
-}
-
-let desktopEventsBound = false
-function bindDesktopEvents() {
-  if (desktopEventsBound || typeof window === 'undefined' || typeof document === 'undefined') return
-  window.addEventListener('resize', onDesktopViewportChange)
-  window.addEventListener('scroll', onDesktopViewportChange, true)
-  document.addEventListener('click', onDocumentClick)
-  document.addEventListener('keydown', onDocumentKeydown)
-  desktopEventsBound = true
-}
-
-function unbindDesktopEvents() {
-  if (!desktopEventsBound || typeof window === 'undefined' || typeof document === 'undefined') return
-  window.removeEventListener('resize', onDesktopViewportChange)
-  window.removeEventListener('scroll', onDesktopViewportChange, true)
-  document.removeEventListener('click', onDocumentClick)
-  document.removeEventListener('keydown', onDocumentKeydown)
-  desktopEventsBound = false
-}
-
-// Mobile sheet positioning.
-const MOBILE_SHEET_MARGIN_PX = 8
-const mobileSheetStyle = ref<CSSProperties>({
-  top: `${MOBILE_SHEET_MARGIN_PX}px`,
-  left: '50%',
-  width: `calc(100% - ${MOBILE_SHEET_MARGIN_PX * 2}px)`,
-  maxHeight: `calc(100dvh - ${MOBILE_SHEET_MARGIN_PX * 2}px)`,
-})
-
-function cssVarPx(name: string, fallback: number): number {
-  if (typeof window === 'undefined' || typeof document === 'undefined') return fallback
-  const raw = getComputedStyle(document.documentElement).getPropertyValue(name)
-  const parsed = Number.parseFloat(String(raw || '').trim())
-  return Number.isFinite(parsed) ? parsed : fallback
-}
-
-async function syncMobileSheetPosition() {
-  if (!props.open || !isMobileSheet.value) return
-  if (typeof window === 'undefined' || typeof document === 'undefined') return
-
-  await nextTick()
-
-  const panel = panelEl.value
-  if (!panel) return
-
-  const { height: viewportHeight, top: viewportTop, width: viewportWidth, left: viewportLeft } = readViewportRect()
-  if (!viewportHeight) return
-
-  const safeTop = cssVarPx('--oc-safe-area-top', 0)
-  const safeBottom = cssVarPx('--oc-safe-area-bottom', 0)
-  const safeLeft = cssVarPx('--oc-safe-area-left', 0)
-  const safeRight = cssVarPx('--oc-safe-area-right', 0)
-
-  const topInset = viewportTop + safeTop + MOBILE_SHEET_MARGIN_PX
-  const bottomEdge = viewportTop + viewportHeight - safeBottom - MOBILE_SHEET_MARGIN_PX
-  const maxHeight = Math.max(0, bottomEdge - topInset)
-  const usableWidth = Math.max(0, viewportWidth - safeLeft - safeRight)
-  const panelWidth = Math.max(0, usableWidth - MOBILE_SHEET_MARGIN_PX * 2)
-  const panelCenter = viewportLeft + safeLeft + usableWidth / 2
-  const dimensions = {
-    left: `${Math.round(panelCenter)}px`,
-    width: `${Math.round(panelWidth)}px`,
-    maxHeight: `${Math.round(maxHeight)}px`,
-  }
-  // Measure after the current viewport constraints reach the scrolling list,
-  // including when the panel reopens after the visible area has grown.
-  mobileSheetStyle.value = { ...mobileSheetStyle.value, ...dimensions }
-  await nextTick()
-  if (!props.open || !isMobileSheet.value || panelEl.value !== panel) return
-  const panelHeight = Math.min(maxHeight, Math.max(0, panel.getBoundingClientRect().height))
-
-  const centeredOffset = Math.max(0, Math.round((maxHeight - panelHeight) / 2))
-  const top = topInset + centeredOffset
-
-  mobileSheetStyle.value = {
-    top: `${Math.round(top)}px`,
-    ...dimensions,
-  }
-}
+const desktopAnchor = computed(() => resolveOverlayAnchorElement(props.desktopAnchorEl))
 
 watch(
   () => props.open,
   (open) => {
-    if (open) {
-      if (focusOutTimer) clearTimeout(focusOutTimer)
-      captureReturnFocus()
-      const margin = viewportMarginPx.value
-      // Reset the desktop style so we avoid flashing stale positions.
-      desktopStyle.value = {
-        left: `${margin}px`,
-        top: `${margin}px`,
-        visibility: 'hidden',
-      }
-
-      if (isMobileSheet.value) {
-        void syncMobileSheetPosition()
-      } else {
-        bindDesktopEvents()
-        void focusDesktopPanel()
-      }
-      return
-    }
-
-    unbindDesktopEvents()
-    if (!isMobileSheet.value) void restoreReturnFocus()
+    if (!open || typeof document === 'undefined') return
+    const active = document.activeElement
+    returnFocusEl = active instanceof HTMLElement && active !== document.body ? active : desktopAnchor.value
   },
-  { immediate: true },
+  { immediate: true, flush: 'sync' },
 )
 
-watch(
-  () => isMobileSheet.value,
-  (mobile) => {
-    if (!props.open) return
-    if (mobile) {
-      unbindDesktopEvents()
-      void syncMobileSheetPosition()
-      return
-    }
-    bindDesktopEvents()
-    void syncDesktopPosition()
-  },
-)
+function onCloseAutoFocus(event: Event) {
+  event.preventDefault()
+  if (props.open && !unmounting) return
 
-watch(
-  () =>
-    [
-      props.desktopAnchorEl,
-      props.desktopPlacement,
-      props.desktopGapPx,
-      props.desktopViewportMarginPx,
-      fileCount.value,
-      props.busy,
-      isMobileSheet.value,
-    ] as const,
-  () => {
-    if (!props.open) return
-    if (isMobileSheet.value) void syncMobileSheetPosition()
-    else void syncDesktopPosition()
-  },
-)
+  const target = returnFocusEl
+  returnFocusEl = null
+  void nextTick(() => {
+    if (props.open && !unmounting) return
+    const active = document.activeElement
+    if (active instanceof HTMLElement && active !== document.body && active !== document.documentElement) return
+    if (target && isVisibleKeyboardTarget(target)) target.focus({ preventScroll: true })
+  })
+}
+
+function onDesktopInteractOutside(event: CustomEvent<{ originalEvent: Event }>) {
+  const target = event.detail.originalEvent.target
+  if (!(target instanceof Element)) return
+  if (
+    target === document.body ||
+    desktopAnchor.value?.contains(target) ||
+    target.closest('[role="dialog"], [role="alertdialog"], [data-keyboard-overlay]')
+  ) {
+    event.preventDefault()
+  }
+}
+
+function onDesktopEscape(event: KeyboardEvent) {
+  const target = event.target instanceof Element ? event.target : null
+  const overlay = target?.closest('[role="dialog"], [role="alertdialog"], [data-keyboard-overlay]')
+  if (
+    ui.isImageViewerOpen ||
+    (overlay && overlay !== panelEl.value) ||
+    (!panelEl.value?.contains(target) &&
+      !escapeBelongsToPanel({
+        panel: desktopAnchor.value,
+        target,
+        paneFocused: !workspacePane || workspacePane.isFocused.value,
+      }))
+  ) {
+    event.preventDefault()
+  }
+}
+
+function onSurfaceOpenChange(open: boolean) {
+  if (!open && props.open) close()
+}
 
 onBeforeUnmount(() => {
-  if (focusOutTimer) clearTimeout(focusOutTimer)
-  unbindDesktopEvents()
+  unmounting = true
 })
-
-useViewportObserver(() => props.open && isMobileSheet.value, syncMobileSheetPosition)
 </script>
 
 <template>
-  <Teleport to="body">
-    <div
-      v-if="open && !isMobileSheet"
-      ref="panelEl"
-      role="dialog"
-      :aria-label="effectiveTitle"
-      data-keyboard-overlay="true"
-      tabindex="-1"
-      class="pointer-events-auto fixed z-[60] w-[min(420px,calc(100vw-1rem))] max-h-[min(72dvh,560px)] rounded-xl border border-border/70 bg-background/95 shadow-xl backdrop-blur overflow-hidden flex flex-col"
-      :style="desktopStyle"
-      @pointerdown.stop
-      @click.stop
-      @focusout="onDesktopFocusOut"
-    >
-      <div class="flex items-center justify-between gap-3 px-3 py-2 border-b border-border/40">
-        <div class="min-w-0 flex items-center gap-2">
-          <RiAttachmentLine class="h-4 w-4 text-muted-foreground" />
-          <div class="min-w-0">
-            <div class="text-xs font-semibold text-foreground truncate">{{ effectiveTitle }}</div>
-            <div class="mt-0.5 text-[10px] text-muted-foreground font-mono">
-              <span v-if="busy" class="inline-flex items-center gap-1">
-                <RiLoader4Line class="h-3.5 w-3.5 animate-spin" />
-                {{ t('chat.attachments.attaching') }}
-              </span>
-              <span v-else>{{ countLabel }}</span>
-            </div>
+  <DefineAttachmentsBody>
+    <header class="flex shrink-0 items-center justify-between gap-3 border-b border-border/50 px-3 py-2">
+      <div class="flex min-w-0 items-center gap-2">
+        <RiAttachmentLine class="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <div class="min-w-0">
+          <component :is="isMobileSheet ? DialogTitle : 'div'" class="truncate text-sm font-semibold">
+            {{ effectiveTitle }}
+          </component>
+          <div class="mt-0.5 text-xs text-muted-foreground" role="status">
+            <span v-if="busy" class="inline-flex items-center gap-1.5">
+              <RiLoader4Line class="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+              {{ t('chat.attachments.attaching') }}
+            </span>
+            <span v-else>{{ countLabel }}</span>
           </div>
         </div>
+      </div>
+      <div class="flex shrink-0 items-center gap-1">
+        <Button
+          v-if="fileCount > 0"
+          data-keyboard-option
+          :size="toolbarSize"
+          variant="ghost-destructive"
+          :class="isMobileSheet && 'min-h-10'"
+          @click="emit('clear')"
+        >
+          {{ t(isMobileSheet ? 'chat.attachments.actions.clear' : 'chat.attachments.actions.clearAll') }}
+        </Button>
         <IconButton
           size="sm"
+          :class="isMobileSheet && 'size-10'"
           :tooltip="t('common.close')"
-          :is-compact-touch="isMobileSheet"
-          :title="t('common.close')"
+          :is-touch-pointer="isMobileSheet"
           :aria-label="t('common.close')"
           @click="close"
         >
-          <RiCloseLine class="h-4 w-4" />
+          <RiCloseLine class="h-4 w-4" aria-hidden="true" />
         </IconButton>
       </div>
+    </header>
 
-      <div class="p-3 flex-1 min-h-0 overflow-hidden flex flex-col gap-3">
-        <div class="flex flex-wrap items-center gap-2">
-          <Button data-attachment-first size="xs" variant="outline" class="h-8" @click="$emit('attachLocal')">
-            <RiFileUploadLine class="h-4 w-4 mr-1.5" />
-            {{ t('chat.attachments.actions.addFromComputer') }}
-          </Button>
-          <Button v-if="allowProject" size="xs" variant="outline" class="h-8" @click="$emit('attachProject')">
-            <RiFileLine class="h-4 w-4 mr-1.5" />
-            {{ t('chat.attachments.actions.addFromProject') }}
-          </Button>
-          <Button
-            size="xs"
-            variant="ghost-destructive"
-            class="h-8 ml-auto"
-            :disabled="fileCount === 0"
-            @click="$emit('clear')"
-          >
-            {{ t('chat.attachments.actions.clearAll') }}
-          </Button>
+    <div class="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden p-3">
+      <div class="flex shrink-0 flex-wrap items-center gap-2">
+        <Button
+          data-attachment-first
+          data-keyboard-option
+          :size="toolbarSize"
+          variant="outline"
+          :class="isMobileSheet ? 'min-h-9' : 'min-h-8'"
+          @click="emit('attachLocal')"
+        >
+          <RiFileUploadLine class="me-1.5 h-4 w-4" aria-hidden="true" />
+          {{ t('chat.attachments.actions.addFromComputer') }}
+        </Button>
+        <Button
+          v-if="allowProject"
+          data-keyboard-option
+          :size="toolbarSize"
+          variant="outline"
+          :class="isMobileSheet ? 'min-h-9' : 'min-h-8'"
+          @click="emit('attachProject')"
+        >
+          <RiFileLine class="me-1.5 h-4 w-4" aria-hidden="true" />
+          {{ t('chat.attachments.actions.addFromProject') }}
+        </Button>
+      </div>
+
+      <div class="min-h-0 flex-1 overflow-auto overscroll-contain" :aria-busy="busy">
+        <div v-if="fileCount === 0" class="space-y-2 rounded-lg border border-border/60 bg-muted/15 p-3">
+          <template v-if="busy">
+            <Skeleton class="h-3 w-2/3" />
+            <Skeleton class="h-3 w-1/2" />
+            <Skeleton v-for="row in 3" :key="row" class="h-8 w-full" />
+          </template>
+          <template v-else>
+            <div class="text-sm font-medium">{{ t('chat.attachments.empty.title') }}</div>
+            <div class="text-xs text-muted-foreground">{{ t('chat.attachments.empty.description') }}</div>
+          </template>
         </div>
 
-        <div class="flex-1 min-h-0 overflow-auto pr-1">
-          <div
-            v-if="busy && fileCount === 0"
-            class="rounded-lg border border-border/60 bg-muted/15 px-3 py-3 animate-in fade-in-0 duration-150"
+        <ul v-else class="space-y-2">
+          <li
+            v-for="f in attachedFiles"
+            :key="f.id"
+            class="flex items-center gap-2.5 rounded-lg border border-border/60 p-2.5"
           >
-            <div class="space-y-2">
-              <Skeleton class="h-3 w-2/3" />
-              <Skeleton class="h-3 w-1/2" />
-              <div class="space-y-1.5 pt-1">
-                <Skeleton class="h-8 w-full" />
-                <Skeleton class="h-8 w-11/12" />
-                <Skeleton class="h-8 w-10/12" />
-              </div>
-            </div>
-          </div>
-
-          <div
-            v-else-if="fileCount === 0"
-            class="rounded-lg border border-border/60 bg-muted/15 px-3 py-3 animate-in fade-in-0 duration-150"
-          >
-            <div class="text-xs font-medium">{{ t('chat.attachments.empty.title') }}</div>
-            <div class="mt-1 text-[11px] text-muted-foreground">{{ t('chat.attachments.empty.description') }}</div>
-          </div>
-
-          <div v-else class="space-y-2">
-            <div
-              v-for="f in attachedFiles"
-              :key="f.id"
-              class="flex items-center gap-3 rounded-lg border border-border/60 bg-background/60 px-3 py-2"
+            <button
+              v-if="isImageFile(f)"
+              data-keyboard-option
+              type="button"
+              class="size-9 shrink-0 overflow-hidden rounded-md border border-border/50 bg-muted/20 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              :aria-label="`${t('common.open')}: ${f.filename}`"
+              @click.stop="openAttachmentImage(f)"
             >
-              <button
-                v-if="isImageFile(f)"
-                tabindex="0"
-                type="button"
-                class="h-9 w-9 shrink-0 overflow-hidden rounded-lg border border-border/50 bg-muted/10 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                :aria-label="`${t('common.open')}: ${f.filename}`"
-                @click.stop="openAttachmentImage(f)"
-              >
-                <img
-                  :src="f.url"
-                  alt=""
-                  aria-hidden="true"
-                  class="h-full w-full object-cover cursor-zoom-in"
-                  draggable="false"
-                />
-              </button>
+              <img :src="f.url" alt="" class="h-full w-full cursor-zoom-in object-cover" draggable="false" />
+            </button>
+            <div
+              v-else
+              class="flex size-9 shrink-0 items-center justify-center rounded-md border border-border/50 bg-muted/20"
+              aria-hidden="true"
+            >
+              <span class="font-mono text-[10px] uppercase text-muted-foreground">
+                {{ f.composerKind === 'skill_ref' ? 'SKILL' : badgeTextForFilename(f.filename) }}
+              </span>
+            </div>
+
+            <div class="min-w-0 flex-1">
               <div
-                v-else
-                class="h-9 w-9 shrink-0 rounded-lg border border-border/50 bg-muted/10 overflow-hidden flex items-center justify-center"
-                aria-hidden="true"
+                class="truncate font-medium"
+                :class="[isMobileSheet ? 'text-sm' : 'text-xs', f.pastePreview === undefined && 'font-mono']"
+                :title="f.filename"
               >
-                <span class="text-[10px] font-mono text-muted-foreground uppercase">
-                  {{ f.composerKind === 'skill_ref' ? 'SKILL' : badgeTextForFilename(f.filename) }}
-                </span>
+                {{ f.pastePreview !== undefined ? t('chat.attachments.pastedText') : f.filename }}
               </div>
-
-              <div class="min-w-0 flex-1">
-                <div
-                  class="text-xs font-medium truncate"
-                  :class="f.pastePreview === undefined ? 'font-mono' : ''"
-                  :title="f.filename"
-                >
-                  {{ f.pastePreview !== undefined ? t('chat.attachments.pastedText') : f.filename }}
-                </div>
-                <p
-                  v-if="f.pastePreview !== undefined"
-                  class="mt-1 line-clamp-2 break-words text-xs text-muted-foreground"
-                  :title="f.pastePreview"
-                >
-                  {{ f.pastePreview }}
-                </p>
-                <label
-                  v-if="f.composerKind !== 'skill_ref'"
-                  class="mt-1 flex items-center gap-1 text-xs text-muted-foreground"
-                >
-                  <input
-                    type="checkbox"
-                    :checked="f.delivery === 'model_input'"
-                    :disabled="busy"
-                    @change="
-                      emit('delivery', f.id, ($event.target as HTMLInputElement).checked ? 'model_input' : 'reference')
-                    "
-                  />
-                  {{ t('chat.attachments.sendContents') }}
-                </label>
-                <div
-                  v-if="f.serverPath"
-                  class="mt-0.5 text-[11px] text-muted-foreground font-mono truncate"
-                  :title="f.serverPath"
-                >
-                  {{ f.serverPath }}
-                </div>
-              </div>
-
-              <div class="shrink-0 flex items-center gap-2">
-                <span class="text-[11px] text-muted-foreground font-mono tabular-nums">
-                  <template v-if="f.serverPath">{{ t('chat.attachments.repo') }}</template>
-                  <template v-else>{{ formatBytes(f.size) }}</template>
-                </span>
-                <IconButton
-                  size="xs"
-                  class="text-muted-foreground hover:text-foreground hover:bg-secondary/50"
-                  :tooltip="t('common.remove')"
-                  :is-compact-touch="isMobileSheet"
-                  :title="t('common.remove')"
-                  :aria-label="t('chat.attachments.removeAttachmentAria')"
-                  @click="$emit('remove', f.id)"
-                >
-                  <RiCloseLine class="h-4 w-4" />
-                </IconButton>
+              <p
+                v-if="f.pastePreview !== undefined"
+                class="mt-1 line-clamp-2 break-words text-xs text-muted-foreground"
+                :title="f.pastePreview"
+              >
+                {{ f.pastePreview }}
+              </p>
+              <label
+                v-if="f.composerKind !== 'skill_ref'"
+                class="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground"
+              >
+                <input
+                  data-keyboard-option
+                  class="accent-primary"
+                  type="checkbox"
+                  :checked="f.delivery === 'model_input'"
+                  :disabled="busy"
+                  @change="
+                    emit('delivery', f.id, ($event.target as HTMLInputElement).checked ? 'model_input' : 'reference')
+                  "
+                />
+                {{ t('chat.attachments.sendContents') }}
+              </label>
+              <div
+                v-if="f.serverPath"
+                class="mt-0.5 truncate font-mono text-[11px] text-muted-foreground"
+                :title="f.serverPath"
+              >
+                {{ f.serverPath }}
               </div>
             </div>
-          </div>
-        </div>
+
+            <span class="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
+              {{ f.serverPath ? t('chat.attachments.repo') : formatBytes(f.size) }}
+            </span>
+            <IconButton
+              data-keyboard-option
+              :size="toolbarSize"
+              class="shrink-0 text-muted-foreground"
+              :tooltip="t('common.remove')"
+              :is-touch-pointer="isMobileSheet"
+              :title="t('common.remove')"
+              :aria-label="t('chat.attachments.removeAttachmentAria')"
+              @click="emit('remove', f.id)"
+            >
+              <RiCloseLine class="h-4 w-4" aria-hidden="true" />
+            </IconButton>
+          </li>
+        </ul>
       </div>
     </div>
-  </Teleport>
+  </DefineAttachmentsBody>
 
-  <DialogRoot :open="open && isMobileSheet" @update:open="onMobileDialogOpenChange">
-    <DialogPortal>
-      <DialogOverlay class="fixed inset-0 z-[64] bg-black/55 backdrop-blur-sm" />
-      <DialogContent as-child @close-auto-focus="onCloseAutoFocus">
-        <div
-          ref="panelEl"
-          data-keyboard-overlay="true"
-          tabindex="-1"
-          class="fixed z-[65] max-w-[24rem] -translate-x-1/2 rounded-xl border border-border/70 bg-background/95 shadow-xl backdrop-blur overflow-hidden flex flex-col outline-none"
-          :style="mobileSheetStyle"
-          @pointerdown.stop
-          @click.stop
-        >
-          <div class="flex items-center justify-between gap-3 px-4 py-3 border-b border-border/40">
-            <div class="min-w-0">
-              <div class="flex items-center gap-2">
-                <RiAttachmentLine class="h-4.5 w-4.5 text-muted-foreground" />
-                <DialogTitle class="text-sm font-semibold truncate">{{ effectiveTitle }}</DialogTitle>
-              </div>
-              <div class="mt-1 text-[12px] text-muted-foreground font-mono">
-                <span v-if="busy" class="inline-flex items-center gap-1">
-                  <RiLoader4Line class="h-4 w-4 animate-spin" />
-                  {{ t('chat.attachments.attaching') }}
-                </span>
-                <span v-else>{{ countLabel }}</span>
-              </div>
-            </div>
-            <IconButton
-              size="sm"
-              :tooltip="t('common.close')"
-              :is-compact-touch="isMobileSheet"
-              :title="t('common.close')"
-              :aria-label="t('common.close')"
-              @click="close"
-            >
-              <RiCloseLine class="h-4 w-4" />
-            </IconButton>
-          </div>
+  <PopoverSurface
+    v-if="!isMobileSheet"
+    :open="open"
+    :anchor="desktopAnchorEl"
+    :layer="60"
+    as-child
+    :side="desktopPlacement.startsWith('top') ? 'top' : 'bottom'"
+    :align="desktopPlacement.endsWith('end') ? 'end' : 'start'"
+    :side-offset="Math.max(0, desktopGapPx)"
+    :collision-padding="Math.max(0, desktopViewportMarginPx)"
+    update-position-strategy="always"
+    :prioritize-position="true"
+    initial-focus="[data-attachment-first]"
+    @update:open="onSurfaceOpenChange"
+    @close-auto-focus="onCloseAutoFocus"
+    @interact-outside="onDesktopInteractOutside"
+    @escape-key-down="onDesktopEscape"
+  >
+    <div
+      ref="panelEl"
+      :aria-label="effectiveTitle"
+      class="flex w-[min(420px,calc(100vw-1rem))] flex-col overflow-hidden"
+      style="max-height: min(var(--radix-popover-content-available-height, 100dvh), 72dvh, 560px)"
+      @pointerdown.stop
+      @click.stop
+      @keydown="handleOptionKeydown($event, panelEl)"
+      @focusin="onPanelFocusin"
+    >
+      <AttachmentsBody />
+    </div>
+  </PopoverSurface>
 
-          <div class="p-4 flex-1 min-h-0 overflow-hidden flex flex-col gap-3">
-            <div class="flex flex-wrap items-center gap-2">
-              <Button size="sm" variant="outline" class="h-9" @click="$emit('attachLocal')">
-                <RiFileUploadLine class="h-4 w-4 mr-2" />
-                {{ t('chat.attachments.actions.addFromComputer') }}
-              </Button>
-              <Button v-if="allowProject" size="sm" variant="outline" class="h-9" @click="$emit('attachProject')">
-                <RiFileLine class="h-4 w-4 mr-2" />
-                {{ t('chat.attachments.actions.addFromProject') }}
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost-destructive"
-                class="h-9 ml-auto"
-                :disabled="fileCount === 0"
-                @click="$emit('clear')"
-              >
-                {{ t('chat.attachments.actions.clear') }}
-              </Button>
-            </div>
-
-            <div class="flex-1 min-h-0 overflow-auto pr-1">
-              <div
-                v-if="busy && fileCount === 0"
-                class="rounded-lg border border-border/60 bg-muted/15 px-3 py-3 animate-in fade-in-0 duration-150"
-              >
-                <div class="space-y-2.5">
-                  <Skeleton class="h-3.5 w-2/3" />
-                  <Skeleton class="h-3.5 w-1/2" />
-                  <div class="space-y-2 pt-1">
-                    <Skeleton class="h-9 w-full" />
-                    <Skeleton class="h-9 w-11/12" />
-                    <Skeleton class="h-9 w-10/12" />
-                  </div>
-                </div>
-              </div>
-
-              <div
-                v-else-if="fileCount === 0"
-                class="rounded-lg border border-border/60 bg-muted/15 px-3 py-3 animate-in fade-in-0 duration-150"
-              >
-                <div class="text-sm font-medium">{{ t('chat.attachments.empty.title') }}</div>
-                <div class="mt-1 text-[13px] text-muted-foreground">{{ t('chat.attachments.empty.description') }}</div>
-              </div>
-
-              <div v-else class="space-y-2">
-                <div
-                  v-for="f in attachedFiles"
-                  :key="f.id"
-                  class="flex items-center gap-3 rounded-lg border border-border/60 bg-background/60 px-3 py-2"
-                >
-                  <button
-                    v-if="isImageFile(f)"
-                    tabindex="0"
-                    type="button"
-                    class="h-10 w-10 shrink-0 overflow-hidden rounded-lg border border-border/50 bg-muted/10 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    :aria-label="`${t('common.open')}: ${f.filename}`"
-                    @click.stop="openAttachmentImage(f)"
-                  >
-                    <img
-                      :src="f.url"
-                      alt=""
-                      aria-hidden="true"
-                      class="h-full w-full object-cover cursor-zoom-in"
-                      draggable="false"
-                    />
-                  </button>
-                  <div
-                    v-else
-                    class="h-10 w-10 shrink-0 rounded-lg border border-border/50 bg-muted/10 overflow-hidden flex items-center justify-center"
-                    aria-hidden="true"
-                  >
-                    <span class="text-[10px] font-mono text-muted-foreground uppercase">
-                      {{ f.composerKind === 'skill_ref' ? 'SKILL' : badgeTextForFilename(f.filename) }}
-                    </span>
-                  </div>
-
-                  <div class="min-w-0 flex-1">
-                    <div
-                      class="text-sm font-medium truncate"
-                      :class="f.pastePreview === undefined ? 'font-mono' : ''"
-                      :title="f.filename"
-                    >
-                      {{ f.pastePreview !== undefined ? t('chat.attachments.pastedText') : f.filename }}
-                    </div>
-                    <p
-                      v-if="f.pastePreview !== undefined"
-                      class="mt-1 line-clamp-2 break-words text-[13px] text-muted-foreground"
-                      :title="f.pastePreview"
-                    >
-                      {{ f.pastePreview }}
-                    </p>
-                    <label
-                      v-if="f.composerKind !== 'skill_ref'"
-                      class="mt-1 flex items-center gap-1 text-xs text-muted-foreground"
-                    >
-                      <input
-                        type="checkbox"
-                        :checked="f.delivery === 'model_input'"
-                        :disabled="busy"
-                        @change="
-                          emit(
-                            'delivery',
-                            f.id,
-                            ($event.target as HTMLInputElement).checked ? 'model_input' : 'reference',
-                          )
-                        "
-                      />
-                      {{ t('chat.attachments.sendContents') }}
-                    </label>
-                    <div
-                      v-if="f.serverPath"
-                      class="mt-0.5 text-[13px] text-muted-foreground font-mono truncate"
-                      :title="f.serverPath"
-                    >
-                      {{ f.serverPath }}
-                    </div>
-                  </div>
-
-                  <div class="shrink-0 flex items-center gap-2">
-                    <span class="text-[12px] text-muted-foreground font-mono tabular-nums">
-                      <template v-if="f.serverPath">{{ t('chat.attachments.repo') }}</template>
-                      <template v-else>{{ formatBytes(f.size) }}</template>
-                    </span>
-                    <IconButton
-                      size="xs"
-                      class="text-muted-foreground hover:text-foreground hover:bg-secondary/50"
-                      :tooltip="t('common.remove')"
-                      :is-compact-touch="isMobileSheet"
-                      :title="t('common.remove')"
-                      :aria-label="t('chat.attachments.removeAttachmentAria')"
-                      @click="$emit('remove', f.id)"
-                    >
-                      <RiCloseLine class="h-4 w-4" />
-                    </IconButton>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </DialogContent>
-    </DialogPortal>
-  </DialogRoot>
+  <ModalSurface
+    v-else
+    :open="open"
+    :layer="64"
+    as-child
+    :aria-describedby="undefined"
+    initial-focus="[data-attachment-first]"
+    @close-auto-focus="onCloseAutoFocus"
+    @update:open="onSurfaceOpenChange"
+  >
+    <div
+      ref="panelEl"
+      data-keyboard-overlay="true"
+      tabindex="-1"
+      :class="[panelClass, 'max-w-[24rem] -translate-x-1/2 -translate-y-1/2']"
+      :style="mobileSheetStyle"
+      @pointerdown.stop
+      @click.stop
+      @keydown="handleOptionKeydown($event, panelEl)"
+      @focusin="onPanelFocusin"
+    >
+      <AttachmentsBody />
+    </div>
+  </ModalSurface>
 </template>

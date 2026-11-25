@@ -1,5 +1,6 @@
 import type { JsonValue, JsonObject } from '@/types/json'
 import type { AttachedFile } from './useChatAttachments'
+import { isSkillReferenceType } from './skillReferences'
 
 function asRecord(value: JsonValue): JsonObject {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
@@ -29,7 +30,8 @@ export function restoredComposerFiles(document: JsonValue): AttachedFile[] {
         .find((value) => typeof value === 'string' && value.trim())
         ?.toString()
         .slice(0, 120) || 'attachment'
-    const filename = payload.activity_type === 'command_reference' ? `Skill: ${baseFilename}` : baseFilename
+    const skillReference = isSkillReferenceType(payload.activity_type)
+    const filename = skillReference ? `Skill: ${baseFilename}` : baseFilename
     const size =
       typeof payload.size_bytes === 'number' && Number.isFinite(payload.size_bytes)
         ? Math.max(0, payload.size_bytes)
@@ -41,7 +43,7 @@ export function restoredComposerFiles(document: JsonValue): AttachedFile[] {
         filename,
         size,
         mime: typeof payload.media_type === 'string' ? payload.media_type : 'application/octet-stream',
-        ...(payload.activity_type === 'command_reference' ? { composerKind: 'skill_ref' as const } : {}),
+        ...(skillReference ? { composerKind: 'skill_ref' as const } : {}),
         ...(path ? { serverPath: path } : { composerNode: node }),
         delivery: payload.delivery === 'model_input' ? ('model_input' as const) : ('reference' as const),
         state: 'ready' as const,

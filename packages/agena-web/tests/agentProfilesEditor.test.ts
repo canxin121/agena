@@ -1,3 +1,4 @@
+import { setupSettingsDraftGuard } from './helpers/setupSettingsDraftGuard'
 import { afterEach, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { compileScript, parse } from '@vue/compiler-sfc'
@@ -9,6 +10,7 @@ import * as promptLibrary from '../src/lib/promptLibrary'
 import * as permissionConfig from '../src/lib/permissionConfig'
 import * as permissionProfiles from '../src/lib/permissionProfiles'
 import { runtimeSettingBaseValue } from '../src/lib/runtimeSettingLayer'
+import * as promptCatalog from '../src/components/settings/promptCatalog'
 import * as settingsDestination from '../src/components/settings/settingsDestination'
 
 const source = readFileSync(new URL('../src/components/settings/AgentProfilesPanel.vue', import.meta.url), 'utf8')
@@ -21,6 +23,48 @@ function compilePanel(source: string, id: string) {
 }
 const compiled = compilePanel(source, 'agent-profiles-test')
 const defaultsCompiled = compilePanel(defaultsSource, 'agent-profile-defaults-test')
+const investigation = 'agena.profile.investigation'
+const implementation = 'agena.profile.implementation'
+const readOnly = 'agena.profile.read-only'
+const planning = 'agena.profile.planning'
+const verification = 'agena.profile.verification'
+const reusablePrompts: promptLayers.BuiltinPrompt[] = [
+  {
+    id: investigation,
+    title: 'Investigation and evidence',
+    body: 'Inspect the relevant context.',
+    when: 'always',
+    reusable: true,
+  },
+  {
+    id: implementation,
+    title: 'Implementation and verification',
+    body: 'Verify the resulting behavior.',
+    when: 'always',
+    reusable: true,
+  },
+  {
+    id: readOnly,
+    title: 'Read-only work',
+    body: 'Preserve the workspace.',
+    when: 'always',
+    reusable: true,
+  },
+  {
+    id: planning,
+    title: 'Planning and acceptance criteria',
+    body: 'Order steps by dependency.',
+    when: 'always',
+    reusable: true,
+  },
+  {
+    id: verification,
+    title: 'Verification and evidence',
+    body: 'Record check outcomes.',
+    when: 'always',
+    reusable: true,
+  },
+]
 const scopes: vue.EffectScope[] = []
 afterEach(() => {
   for (const scope of scopes.splice(0)) scope.stop()
@@ -38,8 +82,17 @@ async function editor(
   } = {},
 ) {
   const builtins = {
-    main: { title: 'Main', description: 'Coordinate the task', mode: 'primary' },
+    main: {
+      title: 'Main',
+      description: 'Coordinate the task',
+      mode: 'primary',
+      prompts: {
+        order: ['agena-profile-main', investigation, planning, implementation, verification],
+        inline: [{ id: 'agena-profile-main', body: 'Own the result.' }],
+      },
+    },
     explore: {
+      read_only: true,
       title: 'Explore',
       description: 'Read and search',
       mode: 'subagent',
@@ -47,6 +100,16 @@ async function editor(
     },
     worker: { title: 'Worker', description: 'Complete assigned work', mode: 'subagent' },
     reviewer: { title: 'Reviewer', mode: 'all' },
+    planner: {
+      title: 'Planner',
+      mode: 'subagent',
+      prompts: { order: [investigation, planning, readOnly] },
+    },
+    verifier: {
+      title: 'Verifier',
+      mode: 'subagent',
+      prompts: { order: [investigation, verification] },
+    },
   }
 
   const documents: Record<string, Record<string, any>> = {
@@ -91,6 +154,31 @@ async function editor(
     '@/lib/promptLibrary': promptLibrary,
     '@/lib/permissionConfig': permissionConfig,
     '@/lib/permissionProfiles': permissionProfiles,
+    '@/lib/skillsApi': {
+      createSkillsClient: () => ({
+        listSkills: async () => ({
+          skills: [
+            {
+              name: 'verify-work',
+              description: 'Check a completed change',
+              scope: 'global',
+              enabled: true,
+              valid: true,
+            },
+            {
+              name: 'project-check',
+              description: 'Read project context',
+              scope: 'workspace',
+              enabled: true,
+              valid: true,
+            },
+            { name: 'disabled-skill', scope: 'global', enabled: false, valid: true },
+          ],
+          diagnostics: [],
+          roots: [],
+        }),
+      }),
+    },
     '@/lib/runtimeSettingLayer': { runtimeSettingBaseValue },
     '@/app/windowScope': { readWindowIdFromQuery: () => '' },
     '@/app/workspace/workspacePaneContext': { useWorkspacePaneContext: () => null },
@@ -106,6 +194,7 @@ async function editor(
     '@/stores/directory': { useDirectoryStore: () => vue.reactive({ currentDirectory: '/project' }) },
     './settingsSessionScope': { useSettingsSessionTarget: () => ({ sessionId: vue.ref('9') }) },
     './settingsDestination': settingsDestination,
+    './promptCatalog': { ...promptCatalog, readBuiltinPrompts: async () => reusablePrompts },
     '@/i18n/settingsText': { settingsText: (text: string) => text },
     '@/lib/runtimeSettings': {
       subscribeRuntimeSettingsChanges: () => () => {},
@@ -138,6 +227,9 @@ async function editor(
       },
     },
     '@/stores/chat/api': {
+      async resolveWorkspace(path: string) {
+        return { id: 1, path }
+      },
       async getSession() {
         return {
           id: '9',
@@ -162,6 +254,7 @@ async function editor(
     },
   }
   const module = { exports: {} as { default?: { setup: (props: unknown, context: unknown) => any } } }
+  setupSettingsDraftGuard(modules)
   new Function('require', 'module', 'exports', options.editDefaults ? defaultsCompiled : compiled)(
     (id: string) => {
       if (id.endsWith('.vue')) return {}
@@ -235,8 +328,10 @@ test('global conversations show global profiles instead of the selected project 
     'base',
     'explore',
     'main',
+    'planner',
     'review',
     'reviewer',
+    'verifier',
     'worker',
   ])
   expect(panel.visibleCatalog.value.review.title).toBe('Review')
@@ -249,8 +344,10 @@ test('missing global profiles can be replaced using only the global catalog', as
     'base',
     'explore',
     'main',
+    'planner',
     'review',
     'reviewer',
+    'verifier',
     'worker',
   ])
   expect(panel.visibleCatalog.value.review.title).toBe('Review')
@@ -273,9 +370,11 @@ test('summary identity refreshes the catalog when missing-profile sessions chang
     'base',
     'explore',
     'main',
+    'planner',
     'project',
     'review',
     'reviewer',
+    'verifier',
     'worker',
   ])
   expect(panel.visibleCatalog.value.review.title).toBe('Project review')
@@ -315,7 +414,14 @@ test('invalid permission edits cannot become an implicit permissive empty policy
 
 test('empty user catalogs display usable builtins without serializing them into user config', async () => {
   const { panel, writes } = await editor({ emptyProfiles: true })
-  expect(Object.keys(panel.catalog.value).sort()).toEqual(['explore', 'main', 'reviewer', 'worker'])
+  expect(Object.keys(panel.catalog.value).sort()).toEqual([
+    'explore',
+    'main',
+    'planner',
+    'reviewer',
+    'verifier',
+    'worker',
+  ])
   expect(panel.profileSource('main')).toBe('Built-in')
   panel.beginEditing('main', panel.catalog.value.main)
   expect(panel.hasOwnProfile.value).toBe(false)
@@ -328,6 +434,24 @@ test('empty user catalogs display usable builtins without serializing them into 
   await panel.removeProfile()
   expect(writes[1]?.value).toEqual({})
   expect(panel.catalog.value.main.description).toBe('Coordinate the task')
+})
+
+test('removing a reusable prompt persists an override of the factory order', async () => {
+  const { panel, writes } = await editor({ emptyProfiles: true })
+  panel.beginEditing('main', panel.catalog.value.main)
+  expect(panel.attachedPrompts.value).toEqual([investigation, planning, implementation, verification])
+  expect(panel.savedPrompts.value.map((prompt: { id: string }) => prompt.id)).toContain(implementation)
+  panel.setSavedPrompts([investigation, planning, verification])
+  await panel.saveProfile()
+  expect(writes[0]?.value.main.prompts).toMatchObject({
+    order: ['agena-profile-main', investigation, planning, verification],
+    disabled: [implementation],
+  })
+  expect(panel.attachedPrompts.value).toEqual([investigation, planning, verification])
+  panel.setSavedPrompts([investigation, planning, implementation, verification])
+  await panel.saveProfile()
+  expect(writes[1]?.value.main.prompts.disabled).toEqual([])
+  expect(panel.attachedPrompts.value).toEqual([investigation, planning, implementation, verification])
 })
 
 test('workspace builtin overrides preserve only workspace entries and can restore the inherited role', async () => {
@@ -353,6 +477,8 @@ test('root and delegated session selectors filter inherited mode while allowing 
   await panel.load()
   expect(panel.sessionCatalog.value.main).toBeDefined()
   expect(panel.sessionCatalog.value.explore).toBeUndefined()
+  expect(panel.sessionCatalog.value.planner).toBeUndefined()
+  expect(panel.sessionCatalog.value.verifier).toBeUndefined()
   panel.sessionProfile.value = 'explore'
   await panel.saveSession()
   expect(sessionWrites).toEqual([])
@@ -361,6 +487,8 @@ test('root and delegated session selectors filter inherited mode while allowing 
   child.documents.global!.profiles.private = { extends: 'explore', hidden: true }
   await child.panel.load()
   expect(child.panel.sessionCatalog.value.main).toBeUndefined()
+  expect(child.panel.sessionCatalog.value.planner).toBeDefined()
+  expect(child.panel.sessionCatalog.value.verifier).toBeDefined()
   expect(child.panel.sessionCatalog.value.private).toBeDefined()
   child.panel.sessionProfile.value = 'private'
   await child.panel.saveSession()
@@ -442,6 +570,37 @@ test('partial raw built-in settings render inherited behavior in global and work
   expect(panel.catalog.value.explore.description).toBe('Read and search')
   expect(panel.catalog.value.explore.permission.path.workspace).toBe('readonly')
   expect(panel.profileSource('explore')).toBe('Global')
+})
+
+test('profile startup context and Git isolation survive editing, with explicit empty skill lists', async () => {
+  const { panel, writes } = await editor()
+  panel.beginEditing('isolated', { extends: 'worker' }, true)
+  expect(panel.skillOptions.value.map((skill: { id: string }) => skill.id)).toEqual(['verify-work'])
+  panel.draft.value.context = { project_instructions: 'on_demand', preload_skills: ['verify-work'] }
+  panel.draft.value.isolation = 'worktree'
+  await panel.saveProfile()
+  expect(writes[0]?.value.isolated).toMatchObject({
+    isolation: 'worktree',
+    context: { project_instructions: 'on_demand', preload_skills: ['verify-work'] },
+  })
+  panel.draft.value.context.preload_skills = []
+  await panel.saveProfile()
+  expect(writes[1]?.value.isolated.context.preload_skills).toEqual([])
+})
+
+test('selecting a read-only role access uses the shared checkout and saves it on the profile', async () => {
+  const { panel, writes } = await editor()
+  panel.beginEditing('site-research', { extends: 'explore', isolation: 'worktree' }, true)
+  expect(panel.readOnlyAccess.value).toBe('')
+  expect(panel.draftReadOnly.value).toBe(true)
+  expect(panel.isolation.value).toBe('shared')
+  panel.readOnlyAccess.value = 'true'
+  await panel.saveProfile()
+  expect(writes[0]?.value['site-research'].read_only).toBe(true)
+  panel.readOnlyAccess.value = 'false'
+  expect(panel.isolation.value).toBe('worktree')
+  await panel.saveProfile()
+  expect(writes[1]?.value['site-research'].read_only).toBe(false)
 })
 
 test('default summaries show persisted values and their scope, independently of unsaved selections', async () => {

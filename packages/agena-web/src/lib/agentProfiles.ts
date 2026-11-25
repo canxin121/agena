@@ -21,6 +21,13 @@ export function resolveAgentProfileDefault(
 }
 
 export type AgentProfileMode = 'primary' | 'subagent' | 'all'
+export type AgentIsolation = 'shared' | 'worktree'
+export type ProjectInstructionsMode = 'startup' | 'on_demand'
+
+export type AgentProfileContext = {
+  project_instructions?: ProjectInstructionsMode
+  preload_skills?: string[]
+}
 
 export type AgentProfileConfig = {
   title?: string
@@ -28,8 +35,11 @@ export type AgentProfileConfig = {
   extends?: string | null
   mode?: AgentProfileMode | null
   hidden?: boolean | null
+  read_only?: boolean
   model?: JsonObject | null
   prompts?: Partial<PromptLayer>
+  context?: AgentProfileContext
+  isolation?: AgentIsolation
   permission?: JsonObject
   permission_profile?: string
   max_turns?: number | null
@@ -64,8 +74,14 @@ export function withBuiltinAgentProfiles(
     const next = { ...base }
     if (overlay.title) next.title = overlay.title
     if (overlay.description) next.description = overlay.description
-    for (const key of ['mode', 'hidden', 'extends', 'model', 'max_turns'] as const) {
+    for (const key of ['mode', 'hidden', 'read_only', 'extends', 'model', 'max_turns', 'isolation'] as const) {
       if (overlay[key] != null) Object.assign(next, { [key]: overlay[key] })
+    }
+    if (overlay.context) {
+      next.context = { ...base.context }
+      const { project_instructions, preload_skills } = overlay.context
+      if (project_instructions != null) next.context.project_instructions = project_instructions
+      if (preload_skills != null) next.context.preload_skills = preload_skills.slice()
     }
     if (overlay.permission_profile) {
       next.permission_profile = overlay.permission_profile
@@ -77,7 +93,10 @@ export function withBuiltinAgentProfiles(
       if (layer.mode === 'replace') next.prompts = layer
       else {
         const previous = normalizePromptLayer(base.prompts)
-        previous.order = previous.order.filter((id) => !layer.disabled.includes(id))
+        const suppressRole = previous.inline.some(({ id }) => layer.disabled.includes(id))
+        previous.order = previous.order.filter(
+          (id) => !layer.disabled.includes(id) && !(suppressRole && id.startsWith('agena.profile.')),
+        )
         previous.inline = previous.inline.filter((fragment) => !layer.disabled.includes(fragment.id))
         previous.disabled = [...new Set([...previous.disabled, ...layer.disabled])]
         for (const id of layer.order) previous.order = [...previous.order.filter((old) => old !== id), id]
@@ -206,9 +225,10 @@ export function agentProfileReferences(catalog: AgentProfileCatalog, name: strin
 export function agentProfileMetadata(
   catalog: AgentProfileCatalog,
   name: string,
-): { mode: AgentProfileMode; hidden: boolean } {
+): { mode: AgentProfileMode; hidden: boolean; readOnly: boolean } {
   let mode: AgentProfileMode = 'all'
   let hidden = false
+  let readOnly = false
   for (const id of agentProfileLineage(catalog, name)) {
     const profile = catalog[id]!
     if (profile.mode != null) {
@@ -220,8 +240,12 @@ export function agentProfileMetadata(
       if (typeof profile.hidden !== 'boolean') throw new Error('Profile hidden must be a boolean')
       hidden = profile.hidden
     }
+    if (profile.read_only != null) {
+      if (typeof profile.read_only !== 'boolean') throw new Error('Profile read_only must be a boolean')
+      readOnly = profile.read_only
+    }
   }
-  return { mode, hidden }
+  return { mode, hidden, readOnly }
 }
 
 /** Hidden affects model discovery, while people can select every compatible role. */

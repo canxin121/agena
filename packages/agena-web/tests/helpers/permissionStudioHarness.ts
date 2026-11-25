@@ -1,3 +1,4 @@
+import { setupSettingsDraftGuard } from './setupSettingsDraftGuard'
 import { readFileSync } from 'node:fs'
 import { compileScript, parse } from '@vue/compiler-sfc'
 import { transformSync } from 'esbuild'
@@ -5,6 +6,7 @@ import * as vue from 'vue'
 
 import * as permissionConfig from '../../src/lib/permissionConfig'
 import * as permissionProfiles from '../../src/lib/permissionProfiles'
+import * as keyboardNavigation from '../../src/lib/keyboardNavigation'
 import * as pluginHub from '../../src/features/pluginWeb/hub'
 import { runtimeSettingBaseValue } from '../../src/lib/runtimeSettingLayer'
 import * as permissionNavigation from '../../src/components/settings/permissions/permissionNavigation'
@@ -249,6 +251,7 @@ export async function createPermissionEditor(
     '@/i18n/settingsText': { settingsText: translate },
     '@/lib/permissionConfig': permissionConfig,
     '@/lib/permissionProfiles': permissionProfiles,
+    '@/lib/keyboardNavigation': keyboardNavigation,
     '@/features/pluginWeb/hub': pluginHub,
     '@/lib/runtimeSettingLayer': { runtimeSettingBaseValue },
     './permissions/permissionNavigation': permissionNavigation,
@@ -278,6 +281,7 @@ export async function createPermissionEditor(
     if (!(id in modules)) throw new Error('Unexpected component dependency: ' + id)
     return modules[id]
   }
+  setupSettingsDraftGuard(modules)
   new Function('require', 'module', 'exports', compiled)(require, module, module.exports)
   const scope = vue.effectScope()
   scopes.push(scope)

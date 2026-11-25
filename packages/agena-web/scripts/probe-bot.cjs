@@ -534,6 +534,12 @@ window.__botProbe = {activeComposerSession: () => {
                     memories_truncated: false,
                     reminders: [],
                   })
+                if (p === '/api/v1/prompts/builtins') {
+                  return json([{ id: 'agena.system.identity', title: 'Assistant identity', body: 'Agena identity', when: 'always' }])
+                }
+                if (p === '/api/v1/settings/layers/global' && url.searchParams.get('path') === 'prompts') {
+                  return json({ value: { library: [], order: [] } })
+                }
                 if (p === '/api/v1/bots' && req.method === 'GET') {
                   if (holdAuthList)
                     await new Promise((resolve) => {
@@ -957,16 +963,17 @@ window.__botProbe = {activeComposerSession: () => {
       await wait(async () => !(await visible(conversation(71))), 'direct group folds')
       check(await visible(conversation(72)), 'surface groups fold independently')
       await cdp.click(toggle(botB))
+      await wait(async () => !(await visible(conversation(43))), 'second Bot folds before reload')
       check(botRequests === beforeDisclosure, 'disclosures read lists without creating local sessions')
       await cdp.send('Page.reload', { ignoreCache: true })
       await wait(() => visible(conversation(42)), 'single local conversation restores on reload', 90000)
       check(!(await visible(conversation(41))), 'reloading never restores a second local conversation')
-      check(
+      const disclosurePreferencesRestored = async () =>
         !(await visible(conversation(43))) &&
-          !(await expanded(group(botA, 'direct'))) &&
-          (await visible(conversation(72))),
-        'Bot and group disclosure preferences survive reload',
-      )
+        !(await expanded(group(botA, 'direct'))) &&
+        (await visible(conversation(72)))
+      await wait(disclosurePreferencesRestored, 'Bot and group disclosure preferences restore after reload')
+      check(await disclosurePreferencesRestored(), 'Bot and group disclosure preferences survive reload')
       check(await noOverflow(), 'desktop Bot tree has no horizontal overflow')
       await cdp.screenshot(path.join(evidence, 'web-bot-tree-desktop.png'))
 
@@ -1091,6 +1098,7 @@ window.__botProbe = {activeComposerSession: () => {
     await wait(() => visible('[data-testid="bot-edit-name"]'), 'sidebar edit ready')
     profiles[1].revision++
     profiles[1].persona.instructions = 'Remote update'
+    await cdp.click('[data-testid="bot-add-instructions"]')
     await cdp.fill('[data-testid="bot-edit-instructions"]', 'Local unsaved draft')
     await cdp.click('[data-testid="bot-save"]')
     await wait(() => visible('[role="dialog"] [role="alert"]'), 'stale sidebar edit conflict')
@@ -1104,6 +1112,7 @@ window.__botProbe = {activeComposerSession: () => {
       `import('/src/i18n/index.ts').then(({i18n})=>i18n.global.t('bot.profiles.reload'))`,
     )
     await cdp.clickText('[role="dialog"] button', reloadLabel)
+    await cdp.click('[data-testid="bot-add-instructions"]')
     await wait(
       () =>
         cdp.evaluate(
@@ -1162,6 +1171,7 @@ window.__botProbe = {activeComposerSession: () => {
     await wait(async () => !(await visible(row(crowded[0].id))), 'crowded fixture removed')
     await cdp.click('[data-testid="sidebar-bot-create"]')
     await cdp.fill('[data-testid="bot-edit-name"]', 'Sidebar Orbit')
+    await cdp.click('[data-testid="bot-add-instructions"]')
     await cdp.fill('[data-testid="bot-edit-instructions"]', 'Independent sidebar persona')
     sidebarWriteFailure = true
     await cdp.click('[data-testid="bot-save"]')
@@ -1412,6 +1422,7 @@ window.__botProbe = {activeComposerSession: () => {
     for (const selector of ['bot-edit-address', 'bot-edit-language', 'bot-edit-tone']) {
       check(!(await visible(`[data-testid="${selector}"]`)), `${selector} is absent`)
     }
+    await cdp.click('[data-testid="bot-add-instructions"]')
     await cdp.fill('[data-testid="bot-edit-instructions"]', 'Use concise writing examples for this Bot only.')
     await cdp.click('[data-testid="bot-save"]')
     await wait(
@@ -1828,7 +1839,7 @@ window.__botProbe = {activeComposerSession: () => {
       'Muse independent model survives document reload after opposing pane choices',
     )
     await cdp.click('[data-testid="bot-settings"]')
-    await wait(() => visible('[data-testid="bot-edit-instructions"]'), 'mobile Bot persona editor')
+    await wait(() => visible('[data-testid="bot-prompt-order"]'), 'mobile Bot persona prompt order')
     check(
       await cdp.evaluate(
         `document.documentElement.scrollWidth<=innerWidth && !document.querySelector('[role="dialog"]').innerText.includes('memory_enabled')`,

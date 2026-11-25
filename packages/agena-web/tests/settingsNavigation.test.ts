@@ -73,13 +73,19 @@ test('prompt library bookmarks open the dedicated editor with two editable scope
   expect(pages.map((page) => page.id)).toEqual([
     'storage',
     'agent-profiles',
+    'system-prompt',
     'prompt-library',
     'client-versions',
     'session-behavior',
   ])
   expect(resolveSettingsSubpage('prompt-library', '', pages, 'session-behavior')).toBe('prompt-library')
   expect(resolveSettingsSubpage('', 'prompt-library', pages, 'session-behavior')).toBe('prompt-library')
-  expect(resolveSettingsSubpage('prompt-layers', '', pages, 'session-behavior')).toBe('agent-profiles')
+  expect(resolveSettingsSubpage('prompt-layers', '', pages, 'session-behavior')).toBe('system-prompt')
+  expect(buildSettingsScopes('runtime-session', 'system-prompt').map((scope) => scope.id)).toEqual([
+    'global',
+    'workspace',
+    'session',
+  ])
   expect(movedSettingsPage('runtime-session', 'agent-profiles', '#settings-prompt-library')).toEqual({
     section: 'runtime-session',
     view: 'prompt-library',

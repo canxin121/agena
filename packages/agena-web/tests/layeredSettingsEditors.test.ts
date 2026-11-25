@@ -1,3 +1,4 @@
+import { setupSettingsDraftGuard } from './helpers/setupSettingsDraftGuard'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { compileScript, compileTemplate, parse } from '@vue/compiler-sfc'
@@ -73,6 +74,7 @@ function setup(name: string, props: Record<string, unknown>, modules: Record<str
     '@/lib/permissionConfig': { parsePermissionConfig: (v: unknown) => v, permissionConfigErrorMessage: String },
     ...modules,
   }
+  setupSettingsDraftGuard(dependencies)
   new Function('require', 'module', 'exports', scripts.get(name)!)(
     (id: string) => {
       if (id.endsWith('.vue')) return {}

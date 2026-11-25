@@ -1,19 +1,17 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { onBeforeRouteLeave, onBeforeRouteUpdate, type RouteLocationNormalized } from 'vue-router'
+import { useSettingsDraftGuard } from './useSettingsDraftGuard'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import {
   RiAddLine,
-  RiArrowLeftLine,
   RiDeleteBinLine,
   RiEditLine,
   RiFileTextLine,
   RiFolderAddLine,
   RiFolderLine,
+  RiLock2Line,
   RiRefreshLine,
   RiStackLine,
 } from '@remixicon/vue'
-import { readWindowIdFromQuery } from '@/app/windowScope'
-import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import Button from '@/components/ui/Button.vue'
 import FormDialog from '@/components/ui/FormDialog.vue'
 import IconButton from '@/components/ui/IconButton.vue'
@@ -29,6 +27,7 @@ import {
   normalizePromptFragment,
   normalizePromptScopeConfig,
   promptFragmentBodyBytes,
+  type BuiltinPrompt,
   type PromptFragment,
   type PromptScopeConfig,
 } from '@/lib/promptLayers'
@@ -38,7 +37,9 @@ import {
   composedPromptText,
   groupSavedPrompts,
   nextSavedPromptId,
+  promptExcerpt,
   savedPromptDisplayName,
+  savedPromptExcerpt,
   savedPromptIsValid,
   savedPromptMatches,
   scopeUsesPrompt,
@@ -46,11 +47,17 @@ import {
 import { readRuntimeSettingSources, setRuntimeSetting, type RuntimeSettingsReadBundle } from '@/lib/runtimeSettings'
 import { useToastsStore } from '@/stores/toasts'
 import PromptReferenceList from './PromptReferenceList.vue'
+import {
+  builtinPromptApplicability,
+  builtinPromptTitle,
+  readBuiltinPrompts,
+  reusableBuiltinPrompts,
+} from './promptCatalog'
 import SettingsSaveBar from './SettingsSaveBar.vue'
+import SettingsListDetail from './workbench/SettingsListDetail.vue'
 
 const props = defineProps<{ scope: 'global' | 'workspace' }>()
 const emit = defineEmits<{ 'workspace-config-path': [path: string] }>()
-const pane = useWorkspacePaneContext()
 const toasts = useToastsStore()
 const sources = ref<RuntimeSettingsReadBundle | null>(null)
 const botReferences = ref<string[]>([])
@@ -59,6 +66,9 @@ const saving = ref(false)
 const error = ref('')
 const search = ref('')
 const filter = ref<string | null>('')
+const builtinOnly = ref(false)
+const builtins = ref<BuiltinPrompt[]>([])
+const builtinSelection = ref<BuiltinPrompt | null>(null)
 const categoriesOpen = ref(false)
 const category = ref('')
 const categoryName = ref('')
@@ -66,9 +76,7 @@ const categoryError = ref('')
 const draft = ref<PromptFragment | null>(null)
 const composing = ref(false)
 const showDetail = ref(false)
-const listHeading = ref<HTMLElement | null>(null)
-const listScroll = ref<HTMLElement | null>(null)
-const editorHeading = ref<HTMLElement | null>(null)
+const listDetail = ref<InstanceType<typeof SettingsListDetail> | null>(null)
 const editorScroll = ref<HTMLElement | null>(null)
 let generation = 0
 let loadController: AbortController | undefined
@@ -77,8 +85,11 @@ const global = computed(() => normalizePromptScopeConfig(sources.value?.global.v
 const workspace = computed(() => normalizePromptScopeConfig(sources.value?.workspace.value))
 const current = computed(() => (props.scope === 'global' ? global.value : workspace.value))
 const options = computed(() =>
-  availableSavedPrompts(global.value, workspace.value, props.scope).map(({ fragment }) => fragment),
+  availableSavedPrompts(global.value, workspace.value, props.scope, reusableBuiltinPrompts(builtins.value)).map(
+    ({ fragment }) => fragment,
+  ),
 )
+const optionsById = computed(() => new Map(options.value.map((prompt) => [prompt.id, prompt])))
 const groups = computed(() => groupSavedPrompts(current.value))
 const entries = computed(() =>
   groups.value
@@ -88,7 +99,7 @@ const entries = computed(() =>
 const categoryOptions = computed(() =>
   groups.value.flatMap(({ category }) => (category === null ? [] : [{ value: category, label: category }])),
 )
-const selected = computed(() => draft.value?.id || '')
+const selected = computed(() => builtinSelection.value?.id || draft.value?.id || '')
 const saved = computed(() => entries.value.find((prompt) => prompt.id === selected.value))
 const isNew = computed(() => Boolean(draft.value && !saved.value))
 const field = computed(() =>
@@ -100,9 +111,20 @@ const editorTitle = computed(() =>
 const activeCategory = computed(() => groups.value.find(({ category }) => category === filter.value))
 const hasSearch = computed(() => Boolean(search.value.trim()))
 const visiblePrompts = computed(() => {
+  if (builtinOnly.value) return []
   const prompts = filter.value === '' ? entries.value : (activeCategory.value?.prompts ?? [])
   return hasSearch.value ? prompts.filter((prompt) => savedPromptMatches(prompt, search.value)) : prompts
 })
+const visibleBuiltins = computed(() =>
+  filter.value === ''
+    ? builtins.value.filter((prompt) => {
+        const needle = search.value.trim().toLocaleLowerCase()
+        return [prompt.id, builtinPromptTitle(prompt), prompt.body].some((part) =>
+          part.toLocaleLowerCase().includes(needle),
+        )
+      })
+    : [],
+)
 const components = computed(() => options.value.filter((prompt) => prompt.id !== selected.value))
 const preview = computed(() =>
   draft.value && composing.value
@@ -137,6 +159,7 @@ const uses = computed(
 )
 
 function show(prompt?: PromptFragment, composition = Boolean(prompt?.parts?.length)) {
+  builtinSelection.value = null
   draft.value = prompt ? normalizePromptFragment(prompt) : null
   composing.value = composition
   if (!prompt) showDetail.value = false
@@ -146,16 +169,17 @@ async function openEditor() {
   showDetail.value = true
   await nextTick()
   editorScroll.value?.scrollTo({ top: 0 })
-  editorHeading.value?.focus()
+  listDetail.value?.focusDetail()
 }
 
 async function backToList() {
   showDetail.value = false
   await nextTick()
-  listHeading.value?.focus()
+  listDetail.value?.focusList()
 }
 
 function clearFilters() {
+  builtinOnly.value = false
   search.value = ''
   filter.value = ''
 }
@@ -181,16 +205,13 @@ function closeCategories() {
   selectCategory('')
 }
 
-async function canDiscard() {
-  if (saving.value) return false
-  if (!dirty.value && !categoryDirty.value) return true
-  return confirmAction({
-    title: st('Discard unsaved changes?'),
-    description: st('You have unsaved changes.'),
-    confirmText: st('Discard changes'),
-    cancelText: st('Keep editing'),
-  })
-}
+const { canDiscard } = useSettingsDraftGuard({
+  dirty: () => dirty.value || categoryDirty.value,
+  busy: () => saving.value,
+  dialog: () => ({ description: st('You have unsaved changes.') }),
+  sameTarget: (to, from) =>
+    to.path === from.path && to.query.view === from.query.view && to.query.scope === from.query.scope,
+})
 
 async function load(prefer = selected.value) {
   const token = ++generation
@@ -200,15 +221,20 @@ async function load(prefer = selected.value) {
   loading.value = true
   error.value = ''
   try {
-    const [data, bots] = await Promise.all([
+    const [data, bots, catalog] = await Promise.all([
       readRuntimeSettingSources('prompts', controller.signal),
       props.scope === 'global' ? listBots(controller.signal).catch(() => null) : null,
+      readBuiltinPrompts(controller.signal),
     ])
     if (token !== generation) return
     sources.value = data
     emit('workspace-config-path', data.workspace.config_path || '')
     botReferences.value = bots?.items.flatMap((bot) => bot.persona.prompts?.ids ?? []) ?? []
+    builtins.value = catalog
     show(entries.value.find((prompt) => prompt.id === prefer) ?? entries.value[0])
+    builtinSelection.value =
+      catalog.find((prompt) => prompt.id === prefer) ?? (draft.value ? null : (catalog[0] ?? null))
+    if (builtinSelection.value) draft.value = null
     resetMissingCategoryFilter()
   } catch (reason) {
     if (token === generation) {
@@ -228,6 +254,27 @@ async function choose(prompt: PromptFragment) {
   error.value = ''
   show(prompt)
   await openEditor()
+}
+
+async function chooseBuiltin(prompt: BuiltinPrompt) {
+  if (busy.value) return
+  const token = generation
+  if (!(await canDiscard()) || token !== generation || busy.value) return
+  error.value = ''
+  show()
+  builtinSelection.value = prompt
+  await openEditor()
+}
+
+async function filterBuiltins() {
+  const token = generation
+  if (!(await canDiscard()) || token !== generation || busy.value) return
+  filter.value = ''
+  builtinOnly.value = true
+  if (!builtinSelection.value && visibleBuiltins.value.length) {
+    show()
+    builtinSelection.value = visibleBuiltins.value[0] ?? null
+  }
 }
 
 async function create(composition: boolean, promptCategory = filter.value) {
@@ -288,6 +335,7 @@ async function savePrompt() {
       [field.value]: isNew.value ? [...list, entry] : list.map((prompt) => (prompt.id === entry.id ? entry : prompt)),
     })
   ) {
+    builtinOnly.value = false
     if (revealEntry) {
       if (filter.value !== '') filter.value = entry.category ?? null
       if (!savedPromptMatches(entry, search.value)) search.value = ''
@@ -385,22 +433,7 @@ async function refresh() {
 }
 
 defineExpose({ refresh })
-function ownsNavigation(to: RouteLocationNormalized) {
-  if (!pane) return true
-  const windowId = readWindowIdFromQuery(to.query)
-  return windowId ? windowId === pane.windowId.value : pane.isFocused.value
-}
-onBeforeRouteLeave((to) => !ownsNavigation(to) || canDiscard())
-onBeforeRouteUpdate((to, from) => {
-  if (
-    !ownsNavigation(to) ||
-    (to.path === from.path && to.query.view === from.query.view && to.query.scope === from.query.scope)
-  )
-    return true
-  return canDiscard()
-})
-
-watch([filter, search], () => listScroll.value?.scrollTo({ top: 0 }), { flush: 'post' })
+watch([filter, search, builtinOnly], () => listDetail.value?.scrollListToTop(), { flush: 'post' })
 watch(
   () => props.scope,
   () => {
@@ -412,16 +445,9 @@ watch(
   },
   { immediate: true },
 )
-function beforeUnload(event: BeforeUnloadEvent) {
-  if (!dirty.value && !categoryDirty.value && !saving.value) return
-  event.preventDefault()
-  event.returnValue = ''
-}
-onMounted(() => window.addEventListener('beforeunload', beforeUnload))
 onBeforeUnmount(() => {
   generation++
   loadController?.abort()
-  window.removeEventListener('beforeunload', beforeUnload)
 })
 </script>
 
@@ -457,268 +483,330 @@ onBeforeUnmount(() => {
     >
       {{ error }}
     </p>
-    <div v-if="loading || sources" class="settings-master-detail settings-viewport-region">
-      <aside
-        class="flex min-h-0 min-w-0 flex-col rounded-lg border border-border/70 bg-card/30"
-        :class="{ 'settings-hide-stacked': showDetail, 'col-span-full': !draft && !entries.length }"
-        :aria-label="$st('Saved prompts')"
-        data-prompt-list
-      >
-        <div class="grid shrink-0 gap-2 border-b border-border/60 p-2.5">
-          <div class="flex min-w-0 items-center justify-between gap-2">
-            <h2 ref="listHeading" tabindex="-1" class="min-w-0 px-0.5 text-sm font-semibold outline-none">
-              {{ $st('Saved prompts') }}
-            </h2>
-            <button
-              v-if="groups.length"
-              type="button"
-              :disabled="busy"
-              :aria-pressed="filter === ''"
-              :title="$st('All categories')"
-              class="prompt-category-filter"
-              data-prompt-category-filter=""
-              @click="filter = ''"
-            >
-              <span class="truncate">{{ $st('All categories') }}</span>
-              <span class="shrink-0 tabular-nums text-muted-foreground">{{ entries.length }}</span>
-            </button>
-          </div>
-          <SearchInput
-            v-model="search"
-            :placeholder="$st('Search prompts…')"
-            :input-aria-label="$st('Search prompts…')"
-            :show-search-button="false"
-          />
-          <div
-            v-if="groups.length"
-            role="group"
-            :aria-label="$st('Prompt category')"
-            class="flex max-h-28 min-w-0 flex-wrap items-start gap-1.5 overflow-y-auto overscroll-contain p-0.5"
+    <SettingsListDetail
+      v-if="loading || sources"
+      ref="listDetail"
+      v-model:detail-open="showDetail"
+      :list-label="$st('Prompt library')"
+      :detail-label="editorTitle"
+      :back-label="$st('Prompts')"
+      :list-busy="loading"
+      :has-detail="Boolean(draft || builtinSelection || entries.length)"
+      list-scroll-class="space-y-2"
+    >
+      <template #list-header>
+        <div class="flex min-w-0 items-center justify-between gap-2">
+          <h2 data-settings-list-heading tabindex="-1" class="min-w-0 px-0.5 text-sm font-semibold outline-none">
+            {{ $st('Prompts') }}
+          </h2>
+          <button
+            v-if="groups.length || builtins.length"
+            type="button"
+            :disabled="busy"
+            :aria-pressed="filter === '' && !builtinOnly"
+            :title="$st('All categories')"
+            class="prompt-category-filter"
+            data-prompt-category-filter=""
+            @click="((filter = ''), (builtinOnly = false))"
           >
-            <button
-              v-for="group in groups"
-              :key="group.category"
-              type="button"
-              :disabled="busy"
-              :aria-pressed="filter === group.category"
-              :title="group.category ?? $st('Uncategorized')"
-              :data-prompt-category-filter="group.category"
-              class="prompt-category-filter"
-              @click="filter = group.category"
-            >
-              <span class="truncate">{{ group.category ?? $st('Uncategorized') }}</span>
-              <span class="shrink-0 tabular-nums text-muted-foreground">{{ group.prompts.length }}</span>
-            </button>
-          </div>
+            <span class="truncate">{{ $st('All categories') }}</span>
+            <span class="shrink-0 tabular-nums text-muted-foreground">{{ entries.length + builtins.length }}</span>
+          </button>
         </div>
-        <div ref="listScroll" class="settings-viewport-scroll space-y-2 p-1.5">
-          <header
-            v-if="activeCategory"
-            class="flex min-w-0 items-center gap-1 rounded-md border border-border/60 bg-muted/25 px-2 py-1"
-            :data-prompt-category="activeCategory.category ?? ''"
+        <SearchInput
+          v-model="search"
+          :placeholder="$st('Search prompts…')"
+          :input-aria-label="$st('Search prompts…')"
+          :show-search-button="false"
+        />
+        <div
+          v-if="groups.length || builtins.length"
+          role="group"
+          :aria-label="$st('Prompt category')"
+          class="flex max-h-28 min-w-0 flex-wrap items-start gap-1.5 overflow-y-auto overscroll-contain p-0.5"
+        >
+          <button
+            v-if="builtins.length"
+            type="button"
+            :disabled="busy"
+            :aria-pressed="builtinOnly"
+            class="prompt-category-filter"
+            @click="filterBuiltins"
           >
-            <RiFolderLine class="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-            <h3
-              class="min-w-0 flex-1 truncate text-xs font-semibold"
-              :title="activeCategory.category ?? $st('Uncategorized')"
-            >
-              {{ activeCategory.category ?? $st('Uncategorized') }}
-            </h3>
-            <IconButton
-              size="sm"
-              :disabled="busy"
-              :aria-label="`${$st('New fragment')} · ${activeCategory.category ?? $st('Uncategorized')}`"
-              :tooltip="$st('New fragment')"
-              @click="create(false, activeCategory.category)"
-            >
-              <RiAddLine class="h-4 w-4" aria-hidden="true" />
-            </IconButton>
-            <IconButton
-              v-if="activeCategory.category !== null"
-              size="sm"
-              :disabled="busy"
-              :aria-label="`${$st('Edit')} · ${activeCategory.category}`"
-              :tooltip="$st('Edit')"
-              @click="openCategory(activeCategory.category)"
-            >
-              <RiEditLine class="h-4 w-4" aria-hidden="true" />
-            </IconButton>
-          </header>
-          <p v-if="loading && !sources" role="status" class="px-3 py-8 text-center text-sm text-muted-foreground">
-            {{ $st('Loading…') }}
+            <RiLock2Line class="h-3.5 w-3.5 shrink-0 text-primary" aria-hidden="true" />
+            <span class="truncate">{{ $st('Built-in prompts') }}</span>
+            <span class="shrink-0 tabular-nums text-muted-foreground">{{ builtins.length }}</span>
+          </button>
+          <button
+            v-for="group in groups"
+            :key="group.category"
+            type="button"
+            :disabled="busy"
+            :aria-pressed="filter === group.category"
+            :title="group.category ?? $st('Uncategorized')"
+            :data-prompt-category-filter="group.category"
+            class="prompt-category-filter"
+            @click="((filter = group.category), (builtinOnly = false))"
+          >
+            <span class="truncate">{{ group.category ?? $st('Uncategorized') }}</span>
+            <span class="shrink-0 tabular-nums text-muted-foreground">{{ group.prompts.length }}</span>
+          </button>
+        </div>
+      </template>
+      <template #list>
+        <header
+          v-if="activeCategory"
+          class="flex min-w-0 items-center gap-1 rounded-md border border-border/60 bg-muted/25 px-2 py-1"
+          :data-prompt-category="activeCategory.category ?? ''"
+        >
+          <RiFolderLine class="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <h3
+            class="min-w-0 flex-1 truncate text-xs font-semibold"
+            :title="activeCategory.category ?? $st('Uncategorized')"
+          >
+            {{ activeCategory.category ?? $st('Uncategorized') }}
+          </h3>
+          <IconButton
+            size="sm"
+            :disabled="busy"
+            :aria-label="`${$st('New fragment')} · ${activeCategory.category ?? $st('Uncategorized')}`"
+            :tooltip="$st('New fragment')"
+            @click="create(false, activeCategory.category)"
+          >
+            <RiAddLine class="h-4 w-4" aria-hidden="true" />
+          </IconButton>
+          <IconButton
+            v-if="activeCategory.category !== null"
+            size="sm"
+            :disabled="busy"
+            :aria-label="`${$st('Edit')} · ${activeCategory.category}`"
+            :tooltip="$st('Edit')"
+            @click="openCategory(activeCategory.category)"
+          >
+            <RiEditLine class="h-4 w-4" aria-hidden="true" />
+          </IconButton>
+        </header>
+        <p v-if="loading && !sources" role="status" class="px-3 py-8 text-center text-sm text-muted-foreground">
+          {{ $st('Loading…') }}
+        </p>
+        <div v-else-if="!visiblePrompts.length && !visibleBuiltins.length" class="space-y-2 px-3 py-8 text-center">
+          <p role="status" class="text-sm text-muted-foreground">
+            {{ hasSearch ? $st('No matching prompts') : $st('No saved prompts') }}
           </p>
-          <div v-else-if="!visiblePrompts.length" class="space-y-2 px-3 py-8 text-center">
-            <p role="status" class="text-sm text-muted-foreground">
-              {{ hasSearch ? $st('No matching prompts') : $st('No saved prompts') }}
-            </p>
-            <Button v-if="hasSearch" size="sm" variant="ghost" @click="clearFilters">{{ $st('Clear filters') }}</Button>
-          </div>
-          <ul v-else class="space-y-0.5">
-            <li v-for="prompt in visiblePrompts" :key="prompt.id" class="min-w-0">
+          <Button v-if="hasSearch" size="sm" variant="ghost" @click="clearFilters">{{ $st('Clear filters') }}</Button>
+        </div>
+        <ul v-if="visiblePrompts.length" class="space-y-0.5">
+          <li v-for="prompt in visiblePrompts" :key="prompt.id" class="min-w-0">
+            <button
+              type="button"
+              :disabled="busy"
+              :aria-pressed="prompt.id === selected"
+              :data-prompt-entry="prompt.id"
+              :data-keyboard-item="prompt.id"
+              :data-keyboard-label="savedPromptDisplayName(prompt)"
+              :data-keyboard-selected="String(prompt.id === selected)"
+              class="flex w-full min-w-0 items-start gap-2 rounded-md px-2 py-1.5 text-start transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              :class="prompt.id === selected ? 'bg-primary/10 ring-1 ring-inset ring-primary/25' : 'hover:bg-muted/60'"
+              @click="choose(prompt)"
+            >
+              <component
+                :is="prompt.parts?.length ? RiStackLine : RiFileTextLine"
+                class="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground"
+                aria-hidden="true"
+              />
+              <span class="min-w-0 flex-1">
+                <span class="block truncate text-sm font-medium">{{ savedPromptDisplayName(prompt) }}</span>
+                <span class="mt-0.5 block truncate text-xs text-muted-foreground">
+                  {{
+                    savedPromptExcerpt(prompt, optionsById) ||
+                    (prompt.parts?.length ? $st('Prompt composition') : prompt.category)
+                  }}
+                </span>
+              </span>
+            </button>
+          </li>
+        </ul>
+        <section v-if="visibleBuiltins.length" class="space-y-1" data-prompt-builtin-list>
+          <h3 class="flex items-center gap-2 px-2 pt-1 text-xs font-semibold text-muted-foreground">
+            {{ $st('Built-in prompts') }}
+          </h3>
+          <ul class="space-y-0.5">
+            <li v-for="prompt in visibleBuiltins" :key="prompt.id">
               <button
                 type="button"
                 :disabled="busy"
                 :aria-pressed="prompt.id === selected"
-                :data-prompt-entry="prompt.id"
+                :data-prompt-builtin="prompt.id"
+                :data-keyboard-item="prompt.id"
+                :data-keyboard-label="builtinPromptTitle(prompt)"
+                :data-keyboard-selected="String(prompt.id === selected)"
                 class="flex w-full min-w-0 items-start gap-2 rounded-md px-2 py-1.5 text-start transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                :class="
-                  prompt.id === selected ? 'bg-primary/10 ring-1 ring-inset ring-primary/25' : 'hover:bg-muted/60'
-                "
-                @click="choose(prompt)"
+                :class="prompt.id === selected ? 'bg-primary/10 ring-1 ring-inset ring-primary/25' : 'hover:bg-muted/60'"
+                @click="chooseBuiltin(prompt)"
               >
-                <component
-                  :is="prompt.parts?.length ? RiStackLine : RiFileTextLine"
-                  class="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground"
-                  aria-hidden="true"
-                />
+                <RiLock2Line class="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
                 <span class="min-w-0 flex-1">
-                  <span class="block truncate text-sm font-medium">{{ savedPromptDisplayName(prompt) }}</span>
+                  <span class="block truncate text-sm font-medium">{{ builtinPromptTitle(prompt) }}</span>
                   <span class="mt-0.5 block truncate text-xs text-muted-foreground">
-                    {{
-                      [
-                        filter === '' ? prompt.category : '',
-                        prompt.parts?.length ? $st('Prompt composition') : prompt.body.trim(),
-                      ]
-                        .filter(Boolean)
-                        .join(' · ')
-                    }}
+                    {{ promptExcerpt(prompt.body) }}
                   </span>
                 </span>
               </button>
             </li>
           </ul>
-        </div>
-      </aside>
-      <form
-        v-if="draft"
-        class="flex min-h-0 min-w-0 flex-col rounded-lg border border-border/70 bg-card/30"
-        :class="{ 'settings-hide-stacked': !showDetail }"
-        :aria-label="editorTitle"
-        data-prompt-editor
-        @submit.prevent="savePrompt"
-        @keydown="saveFromKeyboard"
-      >
-        <div class="settings-stacked-only shrink-0 border-b border-border/60 px-2 py-1">
-          <Button size="sm" variant="ghost" @click="backToList">
-            <RiArrowLeftLine class="me-1.5 h-4 w-4 rtl:rotate-180" aria-hidden="true" />{{ $st('Saved prompts') }}
-          </Button>
-        </div>
-        <header class="flex shrink-0 items-center gap-2 rounded-t-lg border-b border-border/60 bg-muted/20 px-3 py-2">
-          <component
-            :is="composing ? RiStackLine : RiFileTextLine"
-            class="h-4 w-4 shrink-0 text-muted-foreground"
-            aria-hidden="true"
-          />
-          <h2 ref="editorHeading" tabindex="-1" class="min-w-0 flex-1 break-words text-sm font-semibold outline-none">
-            {{ editorTitle }}
-          </h2>
-          <IconButton
-            v-if="saved"
-            size="sm"
-            :disabled="busy || uses"
-            :aria-label="$st('Delete saved prompt?')"
-            :tooltip="$st('Delete')"
-            @click="deletePrompt"
-          >
-            <RiDeleteBinLine class="h-4 w-4 text-destructive" aria-hidden="true" />
-          </IconButton>
-        </header>
-        <div ref="editorScroll" class="settings-viewport-scroll p-3 sm:p-4">
-          <fieldset class="grid min-w-0 gap-4" :class="{ 'prompt-fragment-fields': !composing }" :disabled="busy">
-            <div class="settings-control-grid">
-              <label class="grid min-w-0 gap-1.5 text-xs font-medium text-muted-foreground">
-                {{ $st('Title') }}
-                <Input v-model="draft.title" class="bg-background font-normal text-foreground" required />
-              </label>
-              <div class="grid min-w-0 gap-1.5">
-                <span class="text-xs font-medium text-muted-foreground">{{ $st('Prompt category') }}</span>
-                <p
-                  v-if="isNew"
-                  class="flex min-h-9 min-w-0 items-center gap-2 rounded-md bg-muted/35 px-3 py-1.5 text-sm"
-                  data-prompt-create-category
-                >
-                  <RiFolderLine class="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                  <span class="min-w-0 [overflow-wrap:anywhere]">{{ draft.category ?? $st('Uncategorized') }}</span>
-                </p>
-                <OptionPicker
-                  v-else
-                  :model-value="draft.category ?? ''"
-                  :options="categoryOptions"
-                  :title="$st('Prompt category')"
-                  :empty-label="$st('Uncategorized')"
-                  :disabled="busy"
-                  trigger-class="bg-background font-normal"
-                  data-prompt-category-picker
-                  @update:model-value="draft.category = $event || undefined"
-                />
+        </section>
+      </template>
+      <template #detail>
+        <form
+          v-if="draft"
+          class="flex min-h-0 min-w-0 flex-1 flex-col"
+          :aria-label="editorTitle"
+          data-prompt-editor
+          @submit.prevent="savePrompt"
+          @keydown="saveFromKeyboard"
+        >
+          <header class="flex shrink-0 items-center gap-2 rounded-t-lg border-b border-border/60 bg-muted/20 px-3 py-2">
+            <component
+              :is="composing ? RiStackLine : RiFileTextLine"
+              class="h-4 w-4 shrink-0 text-muted-foreground"
+              aria-hidden="true"
+            />
+            <h2
+              data-settings-detail-heading
+              tabindex="-1"
+              class="min-w-0 flex-1 break-words text-sm font-semibold outline-none"
+            >
+              {{ editorTitle }}
+            </h2>
+            <IconButton
+              v-if="saved"
+              size="sm"
+              :disabled="busy || uses"
+              :aria-label="$st('Delete saved prompt?')"
+              :tooltip="$st('Delete')"
+              @click="deletePrompt"
+            >
+              <RiDeleteBinLine class="h-4 w-4 text-destructive" aria-hidden="true" />
+            </IconButton>
+          </header>
+          <div ref="editorScroll" class="settings-viewport-scroll p-3 sm:p-4">
+            <fieldset class="grid min-w-0 gap-4" :class="{ 'prompt-fragment-fields': !composing }" :disabled="busy">
+              <div class="settings-control-grid">
+                <label class="grid min-w-0 gap-1.5 text-xs font-medium text-muted-foreground">
+                  {{ $st('Title') }}
+                  <Input v-model="draft.title" class="bg-background font-normal text-foreground" required />
+                </label>
+                <div class="grid min-w-0 gap-1.5">
+                  <span class="text-xs font-medium text-muted-foreground">{{ $st('Prompt category') }}</span>
+                  <p
+                    v-if="isNew"
+                    class="flex min-h-9 min-w-0 items-center gap-2 rounded-md bg-muted/35 px-3 py-1.5 text-sm"
+                    data-prompt-create-category
+                  >
+                    <RiFolderLine class="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    <span class="min-w-0 [overflow-wrap:anywhere]">{{ draft.category ?? $st('Uncategorized') }}</span>
+                  </p>
+                  <OptionPicker
+                    v-else
+                    :model-value="draft.category ?? ''"
+                    :options="categoryOptions"
+                    :title="$st('Prompt category')"
+                    :empty-label="$st('Uncategorized')"
+                    :disabled="busy"
+                    trigger-class="bg-background font-normal"
+                    data-prompt-category-picker
+                    @update:model-value="draft.category = $event || undefined"
+                  />
+                </div>
               </div>
-            </div>
-            <div v-if="composing" class="grid min-w-0 gap-2.5">
-              <PromptReferenceList
-                :model-value="draft.parts ?? []"
-                :options="components"
-                :disabled="busy"
-                @update:model-value="draft.parts = $event"
-              />
-              <p v-if="draft.parts?.length && preview === null" role="alert" class="text-xs text-destructive">
-                {{ $st('Check for missing or circular prompt references.') }}
+              <div v-if="composing" class="grid min-w-0 gap-2.5">
+                <PromptReferenceList
+                  :model-value="draft.parts ?? []"
+                  :options="components"
+                  :disabled="busy"
+                  @update:model-value="draft.parts = $event"
+                />
+                <p v-if="draft.parts?.length && preview === null" role="alert" class="text-xs text-destructive">
+                  {{ $st('Check for missing or circular prompt references.') }}
+                </p>
+                <p v-if="exceedsCompositionBudget" role="alert" class="text-xs text-destructive">
+                  {{ $st('The combined prompt exceeds the size limit.') }}
+                </p>
+                <section
+                  v-if="preview"
+                  class="min-w-0 rounded-md border border-border/60 bg-background"
+                  data-prompt-preview
+                >
+                  <h3 class="border-b border-border/60 px-3 py-2 text-xs font-medium">
+                    {{ $st('Preview') }}
+                  </h3>
+                  <pre class="max-h-64 overflow-y-auto whitespace-pre-wrap break-words p-3 text-sm leading-relaxed">{{
+                    preview
+                  }}</pre>
+                </section>
+              </div>
+              <label v-else class="prompt-body-field grid min-w-0 gap-1.5 text-xs font-medium text-muted-foreground">
+                {{ $st('Instructions') }}
+                <textarea
+                  v-model="draft.body"
+                  rows="12"
+                  spellcheck="false"
+                  required
+                  :aria-invalid="exceedsFragmentBudget || undefined"
+                  class="min-h-52 min-w-0 resize-y rounded-md border border-input bg-background px-3 py-2.5 text-sm font-normal leading-relaxed text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                />
+                <span v-if="exceedsFragmentBudget" role="alert" class="text-destructive">
+                  {{ $st('The prompt fragment exceeds the size limit.') }}
+                </span>
+              </label>
+              <p v-if="uses" class="text-xs text-muted-foreground">
+                {{ $st('Referenced by other prompts or active layers') }}
               </p>
-              <p v-if="exceedsCompositionBudget" role="alert" class="text-xs text-destructive">
-                {{ $st('The combined prompt exceeds the size limit.') }}
+            </fieldset>
+          </div>
+          <SettingsSaveBar
+            v-if="dirty || saving"
+            class="m-2.5 shrink-0"
+            :dirty="dirty"
+            :saving="saving"
+            :disabled="loading"
+            :save-disabled="!valid"
+            sticky
+            data-prompt-save
+            @discard="discardPrompt"
+            @save="savePrompt"
+          />
+        </form>
+        <article v-else-if="builtinSelection" class="flex min-h-0 min-w-0 flex-1 flex-col" data-prompt-builtin-detail>
+          <header class="flex shrink-0 items-center gap-2.5 rounded-t-lg border-b border-border/60 bg-muted/20 px-3 py-2">
+            <RiLock2Line class="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+            <div class="min-w-0">
+              <h2 data-settings-detail-heading tabindex="-1" class="break-words text-sm font-semibold outline-none">
+                {{ builtinPromptTitle(builtinSelection) }}
+              </h2>
+              <p class="break-words text-xs text-muted-foreground">
+                {{
+                  builtinSelection.reusable
+                    ? $st('Reusable built-in prompt')
+                    : `${$st('Required built-in prompt')} · ${builtinPromptApplicability(builtinSelection.when)}`
+                }}
               </p>
-              <section
-                v-if="preview"
-                class="min-w-0 rounded-md border border-border/60 bg-background"
-                data-prompt-preview
-              >
-                <h3 class="border-b border-border/60 px-3 py-2 text-xs font-medium">{{ $st('Preview') }}</h3>
-                <pre class="max-h-64 overflow-y-auto whitespace-pre-wrap break-words p-3 text-sm leading-relaxed">{{
-                  preview
-                }}</pre>
-              </section>
             </div>
-            <label v-else class="prompt-body-field grid min-w-0 gap-1.5 text-xs font-medium text-muted-foreground">
-              {{ $st('Instructions') }}
-              <textarea
-                v-model="draft.body"
-                rows="12"
-                spellcheck="false"
-                required
-                :aria-invalid="exceedsFragmentBudget || undefined"
-                class="min-h-52 min-w-0 resize-y rounded-md border border-input bg-background px-3 py-2.5 text-sm font-normal leading-relaxed text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              />
-              <span v-if="exceedsFragmentBudget" role="alert" class="text-destructive">
-                {{ $st('The prompt fragment exceeds the size limit.') }}
-              </span>
-            </label>
-            <p v-if="uses" class="text-xs text-muted-foreground">
-              {{ $st('Referenced by other prompts or active layers') }}
-            </p>
-          </fieldset>
+          </header>
+          <div ref="editorScroll" class="settings-viewport-scroll px-4 py-3 sm:px-5 sm:py-4">
+            <pre class="whitespace-pre-wrap font-mono text-sm leading-relaxed [overflow-wrap:anywhere]">{{
+              builtinSelection.body
+            }}</pre>
+          </div>
+        </article>
+        <div v-else-if="!loading && entries.length" class="settings-split-only">
+          <div class="grid min-h-56 place-content-center gap-2 px-4 text-center text-sm text-muted-foreground">
+            <RiFileTextLine class="mx-auto h-6 w-6" aria-hidden="true" />
+            {{ $st('Select a saved prompt') }}
+          </div>
         </div>
-        <SettingsSaveBar
-          v-if="dirty || saving"
-          class="m-2.5 shrink-0"
-          :dirty="dirty"
-          :saving="saving"
-          :disabled="loading"
-          :save-disabled="!valid"
-          sticky
-          data-prompt-save
-          @discard="discardPrompt"
-          @save="savePrompt"
-        />
-      </form>
-      <div
-        v-else-if="!loading && entries.length"
-        class="settings-split-only rounded-lg border border-dashed border-border/70 bg-card/20"
-      >
-        <div class="grid min-h-56 place-content-center gap-2 px-4 text-center text-sm text-muted-foreground">
-          <RiFileTextLine class="mx-auto h-6 w-6" aria-hidden="true" />
-          {{ $st('Select a saved prompt') }}
-        </div>
-      </div>
-    </div>
+      </template>
+    </SettingsListDetail>
     <FormDialog :open="categoriesOpen" :title="category || $st('New category')" @close="closeCategories">
       <form class="grid min-w-0 gap-3" data-prompt-categories @submit.prevent="saveCategory()">
         <label class="grid min-w-0 gap-1.5 text-xs font-medium text-muted-foreground">

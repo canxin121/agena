@@ -3,6 +3,10 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Button from '@/components/ui/Button.vue'
 import Dialog from '@/components/ui/Dialog.vue'
+import SegmentedButton from '@/components/ui/SegmentedButton.vue'
+import SegmentedControl from '@/components/ui/SegmentedControl.vue'
+import TabPanel from '@/components/ui/TabPanel.vue'
+import { useTabRelations } from '@/components/ui/useTabRelations'
 import MemoryMetadataView from '@/components/MemoryMetadataView.vue'
 import { usePaneVisibility } from '@/composables/usePaneVisibility'
 import { assistantApi, type AssistantSnapshot, type AssistantMemory, type Reminder } from '@/lib/assistantApi'
@@ -23,6 +27,7 @@ const draft = ref<AssistantPreferences | null>(null)
 const draftBase = ref<AssistantPreferences | null>(null),
   draftRevision = ref(0)
 const tab = ref<'profile' | 'memory' | 'reminders'>('profile')
+const tabRelations = useTabRelations()
 const loading = ref(false),
   busy = ref(false),
   error = ref(''),
@@ -217,20 +222,20 @@ onBeforeUnmount(() => {
       </p>
     </header>
     <div class="mx-auto mt-5 max-w-4xl">
-      <div class="flex gap-2 border-b border-border" role="tablist" :aria-label="t('assistant.title')">
-        <button
+      <SegmentedControl variant="underline" :aria-label="t('assistant.title')">
+        <SegmentedButton
           v-for="key in ['profile', 'memory', 'reminders'] as const"
           :key="key"
-          role="tab"
-          class="px-4 py-3 text-sm border-b-2 focus-visible:ring-2 focus-visible:ring-ring"
-          :class="tab === key ? 'border-primary font-semibold' : 'border-transparent text-muted-foreground'"
-          :aria-selected="tab === key"
+          v-bind="tabRelations.tab(key)"
+          variant="underline"
+          size="sm"
+          :active="tab === key"
           @click="tab = key"
           :data-testid="`assistant-tab-${key}`"
         >
           {{ t(`assistant.${key}`) }}
-        </button>
-      </div>
+        </SegmentedButton>
+      </SegmentedControl>
       <p v-if="loading && !snapshot" role="status" class="py-6 text-sm">{{ t('assistant.loading') }}</p>
       <p
         v-if="error"
@@ -240,163 +245,169 @@ onBeforeUnmount(() => {
         {{ error }}
       </p>
       <p v-if="notice" role="status" class="mt-3 text-sm text-muted-foreground">{{ notice }}</p>
-      <form v-if="tab === 'profile' && draft" class="mt-5 space-y-5" @submit.prevent="saveProfile">
-        <fieldset :disabled="busy || !!pending" class="grid grid-cols-1 gap-4 sm:grid-cols-2 disabled:opacity-70">
-          <label class="flex items-center gap-2 text-sm"
-            ><input type="checkbox" v-model="draft.memory_enabled" data-testid="assistant-memory-enabled" />{{
-              t('assistant.memoryRecall')
-            }}</label
+      <TabPanel :active="tab === 'profile'" v-bind="tabRelations.panel('profile')">
+        <form v-if="draft" class="mt-5 space-y-5" @submit.prevent="saveProfile">
+          <fieldset :disabled="busy || !!pending" class="grid grid-cols-1 gap-4 sm:grid-cols-2 disabled:opacity-70">
+            <label class="flex items-center gap-2 text-sm"
+              ><input type="checkbox" v-model="draft.memory_enabled" data-testid="assistant-memory-enabled" />{{
+                t('assistant.memoryRecall')
+              }}</label
+            >
+            <label class="flex items-center gap-2 text-sm"
+              ><input type="checkbox" v-model="draft.proactive_enabled" data-testid="assistant-proactive-enabled" />{{
+                t('assistant.proactive')
+              }}</label
+            >
+            <label class="assistant-field"
+              >{{ t('assistant.timezone')
+              }}<input
+                v-model="draft.timezone"
+                data-testid="assistant-timezone"
+                placeholder="Asia/Shanghai"
+                maxlength="64"
+            /></label>
+            <label class="flex items-center gap-2 text-sm"
+              ><input type="checkbox" v-model="draft.quiet_enabled" />{{ t('assistant.quiet') }}</label
+            >
+            <label class="assistant-field"
+              >{{ t('assistant.quietStart')
+              }}<input
+                type="time"
+                :value="minuteText(draft.quiet_start_minute)"
+                @input="minute('quiet_start_minute', $event)"
+            /></label>
+            <label class="assistant-field"
+              >{{ t('assistant.quietEnd')
+              }}<input
+                type="time"
+                :value="minuteText(draft.quiet_end_minute)"
+                @input="minute('quiet_end_minute', $event)"
+            /></label>
+            <label class="assistant-field"
+              >{{ t('assistant.daily') }}<input v-model.number="draft.daily_limit" type="number" min="1" max="24"
+            /></label>
+            <label class="assistant-field"
+              >{{ t('assistant.cooldown')
+              }}<input v-model.number="draft.cooldown_seconds" type="number" min="60" max="86400" step="60"
+            /></label>
+          </fieldset>
+          <p class="text-xs text-muted-foreground">{{ t('assistant.policyHint') }}</p>
+          <p v-if="pending && error && !conflict" class="text-sm">{{ t('assistant.retryHint') }}</p>
+          <div class="flex flex-wrap gap-2">
+            <Button
+              type="submit"
+              :disabled="busy || conflict || !validPreferences(draft) || (!dirty && !pending)"
+              data-testid="assistant-save"
+              >{{ busy ? t('assistant.saving') : t('assistant.save') }}</Button
+            ><Button
+              v-if="conflict"
+              type="button"
+              variant="outline"
+              @click="reconfirm"
+              data-testid="assistant-reconfirm"
+              >{{ t('assistant.reconfirm') }}</Button
+            >
+          </div>
+        </form>
+      </TabPanel>
+      <TabPanel :active="tab === 'memory'" v-bind="tabRelations.panel('memory')">
+        <section v-if="snapshot" class="mt-5 space-y-3">
+          <p class="text-sm text-muted-foreground">{{ t('assistant.memoryHint') }}</p>
+          <p v-if="!snapshot.profile.preferences.memory_enabled" class="rounded-md bg-muted p-3 text-sm">
+            {{ t('assistant.memoryDisabled') }}
+          </p>
+          <p v-if="!snapshot.memories.length" class="py-10 text-center text-muted-foreground">
+            {{ t('assistant.noMemories') }}
+          </p>
+          <p v-if="snapshot.memories_truncated" class="text-sm">{{ t('assistant.bounded') }}</p>
+          <article
+            v-for="memory in snapshot.memories"
+            :key="memory.name"
+            class="rounded-lg border border-border p-4"
+            :data-memory-name="memory.name"
           >
-          <label class="flex items-center gap-2 text-sm"
-            ><input type="checkbox" v-model="draft.proactive_enabled" data-testid="assistant-proactive-enabled" />{{
-              t('assistant.proactive')
-            }}</label
-          >
-          <label class="assistant-field"
-            >{{ t('assistant.timezone')
-            }}<input
-              v-model="draft.timezone"
-              data-testid="assistant-timezone"
-              placeholder="Asia/Shanghai"
-              maxlength="64"
-          /></label>
-          <label class="flex items-center gap-2 text-sm"
-            ><input type="checkbox" v-model="draft.quiet_enabled" />{{ t('assistant.quiet') }}</label
-          >
-          <label class="assistant-field"
-            >{{ t('assistant.quietStart')
-            }}<input
-              type="time"
-              :value="minuteText(draft.quiet_start_minute)"
-              @input="minute('quiet_start_minute', $event)"
-          /></label>
-          <label class="assistant-field"
-            >{{ t('assistant.quietEnd')
-            }}<input
-              type="time"
-              :value="minuteText(draft.quiet_end_minute)"
-              @input="minute('quiet_end_minute', $event)"
-          /></label>
-          <label class="assistant-field"
-            >{{ t('assistant.daily') }}<input v-model.number="draft.daily_limit" type="number" min="1" max="24"
-          /></label>
-          <label class="assistant-field"
-            >{{ t('assistant.cooldown')
-            }}<input v-model.number="draft.cooldown_seconds" type="number" min="60" max="86400" step="60"
-          /></label>
-        </fieldset>
-        <p class="text-xs text-muted-foreground">{{ t('assistant.policyHint') }}</p>
-        <p v-if="pending && error && !conflict" class="text-sm">{{ t('assistant.retryHint') }}</p>
-        <div class="flex flex-wrap gap-2">
-          <Button
-            type="submit"
-            :disabled="busy || conflict || !validPreferences(draft) || (!dirty && !pending)"
-            data-testid="assistant-save"
-            >{{ busy ? t('assistant.saving') : t('assistant.save') }}</Button
-          ><Button
-            v-if="conflict"
-            type="button"
-            variant="outline"
-            @click="reconfirm"
-            data-testid="assistant-reconfirm"
-            >{{ t('assistant.reconfirm') }}</Button
-          >
-        </div>
-      </form>
-      <section v-if="tab === 'memory' && snapshot" class="mt-5 space-y-3" role="tabpanel">
-        <p class="text-sm text-muted-foreground">{{ t('assistant.memoryHint') }}</p>
-        <p v-if="!snapshot.profile.preferences.memory_enabled" class="rounded-md bg-muted p-3 text-sm">
-          {{ t('assistant.memoryDisabled') }}
-        </p>
-        <p v-if="!snapshot.memories.length" class="py-10 text-center text-muted-foreground">
-          {{ t('assistant.noMemories') }}
-        </p>
-        <p v-if="snapshot.memories_truncated" class="text-sm">{{ t('assistant.bounded') }}</p>
-        <article
-          v-for="memory in snapshot.memories"
-          :key="memory.name"
-          class="rounded-lg border border-border p-4"
-          :data-memory-name="memory.name"
-        >
-          <div class="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h2 class="font-medium break-all">{{ memory.name }}</h2>
-              <p class="mt-1 text-xs text-muted-foreground">{{ memory.description }}</p>
-              <MemoryMetadataView :metadata="memory.metadata" :timezone="snapshot.profile.preferences.timezone" />
+            <div class="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 class="font-medium break-all">{{ memory.name }}</h2>
+                <p class="mt-1 text-xs text-muted-foreground">{{ memory.description }}</p>
+                <MemoryMetadataView :metadata="memory.metadata" :timezone="snapshot.profile.preferences.timezone" />
+              </div>
+              <div class="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  :disabled="busy || memory.truncated"
+                  @click="edit(memory)"
+                  data-testid="assistant-memory-edit"
+                  >{{ t('assistant.edit') }}</Button
+                ><Button
+                  size="sm"
+                  variant="ghost"
+                  :disabled="busy"
+                  @click="edit(memory, true)"
+                  data-testid="assistant-memory-delete"
+                  >{{ t('assistant.delete') }}</Button
+                >
+              </div>
             </div>
-            <div class="flex gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                :disabled="busy || memory.truncated"
-                @click="edit(memory)"
-                data-testid="assistant-memory-edit"
-                >{{ t('assistant.edit') }}</Button
-              ><Button
-                size="sm"
-                variant="ghost"
-                :disabled="busy"
-                @click="edit(memory, true)"
-                data-testid="assistant-memory-delete"
-                >{{ t('assistant.delete') }}</Button
+            <p class="mt-3 whitespace-pre-wrap break-words text-sm max-h-40 overflow-y-auto">{{ memory.body }}</p>
+            <p v-if="memory.truncated" class="mt-2 text-xs">{{ t('assistant.truncated') }}</p>
+          </article>
+        </section>
+      </TabPanel>
+      <TabPanel :active="tab === 'reminders'" v-bind="tabRelations.panel('reminders')">
+        <section v-if="snapshot" class="mt-5 space-y-3">
+          <p class="text-sm text-muted-foreground">{{ t('assistant.reminderHint') }}</p>
+          <p v-if="!snapshot.profile.preferences.proactive_enabled" class="rounded-md bg-muted p-3 text-sm">
+            {{ t('assistant.muted') }}
+          </p>
+          <p v-if="!snapshot.reminders.length" class="py-10 text-center text-muted-foreground">
+            {{ t('assistant.noReminders') }}
+          </p>
+          <article
+            v-for="reminder in snapshot.reminders"
+            :key="reminder.id"
+            :data-reminder-id="reminder.id"
+            class="rounded-lg border border-border p-4"
+          >
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <span class="rounded bg-muted px-2 py-1 text-xs">{{ t(`assistant.state_${reminder.state}`) }}</span
+              ><span class="text-xs text-muted-foreground"
+                >{{ reminder.delivered }} / {{ reminder.spec.occurrences }}</span
               >
             </div>
-          </div>
-          <p class="mt-3 whitespace-pre-wrap break-words text-sm max-h-40 overflow-y-auto">{{ memory.body }}</p>
-          <p v-if="memory.truncated" class="mt-2 text-xs">{{ t('assistant.truncated') }}</p>
-        </article>
-      </section>
-      <section v-if="tab === 'reminders' && snapshot" class="mt-5 space-y-3" role="tabpanel">
-        <p class="text-sm text-muted-foreground">{{ t('assistant.reminderHint') }}</p>
-        <p v-if="!snapshot.profile.preferences.proactive_enabled" class="rounded-md bg-muted p-3 text-sm">
-          {{ t('assistant.muted') }}
-        </p>
-        <p v-if="!snapshot.reminders.length" class="py-10 text-center text-muted-foreground">
-          {{ t('assistant.noReminders') }}
-        </p>
-        <article
-          v-for="reminder in snapshot.reminders"
-          :key="reminder.id"
-          :data-reminder-id="reminder.id"
-          class="rounded-lg border border-border p-4"
-        >
-          <div class="flex flex-wrap items-center justify-between gap-3">
-            <span class="rounded bg-muted px-2 py-1 text-xs">{{ t(`assistant.state_${reminder.state}`) }}</span
-            ><span class="text-xs text-muted-foreground"
-              >{{ reminder.delivered }} / {{ reminder.spec.occurrences }}</span
-            >
-          </div>
-          <p class="mt-3 text-sm whitespace-pre-wrap break-words">{{ reminder.spec.text }}</p>
-          <p class="mt-2 text-xs text-muted-foreground">
-            {{ date(reminder.next_due_ms) }} · {{ snapshot.profile.preferences.timezone }}
-          </p>
-          <p v-if="reminder.retry_at_ms > reminder.next_due_ms" class="mt-1 text-xs">
-            {{ t('assistant.deferred') }} {{ date(reminder.retry_at_ms) }}
-          </p>
-          <p v-if="reminder.last_error" class="mt-2 text-sm text-destructive">{{ reminder.last_error }}</p>
-          <div class="mt-3 flex flex-wrap gap-2">
-            <Button size="sm" variant="ghost" @click="emit('openChat', reminder.source_session_id)">{{
-              t('assistant.openChat')
-            }}</Button
-            ><template v-if="!['completed', 'cancelled'].includes(reminder.state)"
-              ><Button
-                size="sm"
-                variant="outline"
-                :disabled="busy"
-                @click="confirmReminder = { reminder, action: reminder.state === 'paused' ? 'resume' : 'pause' }"
-                >{{ t(reminder.state === 'paused' ? 'assistant.resume' : 'assistant.pause') }}</Button
-              ><Button
-                size="sm"
-                variant="ghost"
-                :disabled="busy"
-                @click="confirmReminder = { reminder, action: 'cancel' }"
-                data-testid="assistant-reminder-cancel"
-                >{{ t('assistant.cancel') }}</Button
-              ></template
-            >
-          </div>
-        </article>
-      </section>
+            <p class="mt-3 text-sm whitespace-pre-wrap break-words">{{ reminder.spec.text }}</p>
+            <p class="mt-2 text-xs text-muted-foreground">
+              {{ date(reminder.next_due_ms) }} · {{ snapshot.profile.preferences.timezone }}
+            </p>
+            <p v-if="reminder.retry_at_ms > reminder.next_due_ms" class="mt-1 text-xs">
+              {{ t('assistant.deferred') }} {{ date(reminder.retry_at_ms) }}
+            </p>
+            <p v-if="reminder.last_error" class="mt-2 text-sm text-destructive">{{ reminder.last_error }}</p>
+            <div class="mt-3 flex flex-wrap gap-2">
+              <Button size="sm" variant="ghost" @click="emit('openChat', reminder.source_session_id)">{{
+                t('assistant.openChat')
+              }}</Button
+              ><template v-if="!['completed', 'cancelled'].includes(reminder.state)"
+                ><Button
+                  size="sm"
+                  variant="outline"
+                  :disabled="busy"
+                  @click="confirmReminder = { reminder, action: reminder.state === 'paused' ? 'resume' : 'pause' }"
+                  >{{ t(reminder.state === 'paused' ? 'assistant.resume' : 'assistant.pause') }}</Button
+                ><Button
+                  size="sm"
+                  variant="ghost"
+                  :disabled="busy"
+                  @click="confirmReminder = { reminder, action: 'cancel' }"
+                  data-testid="assistant-reminder-cancel"
+                  >{{ t('assistant.cancel') }}</Button
+                ></template
+              >
+            </div>
+          </article>
+        </section>
+      </TabPanel>
     </div>
     <Dialog
       :open="!!memoryForm"

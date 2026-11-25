@@ -1,6 +1,6 @@
 <script setup lang="ts">
+import { useSettingsDraftGuard } from './useSettingsDraftGuard'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
 import {
   RiAddLine,
   RiCloudLine,
@@ -2149,25 +2149,13 @@ async function refreshActiveProvider() {
   }
 }
 
-async function canLeaveProvider() {
-  if (mutationBusy.value) return false
-  if (!providerDirty.value) return true
-  return confirmAction({
-    title: st('Discard unsaved provider changes?'),
-    confirmText: st('Discard changes'),
-    cancelText: st('Keep editing'),
-  })
-}
-onBeforeRouteUpdate(async (to, from) => {
-  if (to.path === from.path && to.query.view === from.query.view) return true
-  return canLeaveProvider()
+useSettingsDraftGuard({
+  dirty: () => providerDirty.value,
+  busy: () => mutationBusy.value,
+  unload: () => providerDirty.value || saving.value,
+  dialog: () => ({ title: st('Discard unsaved provider changes?') }),
+  sameTarget: (to, from) => to.path === from.path && to.query.view === from.query.view,
 })
-onBeforeRouteLeave(canLeaveProvider)
-function beforeUnload(event: BeforeUnloadEvent) {
-  if (!providerDirty.value && !saving.value) return
-  event.preventDefault()
-  event.returnValue = ''
-}
 defineExpose({ refresh: refreshActiveProvider })
 
 async function deleteProviderRow(row: ProviderRow) {
@@ -2216,7 +2204,6 @@ async function createProvider() {
 }
 
 onMounted(async () => {
-  window.addEventListener('beforeunload', beforeUnload)
   try {
     await Promise.all([loadProviders(), loadAwsProfiles()])
     const firstProviderId = providers.value[0]?.provider_id
@@ -2227,7 +2214,6 @@ onMounted(async () => {
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('beforeunload', beforeUnload)
   resetAuthUiState()
   clearModelJsonSyncTimer()
   ++draftRequestGeneration

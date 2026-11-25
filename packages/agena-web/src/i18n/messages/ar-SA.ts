@@ -920,6 +920,12 @@ export default {
       sectionTitle: 'BTW',
       sideChip: 'جانبية',
     },
+    mcpApp: {
+      open: 'فتح التطبيق',
+      loading: 'جارٍ تحميل تطبيق MCP…',
+      timeout: 'لم يستجب تطبيق MCP.',
+      unavailable: 'تطبيق MCP غير متاح.',
+    },
     toolDetails: {
       errorUnavailable: 'فشل تنفيذ هذه الأداة، لكن الخادم لم يقدّم سببًا للخطأ.',
       copyDiff: 'نسخ الفروقات',
@@ -1543,8 +1549,6 @@ export default {
     composer: {
       actions: {
         compact: { label: 'تلخيص الجلسة', description: 'لخّص باستخدام النموذج المحدد' },
-        init: { label: 'تهيئة AGENTS.md', description: 'إدراج الأمر /init في حقل إدخال المحادثة' },
-        review: { label: 'مراجعة التغييرات', description: 'إدراج الأمر /review في حقل إدخال المحادثة' },
       },
       picker: {
         modelTitle: 'النموذج',
@@ -2472,8 +2476,8 @@ export default {
           },
           resource: { label: 'مورد', description: 'ملفات وصور وموارد أخرى من أجزاء file_ref.' },
           skill_reference: {
-            label: 'مرجع أمر',
-            description: 'أسماء الأوامر وأوصافها وبياناتها الوصفية من أجزاء skill_ref.',
+            label: 'مرجع مهارة',
+            description: 'أسماء المهارات وأوصافها والبيانات الوصفية لمراجعها.',
           },
           interaction: { label: 'تفاعل المستخدم', description: 'أجزاء التفاعل؛ وتظل الطلبات المعلّقة مفتوحة دائمًا.' },
           hook: { label: 'خطاف', description: 'معلومات دورة حياة الإضافة من أجزاء hook.' },

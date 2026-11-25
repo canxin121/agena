@@ -3,19 +3,20 @@ import { computed, onScopeDispose, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { refDebounced } from '@vueuse/core'
 import {
-  RiArrowLeftLine,
   RiArrowRightSLine,
   RiFile2Line,
   RiHardDrive2Line,
   RiRefreshLine,
-  RiSearchLine,
   RiShieldCheckLine,
   RiTimeLine,
 } from '@remixicon/vue'
 
 import Button from '@/components/ui/Button.vue'
 import Dialog from '@/components/ui/Dialog.vue'
+import PaginationControls from '@/components/ui/PaginationControls.vue'
+import SearchInput from '@/components/ui/SearchInput.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
+import SettingsListDetail from './workbench/SettingsListDetail.vue'
 import { settingsText as st } from '@/i18n/settingsText'
 import { confirmAction } from '@/lib/appConfirm'
 import {
@@ -51,7 +52,8 @@ const page = ref(0)
 const filePage = ref(0)
 const filesOpen = ref(false)
 const selected = ref('')
-const mobileDetail = ref(false)
+const detailOpen = ref(false)
+const listDetail = ref<InstanceType<typeof SettingsListDetail> | null>(null)
 const inventoryLoading = ref(false)
 const detailLoading = ref(false)
 const detailRefreshing = ref(false)
@@ -159,9 +161,9 @@ function errorText(error: unknown) {
   return error instanceof Error ? error.message : String(error)
 }
 
-function pick(id: string, openMobile = true, navigate = true) {
+function pick(id: string, openDetail = true, navigate = true) {
   selected.value = id
-  mobileDetail.value = openMobile
+  detailOpen.value = openDetail
   if (navigate) emit('select', id)
 }
 
@@ -263,7 +265,7 @@ async function loadDetail(id: string, background = false) {
 function resetList() {
   page.value = 0
   selected.value = ''
-  mobileDetail.value = false
+  detailOpen.value = false
 }
 
 function selectScope(event: Event) {
@@ -277,10 +279,10 @@ function selectBot(event: Event) {
   resetList()
 }
 
-function pageBy(change: number) {
+function selectPage(next: number) {
   selected.value = ''
-  mobileDetail.value = false
-  page.value += change
+  detailOpen.value = false
+  page.value = next - 1
 }
 
 watch(
@@ -296,7 +298,14 @@ watch(
   { immediate: true },
 )
 watch(searchTerm, resetList)
-watch([scope, bot, searchTerm, page], () => void loadInventory(), { immediate: true })
+watch(
+  [scope, bot, searchTerm, page],
+  () => {
+    listDetail.value?.scrollListToTop()
+    void loadInventory()
+  },
+  { immediate: true },
+)
 watch(
   selected,
   (id) => {
@@ -403,7 +412,11 @@ onScopeDispose(() => {
 </script>
 
 <template>
-  <section class="mx-auto max-w-6xl space-y-4" :aria-label="st('Storage management')" data-testid="session-storage">
+  <section
+    class="storage-workbench mx-auto min-w-0 max-w-6xl space-y-4"
+    :aria-label="st('Storage management')"
+    data-testid="session-storage"
+  >
     <div class="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
       <div>
         <h2 class="text-lg font-semibold tracking-tight">{{ st('Storage management') }}</h2>
@@ -425,28 +438,35 @@ onScopeDispose(() => {
       {{ inventoryError }}
     </p>
 
-    <div class="storage-layout rounded-lg border border-border/70 bg-card">
-      <div class="storage-list min-w-0 p-3" :class="{ 'storage-list-mobile-hidden': mobileDetail }">
-        <div class="flex flex-wrap items-baseline justify-between gap-1.5 px-1 pb-2">
-          <h3 class="text-sm font-medium">{{ st('Sessions') }}</h3>
+    <SettingsListDetail
+      ref="listDetail"
+      v-model:detail-open="detailOpen"
+      :list-label="st('Sessions')"
+      :detail-label="st('Data stored by this session')"
+      :back-label="st('Sessions')"
+      :list-busy="inventoryLoading"
+      :detail-loading="detailLoading"
+      list-scroll-class="settings-list"
+    >
+      <template #list-header>
+        <div class="flex flex-wrap items-baseline justify-between gap-1.5">
+          <h3 data-settings-list-heading tabindex="-1" class="text-sm font-medium outline-none">
+            {{ st('Sessions') }}
+          </h3>
           <span v-if="inventory" class="text-xs tabular-nums text-muted-foreground">{{
             formatBytes(inventory.bytes)
           }}</span>
         </div>
-        <div class="mb-3 flex flex-col gap-1.5">
-          <div class="relative">
-            <RiSearchLine
-              class="pointer-events-none absolute start-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-              aria-hidden="true"
-            />
-            <input
-              v-model="search"
-              type="search"
-              class="w-full rounded-md border border-input bg-background py-1.5 pe-2 ps-8 text-sm"
-              :placeholder="st('Find a session')"
-              :aria-label="st('Find a session')"
-            />
-          </div>
+        <div class="grid min-w-0 gap-1.5">
+          <SearchInput
+            v-model="search"
+            :show-search-button="false"
+            :placeholder="st('Find a session')"
+            :input-aria-label="st('Find a session')"
+            :input-title="st('Find a session')"
+            :clear-aria-label="t('common.clear')"
+            :clear-title="t('common.clear')"
+          />
           <select
             :value="scope"
             @change="selectScope"
@@ -469,7 +489,7 @@ onScopeDispose(() => {
             <option v-for="item in inventory.bots" :key="item.id" :value="item.id">{{ item.name }}</option>
           </select>
         </div>
-        <div v-if="selectedBot" class="mb-2 rounded-md bg-muted/35 px-2.5 py-2 text-xs">
+        <div v-if="selectedBot" class="rounded-md bg-muted/35 px-2.5 py-2 text-xs">
           <div class="flex items-baseline justify-between gap-2">
             <span class="min-w-0 truncate font-medium">{{ selectedBot.name }}</span>
             <strong class="shrink-0 tabular-nums">{{
@@ -498,16 +518,21 @@ onScopeDispose(() => {
             }}
           </div>
         </div>
-        <div v-if="inventoryLoading && !inventory" class="space-y-2">
+      </template>
+      <template #list>
+        <template v-if="inventoryLoading && !inventory">
           <Skeleton v-for="row in 4" :key="row" class="h-11 rounded-md" />
-        </div>
-        <div v-else-if="inventory?.items.length" class="space-y-0.5" :aria-busy="inventoryLoading">
+        </template>
+        <template v-else-if="inventory?.items.length">
           <button
             v-for="item in inventory.items"
             :key="item.session_id"
             type="button"
             :aria-pressed="selected === String(item.session_id)"
-            class="flex w-full items-start justify-between gap-2 rounded-md border border-transparent px-2.5 py-2 text-start hover:bg-accent/60 aria-pressed:border-border/70 aria-pressed:bg-accent"
+            :data-keyboard-item="item.session_id"
+            :data-keyboard-label="item.title"
+            :data-keyboard-selected="selected === String(item.session_id)"
+            class="flex w-full items-start justify-between gap-2 rounded-md border border-transparent px-2.5 py-2 text-start hover:bg-accent/60 focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring aria-pressed:border-border/70 aria-pressed:bg-accent"
             @click="pick(String(item.session_id))"
           >
             <span class="min-w-0">
@@ -518,176 +543,166 @@ onScopeDispose(() => {
               formatBytes(totalStorage(item.bytes))
             }}</span>
           </button>
-        </div>
+        </template>
         <p v-else-if="!inventoryError && !inventoryLoading" class="px-1 py-4 text-sm text-muted-foreground">
           {{ st('No sessions in this view.') }}
         </p>
-        <div
+      </template>
+      <template #list-footer>
+        <PaginationControls
           v-if="inventory && inventory.total > PAGE_SIZE"
-          class="mt-3 flex items-center justify-between gap-1 border-t border-border/60 pt-2"
-        >
-          <Button variant="ghost" size="sm" :disabled="page === 0 || inventoryLoading" @click="pageBy(-1)">{{
-            st('Previous')
-          }}</Button>
-          <span class="text-xs tabular-nums text-muted-foreground"
-            >{{ page + 1 }} / {{ Math.ceil(inventory.total / PAGE_SIZE) }}</span
-          >
-          <Button
-            variant="ghost"
-            size="sm"
-            :disabled="(page + 1) * PAGE_SIZE >= inventory.total || inventoryLoading"
-            @click="pageBy(1)"
-            >{{ st('Next') }}</Button
-          >
-        </div>
-      </div>
-
-      <div class="storage-detail min-w-0 p-3 sm:p-5" :class="{ 'storage-detail-mobile-hidden': !mobileDetail }">
-        <Button class="storage-back mb-2" variant="ghost" size="sm" @click="mobileDetail = false">
-          <RiArrowLeftLine class="size-4" aria-hidden="true" />{{ st('Sessions') }}
-        </Button>
-        <p v-if="detailError" role="alert" class="mb-2 break-words text-sm text-destructive">{{ detailError }}</p>
-        <div v-if="detailLoading" class="space-y-3">
-          <Skeleton class="h-8 w-2/3" />
-          <Skeleton class="h-28 w-full" />
-        </div>
-        <template v-else-if="detail">
-          <div class="flex flex-wrap items-start justify-between gap-3">
-            <div class="min-w-0 flex-1">
-              <h3 class="break-words text-base font-semibold">{{ detail.title }}</h3>
-              <p class="mt-0.5 text-xs text-muted-foreground">{{ context(detail) }}</p>
+          :page="page + 1"
+          :total-pages="Math.ceil(inventory.total / PAGE_SIZE)"
+          :disabled="inventoryLoading"
+          :prev-label="t('common.previousPage')"
+          :next-label="t('common.nextPage')"
+          :page-input-label="t('common.currentPage')"
+          size="md"
+          class="shrink-0 justify-center border-t border-border/60 py-1.5"
+          @update:page="selectPage"
+        />
+      </template>
+      <template #detail>
+        <div class="settings-viewport-scroll p-3 sm:p-5">
+          <p v-if="detailError" role="alert" class="mb-2 break-words text-sm text-destructive">{{ detailError }}</p>
+          <div v-if="detailLoading" class="space-y-3">
+            <Skeleton class="h-8 w-2/3" />
+            <Skeleton class="h-28 w-full" />
+          </div>
+          <template v-else-if="detail">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+              <div class="min-w-0 flex-1">
+                <h3 data-settings-detail-heading tabindex="-1" class="break-words text-base font-semibold outline-none">
+                  {{ detail.title }}
+                </h3>
+                <p class="mt-0.5 text-xs text-muted-foreground">{{ context(detail) }}</p>
+              </div>
+              <Button size="sm" :disabled="!canClean" @click="open('cleanup')">{{ st('Preview cleanup') }}</Button>
             </div>
-            <Button size="sm" :disabled="!canClean" @click="open('cleanup')">{{ st('Preview cleanup') }}</Button>
-          </div>
 
-          <div class="mt-5 flex flex-wrap items-baseline justify-between gap-2">
-            <span class="text-sm text-muted-foreground">{{ st('Data stored by this session') }}</span>
-            <strong class="text-2xl font-semibold tracking-tight tabular-nums">{{
-              formatBytes(breakdownTotal)
-            }}</strong>
-          </div>
-          <div v-if="rows.length" class="mt-2 flex h-2 overflow-hidden rounded-full bg-muted/55" aria-hidden="true">
+            <div class="mt-5 flex flex-wrap items-baseline justify-between gap-2">
+              <span class="text-sm text-muted-foreground">{{ st('Data stored by this session') }}</span>
+              <strong class="text-2xl font-semibold tracking-tight tabular-nums">{{
+                formatBytes(breakdownTotal)
+              }}</strong>
+            </div>
+            <div v-if="rows.length" class="mt-2 flex h-2 overflow-hidden rounded-full bg-muted/55" aria-hidden="true">
+              <div
+                v-for="row in rows"
+                :key="row.key"
+                :data-bucket="row.key"
+                class="storage-segment"
+                :style="{ flexGrow: row.bytes }"
+              />
+            </div>
+            <dl class="mt-2 divide-y divide-border/55">
+              <div v-for="row in rows" :key="row.key" class="flex items-center justify-between gap-2 py-2.5 text-sm">
+                <dt class="flex min-w-0 items-center gap-2">
+                  <span
+                    class="storage-segment size-[7px] shrink-0 rounded-[2px]"
+                    :data-bucket="row.key"
+                    aria-hidden="true"
+                  />{{ row.label }}
+                </dt>
+                <dd class="shrink-0 whitespace-nowrap tabular-nums">{{ formatBytes(row.bytes) }}</dd>
+              </div>
+            </dl>
             <div
-              v-for="row in rows"
-              :key="row.key"
-              :data-bucket="row.key"
-              class="storage-segment"
-              :style="{ flexGrow: row.bytes }"
-            />
-          </div>
-          <dl class="mt-2 divide-y divide-border/55">
-            <div v-for="row in rows" :key="row.key" class="flex items-center justify-between gap-2 py-2.5 text-sm">
-              <dt class="flex min-w-0 items-center gap-2">
-                <span
-                  class="storage-segment size-[7px] shrink-0 rounded-[2px]"
-                  :data-bucket="row.key"
-                  aria-hidden="true"
-                />{{ row.label }}
-              </dt>
-              <dd class="shrink-0 whitespace-nowrap tabular-nums">{{ formatBytes(row.bytes) }}</dd>
+              v-if="detail.shared_history || detail.busy_reason"
+              class="mt-2 flex items-start gap-2 rounded-md bg-muted/40 px-2.5 py-2 text-xs text-muted-foreground"
+            >
+              <RiShieldCheckLine class="mt-px size-4 shrink-0" aria-hidden="true" />
+              <div>
+                <p v-if="detail.shared_history">{{ st('Other conversations still reference this history.') }}</p>
+                <p v-if="detail.busy_reason">{{ reason(detail.busy_reason) }}</p>
+              </div>
             </div>
-          </dl>
-          <div
-            v-if="detail.shared_history || detail.busy_reason"
-            class="mt-2 flex items-start gap-2 rounded-md bg-muted/40 px-2.5 py-2 text-xs text-muted-foreground"
-          >
-            <RiShieldCheckLine class="mt-px size-4 shrink-0" aria-hidden="true" />
-            <div>
-              <p v-if="detail.shared_history">{{ st('Other conversations still reference this history.') }}</p>
-              <p v-if="detail.busy_reason">{{ reason(detail.busy_reason) }}</p>
+            <div v-if="operation" role="status" class="mt-3 rounded-md border border-border/70 px-3 py-2 text-sm">
+              <p v-if="operation.state === 'running'" class="flex items-center gap-2">
+                <RiTimeLine class="size-4" aria-hidden="true" />{{ st('Cleaning up this session…') }}
+              </p>
+              <p v-else-if="operation.state === 'failed'" class="text-destructive">
+                {{ st('Cleanup stopped. Review the remaining items and try again.') }}
+              </p>
+              <p v-else class="font-medium">
+                {{ operation.purge ? st('Session deletion completed') : st('Cleanup completed') }}
+              </p>
+              <p class="mt-0.5 text-xs text-muted-foreground">
+                {{
+                  st('Files removed {files} · Database data removed {database}', {
+                    files: formatBytes(operation.file_bytes_removed),
+                    database: formatBytes(operation.database_bytes_removed),
+                  })
+                }}
+              </p>
+              <p v-if="operation.files_skipped" class="mt-0.5 text-xs text-muted-foreground">
+                {{ st('{count} files skipped', { count: operation.files_skipped }) }}
+              </p>
             </div>
-          </div>
-          <div v-if="operation" role="status" class="mt-3 rounded-md border border-border/70 px-3 py-2 text-sm">
-            <p v-if="operation.state === 'running'" class="flex items-center gap-2">
-              <RiTimeLine class="size-4" aria-hidden="true" />{{ st('Cleaning up this session…') }}
-            </p>
-            <p v-else-if="operation.state === 'failed'" class="text-destructive">
-              {{ st('Cleanup stopped. Review the remaining items and try again.') }}
-            </p>
-            <p v-else class="font-medium">
-              {{ operation.purge ? st('Session deletion completed') : st('Cleanup completed') }}
-            </p>
-            <p class="mt-0.5 text-xs text-muted-foreground">
-              {{
-                st('Files removed {files} · Database data removed {database}', {
-                  files: formatBytes(operation.file_bytes_removed),
-                  database: formatBytes(operation.database_bytes_removed),
-                })
-              }}
-            </p>
-            <p v-if="operation.files_skipped" class="mt-0.5 text-xs text-muted-foreground">
-              {{ st('{count} files skipped', { count: operation.files_skipped }) }}
-            </p>
-          </div>
 
-          <details
-            v-if="detail.file_count"
-            class="group mt-4 border-t border-border/60 pt-2.5"
-            :open="filesOpen"
-            @toggle="setFilesOpen"
-          >
-            <summary
-              class="flex cursor-pointer list-none items-center justify-between gap-2 rounded-md py-1.5 text-sm font-medium"
+            <details
+              v-if="detail.file_count"
+              class="group mt-4 border-t border-border/60 pt-2.5"
+              :open="filesOpen"
+              @toggle="setFilesOpen"
             >
-              <span>{{ st('Managed files ({count})', { count: detail.file_count }) }}</span>
-              <RiArrowRightSLine class="size-4 text-muted-foreground group-open:rotate-90" aria-hidden="true" />
-            </summary>
-            <ul class="divide-y divide-border/50">
-              <li v-for="file in detail.files" :key="file.id" class="flex flex-wrap items-center gap-2 py-2 text-sm">
-                <RiFile2Line class="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-                <div class="min-w-[5rem] flex-1">
-                  <p class="truncate" :title="file.name">{{ file.name }}</p>
-                  <p v-if="file.protection" class="text-xs text-muted-foreground">
-                    {{
-                      file.kind === 'cache' && file.protection === 'unmanaged'
-                        ? st('Use cache cleanup to remove this file.')
-                        : reason(file.protection)
-                    }}
-                  </p>
-                </div>
-                <span class="whitespace-nowrap text-xs tabular-nums text-muted-foreground">{{
-                  formatBytes(file.bytes)
-                }}</span>
-                <Button
-                  v-if="!file.protection && !blocked"
-                  size="sm"
-                  variant="ghost"
-                  :aria-label="st('Remove {name}', { name: file.name })"
-                  @click="open('file', file)"
-                  >{{ st('Remove file') }}</Button
-                >
-              </li>
-            </ul>
-            <div
-              v-if="detail.file_count > FILE_PAGE_SIZE"
-              class="mt-2 flex items-center justify-between gap-1 border-t border-border/60 pt-2"
-            >
-              <Button variant="ghost" size="sm" :disabled="filePage === 0 || detailRefreshing" @click="filePage--">{{
-                st('Previous')
-              }}</Button>
-              <span class="text-xs tabular-nums text-muted-foreground"
-                >{{ filePage + 1 }} / {{ Math.ceil(detail.file_count / FILE_PAGE_SIZE) }}</span
+              <summary
+                class="flex cursor-pointer list-none items-center justify-between gap-2 rounded-md py-1.5 text-sm font-medium"
               >
-              <Button
-                variant="ghost"
-                size="sm"
-                :disabled="(filePage + 1) * FILE_PAGE_SIZE >= detail.file_count || detailRefreshing"
-                @click="filePage++"
-                >{{ st('Next') }}</Button
-              >
+                <span>{{ st('Managed files ({count})', { count: detail.file_count }) }}</span>
+                <RiArrowRightSLine class="size-4 text-muted-foreground group-open:rotate-90" aria-hidden="true" />
+              </summary>
+              <ul class="divide-y divide-border/50">
+                <li v-for="file in detail.files" :key="file.id" class="flex flex-wrap items-center gap-2 py-2 text-sm">
+                  <RiFile2Line class="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  <div class="min-w-[5rem] flex-1">
+                    <p class="truncate" :title="file.name">{{ file.name }}</p>
+                    <p v-if="file.protection" class="text-xs text-muted-foreground">
+                      {{
+                        file.kind === 'cache' && file.protection === 'unmanaged'
+                          ? st('Use cache cleanup to remove this file.')
+                          : reason(file.protection)
+                      }}
+                    </p>
+                  </div>
+                  <span class="whitespace-nowrap text-xs tabular-nums text-muted-foreground">{{
+                    formatBytes(file.bytes)
+                  }}</span>
+                  <Button
+                    v-if="!file.protection && !blocked"
+                    size="sm"
+                    variant="ghost"
+                    :aria-label="st('Remove {name}', { name: file.name })"
+                    @click="open('file', file)"
+                    >{{ st('Remove file') }}</Button
+                  >
+                </li>
+              </ul>
+              <PaginationControls
+                v-if="detail.file_count > FILE_PAGE_SIZE"
+                :page="filePage + 1"
+                :total-pages="Math.ceil(detail.file_count / FILE_PAGE_SIZE)"
+                :disabled="detailRefreshing"
+                :prev-label="t('common.previousPage')"
+                :next-label="t('common.nextPage')"
+                :page-input-label="t('common.currentPage')"
+                size="md"
+                class="mt-2 flex justify-center border-t border-border/60 pt-2"
+                @update:page="filePage = $event - 1"
+              />
+            </details>
+            <div class="mt-4 flex justify-end border-t border-border/60 pt-2">
+              <Button variant="ghost" size="sm" class="text-destructive" :disabled="blocked" @click="open('purge')">
+                {{ detail.deleted ? st('Reclaim deleted session…') : st('Permanently delete session…') }}
+              </Button>
             </div>
-          </details>
-          <div class="mt-4 flex justify-end border-t border-border/60 pt-2">
-            <Button variant="ghost" size="sm" class="text-destructive" :disabled="blocked" @click="open('purge')">
-              {{ detail.deleted ? st('Reclaim deleted session…') : st('Permanently delete session…') }}
-            </Button>
-          </div>
-        </template>
-        <p v-else-if="!detailError" class="py-8 text-center text-sm text-muted-foreground">
-          {{ st('Choose a session to see its storage.') }}
-        </p>
-      </div>
-    </div>
+          </template>
+          <p v-else-if="!detailError" class="py-8 text-center text-sm text-muted-foreground">
+            {{ st('Choose a session to see its storage.') }}
+          </p>
+        </div>
+      </template>
+    </SettingsListDetail>
 
     <details v-if="inventory" class="rounded-lg border border-border/65 bg-card px-3 py-2">
       <summary class="flex cursor-pointer list-none items-center gap-2 py-0.5 text-sm font-medium">
@@ -827,14 +842,8 @@ onScopeDispose(() => {
 <style scoped>
 @reference '../../style.css';
 
-.storage-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.storage-detail-mobile-hidden,
-.storage-list-mobile-hidden {
-  display: none;
+.storage-workbench {
+  container: settings-workbench / inline-size;
 }
 
 .storage-segment {
@@ -863,24 +872,5 @@ onScopeDispose(() => {
 
 .storage-segment[data-bucket='cache'] {
   --storage-color: light-dark(#607a5f, #8ab186);
-}
-
-@container settings-pane (min-width: 42rem) {
-  .storage-layout {
-    grid-template-columns: minmax(12rem, 28%) minmax(0, 1fr);
-  }
-
-  .storage-list,
-  .storage-detail {
-    display: block;
-  }
-
-  .storage-list {
-    border-inline-end: 1px solid oklch(var(--border) / 0.7);
-  }
-
-  .storage-back {
-    display: none;
-  }
 }
 </style>

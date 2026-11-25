@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useSettingsDraftGuard } from './useSettingsDraftGuard'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, type RouteLocationNormalized } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { RiRefreshLine, RiRefreshFill, RiCpuLine, RiStackLine } from '@remixicon/vue'
 
 import SettingsCard from './SettingsCard.vue'
@@ -9,15 +10,13 @@ import AgentProfilesPanel from './AgentProfilesPanel.vue'
 import AgentProfileDefaultsPanel from './AgentProfileDefaultsPanel.vue'
 import ModelSettingsPanel from './ModelSettingsPanel.vue'
 import PromptLibraryPanel from './PromptLibraryPanel.vue'
+import SystemPromptPanel from './SystemPromptPanel.vue'
 import { resolveSettingsSessionId } from './settingsSessionScope'
 import ServerSettingField from '@/components/settings/ServerSettingField.vue'
 import SettingsSectionWorkbench from '@/components/settings/workbench/SettingsSectionWorkbench.vue'
 import { SETTINGS_DEFAULT_SUBPAGE, buildSettingsSubpages } from '@/components/settings/settingsNavigationCatalog'
 import Button from '@/components/ui/Button.vue'
-import { readWindowIdFromQuery } from '@/app/windowScope'
-import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import { apiJson } from '@/lib/api'
-import { confirmAction } from '@/lib/appConfirm'
 import { lastSessionId } from '@/lib/lastSession'
 import { useChatStoreUnscoped } from '@/stores/chat'
 import { settingsText as st } from '@/i18n/settingsText'
@@ -25,7 +24,6 @@ import { settingsText as st } from '@/i18n/settingsText'
 const { t } = useI18n()
 const props = defineProps<{ activePage: string; scope: string; sessionId?: string }>()
 const route = useRoute()
-const pane = useWorkspacePaneContext()
 const chat = useChatStoreUnscoped()
 const configLayer = computed(() => (props.scope === 'global' || props.scope === 'workspace' ? props.scope : undefined))
 const defaultsScope = computed(() => (props.scope === 'effective' ? props.scope : configLayer.value))
@@ -40,48 +38,29 @@ const titleFields = ref<InstanceType<typeof ServerSettingField>[]>([])
 const modelSettingsPanel = ref<InstanceType<typeof ModelSettingsPanel> | null>(null)
 const agentProfilesPanel = ref<InstanceType<typeof AgentProfilesPanel> | null>(null)
 const promptLibraryPanel = ref<InstanceType<typeof PromptLibraryPanel> | null>(null)
+const systemPromptPanel = ref<InstanceType<typeof SystemPromptPanel> | null>(null)
 const profileDefaultsPanel = ref<InstanceType<typeof AgentProfileDefaultsPanel> | null>(null)
-const saving = computed(() => modelSettingsPanel.value?.saving || Boolean(profileDefaultsPanel.value?.saving))
-const dirty = computed(() => modelSettingsPanel.value?.dirty || Boolean(profileDefaultsPanel.value?.dirty))
+const saving = computed(
+  () => modelSettingsPanel.value?.saving || profileDefaultsPanel.value?.saving || systemPromptPanel.value?.saving,
+)
+const dirty = computed(
+  () => modelSettingsPanel.value?.dirty || profileDefaultsPanel.value?.dirty || systemPromptPanel.value?.dirty,
+)
 
-async function canLeave() {
-  if (saving.value) return false
-  if (!dirty.value) return true
-  return confirmAction({
-    title: profileDefaultsPanel.value?.dirty ? st('Discard unsaved changes?') : st('Discard unsaved model changes?'),
-    confirmText: st('Discard changes'),
-    cancelText: st('Keep editing'),
-  })
-}
-
-function ownsNavigation(to: RouteLocationNormalized) {
-  if (!pane) return true
-  const windowId = readWindowIdFromQuery(to.query)
-  return windowId ? windowId === pane.windowId.value : pane.isFocused.value
-}
-
-onBeforeRouteUpdate((to) => {
-  if (!ownsNavigation(to)) return true
-  if (
+useSettingsDraftGuard({
+  dirty: () => Boolean(dirty.value),
+  busy: () => Boolean(saving.value),
+  dialog: () => ({
+    title: modelSettingsPanel.value?.dirty ? st('Discard unsaved model changes?') : st('Discard unsaved changes?'),
+  }),
+  sameTarget: (to) =>
     to.path === route.path &&
     to.query.scope === route.query.scope &&
     to.query.view === route.query.view &&
     (props.scope !== 'session' ||
       resolveSettingsSessionId(to.query.targetSessionId, lastSessionId.value || chat.selectedSessionId) ===
-        props.sessionId)
-  )
-    return true
-  return canLeave()
+        props.sessionId),
 })
-onBeforeRouteLeave((to) => !ownsNavigation(to) || canLeave())
-
-function beforeUnload(event: BeforeUnloadEvent) {
-  if (!dirty.value && !saving.value) return
-  event.preventDefault()
-  event.returnValue = ''
-}
-onMounted(() => window.addEventListener('beforeunload', beforeUnload))
-onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload))
 
 const titleOptions = computed(() => [
   {
@@ -138,6 +117,7 @@ async function refresh() {
       modelSettingsPanel.value,
       agentProfilesPanel.value,
       promptLibraryPanel.value,
+      systemPromptPanel.value,
       profileDefaultsPanel.value,
     ].map((field) => field?.refresh()),
   )
@@ -223,6 +203,13 @@ async function refreshClientVersions() {
       v-else-if="activePage === 'prompt-library'"
       ref="promptLibraryPanel"
       :scope="scope === 'workspace' ? 'workspace' : 'global'"
+      @workspace-config-path="workspaceConfigPath = $event"
+    />
+    <SystemPromptPanel
+      v-else-if="activePage === 'system-prompt'"
+      ref="systemPromptPanel"
+      :scope="scope === 'session' ? 'session' : configLayer || 'global'"
+      :session-id="sessionId"
       @workspace-config-path="workspaceConfigPath = $event"
     />
     <div v-else class="settings-stack">

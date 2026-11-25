@@ -1,6 +1,7 @@
 <script setup lang="ts">
+import { useSettingsDraftGuard } from './useSettingsDraftGuard'
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref } from 'vue'
-import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { RiAddLine, RiDeleteBinLine, RiRefreshLine, RiShieldCheckLine } from '@remixicon/vue'
 import SettingsDisclosureRow from './SettingsDisclosureRow.vue'
 import SettingsSaveBar from './SettingsSaveBar.vue'
@@ -157,16 +158,12 @@ function showEntry(id: string | null) {
   original.value = JSON.stringify(next)
 }
 
-async function canDiscard(): Promise<boolean> {
-  if (saving.value) return false
-  if (!dirty.value) return true
-  return confirmAction({
-    title: st('Discard unsaved changes?'),
-    description: st('You have unsaved changes.'),
-    confirmText: st('Discard changes'),
-    cancelText: st('Keep editing'),
-  })
-}
+const { canDiscard } = useSettingsDraftGuard({
+  dirty: () => dirty.value,
+  busy: () => saving.value,
+  unload: () => dirty.value,
+  dialog: () => ({ description: st('You have unsaved changes.') }),
+})
 
 async function load() {
   const token = ++generation
@@ -347,22 +344,12 @@ async function removeEntry() {
   }
 }
 
-function beforeUnload(event: BeforeUnloadEvent) {
-  if (dirty.value) {
-    event.preventDefault()
-    event.returnValue = ''
-  }
-}
 onMounted(() => {
   void load()
-  window.addEventListener('beforeunload', beforeUnload)
 })
 onBeforeUnmount(() => {
   generation += 1
-  window.removeEventListener('beforeunload', beforeUnload)
 })
-onBeforeRouteLeave(canDiscard)
-onBeforeRouteUpdate(canDiscard)
 defineExpose({ refresh })
 </script>
 

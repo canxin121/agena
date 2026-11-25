@@ -23,10 +23,12 @@ import {
   promptScopeConfigUpdateFragment,
   promptScopeConfigIsEmpty,
   promptScopeConfigWithLayer,
+  systemPromptOrder,
   validatePromptLayer,
   type PromptFragment,
   type PromptLayer,
   type PromptScopeConfig,
+  type BuiltinPrompt,
 } from '../src/lib/promptLayers'
 
 function fragment(id: string, body = 'Body'): PromptFragment {
@@ -136,6 +138,45 @@ test('scope edits preserve model route overlays', () => {
   assert.deepEqual(updated.order, ['next'])
   assert.deepEqual(promptScopeConfigWithLayer(config, emptyPromptLayer()).models, config.models)
   assert.equal(promptScopeConfigIsEmpty(emptyPromptScopeConfig()), true)
+})
+
+test('the scope editor keeps required prompts and only selects local optional references', () => {
+  const catalog: BuiltinPrompt[] = ['first', 'second', 'third'].map((title) => ({
+    id: `agena.system.${title}`,
+    title,
+    body: title,
+    when: 'always',
+  }))
+  const [first, second, third] = catalog.map((item) => item.id)
+  const parent = layer({ order: ['inherited', second] })
+  const current = layer({ mode: 'replace', order: ['selected', first] })
+  const order = systemPromptOrder(catalog, [parent], current)
+  assert.deepEqual(order, [third, second, 'selected', first])
+  const moved = promptLayerMoveOrder({ ...current, order }, 'selected', -1)
+  assert.deepEqual(systemPromptOrder(catalog, [parent], moved), [third, 'selected', second, first])
+})
+
+test('legacy built-in entries coalesce at the last occurrence and library prompts remain optional', () => {
+  const required: BuiltinPrompt = {
+    id: 'agena.system.identity',
+    title: 'Assistant identity and shared rules',
+    body: 'Instructions',
+    when: 'always',
+    aliases: ['agena.system.context', 'agena.system.evidence'],
+  }
+  const reusable: BuiltinPrompt = {
+    id: 'agena.profile.investigation',
+    title: 'Investigation',
+    body: 'Inspect relevant sources.',
+    when: 'always',
+    reusable: true,
+  }
+  const catalog = [required, reusable]
+  assert.deepEqual(systemPromptOrder(catalog, [], emptyPromptLayer()), [required.id])
+  assert.deepEqual(
+    systemPromptOrder(catalog, [], layer({ order: ['agena.system.context', reusable.id, 'agena.system.evidence'] })),
+    [reusable.id, required.id],
+  )
 })
 
 test('renaming a fragment syncs model layer order and disabled references', () => {

@@ -1,12 +1,16 @@
 <script setup lang="ts">
+import { useSettingsDraftGuard } from './useSettingsDraftGuard'
 import { computed, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
-import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
-import { RiAddLine, RiArrowLeftLine, RiDeleteBinLine, RiExternalLinkLine, RiPlugLine, RiRefreshLine, RiUpload2Line } from '@remixicon/vue'
+import { useRoute, useRouter } from 'vue-router'
+import { RiAddLine, RiDeleteBinLine, RiExternalLinkLine, RiPlugLine, RiRefreshLine, RiUpload2Line } from '@remixicon/vue'
 import Button from '@/components/ui/Button.vue'
 import Dialog from '@/components/ui/Dialog.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
 import SearchInput from '@/components/ui/SearchInput.vue'
+import SegmentedButton from '@/components/ui/SegmentedButton.vue'
+import SegmentedControl from '@/components/ui/SegmentedControl.vue'
+import SettingsListDetail from './workbench/SettingsListDetail.vue'
 import SettingsSaveBar from './SettingsSaveBar.vue'
 import SettingsSectionWorkbench from './workbench/SettingsSectionWorkbench.vue'
 import { buildSettingsSubpages, SETTINGS_DEFAULT_SUBPAGE } from './settingsNavigationCatalog'
@@ -147,11 +151,13 @@ async function refresh() {
   } catch (reason) { if (!disposed && request === listGeneration && !controller.signal.aborted) error.value = message(reason) }
   finally { if (request === listGeneration) loading.value = false }
 }
-async function canDiscard() {
-  if (busy.value) return false
-  if (!hasUnsaved.value) return true
-  return await confirmAction({ title: st('Discard unsaved changes?'), description: st('You have unsaved changes.'), confirmText: st('Discard changes'), cancelText: st('Keep editing') })
-}
+const { canDiscard } = useSettingsDraftGuard({
+  dirty: () => hasUnsaved.value,
+  busy: () => busy.value,
+  unload: () => hasUnsaved.value,
+  dialog: () => ({ description: st('You have unsaved changes.') }),
+  sameTarget: (to, from) => to.params.section === from.params.section && to.query.view === from.query.view,
+})
 async function select(id: string) {
   if (id === selectedId.value) { showDetail.value = true; return }
   if (!(await canDiscard())) return
@@ -364,20 +370,16 @@ async function resumeAuth() {
   for (const key of ['code', 'state', 'error', 'error_description', 'iss']) delete query[key]
   await router.replace({ path: route.path, query, hash: route.hash })
 }
-function beforeUnload(event: BeforeUnloadEvent) { if (hasUnsaved.value) { event.preventDefault(); event.returnValue = '' } }
 function onKey(event: KeyboardEvent) {
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
     if (createOpen.value) { event.preventDefault(); void create() }
     else if (dirty.value && !importOpen.value) { event.preventDefault(); void save() }
   }
 }
-onBeforeRouteLeave(async () => await canDiscard())
-onBeforeRouteUpdate(async (to, from) => to.params.section !== from.params.section || to.query.view !== from.query.view ? await canDiscard() : true)
 watch(() => route.query.connection, (value) => { if (typeof value === 'string' && value !== selectedId.value) void select(value) })
 onMounted(async () => {
   try { pendingAuth.value = readMcpPendingAuth(sessionStorage.getItem(MCP_AUTH_STORAGE_KEY)) } catch {}
   if (pendingAuth.value && new URL(location.href).searchParams.has('state')) selectedId.value = pendingAuth.value.connection_id
-  window.addEventListener('beforeunload', beforeUnload)
   window.addEventListener('keydown', onKey)
   await refresh()
   if (disposed) return
@@ -389,7 +391,7 @@ onBeforeUnmount(() => {
   disposed = true; listGeneration++; detailGeneration++; listController?.abort(); detailController?.abort()
   if (refreshTimer) clearInterval(refreshTimer)
   if (reloadTimer) clearTimeout(reloadTimer)
-  window.removeEventListener('beforeunload', beforeUnload); window.removeEventListener('keydown', onKey)
+  window.removeEventListener('keydown', onKey)
   storedToken.value = ''; callbackUrl.value = ''; draft.value = null; createDraft.value = { config: newMcpConfig(), preserveSecrets: [] }
 })
 defineExpose({ refresh })
@@ -408,27 +410,207 @@ defineExpose({ refresh })
       </div>
       <p v-if="error" role="alert" class="break-words rounded-xl border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">{{ error }}</p>
       <p v-if="notice" role="status" class="break-words rounded-xl border border-border/70 bg-muted/20 p-3 text-xs text-muted-foreground">{{ notice }}</p>
-      <div class="settings-master-detail settings-viewport-region">
-        <aside class="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-border/70" :class="{ 'settings-hide-stacked': showDetail }">
-          <div class="space-y-2 border-b border-border/60 p-2.5"><SearchInput v-model="query" :placeholder="st('Search MCP connections')" /><div class="grid min-w-0 grid-cols-2 gap-1.5"><OptionPicker v-model="scopeFilter" :options="filterScopes" :include-empty="false" :title="st('Connection scope')" size="sm" /><OptionPicker v-model="statusFilter" :options="statusOptions" :include-empty="false" :title="st('Connection status')" size="sm" /></div></div>
-          <div class="settings-viewport-scroll space-y-1 p-1.5">
-            <p v-if="loading && !catalog" role="status" class="p-6 text-center text-sm text-muted-foreground">{{ st('Loading connections…') }}</p>
-            <div v-else-if="!items.length" class="space-y-2 p-6 text-center"><RiPlugLine class="mx-auto h-7 w-7 text-muted-foreground/60" /><p class="text-sm font-medium">{{ catalog?.connections.length ? st('No matching connections.') : st('Connect your first MCP service') }}</p><p class="text-xs leading-relaxed text-muted-foreground">{{ st('Add a local command or a remote endpoint to bring its tools and resources into Agena.') }}</p></div>
-            <button v-for="connection in items" :key="connection.id" type="button" :disabled="busy" :aria-pressed="selectedId === connection.id" class="w-full min-w-0 space-y-1 rounded-md border px-2.5 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60" :class="selectedId === connection.id ? 'border-primary/25 bg-primary/10' : 'border-transparent hover:bg-muted/40'" @click="select(connection.id)">
-              <span class="flex items-start justify-between gap-2"><span class="min-w-0 break-words text-sm font-medium">{{ connection.name }}</span><span class="mt-1 h-2 w-2 shrink-0 rounded-full" :class="connection.state === 'connected' ? 'bg-emerald-500' : ['disconnected', 'authentication_required', 'invalid', 'pending_reload'].includes(connection.state) ? 'bg-amber-500' : 'bg-muted-foreground/40'" /></span>
-              <span class="block text-xs text-muted-foreground">{{ connection.transport === 'stdio' ? st('Local command') : connection.transport === 'http' ? st('Remote HTTP') : connection.transport }}</span>
-              <span class="flex flex-wrap items-center gap-1.5 text-[10px]"><span class="rounded border border-border/70 px-1.5 py-0.5 text-muted-foreground">{{ scopeLabel(connection.scope) }}</span><span class="rounded border px-1.5 py-0.5" :class="stateClass(connection.state)">{{ stateLabel(connection.state) }}</span><span v-if="connection.state === 'connected'" class="text-muted-foreground">{{ connection.tool_count }} {{ st('Tools') }}</span></span>
-            </button>
+      <SettingsListDetail
+        v-model:detail-open="showDetail"
+        :list-label="st('Connections')"
+        :detail-label="st('Connection details')"
+        :back-label="st('Connections')"
+        :list-busy="loading"
+        :detail-loading="detailLoading"
+      >
+        <template #list-header>
+          <SearchInput
+            v-model="query"
+            :placeholder="st('Search MCP connections')"
+            :input-aria-label="st('Search MCP connections')"
+          />
+          <div class="grid min-w-0 grid-cols-2 gap-1.5">
+            <OptionPicker
+              v-model="scopeFilter"
+              :options="filterScopes"
+              :include-empty="false"
+              :title="st('Connection scope')"
+              size="sm"
+            />
+            <OptionPicker
+              v-model="statusFilter"
+              :options="statusOptions"
+              :include-empty="false"
+              :title="st('Connection status')"
+              size="sm"
+            />
           </div>
+        </template>
+        <template #list>
+          <p v-if="loading && !catalog" role="status" class="p-6 text-center text-sm text-muted-foreground">
+            {{ st('Loading connections…') }}
+          </p>
+          <div v-else-if="!items.length" class="space-y-2 p-6 text-center">
+            <RiPlugLine class="mx-auto h-7 w-7 text-muted-foreground/60" />
+            <p class="text-sm font-medium">
+              {{ catalog?.connections.length ? st('No matching connections.') : st('Connect your first MCP service') }}
+            </p>
+            <p class="text-xs leading-relaxed text-muted-foreground">
+              {{ st('Add a local command or a remote endpoint to bring its tools and resources into Agena.') }}
+            </p>
+          </div>
+          <button
+            v-for="connection in items"
+            :key="connection.id"
+            type="button"
+            :data-keyboard-item="connection.id"
+            :data-keyboard-label="connection.name"
+            :data-keyboard-selected="String(selectedId === connection.id)"
+            :disabled="busy"
+            :aria-pressed="selectedId === connection.id"
+            class="w-full min-w-0 space-y-1 rounded-md border px-2.5 py-2 text-start transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:opacity-60"
+            :class="
+              selectedId === connection.id ? 'border-primary/25 bg-primary/10' : 'border-transparent hover:bg-muted/40'
+            "
+            @click="select(connection.id)"
+          >
+            <span class="flex items-start justify-between gap-2"
+              ><span class="min-w-0 break-words text-sm font-medium">{{ connection.name }}</span
+              ><span
+                class="mt-1 h-2 w-2 shrink-0 rounded-full"
+                :class="
+                  connection.state === 'connected'
+                    ? 'bg-emerald-500'
+                    : ['disconnected', 'authentication_required', 'invalid', 'pending_reload'].includes(connection.state)
+                      ? 'bg-amber-500'
+                      : 'bg-muted-foreground/40'
+                "
+            /></span>
+            <span class="block text-xs text-muted-foreground">{{
+              connection.transport === 'stdio'
+                ? st('Local command')
+                : connection.transport === 'http'
+                  ? st('Remote HTTP')
+                  : connection.transport
+            }}</span>
+            <span class="flex flex-wrap items-center gap-1.5 text-[10px]"
+              ><span class="rounded border border-border/70 px-1.5 py-0.5 text-muted-foreground">{{
+                scopeLabel(connection.scope)
+              }}</span
+              ><span class="rounded border px-1.5 py-0.5" :class="stateClass(connection.state)">{{
+                stateLabel(connection.state)
+              }}</span
+              ><span v-if="connection.state === 'connected'" class="text-muted-foreground"
+                >{{ connection.tool_count }} {{ st('Tools') }}</span
+              ></span
+            >
+          </button>
+        </template>
+        <template #list-footer>
           <details v-if="catalog" class="shrink-0 border-t border-border/60 px-3 py-2 text-xs"><summary class="cursor-pointer font-medium text-muted-foreground">{{ st('Server workspace and configuration') }}</summary><div class="mt-2 max-h-52 space-y-3 overflow-y-auto break-all pb-1 text-[11px] text-muted-foreground"><div><span class="font-medium text-foreground">{{ st('Server workspace') }}</span><p class="mt-1 font-mono">{{ catalog.workspace_root }}</p></div><p>{{ st('These connections belong to the running Agena server. Changing the chat directory does not change this workspace.') }}</p><div><span>{{ st('Global configuration') }}</span><p class="mt-1 font-mono">{{ catalog.global_path }}</p></div><div><span>{{ st('Workspace configuration') }}</span><p class="mt-1 font-mono">{{ catalog.workspace_path }}</p></div><div v-if="catalog.bridge_enabled" class="space-y-2 border-t border-border/60 pt-2"><OptionPicker :model-value="bridgeScope" :options="scopeOptions" :include-empty="false" :disabled="busy" :title="st('Bridge scope')" size="sm" @update:model-value="bridgeScope = $event === 'global' ? 'global' : 'workspace'" /><Button variant="outline" size="sm" :disabled="busy" @click="setBridge(false)">{{ st('Disable MCP bridge') }}</Button></div></div></details>
-        </aside>
-        <section class="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-border/70" :class="{ 'settings-hide-stacked': !showDetail }">
-          <div class="settings-stacked-only border-b border-border/60 px-2 py-1"><Button variant="ghost" size="sm" @click="showDetail = false"><RiArrowLeftLine class="mr-1.5 h-4 w-4" />{{ st('Connections') }}</Button></div>
-          <div v-if="!detail" class="flex min-h-64 flex-1 items-center justify-center p-8 text-center text-sm text-muted-foreground">{{ detailLoading ? st('Loading connection…') : st('Choose a connection to inspect or configure it.') }}</div>
+        </template>
+        <template #detail>
+          <div
+            v-if="!detail"
+            class="flex min-h-64 flex-1 items-center justify-center p-8 text-center text-sm text-muted-foreground"
+          >
+            {{ detailLoading ? st('Loading connection…') : st('Choose a connection to inspect or configure it.') }}
+          </div>
           <template v-else>
-            <header class="space-y-3 border-b border-border/60 p-4"><div class="flex flex-wrap items-start justify-between gap-3"><div class="min-w-0 flex-1"><h2 class="break-words text-base font-semibold">{{ detail.name }}</h2><p class="mt-1 break-all font-mono text-xs text-muted-foreground">{{ detail.secret_paths.includes('/endpoint/url') ? st('Stored endpoint URL') : mcpEndpoint(detail) }}</p><div class="mt-2 flex flex-wrap items-center gap-2 text-[11px]"><span>{{ scopeLabel(detail.scope) }}</span><span class="rounded-full border px-2 py-0.5" :class="stateClass(detail.state)">{{ stateLabel(detail.state) }}</span><span v-if="detail.protocol_version" class="text-muted-foreground">{{ st('Protocol') }} {{ detail.protocol_version }}</span></div></div><div class="flex items-center gap-2"><Button variant="outline" size="sm" :disabled="busy || dirty || !ready" @click="toggleEnabled">{{ detail.enabled ? st('Disable') : st('Enable') }}</Button><IconButton :disabled="busy || !ready" :aria-label="st('Remove connection')" :tooltip="st('Remove connection')" @click="remove"><RiDeleteBinLine class="h-4 w-4 text-destructive" /></IconButton></div></div><div class="flex flex-wrap items-center gap-2"><Button variant="outline" size="sm" :disabled="busy || dirty || !ready || detail.state === 'invalid'" @click="test">{{ action === 'test' ? st('Testing connection…') : st('Test connection') }}</Button><Button variant="outline" size="sm" :disabled="busy || dirty || !ready || !detail.enabled || !detail.effective || !catalog?.bridge_enabled || detail.state === 'pending_reload'" @click="reconnect"><RiRefreshLine class="mr-1.5 h-3.5 w-3.5" :class="action === 'reconnect' ? 'animate-spin' : ''" />{{ st('Reconnect') }}</Button><span v-if="dirty" class="text-xs text-muted-foreground">{{ st('Save changes before testing or reconnecting.') }}</span></div><p v-if="detail.error" class="break-words rounded-lg border border-amber-500/25 bg-amber-500/5 p-2.5 text-xs text-amber-800 dark:text-amber-200">{{ detail.error }}</p><p v-if="detail.state === 'pending_reload'" role="status" class="rounded-lg border border-amber-500/25 bg-amber-500/5 p-2.5 text-xs text-amber-800 dark:text-amber-200">{{ st('Saved settings differ from the active runtime. Reload the runtime or check profile overrides.') }}</p><p v-if="detail.state === 'shadowed'" class="text-xs text-muted-foreground">{{ st('A workspace connection with this name takes precedence. This copy remains editable.') }}</p></header>
-            <nav class="flex shrink-0 gap-1 overflow-x-auto border-b border-border/60 p-2" :aria-label="st('Connection details')"><button v-for="item in tabs" :key="item.id" type="button" :aria-current="tab === item.id ? 'page' : undefined" class="shrink-0 rounded-lg px-3 py-2 text-xs font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" :class="tab === item.id ? 'bg-muted text-foreground shadow-sm' : 'text-muted-foreground hover:bg-muted/40'" @click="tab = item.id">{{ item.label }}</button></nav>
-            <div class="settings-viewport-scroll p-3">
+            <header class="space-y-3 border-b border-border/60 p-4">
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div class="min-w-0 flex-1">
+                  <h2 data-settings-detail-heading tabindex="-1" class="break-words text-base font-semibold outline-none">
+                    {{ detail.name }}
+                  </h2>
+                  <p class="mt-1 break-all font-mono text-xs text-muted-foreground">
+                    {{ detail.secret_paths.includes('/endpoint/url') ? st('Stored endpoint URL') : mcpEndpoint(detail) }}
+                  </p>
+                  <div class="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
+                    <span>{{ scopeLabel(detail.scope) }}</span
+                    ><span class="rounded-full border px-2 py-0.5" :class="stateClass(detail.state)">{{
+                      stateLabel(detail.state)
+                    }}</span
+                    ><span v-if="detail.protocol_version" class="text-muted-foreground"
+                      >{{ st('Protocol') }} {{ detail.protocol_version }}</span
+                    >
+                  </div>
+                </div>
+                <div class="flex items-center gap-2">
+                  <Button variant="outline" size="sm" :disabled="busy || dirty || !ready" @click="toggleEnabled">{{
+                    detail.enabled ? st('Disable') : st('Enable')
+                  }}</Button
+                  ><IconButton
+                    :disabled="busy || !ready"
+                    :aria-label="st('Remove connection')"
+                    :tooltip="st('Remove connection')"
+                    @click="remove"
+                    ><RiDeleteBinLine class="h-4 w-4 text-destructive"
+                  /></IconButton>
+                </div>
+              </div>
+              <div class="flex flex-wrap items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  :disabled="busy || dirty || !ready || detail.state === 'invalid'"
+                  @click="test"
+                  >{{ action === 'test' ? st('Testing connection…') : st('Test connection') }}</Button
+                ><Button
+                  variant="outline"
+                  size="sm"
+                  :disabled="
+                    busy ||
+                    dirty ||
+                    !ready ||
+                    !detail.enabled ||
+                    !detail.effective ||
+                    !catalog?.bridge_enabled ||
+                    detail.state === 'pending_reload'
+                  "
+                  @click="reconnect"
+                  ><RiRefreshLine class="mr-1.5 h-3.5 w-3.5" :class="action === 'reconnect' ? 'animate-spin' : ''" />{{
+                    st('Reconnect')
+                  }}</Button
+                ><span v-if="dirty" class="text-xs text-muted-foreground">{{
+                  st('Save changes before testing or reconnecting.')
+                }}</span>
+              </div>
+              <p
+                v-if="detail.error"
+                class="break-words rounded-lg border border-amber-500/25 bg-amber-500/5 p-2.5 text-xs text-amber-800 dark:text-amber-200"
+              >
+                {{ detail.error }}
+              </p>
+              <p
+                v-if="detail.state === 'pending_reload'"
+                role="status"
+                class="rounded-lg border border-amber-500/25 bg-amber-500/5 p-2.5 text-xs text-amber-800 dark:text-amber-200"
+              >
+                {{ st('Saved settings differ from the active runtime. Reload the runtime or check profile overrides.') }}
+              </p>
+              <p v-if="detail.state === 'shadowed'" class="text-xs text-muted-foreground">
+                {{ st('A workspace connection with this name takes precedence. This copy remains editable.') }}
+              </p>
+            </header>
+            <div class="shrink-0 border-b border-border/60 px-3 py-2">
+              <SegmentedControl class="flex w-fit max-w-full overflow-x-auto" :aria-label="st('Connection details')">
+                <SegmentedButton
+                  v-for="item in tabs"
+                  :id="fieldId + '-' + item.id + '-tab'"
+                  :key="item.id"
+                  :active="tab === item.id"
+                  :aria-controls="fieldId + '-details'"
+                  size="sm"
+                  class="shrink-0 focus-visible:-outline-offset-2"
+                  @click="tab = item.id"
+                >
+                  {{ item.label }}
+                </SegmentedButton>
+              </SegmentedControl>
+            </div>
+            <div
+              :id="fieldId + '-details'"
+              :aria-labelledby="fieldId + '-' + tab + '-tab'"
+              role="tabpanel"
+              tabindex="0"
+              class="settings-viewport-scroll p-3 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+            >
               <p v-if="actionError" role="alert" class="mb-4 break-words rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">{{ actionError }}</p>
               <div v-if="testResult" role="status" class="mb-4 space-y-1 rounded-lg border p-3" :class="testResult.ok ? 'border-emerald-500/25 bg-emerald-500/5' : 'border-amber-500/30 bg-amber-500/5'"><p class="text-sm font-medium">{{ testResult.ok ? st('Connection test passed') : st('Connection test failed') }}</p><p class="text-xs text-muted-foreground">{{ st('Elapsed: {value} ms', { value: testResult.elapsed_ms }) }} · {{ testResult.tool_count }} {{ st('Tools') }}<span v-if="testResult.protocol_version"> · {{ testResult.protocol_version }}</span></p><p v-if="testResult.error" class="break-words text-xs">{{ testResult.error }}</p></div>
               <template v-if="tab === 'configuration'">
@@ -446,10 +628,19 @@ defineExpose({ refresh })
               </template>
               <McpCapabilitiesPanel v-else :key="selectedId + ':' + tab" :connection-id="selectedId" :enabled="detail.state === 'connected'" :kind="tab === 'resources' ? 'resources' : tab === 'prompts' ? 'prompts' : 'tools'" />
             </div>
-            <div v-if="draft && tab === 'configuration'" class="shrink-0 border-t border-border/60 p-3"><SettingsSaveBar :dirty="dirty" :saving="action === 'save'" :disabled="busy || !ready" :save-disabled="!editorValid || Boolean(draftProblems.length) || changedElsewhere" @save="save" @discard="discard" /></div>
+            <div v-if="draft && tab === 'configuration'" class="shrink-0 border-t border-border/60 p-3">
+              <SettingsSaveBar
+                :dirty="dirty"
+                :saving="action === 'save'"
+                :disabled="busy || !ready"
+                :save-disabled="!editorValid || Boolean(draftProblems.length) || changedElsewhere"
+                @save="save"
+                @discard="discard"
+              />
+            </div>
           </template>
-        </section>
-      </div>
+        </template>
+      </SettingsListDetail>
     </div>
     <Dialog :open="createOpen" :title="st('Add MCP connection')" :description="st('Configure a local process or a remote service for this Agena server.')" max-width="max-w-2xl" @update:open="(value) => { if (!value) void closeCreate() }">
       <div class="space-y-5"><div class="grid gap-3 sm:grid-cols-[minmax(0,1fr)_10rem]"><label class="space-y-1.5" :for="fieldId + '-name'"><span class="text-xs font-medium">{{ st('Connection name') }}</span><input :id="fieldId + '-name'" v-model="createName" :disabled="busy" autofocus autocomplete="off" spellcheck="false" class="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm" /></label><div class="space-y-1.5"><span class="text-xs font-medium">{{ st('Connection scope') }}</span><OptionPicker :model-value="createScope" :options="scopeOptions" :include-empty="false" :disabled="busy" :title="st('Connection scope')" @update:model-value="createScope = $event === 'global' ? 'global' : 'workspace'" /></div></div><p v-if="createScope === 'workspace' && catalog" class="break-all text-xs text-muted-foreground">{{ st('Server workspace') }}: {{ catalog.workspace_root }}</p><McpConfigEditor v-if="createOpen" v-model="createDraft" :disabled="busy" @validity="createValid = $event" /><p v-if="createError" role="alert" class="break-words text-xs text-destructive">{{ createError }}</p><ul v-if="createName.trim() && createProblems.length" class="list-inside list-disc space-y-1 text-xs text-muted-foreground"><li v-for="problem in createProblems" :key="problem">{{ st(problem) }}</li></ul></div>

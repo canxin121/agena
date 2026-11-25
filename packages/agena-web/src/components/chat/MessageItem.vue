@@ -431,6 +431,7 @@ function handlePartControlsKeydown(event: KeyboardEvent) {
           >
             <template #actions>
               <Button
+                data-keyboard-option
                 variant="ghost"
                 size="sm"
                 class="h-auto w-full justify-start gap-2 whitespace-normal py-2 text-left"
@@ -446,6 +447,7 @@ function handlePartControlsKeydown(event: KeyboardEvent) {
                 </span>
               </Button>
               <Button
+                data-keyboard-option
                 variant="ghost-destructive"
                 size="sm"
                 class="h-auto w-full justify-start gap-2 whitespace-normal py-2 text-left"

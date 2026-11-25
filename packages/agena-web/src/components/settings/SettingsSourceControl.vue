@@ -70,6 +70,7 @@ function select(value: 'inherit' | 'local') {
     size="sm"
     class="setting-reset-control order-last shrink-0"
     data-setting-reset
+    data-keyboard-option
     data-setting-scope="global"
     :aria-label="label + ': ' + resetLabel"
     :tooltip="inheritTitle"

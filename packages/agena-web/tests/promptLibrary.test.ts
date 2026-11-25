@@ -1,8 +1,11 @@
 import { expect, test } from 'bun:test'
 import {
   availableSavedPrompts,
+  composedPromptText,
   groupSavedPrompts,
   nextSavedPromptId,
+  promptExcerpt,
+  savedPromptExcerpt,
   savedPromptIsValid,
   savedPromptMatches,
   scopeUsesPrompt,
@@ -71,4 +74,29 @@ test('search and validation handle custom categories, empty bodies and UTF-8 siz
   expect(savedPromptMatches(prompt, 'unrelated')).toBe(false)
   expect(savedPromptIsValid({ ...prompt, body: '   ' })).toBe(false)
   expect(savedPromptIsValid({ ...prompt, body: '中'.repeat(6000) })).toBe(false)
+})
+
+test('prompt rows preview the first line of body text and bound long Unicode excerpts', () => {
+  expect(promptExcerpt('\n## 写作约定\r\n\r\n  先说\t 结论。\n补充背景。')).toBe('先说 结论。…')
+  expect(promptExcerpt('# 独立标题')).toBe('# 独立标题')
+  expect(promptExcerpt('Short prompt.')).toBe('Short prompt.')
+  expect(promptExcerpt('𠮷'.repeat(121))).toBe(`${'𠮷'.repeat(120)}…`)
+  expect(promptExcerpt('   ')).toBe('')
+})
+
+test('compositions preview linked body text in reference order and keep the full detail', () => {
+  const { library } = normalizePromptScopeConfig({
+    library: [
+      { id: 'ending', body: 'End with an example.' },
+      { id: 'opening', body: 'Start with the result.' },
+      { id: 'inner', parts: ['opening'] },
+      { id: 'combined', parts: ['inner', 'ending'] },
+    ],
+  })
+  const byId = new Map(library.map((prompt) => [prompt.id, prompt]))
+  const composition = byId.get('combined')!
+  expect(savedPromptExcerpt(composition, byId)).toBe('Start with the result.…')
+  expect(composedPromptText(composition, byId)).toBe('Start with the result.\n\nEnd with an example.')
+  byId.delete('opening')
+  expect(savedPromptExcerpt(composition, byId)).toBe('')
 })

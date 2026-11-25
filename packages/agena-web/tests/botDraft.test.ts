@@ -1,5 +1,12 @@
 import { describe, expect, test } from 'bun:test'
-import { botDraftFields, instructionsBytes, MAX_INSTRUCTIONS_BYTES } from '../src/features/bots/draft'
+import {
+  BOT_INSTRUCTIONS_ID,
+  botDraftFields,
+  botPromptOrder,
+  instructionsBytes,
+  MAX_INSTRUCTIONS_BYTES,
+} from '../src/features/bots/draft'
+import { emptyPromptLayer, type BuiltinPrompt } from '../src/lib/promptLayers'
 import { emptyBotPersona } from '../src/lib/bots'
 
 describe('Bot editor draft', () => {
@@ -17,5 +24,14 @@ describe('Bot editor draft', () => {
     expect(emptyBotPersona()).toEqual({ instructions: '' })
     expect(botDraftFields(' Atlas ', '')).toEqual({ name: 'Atlas', persona: { instructions: '' } })
     expect(botDraftFields('Atlas', 'Precise')).toEqual({ name: 'Atlas', persona: { instructions: 'Precise' } })
+  })
+  test('legacy Bot instructions appear once and move alongside built-in and saved prompts', () => {
+    const id = 'agena.system.identity'
+    const builtins: BuiltinPrompt[] = [{ id, title: 'Identity', body: 'Agena', when: 'always' }]
+    const legacy = { instructions: 'Old Bot instructions', prompts: { ids: ['style'] } }
+    expect(botPromptOrder(legacy, builtins, emptyPromptLayer())).toEqual([id, 'style', BOT_INSTRUCTIONS_ID])
+    const ordered = { ...legacy, prompts: { ids: [BOT_INSTRUCTIONS_ID, id, 'style'] } }
+    expect(botPromptOrder(ordered, builtins, emptyPromptLayer())).toEqual([BOT_INSTRUCTIONS_ID, id, 'style'])
+    expect(botPromptOrder({ ...ordered, instructions: '' }, builtins, emptyPromptLayer())).toEqual([id, 'style'])
   })
 })

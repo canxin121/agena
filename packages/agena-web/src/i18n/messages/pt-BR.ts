@@ -987,8 +987,8 @@ export default {
             description: 'Arquivos, imagens e outros recursos das seções file_ref.',
           },
           skill_reference: {
-            label: 'Referência de comando',
-            description: 'Nomes, descrições e metadados de referência das seções skill_ref.',
+            label: 'Referência de habilidade',
+            description: 'Nomes, descrições e metadados de referência das habilidades.',
           },
           interaction: {
             label: 'Interação do usuário',
@@ -1697,14 +1697,6 @@ export default {
           label: 'Compactar sessão',
           description: 'Resumir com o modelo selecionado',
         },
-        init: {
-          label: 'Inicializar AGENTS.md',
-          description: 'Inserir o comando /init no campo de mensagem',
-        },
-        review: {
-          label: 'Revisar alterações',
-          description: 'Inserir o comando /review no campo de mensagem',
-        },
       },
       picker: {
         modelTitle: 'Modelo',
@@ -1894,6 +1886,12 @@ export default {
       sideDescription: 'Abrir uma ramificação separada com o contexto atual',
       sectionTitle: 'BTW',
       sideChip: 'Paralela',
+    },
+    mcpApp: {
+      open: 'Abrir aplicativo',
+      loading: 'Carregando o aplicativo MCP…',
+      timeout: 'O aplicativo MCP não respondeu.',
+      unavailable: 'O aplicativo MCP está indisponível.',
     },
     toolDetails: {
       errorUnavailable: 'Esta ferramenta falhou, mas o servidor não informou o motivo do erro.',

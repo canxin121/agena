@@ -12,7 +12,7 @@ export const BUILTIN_CHAT_ACTIVITY_KINDS: ChatActivityKindCatalogItem[] = [
   { id: 'reasoning', category: 'builtin', label: 'Reasoning' },
   { id: 'operation', category: 'builtin', label: 'Operation' },
   { id: 'resource', category: 'builtin', label: 'Resource' },
-  { id: 'skill_reference', category: 'builtin', label: 'Command reference' },
+  { id: 'skill_reference', category: 'builtin', label: 'Skill reference' },
   { id: 'interaction', category: 'builtin', label: 'Interaction' },
   { id: 'hook', category: 'builtin', label: 'Hook' },
   { id: 'error', category: 'builtin', label: 'Error' },

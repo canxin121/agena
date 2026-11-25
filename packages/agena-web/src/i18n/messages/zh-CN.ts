@@ -1338,8 +1338,8 @@ export default {
             description: 'file_ref Part 的文件、图片和其他资源。',
           },
           skill_reference: {
-            label: '命令引用',
-            description: 'skill_ref Part 的命令名称、简介和引用元数据。',
+            label: '技能引用',
+            description: '技能名称、简介和引用元数据。',
           },
           interaction: {
             label: '用户交互',
@@ -1658,6 +1658,12 @@ export default {
       sectionTitle: 'BTW',
       sideChip: 'Side',
     },
+    mcpApp: {
+      open: '打开应用',
+      loading: '正在加载 MCP 应用…',
+      timeout: 'MCP 应用没有响应。',
+      unavailable: 'MCP 应用不可用。',
+    },
     toolDetails: {
       errorUnavailable: '此工具执行失败，但服务器未提供具体原因。',
       copyDiff: '复制 diff',
@@ -1886,14 +1892,6 @@ export default {
         compact: {
           label: '压缩会话',
           description: '使用所选模型进行总结',
-        },
-        init: {
-          label: '初始化 AGENTS.md',
-          description: '将 /init 命令插入到聊天输入框',
-        },
-        review: {
-          label: '审查改动',
-          description: '将 /review 命令插入到聊天输入框',
         },
       },
       picker: {

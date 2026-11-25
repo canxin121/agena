@@ -197,7 +197,7 @@ import { createApp, h, computed, reactive } from 'vue'
 import { createPinia } from 'pinia'
 import { createRouter, createWebHistory, RouterView, useRoute } from 'vue-router'
 import PluginsPanel from '/@fs/${web}/src/components/settings/PluginsPanel.vue'
-import AppConfirmHost from '/@fs/${web}/src/components/AppConfirmHost.vue'
+import AppDialogHost from '/@fs/${web}/src/components/AppDialogHost.vue'
 import { pluginTabForSettingsView } from '/@fs/${web}/src/components/settings/pluginSettingsNavigation.ts'
 import { pluginSettingsLocation } from '/@fs/${web}/src/features/pluginWeb/settingsEntry.ts'
 import { useChatStore } from '/@fs/${web}/src/stores/chat.ts'
@@ -231,7 +231,7 @@ window.__pluginCardsProbe = {
   navigate: (target) => router.push(target),
 }
 const app = createApp({render: () => h('main', {'data-probe-shell': ''}, [
-  h(RouterView), h(AppConfirmHost),
+  h(RouterView), h(AppDialogHost),
 ])})
 app.config.globalProperties.$st = settingsText
 app.use(pinia).use(router).use(i18n)
@@ -457,7 +457,23 @@ app.mount('#app')
       'browser back and forward restore catalog and plugin settings',
     )
     const input = page.locator('[data-plugin-detail] input[type="text"]').first()
+    const detailTabs = page.getByRole('tablist', { name: 'Plugin details' })
+    const settingsTab = detailTabs.getByRole('tab', { name: /^Settings/ })
+    const toolsTab = detailTabs.getByRole('tab', { name: /^Tools/ })
+    const selectedTab = page.locator('[aria-selected="true"][tabindex="0"]')
     await input.fill('Unsaved fixture label')
+    await settingsTab.press('ArrowRight')
+    await toolsTab.and(selectedTab).waitFor()
+    check(
+      (await toolsTab.innerText()).match(/\d+/) &&
+        (await toolsTab.evaluate((tab) => tab === document.activeElement)) &&
+        (await page.evaluate(() => window.__pluginCardsProbe.route().query.pluginTab === 'tools')),
+      'arrow navigation focuses the tab with its count and updates the plugin route',
+    )
+    await settingsTab.getByTitle('You have unsaved changes.').waitFor()
+    await toolsTab.press('ArrowLeft')
+    await settingsTab.and(selectedTab).waitFor()
+    check((await input.inputValue()) === 'Unsaved fixture label', 'switching tabs retains the plugin draft')
     await page.locator('[data-plugin-back]').click()
     const dialog = page.getByRole('dialog')
     await dialog.waitFor()
@@ -563,6 +579,35 @@ app.mount('#app')
       await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth),
       'mobile plugin settings fit the viewport without horizontal overflow',
     )
+    const diagnosticsTab = detailTabs.getByRole('tab', { name: /^Diagnostics/ })
+    const overviewTab = detailTabs.getByRole('tab', { name: 'Overview', exact: true })
+    await settingsTab.press('End')
+    await diagnosticsTab.and(selectedTab).waitFor()
+    check(
+      await detailTabs.evaluate((list) => {
+        const tabs = [...list.querySelectorAll('[role="tab"]')]
+        const panels = tabs.map((tab) => document.getElementById(tab.getAttribute('aria-controls')))
+        const selected = tabs.find((tab) => tab === document.activeElement)
+        const bounds = list.getBoundingClientRect()
+        return list.scrollWidth > list.clientWidth && selected && selected.getBoundingClientRect().right <= bounds.right + 1 &&
+          selected.matches(':focus-visible') && getComputedStyle(selected).boxShadow !== 'none' &&
+          tabs.filter((tab) => tab.tabIndex === 0).length === 1 && new Set(panels).size === tabs.length &&
+          panels.every((panel, index) => panel?.getAttribute('role') === 'tabpanel' &&
+            panel.getAttribute('aria-labelledby') === tabs[index].id &&
+            (panel.getClientRects().length > 0) === (tabs[index] === selected))
+      }),
+      'End scrolls the overflowing mobile tabs to their visible focus ring and each tab owns a panel',
+    )
+    await diagnosticsTab.press('Home')
+    await overviewTab.and(selectedTab).waitFor()
+    await detailTabs.evaluate((list) => { list.dir = 'rtl' })
+    await overviewTab.press('ArrowLeft')
+    await settingsTab.and(selectedTab).waitFor()
+    check(
+      await settingsTab.evaluate((tab) => tab === document.activeElement),
+      'the physical Left key advances to the next route-backed tab in RTL',
+    )
+    await detailTabs.evaluate((list) => list.removeAttribute('dir'))
     await page.locator('[data-plugin-back]').click()
     await page.locator('[data-plugin-grid]').waitFor()
     check(

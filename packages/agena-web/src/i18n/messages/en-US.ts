@@ -1366,8 +1366,8 @@ export default {
             description: 'Files, images, and other resources from file_ref parts.',
           },
           skill_reference: {
-            label: 'Command reference',
-            description: 'Command names, descriptions, and reference metadata from skill_ref parts.',
+            label: 'Skill reference',
+            description: 'Skill names, descriptions, and reference metadata.',
           },
           interaction: {
             label: 'User interaction',
@@ -1688,6 +1688,12 @@ export default {
       sectionTitle: 'BTW',
       sideChip: 'Side',
     },
+    mcpApp: {
+      open: 'Open app',
+      loading: 'Loading the MCP App…',
+      timeout: 'The MCP App did not respond.',
+      unavailable: 'The MCP App is unavailable.',
+    },
     toolDetails: {
       errorUnavailable: 'This tool failed, but the server did not provide an error reason.',
       copyDiff: 'Copy diff',
@@ -1917,14 +1923,6 @@ export default {
         compact: {
           label: 'Compact session',
           description: 'Summarize with the selected model',
-        },
-        init: {
-          label: 'Initialize AGENTS.md',
-          description: 'Insert /init command into chat input',
-        },
-        review: {
-          label: 'Review changes',
-          description: 'Insert /review command into chat input',
         },
       },
       picker: {

@@ -73,7 +73,7 @@ export type AttachmentPresentation = {
   unavailableReason: string
 }
 
-export type CommandPresentation = {
+export type SkillPresentation = {
   name: string
   description: string
   source: string
@@ -543,21 +543,21 @@ export function attachmentPresentations(part: TranscriptDisplayPart): Attachment
     .filter((item): item is AttachmentPresentation => Boolean(item))
 }
 
-export function commandPresentations(part: TranscriptDisplayPart): CommandPresentation[] {
+export function skillPresentations(part: TranscriptDisplayPart): SkillPresentation[] {
   const content = jsonRecord(part.source.agenaContent)
-  return jsonArray(content.commands)
+  return jsonArray(content.skills ?? content.commands)
     .map((value) => {
-      const command = jsonRecord(value)
-      const name = stringValue(command.name)
+      const skill = jsonRecord(value)
+      const name = stringValue(skill.name)
       if (!name) return null
       return {
         name,
-        description: firstString(command, ['description']),
-        source: firstString(command, ['source']),
-        contentHash: firstString(command, ['content_hash']),
+        description: firstString(skill, ['description']),
+        source: firstString(skill, ['source']),
+        contentHash: firstString(skill, ['content_hash']),
       }
     })
-    .filter((item): item is CommandPresentation => Boolean(item))
+    .filter((item): item is SkillPresentation => Boolean(item))
 }
 
 function interactionQuestion(value: JsonValue, index: number): InteractionQuestionPresentation | null {

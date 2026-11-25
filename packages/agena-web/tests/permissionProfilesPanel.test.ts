@@ -1,3 +1,4 @@
+import { setupSettingsDraftGuard } from './helpers/setupSettingsDraftGuard'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { compileScript, parse } from '@vue/compiler-sfc'
@@ -93,6 +94,7 @@ async function editor(
     },
   }
   const component = { exports: {} as { default?: { setup: (props: unknown, context: unknown) => any } } }
+  setupSettingsDraftGuard(modules)
   new Function('require', 'module', 'exports', componentCode)(
     (id: string) => {
       if (id.endsWith('.vue')) return {}

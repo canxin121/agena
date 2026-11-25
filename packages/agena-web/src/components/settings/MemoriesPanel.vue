@@ -1,12 +1,11 @@
 <script setup lang="ts">
+import { useSettingsDraftGuard } from './useSettingsDraftGuard'
 import { computed, nextTick, ref, watch } from 'vue'
-import { onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
 import { RiRefreshLine, RiBookOpenLine, RiEditLine } from '@remixicon/vue'
 
 import SettingsCard from './SettingsCard.vue'
 import SettingsSaveBar from './SettingsSaveBar.vue'
 import SearchInput from '@/components/ui/SearchInput.vue'
-import { confirmAction } from '@/lib/appConfirm'
 import Button from '@/components/ui/Button.vue'
 import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
 import IconButton from '@/components/ui/IconButton.vue'
@@ -295,23 +294,15 @@ function discardDraft() {
   editBody.value = originalMemory.value.body
   editError.value = ''
 }
-async function canLeave() {
-  if (editBusy.value) return false
-  if (!dirty.value) return true
-  return confirmAction({
-    title: st('Discard unsaved changes?'),
-    confirmText: st('Discard changes'),
-    cancelText: st('Keep editing'),
-  })
-}
+const { canDiscard: canLeave } = useSettingsDraftGuard({
+  dirty: () => dirty.value,
+  busy: () => editBusy.value,
+  unload: false,
+  sameTarget: (to, from) => to.path === from.path && to.query.view === from.query.view,
+})
 async function closeEditor() {
   if (await canLeave()) selectedName.value = null
 }
-onBeforeRouteUpdate((to, from) => {
-  if (to.path === from.path && to.query.view === from.query.view) return true
-  return canLeave()
-})
-onBeforeRouteLeave(canLeave)
 defineExpose({ refresh })
 </script>
 

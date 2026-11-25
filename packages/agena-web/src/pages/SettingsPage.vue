@@ -142,7 +142,7 @@ const activeScopes = computed(() => buildSettingsScopes(activeSection.value, act
 // Runtime settings pages with distinct scope choices remember those choices independently.
 const scopeStorageKey = computed(() =>
   settingsScopeStorageKey(
-    ['session-behavior', 'prompt-library'].includes(activeView.value)
+    ['session-behavior', 'prompt-library', 'system-prompt'].includes(activeView.value)
       ? `${activeSection.value}.${activeView.value}`
       : activeSection.value,
   ),

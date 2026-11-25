@@ -1,15 +1,15 @@
 import { describe, expect, test } from 'bun:test'
 import { projectLocalPart, projectTranscriptBlocks } from '../src/pages/chat/transcriptProjection'
-import { attachmentPresentations, commandPresentations } from '../src/pages/chat/transcriptPartPresentation'
+import { attachmentPresentations, skillPresentations } from '../src/pages/chat/transcriptPartPresentation'
 
 describe('current transcript reference contracts', () => {
-  test('composer activities project to the same attachment and command envelopes as persisted parts', () => {
-    const command = {
-      activity_type: 'command_reference',
+  test('composer activities project to the same attachment and skill envelopes as persisted parts', () => {
+    const skill = {
+      activity_type: 'skill_reference',
       name: 'review',
       description: 'Review the patch',
-      source: 'plugin.commands',
-      content_hash: 'command-hash',
+      source: 'agena.skills',
+      content_hash: 'skill-revision',
     }
     const resource = {
       activity_type: 'resource',
@@ -30,7 +30,7 @@ describe('current transcript reference contracts', () => {
               text: 'Review this',
               document: [
                 { type: 'activity', activity: { id: 'attachment', payload: resource } },
-                { type: 'activity', activity: { id: 'command', payload: command } },
+                { type: 'activity', activity: { id: 'skill', payload: skill } },
               ],
             },
           },
@@ -38,7 +38,7 @@ describe('current transcript reference contracts', () => {
       },
     ])
     const attachment = message!.displayParts.find((part) => part.kind === 'resource')!
-    const reference = message!.displayParts.find((part) => part.kind === 'command')!
+    const reference = message!.displayParts.find((part) => part.kind === 'skill')!
     expect(Object.keys(attachment.source.agenaContent!)).toEqual(['attachments'])
     expect(attachmentPresentations(attachment)).toEqual([
       expect.objectContaining({
@@ -48,9 +48,9 @@ describe('current transcript reference contracts', () => {
         sizeBytes: 42,
       }),
     ])
-    expect(reference.source.agenaContent).toEqual({ commands: [command] })
-    expect(commandPresentations(reference)).toEqual([
-      { name: 'review', description: 'Review the patch', source: 'plugin.commands', contentHash: 'command-hash' },
+    expect(reference.source.agenaContent).toEqual({ skills: [skill] })
+    expect(skillPresentations(reference)).toEqual([
+      { name: 'review', description: 'Review the patch', source: 'agena.skills', contentHash: 'skill-revision' },
     ])
     expect(reference.summary).toContain('review')
   })
@@ -118,7 +118,7 @@ describe('current transcript reference contracts', () => {
     }
   })
 
-  test('retired top-level attachment and command shapes are not upgraded', () => {
+  test('incomplete top-level attachment and skill shapes are not upgraded', () => {
     const attachment = projectLocalPart(
       {
         id: 'old-file',
@@ -131,10 +131,10 @@ describe('current transcript reference contracts', () => {
     )
     expect(attachmentPresentations(attachment)).toEqual([])
     expect(attachment.summary).not.toContain('old.png')
-    for (const content of [{ command: 'old-command' }, { skills: [{ name: 'old-command' }] }]) {
-      const command = projectLocalPart({ id: 'old-command', agenaKind: 'skill_ref', agenaContent: content }, 'user')
-      expect(commandPresentations(command)).toEqual([])
-      expect(command.summary).not.toContain('old-command')
+    for (const content of [{ skill: 'old-skill' }, { skills: [{ source: 'incomplete' }] }]) {
+      const skill = projectLocalPart({ id: 'old-skill', agenaKind: 'skill_ref', agenaContent: content }, 'user')
+      expect(skillPresentations(skill)).toEqual([])
+      expect(skill.summary).not.toContain('old-skill')
     }
   })
 })

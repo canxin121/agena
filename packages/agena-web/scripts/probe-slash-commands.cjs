@@ -45,6 +45,7 @@ const app = createApp({ setup() {
   })
   const commands = useChatCommands({
     draft, composerRef:ref(null), composerPickerOpen:ref(null),
+    isBotSession:ref(false),
     onSend:async()=>{sent.push(draft.value)},
     onCommandSelected:async(command)=>{
       selected.push({kind:command.kind, action:command.kind==='builtin'?command.action:null})
@@ -138,6 +139,14 @@ app.use(createPinia()).use(createRouter({history:createMemoryHistory(),routes:[{
     const options = page.getByRole('option')
     assert(await options.count() > 0, 'typing / must display actual catalog options')
     assert.equal(await options.filter({ hasText: '/compact' }).count(), 1, '/compact must appear in the palette')
+    const active = page.locator('[data-command-active="true"]')
+    const first = await active.getAttribute('id')
+    await composer.press('Shift+ArrowDown')
+    assert.equal(await active.getAttribute('id'), first, 'modified arrows stay with the text editor')
+    await composer.press('ArrowDown')
+    assert.notEqual(await active.getAttribute('id'), first, 'down moves the highlighted command')
+    await composer.press('ArrowUp')
+    assert.equal(await active.getAttribute('id'), first, 'up restores the previous command')
 
     await composer.fill('/compact')
     await page.waitForFunction(() =>

@@ -12,3 +12,13 @@ export function instructionsBytes(instructions: string): number {
 export function botDraftFields(name: string, instructions: string, avatar?: string | null) {
   return { name: name.trim(), persona: { instructions }, ...(avatar === undefined ? {} : { avatar }) }
 }
+import { emptyPromptLayer, systemPromptOrder, type BuiltinPrompt, type PromptLayer } from '@/lib/promptLayers'
+import type { BotPersona } from '@/generated/agenaState'
+
+export const BOT_INSTRUCTIONS_ID = 'agena.bot.instructions'
+
+export function botPromptOrder(persona: BotPersona, builtins: BuiltinPrompt[], global: PromptLayer): string[] {
+  const order = (persona.prompts?.ids ?? []).filter((id) => id !== BOT_INSTRUCTIONS_ID || persona.instructions.trim())
+  if (persona.instructions.trim() && !order.includes(BOT_INSTRUCTIONS_ID)) order.push(BOT_INSTRUCTIONS_ID)
+  return systemPromptOrder(builtins, [global], { ...emptyPromptLayer(), order })
+}

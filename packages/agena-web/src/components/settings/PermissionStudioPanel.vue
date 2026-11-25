@@ -1,12 +1,10 @@
 <script setup lang="ts">
+import { useSettingsDraftGuard } from './useSettingsDraftGuard'
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, ref, useId, watch, type Ref } from 'vue'
 import {
   RouterLink,
-  onBeforeRouteLeave,
-  onBeforeRouteUpdate,
   useRoute,
   useRouter,
-  type RouteLocationNormalized,
 } from 'vue-router'
 import {
   RiAddLine,
@@ -22,7 +20,9 @@ import {
   RiSave3Line,
   RiToolsLine,
 } from '@remixicon/vue'
-import { PopoverContent, PopoverPortal, PopoverRoot, PopoverTrigger } from 'radix-vue'
+import { PopoverTrigger } from 'radix-vue'
+import PopoverSurface from '@/components/ui/PopoverSurface.vue'
+import { handleOptionKeydown } from '@/lib/keyboardNavigation'
 
 import Button from '@/components/ui/Button.vue'
 import { findSettingsScope } from '@/components/settings/settingsScopeCatalog'
@@ -60,6 +60,7 @@ import {
 import { useChatStoreUnscoped } from '@/stores/chat'
 import { lastSessionId } from '@/lib/lastSession'
 import { resolveSettingsSessionId } from './settingsSessionScope'
+import { readWindowIdFromQuery } from '@/app/windowScope'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import { useToastsStore } from '@/stores/toasts'
 import type { JsonValue } from '@/types/json'
@@ -2022,58 +2023,39 @@ async function clearSource() {
   clearAllRuleSelections()
 }
 
-async function canLeave() {
-  if (saving.value || sandboxSaving.value || rulesPanel.value?.busy) return false
-  if (!dirty.value && !drafts.size) return true
-  return confirmAction({
+useSettingsDraftGuard({
+  dirty: () => dirty.value || drafts.size > 0,
+  busy: () => Boolean(saving.value || sandboxSaving.value || rulesPanel.value?.busy),
+  enabled: () => !profileEditor.value,
+  unload: () => dirty.value || drafts.size > 0,
+  dialog: () => ({
     title: st('Discard unsaved permission changes?'),
     description: st('Your permission changes have not been saved.'),
-    confirmText: st('Discard changes'),
-    cancelText: st('Keep editing'),
-  })
-}
-function routeWindowId(location: Pick<RouteLocationNormalized, 'query'>): string {
-  const value = location.query.windowId
-  return String(Array.isArray(value) ? value[0] || '' : value || '').trim()
-}
-function ownsNavigation(to: Pick<RouteLocationNormalized, 'query'>): boolean {
-  if (!workspacePane) return true
-  const destination = routeWindowId(to)
-  return destination ? destination === workspacePane.windowId.value : workspacePane.isFocused.value
-}
-onBeforeRouteUpdate(async (to, from) => {
-  // All mounted settings panes share route records. A navigation in another
-  // pane must neither ask about nor discard this pane's retained draft.
-  if (profileEditor.value || !ownsNavigation(to)) return true
-  const sourceRoute =
-    workspacePane && routeWindowId(from) && routeWindowId(from) !== workspacePane.windowId.value ? route : from
-  const source = normalizePermissionSource(sourceRoute.query.scope || selectedSource.value)
-  const recordedSessionId = lastSessionId.value || chat.selectedSessionId
-  if (
-    to.params.section === 'permissions' &&
-    isPermissionAccessView(to.query.view || PERMISSION_ACCESS_VIEW) &&
-    normalizePermissionSource(
-      legacyPermissionAccessScope(to.query.view, to.query.scope) || to.query.scope || source,
-    ) === source &&
-    (source !== 'workspace' ||
-      permissionWorkspaceTarget(to.query.targetWorkspaceId) ===
-        permissionWorkspaceTarget(sourceRoute.query.targetWorkspaceId)) &&
-    ((source !== 'session' && source !== 'effective') ||
-      resolveSettingsSessionId(to.query.targetSessionId, recordedSessionId) ===
-        resolveSettingsSessionId(sourceRoute.query.targetSessionId, recordedSessionId))
-  )
-    return true
-  if (!(await canLeave())) return false
-  discard()
-  drafts.clear()
-  return true
+  }),
+  sameTarget: (to, from) => {
+    const fromWindowId = readWindowIdFromQuery(from.query)
+    const sourceRoute = workspacePane && fromWindowId && fromWindowId !== workspacePane.windowId.value ? route : from
+    const source = normalizePermissionSource(sourceRoute.query.scope || selectedSource.value)
+    const recordedSessionId = lastSessionId.value || chat.selectedSessionId
+    return (
+      to.params.section === 'permissions' &&
+      isPermissionAccessView(to.query.view || PERMISSION_ACCESS_VIEW) &&
+      normalizePermissionSource(
+        legacyPermissionAccessScope(to.query.view, to.query.scope) || to.query.scope || source,
+      ) === source &&
+      (source !== 'workspace' ||
+        permissionWorkspaceTarget(to.query.targetWorkspaceId) ===
+          permissionWorkspaceTarget(sourceRoute.query.targetWorkspaceId)) &&
+      ((source !== 'session' && source !== 'effective') ||
+        resolveSettingsSessionId(to.query.targetSessionId, recordedSessionId) ===
+          resolveSettingsSessionId(sourceRoute.query.targetSessionId, recordedSessionId))
+    )
+  },
+  afterRouteUpdate: () => {
+    discard()
+    drafts.clear()
+  },
 })
-onBeforeRouteLeave((to) => profileEditor.value || !ownsNavigation(to) || canLeave())
-function beforeUnload(event: BeforeUnloadEvent) {
-  if (!dirty.value && !drafts.size) return
-  event.preventDefault()
-  event.returnValue = ''
-}
 async function refresh() {
   if (saving.value) return
   await Promise.allSettled([load(), rulesPanel.value?.refresh(), sandboxSettings.value?.refresh()])
@@ -2138,12 +2120,10 @@ watch(
 )
 onMounted(() => {
   void load()
-  if (!profileEditor.value) window.addEventListener('beforeunload', beforeUnload)
 })
 onBeforeUnmount(() => {
   loadGeneration += 1
   loadController?.abort()
-  window.removeEventListener('beforeunload', beforeUnload)
 })
 </script>
 
@@ -2503,58 +2483,58 @@ onBeforeUnmount(() => {
                     :disabled="formDisabled"
                     @update:model-value="$event === 'local' ? copyCommandRules() : restoreCommandRules()"
                   />
-                  <PopoverRoot v-if="group.kind === 'network'">
-                    <PopoverTrigger as-child>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        class="permission-network-source-trigger gap-1 px-2 text-[13px] text-muted-foreground"
-                        data-permission-network-sources
-                        :aria-label="group.label + ' · ' + $st('Source')"
-                        :title="$st('Source')"
-                        :disabled="formDisabled || Boolean(networkRuleDraft)"
-                      >
-                        <RiListSettingsLine class="h-4 w-4" aria-hidden="true" />
-                        <span>{{ $st('Source') }}</span>
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverPortal>
-                      <PopoverContent
-                        class="permission-network-source-popover"
-                        align="end"
-                        :side-offset="6"
-                        :collision-padding="12"
-                        :aria-label="group.label + ' · ' + $st('Source')"
-                        data-permission-network-source-menu
-                      >
-                        <div
-                          v-for="action in networkRuleLists"
-                          :key="action"
-                          class="permission-network-list-source"
-                          :data-permission-default="'network.' + action"
+                  <PopoverSurface
+                    v-if="group.kind === 'network'"
+                    class="grid w-[min(22rem,calc(100vw-1.5rem))] max-w-[var(--radix-popover-content-available-width)] gap-1 overflow-y-auto overscroll-contain p-2.5"
+                    align="end"
+                    :side-offset="6"
+                    :collision-padding="12"
+                    :aria-label="group.label + ' · ' + $st('Source')"
+                    data-permission-network-source-menu
+                    @keydown="handleOptionKeydown($event, $event.currentTarget as HTMLElement)"
+                  >
+                    <template #trigger>
+                      <PopoverTrigger as-child>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          class="permission-network-source-trigger gap-1 px-2 text-[13px] text-muted-foreground"
+                          data-permission-network-sources
+                          :aria-label="group.label + ' · ' + $st('Source')"
+                          :title="$st('Source')"
+                          :disabled="formDisabled || Boolean(networkRuleDraft)"
                         >
-                          <span>{{ networkRuleListLabel(action) }}</span>
-                          <SettingsSourceControl
-                            :scope="selectedSource"
-                            :model-value="networkSource(action)"
-                            :label="networkRuleListLabel(action)"
-                            :inherited-value="networkBaseValueLabel(action)"
-                            :inherited-source="inheritedSourceLabel"
-                            :show-inherited-summary="false"
-                            :disabled="formDisabled || Boolean(networkRuleDraft)"
-                            @update:model-value="setNetworkSource(action, $event)"
-                          />
-                        </div>
-                        <p class="text-xs leading-snug text-muted-foreground">
-                          {{
-                            $st(
-                              'Each list replaces only the same list from the base settings. An empty local list clears those rules.',
-                            )
-                          }}
-                        </p>
-                      </PopoverContent>
-                    </PopoverPortal>
-                  </PopoverRoot>
+                          <RiListSettingsLine class="h-4 w-4" aria-hidden="true" />
+                          <span>{{ $st('Source') }}</span>
+                        </Button>
+                      </PopoverTrigger>
+                    </template>
+                    <div
+                      v-for="action in networkRuleLists"
+                      :key="action"
+                      class="permission-network-list-source"
+                      :data-permission-default="'network.' + action"
+                    >
+                      <span>{{ networkRuleListLabel(action) }}</span>
+                      <SettingsSourceControl
+                        :scope="selectedSource"
+                        :model-value="networkSource(action)"
+                        :label="networkRuleListLabel(action)"
+                        :inherited-value="networkBaseValueLabel(action)"
+                        :inherited-source="inheritedSourceLabel"
+                        :show-inherited-summary="false"
+                        :disabled="formDisabled || Boolean(networkRuleDraft)"
+                        @update:model-value="setNetworkSource(action, $event)"
+                      />
+                    </div>
+                    <p class="text-xs leading-snug text-muted-foreground">
+                      {{
+                        $st(
+                          'Each list replaces only the same list from the base settings. An empty local list clears those rules.',
+                        )
+                      }}
+                    </p>
+                  </PopoverSurface>
                   <Button
                     variant="outline"
                     size="sm"
@@ -3052,11 +3032,6 @@ onBeforeUnmount(() => {
 .permission-create-form > details,
 .permission-create-form > p {
   flex: 1 1 100%;
-}
-.permission-network-source-popover {
-  @apply z-[80] grid gap-1 rounded-lg border border-border bg-popover p-2.5 text-popover-foreground shadow-lg outline-none;
-  width: min(22rem, calc(100vw - 1.5rem));
-  max-width: var(--radix-popover-content-available-width);
 }
 .permission-network-source-trigger[data-state='open'] {
   @apply bg-muted text-foreground;

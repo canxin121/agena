@@ -128,7 +128,7 @@ async function main() {
   assert(backend && ['127.0.0.1', 'localhost', '[::1]'].includes(new URL(backend).hostname))
   const a = JSON.parse(process.env.BOT_PROFILE_A)
   const b = JSON.parse(process.env.BOT_PROFILE_B)
-  assert(a.id !== b.id && a.session_id !== b.session_id)
+  assert(a.id !== b.id && a.local_session_id !== b.local_session_id)
   const source = Number(process.env.BOT_PROJECT_SESSION)
   const web = path.resolve(__dirname, '../../../packages/agena-web')
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'agena-multi-bot-browser-'))
@@ -145,8 +145,8 @@ async function main() {
   }
   const visible = selector => `Array.from(document.querySelectorAll(${JSON.stringify(selector)})).find(n => n.getClientRects().length)`
   async function assertGlobal(profile) {
-    const resource = await api(`/api/v1/sessions/${profile.session_id}`)
-    const state = await api(`/api/v1/sessions/${profile.session_id}/state`)
+    const resource = await api(`/api/v1/sessions/${profile.local_session_id}`)
+    const state = await api(`/api/v1/sessions/${profile.local_session_id}/state`)
     assert.equal(resource.workspace_id, null, 'real Bot session association is null')
     assert.equal(state.session.workspace_id, null, 'real execution session association is null')
     assert.equal(state.execution.effective_workspace_root ?? null, null, 'real execution root is null')
@@ -161,7 +161,7 @@ async function main() {
   }
   async function ready(profile) {
     await wait(() => cdp.evaluate(`Boolean(${visible(input)})`), 'visible Bot composer', 90000)
-    await wait(() => cdp.evaluate(`new URLSearchParams(location.search).get('botId') === '${profile.id}' && new URLSearchParams(location.search).get('sessionId') === '${profile.session_id}'`), `canonical route for ${profile.name}`)
+    await wait(() => cdp.evaluate(`new URLSearchParams(location.search).get('botId') === '${profile.id}' && new URLSearchParams(location.search).get('sessionId') === '${profile.local_session_id}'`), `canonical route for ${profile.name}`)
     await wait(() => cdp.evaluate(`Array.from(document.querySelectorAll('[data-testid="bot-name"]')).some(n=>n.getClientRects().length && n.textContent.includes(${JSON.stringify(profile.name)}))`), 'selected name matches bound session')
   }
   const bodyHas = text => cdp.evaluate(`document.body.innerText.includes(${JSON.stringify(text)})`)
@@ -173,7 +173,7 @@ async function main() {
     await wait(() => bodyHas(reply),`real response ${reply}`,60000)
     const requests=sends.filter(x=>x.body.includes(text))
     assert.equal(requests.length,1,`one dispatch for ${text}`)
-    assert.equal(requests[0].path,`/api/v1/sessions/${profile.session_id}/messages`,'correct selected Bot target')
+    assert.equal(requests[0].path,`/api/v1/sessions/${profile.local_session_id}/messages`,'correct selected Bot target')
   }
   // The standalone Bot sidebar is the selector: its rows are the same list
   // primitives the project session sidebar uses.
@@ -231,7 +231,7 @@ async function main() {
     await cdp.send('Page.navigate',{url:`${base}/chat?sessionId=${source}`})
     await wait(()=>cdp.evaluate(`location.pathname==='/chat' && Boolean(${visible(test('bot-sidebar'))})===false`),'project sidebar has no Bot section',120000)
     await wait(()=>cdp.evaluate(`!document.querySelector('[data-sidebar-bot-id]')`),'project sidebar has no Bot rows')
-    assert(await cdp.evaluate(`Boolean(document.querySelector('.oc-chat-sidebar')?.getClientRects().length)`),'project session sidebar is visible')
+    await wait(()=>cdp.evaluate(`Boolean(document.querySelector('.oc-chat-sidebar')?.getClientRects().length)`),'project session sidebar is visible')
     assert(!await cdp.evaluate(`Boolean(${visible(test('chat-assistant'))})`),'project chat header hides assistant settings')
     const projectRoute=await cdp.evaluate('location.pathname+location.search')
     const aBefore=await api(`/api/v1/bots/${a.id}`)
@@ -240,6 +240,7 @@ async function main() {
     // Row edit goes through the shared overflow menu and the Bot manager.
     await cdp.click(`[data-sidebar-bot-id="${b.id}"] ${test('sidebar-bot-actions')}`)
     await cdp.clickText('[data-option-menu-item]', 'Edit Bot')
+    await cdp.click(test('bot-add-instructions'))
     await cdp.fill(test('bot-edit-instructions'),'Manager edited B personality persisted')
     await cdp.click(test('bot-save'))
     await wait(async()=>(await api(`/api/v1/bots/${b.id}`)).persona.instructions==='Manager edited B personality persisted','Bot edit persisted')
@@ -275,7 +276,7 @@ async function main() {
     await cdp.send('DOM.setFileInputFiles',{nodeId:fileInput.nodeId,files:[imageFile]})
     await wait(()=>bodyHas('global-ui-image.png'),'image staged in Bot composer')
     await message('multi-web-a-message',a,'multi-web-a-reply',true)
-    assert(uploads.includes(`/api/v1/sessions/${a.session_id}/attachments`),'global image used owning session upload')
+    assert(uploads.includes(`/api/v1/sessions/${a.local_session_id}/attachments`),'global image used owning session upload')
     await wait(()=>cdp.evaluate(`Array.from(document.images).some(n=>n.getClientRects().length && n.complete && n.naturalWidth > 0)`),'global attachment rendered')
     await cdp.screenshot(path.join(evidence,'multi-bot-web-attachment.png'))
     await cdp.fill(input,'multi-a-unsent-draft')
@@ -291,8 +292,8 @@ async function main() {
     await wait(()=>bodyHas('multi-web-a-reply'),'A history after picker switch')
     assert(!await bodyHas('multi-web-b-reply'),'B transcript is absent from A')
     await wait(async()=>String(await draft()).includes('multi-a-unsent-draft'),'independent A draft restored')
-    const aSnapshot=await api(`/api/v1/sessions/${a.session_id}/state`)
-    const bSnapshot=await api(`/api/v1/sessions/${b.session_id}/state`)
+    const aSnapshot=await api(`/api/v1/sessions/${a.local_session_id}/state`)
+    const bSnapshot=await api(`/api/v1/sessions/${b.local_session_id}/state`)
     assert.equal(aSnapshot.execution.model_id,'fake-model','A keeps its model')
     assert.equal(bSnapshot.execution.model_id,'multi-bot-model','B keeps its model')
     await cdp.click(test('bot-settings'))
@@ -300,10 +301,14 @@ async function main() {
       assert(!await cdp.evaluate(`Boolean(${visible(test(removed))})`), `removed persona control ${removed} is visible`)
     }
     await cdp.fill(test('bot-edit-name'),'Aurora Web edited')
+    const personalRow = '[data-bot-prompt-id="agena.bot.instructions"]'
+    await wait(() => cdp.evaluate(`Boolean(${visible(personalRow)}) && !Boolean(${visible(test('bot-edit-instructions'))})`), 'legacy text opens as a prompt row')
+    await cdp.click(`${personalRow} button[aria-label="Move up"]`)
+    await cdp.click(test('bot-add-instructions'))
     await cdp.fill(test('bot-edit-instructions'),'Web edited A personality persisted')
     await cdp.screenshot(path.join(evidence,'multi-bot-web-persona-wide.png'))
     await cdp.click(test('bot-save'))
-    await wait(async()=>{const p=await api(`/api/v1/bots/${a.id}`);return p.name==='Aurora Web edited' && p.persona.instructions==='Web edited A personality persisted'},'saved A profile from real API')
+    await wait(async()=>{const p=await api(`/api/v1/bots/${a.id}`);return p.name==='Aurora Web edited' && p.persona.instructions==='Web edited A personality persisted' && p.persona.prompts?.ids.at(-2)==='agena.bot.instructions'},'saved A profile from real API')
     a.name='Aurora Web edited'
     await wait(()=>cdp.evaluate(`!Boolean(${visible('[role="dialog"]')})`),'saved editor and overlay close')
     await ready(a)
@@ -312,7 +317,7 @@ async function main() {
     await choose(b)
     await wait(async()=>String(await draft()).includes('multi-b-unsent-draft'),'independent B draft restored')
     // Explicit deep link wins browser last selection and ignores forged session.
-    await navigate(b,`&sessionId=${a.session_id}`)
+    await navigate(b,`&sessionId=${a.local_session_id}`)
     await wait(()=>bodyHas('multi-web-b-reply'),'B history from bookmarked identity')
     assert(!await bodyHas('multi-web-a-reply'))
     await cdp.send('Emulation.setDeviceMetricsOverride',{width:375,height:812,deviceScaleFactor:1,mobile:true})
@@ -334,11 +339,12 @@ async function main() {
     await ready(a)
     await cdp.click(test('bot-settings'))
     await wait(() => cdp.evaluate(`(() => {const n=${visible(test('bot-edit-name'))}; return (n?.matches('input,textarea') ? n : n?.querySelector('input,textarea'))?.value === ${JSON.stringify(a.name)};})()`),'mobile editor persisted name')
+    await cdp.click(test('bot-add-instructions'))
     await wait(() => cdp.evaluate(`(${visible(test('bot-edit-instructions'))})?.value === 'Web edited A personality persisted'`),'mobile editor persisted instructions')
     await cdp.screenshot(path.join(evidence,'multi-bot-web-persona-375.png'))
     // Invalid explicit ids never silently expose another profile's composer.
     const bad='00000000-0000-0000-0000-000000000042'
-    await cdp.send('Page.navigate',{url:`${base}/bot?botId=${bad}&sessionId=${a.session_id}`})
+    await cdp.send('Page.navigate',{url:`${base}/bot?botId=${bad}&sessionId=${a.local_session_id}`})
     await wait(()=>cdp.evaluate(`location.search.includes('${bad}') && !Boolean(${visible(input)}) && Boolean(${visible('[data-testid="bot-sidebar"]')}) && Boolean(${visible('[role="alert"]')})`),'invalid Bot explicit create/choose state')
     await cdp.screenshot(path.join(evidence,'multi-bot-web-invalid-375.png'))
     assert.deepEqual(errors,[],'no runtime exceptions')

@@ -1,8 +1,9 @@
 <script setup lang="ts">
+import { useSettingsDraftGuard } from './useSettingsDraftGuard'
 import { pluginTabForSettingsView, type PluginSettingsTab } from '@/components/settings/pluginSettingsNavigation'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import {
   RiArrowLeftLine,
   RiArrowRightLine,
@@ -36,9 +37,12 @@ import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
 import SearchInput from '@/components/ui/SearchInput.vue'
+import SegmentedButton from '@/components/ui/SegmentedButton.vue'
+import SegmentedControl from '@/components/ui/SegmentedControl.vue'
+import TabPanel from '@/components/ui/TabPanel.vue'
+import { useTabRelations } from '@/components/ui/useTabRelations'
 import { settingsText as st } from '@/i18n/settingsText'
 import { apiJson } from '@/lib/api'
-import { confirmAction } from '@/lib/appConfirm'
 import {
   localizePluginManifest,
   localizePluginSettings,
@@ -341,8 +345,7 @@ const settingsError = ref('')
 const catalogError = ref('')
 const architectureError = ref('')
 const saveError = ref('')
-const detailBody = ref<HTMLElement | null>(null)
-const panelId = useId()
+const tabRelations = useTabRelations()
 let detailRequest = 0
 let logRequest = 0
 let disposed = false
@@ -487,7 +490,7 @@ const allCommands = computed(() =>
 )
 const selectedCommands = computed(() =>
   allCommands.value.filter(
-    (command) => command.plugin_id === selectedPluginId.value && command.category?.trim().toLowerCase() !== 'skill',
+    (command) => command.plugin_id === selectedPluginId.value,
   ),
 )
 const pluginPages = computed(
@@ -649,53 +652,24 @@ async function selectTab(tab: PanelTab) {
   })
 }
 
-function onTabKeydown(event: KeyboardEvent, index: number) {
-  let next = index
-  if (event.key === 'ArrowRight') next = (index + 1) % tabs.value.length
-  else if (event.key === 'ArrowLeft') next = (index + tabs.value.length - 1) % tabs.value.length
-  else if (event.key === 'Home') next = 0
-  else if (event.key === 'End') next = tabs.value.length - 1
-  else return
-  event.preventDefault()
-  const buttons = (event.currentTarget as HTMLElement).parentElement?.querySelectorAll<HTMLButtonElement>(
-    '[role="tab"]',
-  )
-  buttons?.[next]?.focus()
-  void selectTab(tabs.value[next]!.id)
-}
-
 async function browseMarketplace() {
   const { plugin: _plugin, pluginTab: _tab, ...query } = route.query
   await router.push({ query: { ...query, view: 'marketplace' }, hash: route.hash })
 }
 
-async function canLeavePlugin() {
-  if (settingsSaving.value) return false
-  if (!settingsDirty.value) return true
-  return confirmAction({
+const { canDiscard: canLeavePlugin } = useSettingsDraftGuard({
+  dirty: () => settingsDirty.value,
+  busy: () => settingsSaving.value,
+  unload: () => settingsDirty.value,
+  dialog: () => ({
     title: st('Discard unsaved plugin changes?'),
     description: st('Your changes to {plugin} have not been saved.', { plugin: selectedPluginId.value }),
-    confirmText: st('Discard changes'),
-    cancelText: st('Keep editing'),
-  })
-}
-
-onBeforeRouteUpdate((to) => {
-  if (
+  }),
+  sameTarget: (to) =>
     to.params.section === 'plugins-tools' &&
     pluginTabForSettingsView(to.query.view || 'plugin-workbench') !== null &&
-    String(to.query.plugin || '').trim() === selectedPluginId.value
-  )
-    return true
-  return canLeavePlugin()
+    String(to.query.plugin || '').trim() === selectedPluginId.value,
 })
-onBeforeRouteLeave(canLeavePlugin)
-
-function beforeUnload(event: BeforeUnloadEvent) {
-  if (!settingsDirty.value) return
-  event.preventDefault()
-  event.returnValue = ''
-}
 
 function commandKey(command: PluginCommandCatalogItem): string {
   return `${command.plugin_id}:${command.id}`
@@ -940,23 +914,19 @@ watch(selectedPluginId, () => {
   void loadSelectedPlugin()
 })
 
-watch([selectedPluginId, activeTab], async () => {
+watch([selectedPluginId, activeTab], () => {
   if (activeTab.value === 'logs' && selectedPluginId.value && logsLoadedPluginId !== selectedPluginId.value) {
     void loadLogs()
   }
-  await nextTick()
-  detailBody.value?.scrollTo({ top: 0 })
 })
 
 onMounted(() => {
-  window.addEventListener('beforeunload', beforeUnload)
   void refresh()
 })
 onBeforeUnmount(() => {
   disposed = true
   detailRequest++
   logRequest++
-  window.removeEventListener('beforeunload', beforeUnload)
 })
 defineExpose({ refresh })
 </script>
@@ -1133,28 +1103,14 @@ defineExpose({ refresh })
               </div>
             </div>
           </header>
-          <div
-            class="flex shrink-0 gap-1 overflow-x-auto border-b border-border/60 px-3 lg:px-4"
-            role="tablist"
-            :aria-label="$st('Plugin details')"
-          >
-            <button
-              v-for="(tab, index) in tabs"
-              :id="`${panelId}-tab-${tab.id}`"
+          <SegmentedControl variant="underline" class="px-3 lg:px-4" :aria-label="$st('Plugin details')">
+            <SegmentedButton
+              v-for="tab in tabs"
               :key="tab.id"
-              type="button"
-              role="tab"
-              :aria-selected="activeTab === tab.id"
-              :aria-controls="`${panelId}-content`"
-              :tabindex="activeTab === tab.id ? 0 : -1"
-              class="relative flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-3 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-              :class="
-                activeTab === tab.id
-                  ? 'border-primary font-medium text-foreground'
-                  : 'border-transparent text-muted-foreground hover:text-foreground'
-              "
+              v-bind="tabRelations.tab(tab.id)"
+              variant="underline"
+              :active="activeTab === tab.id"
               @click="selectTab(tab.id)"
-              @keydown="onTabKeydown($event, index)"
             >
               {{ tab.label }}
               <span
@@ -1168,17 +1124,16 @@ defineExpose({ refresh })
                 class="h-1.5 w-1.5 rounded-full bg-amber-500"
                 :title="$st('You have unsaved changes.')"
               />
-            </button>
-          </div>
+            </SegmentedButton>
+          </SegmentedControl>
 
-          <div
-            :id="`${panelId}-content`"
-            ref="detailBody"
-            role="tabpanel"
-            :aria-labelledby="`${panelId}-tab-${activeTab}`"
-            tabindex="0"
-            class="settings-viewport-scroll p-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-            data-plugin-content
+          <TabPanel
+            v-for="tab in tabs"
+            :key="`${selectedPluginId}:${tab.id}`"
+            v-bind="tabRelations.panel(tab.id)"
+            :active="activeTab === tab.id"
+            class="settings-viewport-scroll p-3"
+            :data-plugin-content="activeTab === tab.id ? '' : undefined"
           >
             <PluginEmptyState v-if="detailLoading" :title="$st('Loading plugin details…')" :icon="RiRefreshLine" />
             <PluginEmptyState
@@ -1921,7 +1876,7 @@ defineExpose({ refresh })
                 </div>
               </details>
             </section>
-          </div>
+          </TabPanel>
         </template>
         <PluginEmptyState v-else :title="$st('Plugin details are unavailable.')" :description="selectedPluginId" />
       </div>

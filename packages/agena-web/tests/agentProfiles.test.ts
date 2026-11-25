@@ -90,18 +90,18 @@ test('agent profiles have a distinct AI settings entry and a current-session sco
   ])
 })
 
-test('role modes and model visibility inherit independently with all as the legacy default', () => {
+test('role modes, model visibility and read-only access inherit independently', () => {
   const catalog = {
     main: { mode: 'primary' as const },
-    explore: { mode: 'subagent' as const, hidden: true },
+    explore: { mode: 'subagent' as const, hidden: true, read_only: true },
     custom: { extends: 'explore' },
-    public: { extends: 'custom', hidden: false },
+    public: { extends: 'custom', hidden: false, read_only: false },
     reviewer: { mode: 'all' as const },
     legacy: {},
   }
-  expect(agentProfileMetadata(catalog, 'custom')).toEqual({ mode: 'subagent', hidden: true })
-  expect(agentProfileMetadata(catalog, 'public')).toEqual({ mode: 'subagent', hidden: false })
-  expect(agentProfileMetadata(catalog, 'legacy')).toEqual({ mode: 'all', hidden: false })
+  expect(agentProfileMetadata(catalog, 'custom')).toEqual({ mode: 'subagent', hidden: true, readOnly: true })
+  expect(agentProfileMetadata(catalog, 'public')).toEqual({ mode: 'subagent', hidden: false, readOnly: false })
+  expect(agentProfileMetadata(catalog, 'legacy')).toEqual({ mode: 'all', hidden: false, readOnly: false })
   expect(Object.keys(selectableAgentProfiles(catalog, false))).toEqual(['main', 'reviewer', 'legacy'])
   expect(Object.keys(selectableAgentProfiles(catalog, true))).toEqual([
     'explore',
@@ -120,6 +120,7 @@ test('partial built-in overrides retain role behavior while file scopes replace 
       title: 'Explore',
       description: 'Search the code',
       mode: 'subagent' as const,
+      read_only: true,
       permission: { path: { workspace: 'readonly', external: 'readonly' } },
       prompts: { order: ['explore'], inline: [{ id: 'explore', body: 'Inspect and report' }] },
     },
@@ -127,6 +128,7 @@ test('partial built-in overrides retain role behavior while file scopes replace 
   const merged = withBuiltinAgentProfiles(builtins, { explore: { model: { model: 'fast' } } })
   expect(merged.explore).toMatchObject({ mode: 'subagent', description: 'Search the code', model: { model: 'fast' } })
   expect(merged.explore!.permission).toEqual(builtins.explore.permission)
+  expect(merged.explore!.read_only).toBe(true)
   expect(merged.explore!.prompts).toEqual(builtins.explore.prompts)
   const raw = mergedAgentProfiles(
     { explore: { description: 'Global override', hidden: true } },

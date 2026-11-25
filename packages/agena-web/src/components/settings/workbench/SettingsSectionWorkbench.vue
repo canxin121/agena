@@ -58,6 +58,7 @@ function selectProject(id: string) {
 const LOCAL_PAGE_GROUPS: Partial<Record<SettingsTab, string[][]>> = {
   'plugins-tools': [['plugin-workbench', 'marketplace']],
   skills: [['library', 'install']],
+  'runtime-session': [['system-prompt', 'prompt-library']],
 }
 const localPages = computed(() => {
   const ids = LOCAL_PAGE_GROUPS[props.section]?.find((group) => group.includes(activePage.value)) || []

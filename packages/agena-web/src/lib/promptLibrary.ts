@@ -24,6 +24,7 @@ export function availableSavedPrompts(
   global: PromptScopeConfig,
   workspace: PromptScopeConfig,
   target: PromptLayerScope,
+  reusable: readonly PromptFragment[] = [],
 ): SavedPromptOption[] {
   const items = new Map<string, SavedPromptOption>()
   const add = (source: PromptScopeConfig, scope: 'global' | 'workspace') => {
@@ -36,6 +37,9 @@ export function availableSavedPrompts(
   }
   add(global, 'global')
   if (target !== 'global') add(workspace, 'workspace')
+  for (const fragment of reusable) {
+    items.set(fragment.id, { id: fragment.id, fragment, scope: 'global', legacy: false })
+  }
   return [...items.values()].sort((a, b) => (a.fragment.title || a.id).localeCompare(b.fragment.title || b.id))
 }
 
@@ -62,6 +66,17 @@ export function nextSavedPromptId(
 
 export function savedPromptDisplayName(fragment: PromptFragment): string {
   return fragment.title.trim() || fragment.id
+}
+
+export function promptExcerpt(body: string, hasMore = false): string {
+  const text = body.trim().replace(/^#{1,6}[ \t]+[^\r\n]+[\r\n]+\s*/, '')
+  const newline = text.search(/[\r\n]/)
+  const firstLine = (newline < 0 ? text : text.slice(0, newline)).trim().replace(/\s+/g, ' ')
+  const prefix = firstLine.match(/^.{1,120}/u)?.[0].trimEnd() ?? ''
+  if (prefix && (hasMore || newline >= 0 || prefix.length < firstLine.length) && !prefix.endsWith('…')) {
+    return `${prefix}…`
+  }
+  return prefix
 }
 
 export function savedPromptMatches(fragment: PromptFragment, query: string): boolean {
@@ -134,6 +149,16 @@ export function changePromptCategory(config: PromptScopeConfig, previous: string
 
 /** Preview the linked bodies in their saved order, before applying runtime conditions. */
 export function composedPromptText(root: PromptFragment, prompts: ReadonlyMap<string, PromptFragment>): string | null {
+  return composedPromptBodies(root, prompts)?.join('\n\n') ?? null
+}
+
+export function savedPromptExcerpt(root: PromptFragment, prompts: ReadonlyMap<string, PromptFragment>): string {
+  if (!root.parts?.length) return promptExcerpt(root.body)
+  const bodies = composedPromptBodies(root, prompts)
+  return promptExcerpt(bodies?.[0] ?? '', (bodies?.length ?? 0) > 1)
+}
+
+function composedPromptBodies(root: PromptFragment, prompts: ReadonlyMap<string, PromptFragment>): string[] | null {
   const bodies: string[] = []
   const ancestors = new Set<string>()
   let remaining = 256
@@ -152,5 +177,5 @@ export function composedPromptText(root: PromptFragment, prompts: ReadonlyMap<st
     ancestors.delete(fragment.id)
     return true
   }
-  return visit(root) ? bodies.join('\n\n') : null
+  return visit(root) ? bodies : null
 }

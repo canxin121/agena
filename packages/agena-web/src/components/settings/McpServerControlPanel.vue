@@ -1,6 +1,6 @@
 <script setup lang="ts">
+import { useSettingsDraftGuard } from './useSettingsDraftGuard'
 import { computed, onMounted, ref } from 'vue'
-import { onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router'
 import { RiRefreshLine } from '@remixicon/vue'
 
 import SettingsSaveBar from '@/components/settings/SettingsSaveBar.vue'
@@ -9,7 +9,6 @@ import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import Input from '@/components/ui/Input.vue'
 import { apiJson } from '@/lib/api'
-import { confirmAction } from '@/lib/appConfirm'
 import { settingsText as st } from '@/i18n/settingsText'
 
 type McpOAuthStatus = {
@@ -140,20 +139,12 @@ async function saveControlDraft() {
 function discardControlDraft() {
   if (control.value) applyControl(control.value)
 }
-async function canLeave() {
-  if (saving.value) return false
-  if (!controlDirty.value) return true
-  return confirmAction({
-    title: st('Discard unsaved changes?'),
-    confirmText: st('Discard changes'),
-    cancelText: st('Keep editing'),
-  })
-}
-onBeforeRouteUpdate((to, from) => {
-  if (to.path === from.path && to.query.view === from.query.view) return true
-  return canLeave()
+useSettingsDraftGuard({
+  dirty: () => controlDirty.value,
+  busy: () => saving.value,
+  unload: false,
+  sameTarget: (to, from) => to.path === from.path && to.query.view === from.query.view,
 })
-onBeforeRouteLeave(canLeave)
 defineExpose({ refresh })
 onMounted(() => {
   void refresh()

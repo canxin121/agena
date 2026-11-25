@@ -22,6 +22,7 @@ import { hasToolAttachmentOutput } from '../../lib/toolAttachments'
 import type { JsonValue } from '@/types/json'
 import { pendingPartInteractions } from '../../lib/interactiveRequests'
 import { conversationMessages, sameAssistantReply } from './conversationMessages'
+import { isSkillReferenceType } from './skillReferences'
 
 type JsonRecord = Record<string, JsonValue>
 
@@ -35,7 +36,6 @@ export type TranscriptProjectionLabels = {
   attachment?: string
   /** Fallback titles for rows whose part carries no runtime presentation. */
   operation?: string
-  command?: string
   skill?: string
   error?: string
   notice?: string
@@ -61,7 +61,6 @@ export function transcriptProjectionLabels(
   return {
     attachment: String(t('chat.attachments.rowTitle')),
     operation: String(t('chat.partTitles.operation')),
-    command: String(t('chat.partTitles.command')),
     skill: String(t('chat.skills.title')),
     error: String(t('chat.partTitles.error')),
     notice: String(t('chat.partTitles.notice')),
@@ -241,9 +240,10 @@ export function userInputOrder(parts: TranscriptDisplayPart[]): TranscriptDispla
   return [...attachments, ...parts.filter((part) => part.kind !== 'resource')]
 }
 
-function commandLabels(part: MessagePartLike): string[] {
-  const commands = durablePartContent(part).commands
-  return Array.isArray(commands) ? commands.map((value) => text(record(value).name)).filter(Boolean) : []
+function skillLabels(part: MessagePartLike): string[] {
+  const content = durablePartContent(part)
+  const skills = content.skills ?? content.commands
+  return Array.isArray(skills) ? skills.map((value) => text(record(value).name)).filter(Boolean) : []
 }
 
 function noticeTitle(part: MessagePartLike, labels?: TranscriptProjectionLabels): string {
@@ -308,7 +308,7 @@ function classifyPart(part: MessagePartLike, answerPartId: string | null, assist
   if (kind === 'think') return 'reasoning'
   if (kind === 'tool_call') return 'operation'
   if (kind === 'file_ref') return 'resource'
-  if (kind === 'skill_ref') return 'command'
+  if (kind === 'skill_ref') return 'skill'
   if (kind === 'notice' || kind === 'hook' || kind === 'system_notification') return 'notice'
   if (kind === 'compaction') return 'compaction'
   // A cleared context is its own row: it is not a summary and must not be
@@ -373,13 +373,10 @@ function displayFields(
       copyText: labels.join('\n'),
     }
   }
-  if (kind === 'command') {
-    const labels = commandLabels(part)
+  if (kind === 'skill') {
+    const labels = skillLabels(part)
     return {
-      title:
-        presentedTitle ||
-        text(durablePartKind(part) === 'skill_ref' ? presentationLabels?.skill : presentationLabels?.command) ||
-        (durablePartKind(part) === 'skill_ref' ? 'Skill' : 'Command'),
+      title: presentedTitle || text(presentationLabels?.skill) || 'Skill',
       summary: presentedSummary || labels.join(', '),
       copyText: labels.join('\n'),
     }
@@ -619,12 +616,12 @@ function expandComposerActivities(part: MessagePartLike): MessagePartLike[] {
         url: url || path,
         agenaContent: { attachments: [attachment] },
       })
-    } else if (payload.activity_type === 'command_reference') {
+    } else if (isSkillReferenceType(payload.activity_type)) {
       activities.push({
         ...base,
         type: 'tool',
         agenaKind: 'skill_ref',
-        agenaContent: { commands: [payload] },
+        agenaContent: { skills: [payload] },
       })
     } else if (payload.activity_type === 'text_artifact') {
       activities.push({

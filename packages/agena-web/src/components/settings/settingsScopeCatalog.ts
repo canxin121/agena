@@ -102,6 +102,14 @@ const SETTINGS_PAGE_SCOPE_SOURCES: Partial<Record<SettingsTab, Record<string, re
       },
     ],
     'prompt-library': LAYER_SCOPE_SOURCES,
+    'system-prompt': [
+      ...LAYER_SCOPE_SOURCES,
+      {
+        id: 'session',
+        label: () => st('Current session'),
+        description: () => st('Arrange the prompts selected for this session.'),
+      },
+    ],
     'session-behavior': SESSION_SETTINGS_SCOPE_SOURCES,
   },
   diagnostics: {

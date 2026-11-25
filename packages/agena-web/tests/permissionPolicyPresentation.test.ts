@@ -103,7 +103,7 @@ describe('permission policy presentation', () => {
 
   test('normalizes only registered tool identities, including monitor commands', () => {
     expect(canonicalPermissionToolName('shell.exec')).toBe('agena.shell.exec')
-    expect(canonicalPermissionToolName('agena_shell_logs')).toBe('agena.shell.logs')
+    expect(canonicalPermissionToolName('agena_shell_read')).toBe('agena.shell.read')
     expect(canonicalPermissionToolName('monitor.start')).toBe('agena.monitor.start')
     expect(canonicalPermissionToolName('my_custom_tool')).toBe('my_custom_tool')
     expect(canonicalPermissionToolName('shell_exec')).toBe('shell_exec')

@@ -1,9 +1,7 @@
 import { describe, expect, test } from 'bun:test'
-import type { PluginCommandCatalogItem } from '../src/lib/pluginOperations'
 import type { SkillSummary } from '../src/lib/skillsApi'
 import {
   createSkillReferenceAttachment,
-  isSkillCatalogEntry,
   managedSkillCatalog,
   skillCatalogKey,
   skillReferenceKeyFromAttachment,
@@ -26,20 +24,6 @@ function skill(overrides: Partial<SkillSummary> = {}): SkillSummary {
     diagnostics: [],
     ...overrides,
   }
-}
-
-const legacy: PluginCommandCatalogItem = {
-  plugin_id: 'legacy.commands',
-  id: 'review',
-  title: 'Review code',
-  group: 'Skills',
-  category: ' skill ',
-  aliases: ['check'],
-  docs: { summary: 'Legacy review instructions' },
-  accepts_empty_input: true,
-  default_input: {},
-  input: { version: 1, root: { id: 'input', path: '', title: 'Input', kind: 'object', fields: [] } },
-  target: { kind: 'method', handler: 'review' },
 }
 
 describe('skill references', () => {
@@ -65,13 +49,12 @@ describe('skill references', () => {
       activity: {
         id: reference.id,
         payload: {
-          activity_type: 'command_reference',
+          activity_type: 'skill_reference',
           name: 'code-review',
           skill_id: 'workspace-opaque-id',
           description: 'Review changes in this project.',
           content_hash: 'package-revision-2',
           source: 'agena.skills',
-          aliases: [],
         },
         provenance: {
           source: 'agena.skills',
@@ -96,29 +79,22 @@ describe('skill references', () => {
     expect(restored.map((file) => file.composerNode)).toEqual(references.map((file) => file.composerNode))
   })
 
-  test('retains legacy command-reference metadata and definition hashes without adding a package ID', async () => {
-    expect(isSkillCatalogEntry(legacy)).toBe(true)
-    const reference = await createSkillReferenceAttachment(legacy)
-    const restored = restoredComposerFiles([reference.composerNode!])[0]!
-    expect(skillReferenceKeyFromAttachment(restored)).toBe('legacy.commands/review')
-    expect(reference.composerNode).toEqual({
+  test('restores the earlier saved reference shape in queued drafts', () => {
+    const node = {
       type: 'activity',
       activity: {
-        id: reference.id,
+        id: 'saved-reference',
         payload: {
           activity_type: 'command_reference',
           name: 'review',
-          description: 'Legacy review instructions',
-          content_hash: expect.stringMatching(/^[a-f0-9]{64}$/),
-          source: 'legacy.commands',
-          aliases: ['check'],
-        },
-        provenance: {
-          source: 'legacy.commands',
-          content_hash: expect.stringMatching(/^[a-f0-9]{64}$/),
-          plugin_id: 'legacy.commands',
+          content_hash: 'saved-revision',
+          source: 'agena.commands',
         },
       },
-    })
+    }
+    const [restored] = restoredComposerFiles([node])
+    expect(restored?.filename).toBe('Skill: review')
+    expect(restored?.composerKind).toBe('skill_ref')
+    expect(restored && skillReferenceKeyFromAttachment(restored)).toBe('agena.commands/review')
   })
 })

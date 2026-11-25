@@ -64,6 +64,13 @@ const SETTINGS_CATEGORIES: readonly SettingsCategory[] = [
         keywords: ['profile', 'agent', 'permissions', 'system prompt', '智能体', '配置档案'],
       },
       {
+        id: 'system-prompt',
+        section: 'runtime-session',
+        view: 'system-prompt',
+        label: () => st('System prompt'),
+        keywords: ['prompt order', '系统提示词', '提示词顺序'],
+      },
+      {
         id: 'prompt-library',
         section: 'runtime-session',
         view: 'prompt-library',

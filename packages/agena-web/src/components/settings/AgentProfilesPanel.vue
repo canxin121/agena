@@ -1,20 +1,20 @@
 <script setup lang="ts">
+import { useSettingsDraftGuard } from './useSettingsDraftGuard'
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { RouterLink, onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, type RouteLocationNormalized } from 'vue-router'
+import { RouterLink, useRoute } from 'vue-router'
 import { RiAddLine, RiCpuLine, RiDeleteBinLine, RiRefreshLine, RiResetLeftLine, RiRobot2Line } from '@remixicon/vue'
 import SettingsCard from './SettingsCard.vue'
 import SettingsDisclosureRow from './SettingsDisclosureRow.vue'
 import SettingsSaveBar from './SettingsSaveBar.vue'
 import AgentProfileModelFields from './AgentProfileModelFields.vue'
 import PromptReferenceList from './PromptReferenceList.vue'
+import { readBuiltinPrompts, reusableBuiltinPrompts } from './promptCatalog'
 import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import Input from '@/components/ui/Input.vue'
 import SearchInput from '@/components/ui/SearchInput.vue'
 import SegmentedControl from '@/components/ui/SegmentedControl.vue'
 import SegmentedButton from '@/components/ui/SegmentedButton.vue'
-import { readWindowIdFromQuery } from '@/app/windowScope'
-import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import { confirmAction } from '@/lib/appConfirm'
 import {
   DEFAULT_PRIMARY_AGENT_PROFILE,
@@ -33,13 +33,17 @@ import {
   parseAgentProfileObject,
   resolveAgentProfileDefault,
   withAgentProfileInstructions,
+  type AgentIsolation,
   type AgentProfileConfig,
+  type ProjectInstructionsMode,
 } from '@/lib/agentProfiles'
 import {
   normalizePromptLayer,
   normalizePromptScopeConfig,
   promptLayerHasErrors,
   validatePromptLayer,
+  type BuiltinPrompt,
+  type PromptFragment,
 } from '@/lib/promptLayers'
 import {
   completePermissionConfig,
@@ -49,9 +53,10 @@ import {
 } from '@/lib/permissionConfig'
 import { availableSavedPrompts } from '@/lib/promptLibrary'
 import { permissionProfileDisplayName, permissionProfilesForLayer } from '@/lib/permissionProfiles'
+import { createSkillsClient, type SkillCatalog } from '@/lib/skillsApi'
 import { readRuntimeSettingSources, setRuntimeSetting, type RuntimeSettingsReadBundle } from '@/lib/runtimeSettings'
 import { runtimeSettingBaseValue } from '@/lib/runtimeSettingLayer'
-import { getSession, getSessionExecution, patchSessionMetadata } from '@/stores/chat/api'
+import { getSession, getSessionExecution, patchSessionMetadata, resolveWorkspace } from '@/stores/chat/api'
 import { useSettingsSessionTarget } from './settingsSessionScope'
 import { agentProfileDefaultsDestination } from './settingsDestination'
 import { useDirectoryStore } from '@/stores/directory'
@@ -59,11 +64,14 @@ import { useModelSelectionCatalog } from '@/pages/chat/modelSelectionCatalog'
 import type { JsonObject } from '@/types/json'
 import { settingsText as st } from '@/i18n/settingsText'
 
-const props = defineProps<{ scope: string; sessionId?: string }>()
-const emit = defineEmits<{ 'workspace-config-path': [path: string] }>()
+const props = defineProps<{ scope: string; sessionId?: string; createForBot?: boolean }>()
+const emit = defineEmits<{
+  'workspace-config-path': [path: string]
+  'profile-created': [name: string]
+  'cancel-create': []
+}>()
 const directory = useDirectoryStore()
 const route = useRoute()
-const pane = useWorkspacePaneContext()
 const modelCatalog = useModelSelectionCatalog()
 const sessionTarget = useSettingsSessionTarget()
 const sessionId = computed(() => props.sessionId || sessionTarget.sessionId.value)
@@ -75,6 +83,7 @@ const defaults = ref<RuntimeSettingsReadBundle | null>(null)
 const subagentDefaults = ref<RuntimeSettingsReadBundle | null>(null)
 const builtinSources = ref<RuntimeSettingsReadBundle | null>(null)
 const promptSources = ref<RuntimeSettingsReadBundle | null>(null)
+const promptCatalog = ref<BuiltinPrompt[]>([])
 const permissionSources = ref<RuntimeSettingsReadBundle | null>(null)
 const permissionCatalog = ref<RuntimeSettingsReadBundle | null>(null)
 const completePermissions = computed(() =>
@@ -89,6 +98,7 @@ const effectiveCatalog = computed(() =>
 )
 const globalSession = ref(false)
 const subagentSession = ref(false)
+const botSession = ref(false)
 const visibleCatalog = computed(() =>
   scope.value === 'global' || (scope.value === 'session' && globalSession.value)
     ? globalEffectiveCatalog.value
@@ -117,12 +127,14 @@ function profileSource(id: string): string {
 }
 function profileModeLabel(id: string): string {
   try {
-    const mode = agentProfileMetadata(visibleCatalog.value, id).mode
-    return mode === 'primary'
-      ? st('Primary sessions')
-      : mode === 'subagent'
-        ? st('Subagents')
-        : st('Primary sessions and subagents')
+    const { mode, readOnly } = agentProfileMetadata(visibleCatalog.value, id)
+    const label =
+      mode === 'primary'
+        ? st('Primary sessions')
+        : mode === 'subagent'
+          ? st('Subagents')
+          : st('Primary sessions and subagents')
+    return readOnly ? `${label} · ${st('Read only')}` : label
   } catch {
     return ''
   }
@@ -130,6 +142,63 @@ function profileModeLabel(id: string): string {
 const selectedName = ref('')
 const name = ref('')
 const draft = ref<AgentProfileConfig | null>(null)
+const readOnlyAccess = computed({
+  get: () => (draft.value?.read_only == null ? '' : String(draft.value.read_only)),
+  set: (value: string) => {
+    if (draft.value) draft.value.read_only = value === '' ? undefined : value === 'true'
+  },
+})
+const inheritedReadOnly = computed(() => {
+  const builtin = builtinCatalog.value[name.value]?.read_only
+  if (builtin != null) return builtin
+  const parent = draft.value?.extends
+  try {
+    return parent ? agentProfileMetadata(visibleCatalog.value, parent).readOnly : false
+  } catch {
+    return false
+  }
+})
+const draftReadOnly = computed(() => draft.value?.read_only ?? inheritedReadOnly.value)
+const isolation = computed({
+  get: () => (draftReadOnly.value ? 'shared' : draft.value?.isolation || ''),
+  set: (value: AgentIsolation | '') => {
+    if (draft.value) draft.value.isolation = value || undefined
+  },
+})
+const projectInstructions = computed({
+  get: () => draft.value?.context?.project_instructions || '',
+  set: (value: ProjectInstructionsMode | '') => {
+    if (draft.value) draft.value.context = { ...draft.value.context, project_instructions: value || undefined }
+  },
+})
+const skillCatalog = ref<SkillCatalog | null>(null)
+const skillOptions = computed<PromptFragment[]>(() => {
+  const found = new Map<string, PromptFragment>()
+  for (const skill of skillCatalog.value?.skills || []) {
+    if (!skill.enabled || !skill.valid) continue
+    if (scope.value === 'global' ? skill.scope !== 'global' : skill.shadowed) continue
+    if (found.has(skill.name)) continue
+    found.set(skill.name, {
+      id: skill.name,
+      title: skill.name,
+      category: skill.scope === 'global' ? st('Global') : st('Workspace'),
+      body: skill.description,
+      when: { models: [], requires_tools: null },
+    })
+  }
+  return [...found.values()].sort((a, b) => a.id.localeCompare(b.id))
+})
+function inheritsPreloadedSkills(inherits: boolean) {
+  if (!draft.value) return
+  const context = { ...draft.value.context }
+  if (inherits) {
+    delete context.preload_skills
+  } else {
+    const profile = visibleCatalog.value[selectedName.value]
+    context.preload_skills = [...(profile?.context?.preload_skills || [])]
+  }
+  draft.value.context = context
+}
 const promptJson = ref('{}')
 const permission = ref<PermissionConfig>({})
 const modelJson = ref('{}')
@@ -191,7 +260,7 @@ const dirty = computed(() =>
 )
 const profileRows = computed(() => {
   const search = query.value.trim().toLowerCase()
-  const rows = entries.value
+  const rows = (props.createForBot ? [] : entries.value)
     .filter(([id, profile]) => {
       if (id === selectedName.value && dirty.value) return true
       return [id, profile.title, profile.description, profileModeLabel(id)].some((value) =>
@@ -222,6 +291,7 @@ const savedPrompts = computed(() =>
     normalizePromptScopeConfig(promptSources.value?.global.value),
     normalizePromptScopeConfig(promptSources.value?.workspace.value),
     scope.value === 'global' ? 'global' : 'workspace',
+    reusableBuiltinPrompts(promptCatalog.value),
   )
     .map(({ fragment }) => fragment)
     .filter((fragment) => !normalizePromptLayer(parsedPrompts.value).inline.some(({ id }) => id === fragment.id)),
@@ -291,6 +361,12 @@ const primaryDefault = computed(
 const subagentDefault = computed(
   () => resolveAgentProfileDefault(subagentDefaults.value, defaultConfigScope.value, DEFAULT_SUBAGENT_PROFILE).name,
 )
+const restoreSessionProfile = computed(() => {
+  const defaultRole =
+    (!savedSessionProfile.value && effectiveSessionProfile.value) ||
+    (subagentSession.value ? subagentDefault.value : botSession.value ? '' : primaryDefault.value)
+  return [st('Restore default role'), defaultRole].filter(Boolean).join(' · ')
+})
 function defaultSettingsDestination(layer: 'global' | 'workspace') {
   return agentProfileDefaultsDestination(layer, route.query)
 }
@@ -307,8 +383,13 @@ function beginEditing(id: string, profile: AgentProfileConfig, creating = false)
       : undefined
   selectedName.value = creating ? '' : id
   name.value = id
-  const { permission: _, ...fields } = structuredClone(profile)
-  draft.value = fields
+  const { permission: _, context, isolation, read_only, ...fields } = structuredClone(profile)
+  draft.value = {
+    ...fields,
+    context: creating ? context : structuredClone(authored?.context || {}),
+    isolation: creating ? isolation : authored?.isolation,
+    read_only: creating ? read_only : authored?.read_only,
+  }
   promptJson.value = JSON.stringify(profile.prompts || {}, null, 2)
   // A profile replacement keeps the settings from its source file. Built-in
   // permissions remain inherited, so editing a title does not pin them.
@@ -329,6 +410,10 @@ function closeProfile() {
 }
 function discardProfile() {
   if (saving.value) return
+  if (props.createForBot) {
+    emit('cancel-create')
+    return
+  }
   const section = editorSection.value
   const selected = catalog.value[selectedName.value]
   if (isNew.value || !selected) closeProfile()
@@ -338,16 +423,16 @@ function discardProfile() {
   }
 }
 
-async function canDiscard() {
-  if (saving.value) return false
-  if (!dirty.value) return true
-  return confirmAction({
-    title: st('Discard unsaved changes?'),
-    description: st('You have unsaved changes.'),
-    confirmText: st('Discard changes'),
-    cancelText: st('Keep editing'),
-  })
-}
+const { canDiscard } = useSettingsDraftGuard({
+  dirty: () => dirty.value,
+  busy: () => saving.value,
+  dialog: () => ({ description: st('You have unsaved changes.') }),
+  sameTarget: (to) =>
+    to.path === route.path &&
+    to.query.view === route.query.view &&
+    to.query.scope === route.query.scope &&
+    (scope.value !== 'session' || to.query.targetSessionId === route.query.targetSessionId),
+})
 
 async function load(preferred = selectedName.value) {
   const revision = ++generation
@@ -355,6 +440,21 @@ async function load(preferred = selectedName.value) {
   loading.value = true
   error.value = ''
   let sessionError = ''
+  if (scope.value !== 'session') {
+    const path = scope.value === 'workspace' ? directory.currentDirectory : null
+    const workspace = path ? resolveWorkspace(path).then(({ id }) => id) : Promise.resolve(undefined)
+    skillCatalog.value = null
+    void workspace
+      .then((id) => createSkillsClient(id).listSkills())
+      .then(
+        (result) => {
+          if (revision === generation) skillCatalog.value = result
+        },
+        () => {
+          if (revision === generation) skillCatalog.value = { skills: [], diagnostics: [], roots: [] }
+        },
+      )
+  }
   try {
     const [
       profiles,
@@ -366,6 +466,7 @@ async function load(preferred = selectedName.value) {
       defaultSubagents,
       basePermission,
       namedPermissions,
+      builtinPrompts,
     ] = await Promise.all([
       readRuntimeSettingSources('profiles'),
       readRuntimeSettingSources('default_profile'),
@@ -381,6 +482,7 @@ async function load(preferred = selectedName.value) {
       readRuntimeSettingSources('default_subagent_profile'),
       scope.value === 'session' ? null : readRuntimeSettingSources('permission').catch(() => null),
       scope.value === 'session' ? null : readRuntimeSettingSources('access_control').catch(() => null),
+      scope.value === 'session' ? [] : readBuiltinPrompts(),
       scope.value !== 'session' ? modelCatalog.loadProvidersAndModels() : Promise.resolve(),
     ])
     if (revision !== generation) return
@@ -389,6 +491,7 @@ async function load(preferred = selectedName.value) {
     builtinSources.value = builtins
     subagentDefaults.value = defaultSubagents
     promptSources.value = prompts
+    promptCatalog.value = builtinPrompts
     permissionSources.value = basePermission
     permissionCatalog.value = namedPermissions
     emit('workspace-config-path', profiles.workspace.config_path || '')
@@ -397,9 +500,14 @@ async function load(preferred = selectedName.value) {
     // Summary identity survives a missing profile that prevents execution resolution.
     globalSession.value = summary?.workspace_id === null
     subagentSession.value = summary?.relation_kind === 'subagent'
+    botSession.value = Boolean(summary?.owner_bot_id)
     effectiveSessionProfile.value = typeof session?.execution?.profile === 'string' ? session.execution.profile : ''
     sessionProfile.value = session?.execution?.profile_is_default ? '' : effectiveSessionProfile.value
     savedSessionProfile.value = sessionProfile.value
+    if (props.createForBot) {
+      beginNewProfile()
+      return
+    }
     const id = preferred && Object.hasOwn(catalog.value, preferred) ? preferred : Object.keys(catalog.value)[0]
     if (id && catalog.value[id]) beginEditing(id, catalog.value[id]!)
     else closeProfile()
@@ -421,9 +529,12 @@ async function selectProfile(id: string) {
 }
 async function addProfile() {
   if (loading.value || !(await canDiscard())) return
+  beginNewProfile()
+}
+function beginNewProfile() {
   let id = 'profile'
   for (let index = 1; Object.hasOwn(visibleCatalog.value, id); index++) id = `profile-${index}`
-  beginEditing(id, { title: '', description: '' }, true)
+  beginEditing(id, { title: '', description: '', ...(props.createForBot ? { mode: 'primary' } : {}) }, true)
 }
 function setSavedPrompts(order: string[]) {
   if (!parsedPrompts.value) return
@@ -432,7 +543,11 @@ function setSavedPrompts(order: string[]) {
   const remaining = [...order]
   layer.order = layer.order.flatMap((id) => (slots.has(id) ? remaining.splice(0, 1) : [id]))
   layer.order.push(...remaining)
-  layer.disabled = layer.disabled.filter((id) => !order.includes(id))
+  const disabled = new Set(layer.disabled.filter((id) => !order.includes(id)))
+  for (const id of builtinCatalog.value[name.value]?.prompts?.order ?? []) {
+    if (slots.has(id) && !order.includes(id)) disabled.add(id)
+  }
+  layer.disabled = [...disabled]
   promptJson.value = JSON.stringify(layer, null, 2)
 }
 function definition(): AgentProfileConfig {
@@ -451,6 +566,7 @@ function definition(): AgentProfileConfig {
   if (Object.keys(model).length) profile.model = model
   else delete profile.model
   if (!profile.extends) delete profile.extends
+  if (!profile.context?.project_instructions && profile.context?.preload_skills === undefined) delete profile.context
   if (profile.max_turns === null || profile.max_turns === undefined || String(profile.max_turns) === '')
     delete profile.max_turns
   else if (!Number.isSafeInteger(profile.max_turns) || profile.max_turns < 0)
@@ -485,7 +601,9 @@ async function saveProfile() {
       { expected_revision: sources.value[source].revision },
       source,
     )
-    if (context === contextKey.value) {
+    if (props.createForBot) {
+      emit('profile-created', name.value)
+    } else if (context === contextKey.value) {
       await load(name.value)
       if (context === contextKey.value) showEditorSection(section)
     }
@@ -556,41 +674,20 @@ async function refresh() {
 }
 defineExpose({ refresh })
 watch(contextKey, () => void load(''))
-function beforeUnload(event: BeforeUnloadEvent) {
-  if (!dirty.value && !saving.value) return
-  event.preventDefault()
-  event.returnValue = ''
-}
 onMounted(() => {
   void load('')
-  window.addEventListener('beforeunload', beforeUnload)
 })
 onBeforeUnmount(() => {
   generation++
-  window.removeEventListener('beforeunload', beforeUnload)
-})
-function ownsNavigation(to: RouteLocationNormalized) {
-  if (!pane) return true
-  const windowId = readWindowIdFromQuery(to.query)
-  return windowId ? windowId === pane.windowId.value : pane.isFocused.value
-}
-onBeforeRouteLeave((to) => !ownsNavigation(to) || canDiscard())
-onBeforeRouteUpdate((to) => {
-  if (
-    !ownsNavigation(to) ||
-    (to.path === route.path &&
-      to.query.view === route.query.view &&
-      to.query.scope === route.query.scope &&
-      (scope.value !== 'session' || to.query.targetSessionId === route.query.targetSessionId))
-  )
-    return true
-  return canDiscard()
 })
 </script>
 
 <template>
   <section class="settings-stack" :aria-busy="loading || saving" data-agent-profiles>
-    <div v-if="scope !== 'session'" class="settings-toolbar rounded-lg border border-border/70 bg-card/30 p-2.5">
+    <div
+      v-if="scope !== 'session' && !createForBot"
+      class="settings-toolbar rounded-lg border border-border/70 bg-card/30 p-2.5"
+    >
       <SearchInput
         v-model="query"
         class="settings-toolbar-search"
@@ -652,7 +749,7 @@ onBeforeRouteUpdate((to) => {
                 :disabled="loading || saving"
               >
                 <option value="">
-                  {{ $st('Restore default role') }} · {{ subagentSession ? subagentDefault : primaryDefault }}
+                  {{ restoreSessionProfile }}
                 </option>
                 <option v-if="sessionProfile && !Object.hasOwn(sessionCatalog, sessionProfile)" :value="sessionProfile">
                   {{ sessionProfile }}
@@ -794,9 +891,9 @@ onBeforeRouteUpdate((to) => {
                       draft.mode = (($event.target as HTMLSelectElement).value || null) as AgentProfileConfig['mode']
                     "
                   >
-                    <option value="">{{ $st('Inherit') }}</option>
+                    <option v-if="!createForBot" value="">{{ $st('Inherit') }}</option>
                     <option value="primary">{{ $st('Primary sessions') }}</option>
-                    <option value="subagent">{{ $st('Subagents') }}</option>
+                    <option v-if="!createForBot" value="subagent">{{ $st('Subagents') }}</option>
                     <option value="all">{{ $st('Primary sessions and subagents') }}</option>
                   </select>
                 </label>
@@ -817,11 +914,61 @@ onBeforeRouteUpdate((to) => {
                     <option value="true">{{ $st('Hidden from model discovery') }}</option>
                   </select>
                 </label>
+                <label class="profile-field">
+                  {{ $st('Execution access') }}
+                  <select v-model="readOnlyAccess" :aria-label="$st('Execution access')">
+                    <option value="">
+                      {{ inheritedReadOnly ? `${$st('Inherit')} · ${$st('Read only')}` : $st('Inherit') }}
+                    </option>
+                    <option value="true">{{ $st('Read only') }}</option>
+                    <option value="false">{{ $st('Use configured permissions') }}</option>
+                  </select>
+                </label>
+                <label v-if="draft.mode !== 'primary'" class="profile-field">
+                  {{ $st('Subagent workspace') }}
+                  <select
+                    v-model="isolation"
+                    :aria-label="$st('Subagent workspace')"
+                    :disabled="draftReadOnly"
+                  >
+                    <option value="">{{ $st('Inherit') }}</option>
+                    <option value="shared">{{ $st('Shared checkout') }}</option>
+                    <option value="worktree">{{ $st('Git worktree') }}</option>
+                  </select>
+                </label>
+                <label class="profile-field">
+                  {{ $st('Project instructions') }}
+                  <select v-model="projectInstructions" :aria-label="$st('Project instructions')">
+                    <option value="">{{ $st('Inherit') }}</option>
+                    <option value="startup">{{ $st('Load at startup') }}</option>
+                    <option value="on_demand">{{ $st('Read on demand') }}</option>
+                  </select>
+                </label>
               </div>
               <label class="profile-field mt-2">
                 {{ $st('Description') }}
                 <textarea v-model="draft.description" rows="2" />
               </label>
+              <fieldset class="mt-4 grid min-w-0 gap-2 border-t border-border/60 pt-2">
+                <legend class="pe-2 text-xs font-medium">{{ $st('Preloaded skills') }}</legend>
+                <label class="flex items-center gap-2 text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    :checked="draft.context?.preload_skills == null"
+                    @change="inheritsPreloadedSkills(($event.target as HTMLInputElement).checked)"
+                  />
+                  {{ $st('Inherit preloaded skills') }}
+                </label>
+                <PromptReferenceList
+                  v-if="draft.context?.preload_skills"
+                  :model-value="draft.context.preload_skills"
+                  :options="skillOptions"
+                  :select-label="$st('Select a skill')"
+                  :limit="8"
+                  :disabled="loading || saving"
+                  @update:model-value="draft.context = { ...draft.context, preload_skills: $event }"
+                />
+              </fieldset>
             </section>
 
             <section

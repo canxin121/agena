@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { RiFolder6Line, RiSettings3Line } from '@remixicon/vue'
-import { computed, defineAsyncComponent, isRef, onScopeDispose, provide, ref, unref, useId, watch } from 'vue'
+import { computed, defineAsyncComponent, onScopeDispose, provide, ref, unref, useId, watch } from 'vue'
 import { useResizeObserver, useWindowSize } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import {
@@ -51,6 +51,9 @@ import type { OptionMenuItem } from '@/components/ui/optionMenu.types'
 import { resolveComposerToolbarLayout } from './composerToolbarLayout'
 import { useBtwStore } from '@/stores/btw'
 import { skillCatalogKey } from './skillReferences'
+import type { ComposerPickerKind } from './composerPickerTypes'
+import { optionOpenEdge } from '@/lib/keyboardNavigation'
+import { resolveOverlayAnchorElement, type OverlayAnchor } from '@/lib/overlayAnchor'
 
 const SessionOperationFooter = defineAsyncComponent(() => import('@/components/chat/SessionOperationFooter.vue'))
 const WorkspaceChangesSection = defineAsyncComponent(() => import('@/components/chat/WorkspaceChangesSection.vue'))
@@ -298,12 +301,11 @@ const {
   handleCopyMessage,
 } = ctx
 
-type TooltipAnchorLike = { triggerEl?: unknown; $el?: unknown } | HTMLElement | null
-
-const attachmentsTriggerRef = ref<TooltipAnchorLike>(null)
-const skillTriggerRef = ref<TooltipAnchorLike>(null)
+const attachmentsTriggerRef = ref<OverlayAnchor>(null)
+const skillTriggerRef = ref<OverlayAnchor>(null)
 const skillPickerOpen = ref(false)
 const skillPickerQuery = ref('')
+const pickerOpenAt = ref<'first' | 'last'>()
 const { width: viewportWidth } = useWindowSize()
 // The composer's context chip owns its popover, like the other session chips.
 const contextUsageOpen = ref(false)
@@ -353,46 +355,17 @@ useResizeObserver(scrollEl, () => {
   scrollbarGutter.value = element ? Math.max(0, element.offsetWidth - element.clientWidth) : 0
 })
 
-// Resolve popover anchors to the trigger button element.
-// This keeps desktop popups aligned with the button that opened them.
-function unwrapAnchorCandidate(value: unknown): unknown {
-  let current = value
-  for (let i = 0; i < 4; i += 1) {
-    if (!isRef(current)) return current
-    current = current.value
-  }
-  return current
-}
-
-function resolveAnchorEl(target: TooltipAnchorLike): HTMLElement | null {
-  const raw = unwrapAnchorCandidate(target)
-  if (raw instanceof HTMLElement) return raw
-  if (!raw || typeof raw !== 'object') return null
-
-  const triggerEl = unwrapAnchorCandidate((raw as { triggerEl?: unknown }).triggerEl)
-  if (triggerEl instanceof HTMLElement) return triggerEl
-
-  if (triggerEl && typeof triggerEl === 'object') {
-    const triggerHostEl = unwrapAnchorCandidate((triggerEl as { $el?: unknown }).$el)
-    if (triggerHostEl instanceof HTMLElement) return triggerHostEl
-  }
-
-  const rootEl = unwrapAnchorCandidate((raw as { $el?: unknown }).$el)
-  if (rootEl instanceof HTMLElement) return rootEl
-  return null
-}
-
 const activePickerAnchor = computed(() => {
   const mode = unref(composerPickerOpen)
-  if (mode === 'model') return resolveAnchorEl(unref(modelTriggerRef) as TooltipAnchorLike)
-  if (mode === 'profile') return resolveAnchorEl(unref(profileTriggerRef) as TooltipAnchorLike)
-  if (mode === 'thinking') return resolveAnchorEl(unref(thinkingTriggerRef) as TooltipAnchorLike)
-  if (mode === 'speed') return resolveAnchorEl(unref(speedTriggerRef) as TooltipAnchorLike)
+  if (mode === 'model') return resolveOverlayAnchorElement(unref(modelTriggerRef))
+  if (mode === 'profile') return resolveOverlayAnchorElement(unref(profileTriggerRef))
+  if (mode === 'thinking') return resolveOverlayAnchorElement(unref(thinkingTriggerRef))
+  if (mode === 'speed') return resolveOverlayAnchorElement(unref(speedTriggerRef))
   return null
 })
 
-const activeAttachmentsAnchor = computed(() => resolveAnchorEl(unref(attachmentsTriggerRef) as TooltipAnchorLike))
-const activeSkillAnchor = computed(() => resolveAnchorEl(unref(skillTriggerRef) as TooltipAnchorLike))
+const activeAttachmentsAnchor = computed(() => resolveOverlayAnchorElement(unref(attachmentsTriggerRef)))
+const activeSkillAnchor = computed(() => resolveOverlayAnchorElement(unref(skillTriggerRef)))
 const skillPickerGroups = computed(() => [
   {
     id: 'skills',
@@ -410,6 +383,7 @@ const skillPickerGroups = computed(() => [
 function setSkillPickerOpen(open: boolean) {
   skillPickerOpen.value = open
   if (open) {
+    setComposerPickerOpen(false)
     closeAttachmentsPanel()
     closePromptHistory()
     closeCommandPalette()
@@ -418,6 +392,26 @@ function setSkillPickerOpen(open: boolean) {
     skillPickerQuery.value = ''
   }
 }
+
+function toggleFooterPicker(kind: ComposerPickerKind | 'skills', event?: KeyboardEvent) {
+  const open = kind === 'skills' ? skillPickerOpen.value : unref(composerPickerOpen) === kind
+  const edge = event && optionOpenEdge(event)
+  if (event) {
+    if (!edge || open) return
+    event.preventDefault()
+    event.stopPropagation()
+  }
+  pickerOpenAt.value = edge
+  if (kind === 'skills') setSkillPickerOpen(!open)
+  else {
+    if (skillPickerOpen.value) setSkillPickerOpen(false)
+    void toggleComposerPicker(kind)
+  }
+}
+
+watch([() => unref(composerPickerOpen), skillPickerOpen], ([composerOpen, skillsOpen]) => {
+  if (!composerOpen && !skillsOpen) pickerOpenAt.value = undefined
+})
 
 watch(
   () => unref(sessionDirectory),
@@ -843,8 +837,11 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                       :class="composerPickerOpen === 'model' ? 'bg-secondary/60 text-foreground' : ''"
                       :title="modelHint"
                       :aria-label="t('chat.composer.picker.modelTitle')"
+                      aria-haspopup="dialog"
+                      :aria-expanded="composerPickerOpen === 'model'"
                       @mousedown.prevent
-                      @click.stop="toggleComposerPicker('model')"
+                      @click.stop="toggleFooterPicker('model')"
+                      @keydown="toggleFooterPicker('model', $event)"
                     >
                       <RiStackLine class="h-3 w-3" />
                       <span :class="modelChipTextClass">{{ modelStatusLabel }}</span>
@@ -854,7 +851,8 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                         :profile="chat.selectedSessionExecution?.profile"
                         :profile-is-default="chat.selectedSessionExecution?.profile_is_default"
                         :open="composerPickerOpen === 'profile'"
-                        @select="toggleComposerPicker('profile')"
+                        @select="toggleFooterPicker('profile')"
+                        @keydown="toggleFooterPicker('profile', $event)"
                       />
                     </span>
                     <template v-if="hasThinkingModesForSelection">
@@ -867,8 +865,11 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                         :class="composerPickerOpen === 'thinking' ? 'bg-secondary/60 text-foreground' : ''"
                         :title="thinkingModeHint"
                         :aria-label="t('chat.composer.picker.thinkingTitle')"
+                        aria-haspopup="dialog"
+                        :aria-expanded="composerPickerOpen === 'thinking'"
                         @mousedown.prevent
-                        @click.stop="toggleComposerPicker('thinking')"
+                        @click.stop="toggleFooterPicker('thinking')"
+                        @keydown="toggleFooterPicker('thinking', $event)"
                       >
                         <RiBrainAi3Line class="h-3 w-3" />
                         <span :class="modeChipTextClass">{{ thinkingModeChipLabel }}</span>
@@ -884,8 +885,11 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                         :class="composerPickerOpen === 'speed' ? 'bg-secondary/60 text-foreground' : ''"
                         :title="speedModeHint"
                         :aria-label="t('chat.composer.picker.speedTitle')"
+                        aria-haspopup="dialog"
+                        :aria-expanded="composerPickerOpen === 'speed'"
                         @mousedown.prevent
-                        @click.stop="toggleComposerPicker('speed')"
+                        @click.stop="toggleFooterPicker('speed')"
+                        @keydown="toggleFooterPicker('speed', $event)"
                       >
                         <RiSpeedUpLine class="h-3 w-3" />
                         <span :class="modeChipTextClass">{{ speedModeChipLabel || t('common.default') }}</span>
@@ -973,6 +977,7 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                   <div ref="composerControlsRef" class="relative">
                     <OptionMenu
                       :open="skillPickerOpen"
+                      :open-at="pickerOpenAt"
                       :query="skillPickerQuery"
                       :groups="skillPickerGroups"
                       :title="t('chat.skills.title')"
@@ -994,6 +999,7 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                     <OptionMenu
                       ref="composerPickerRef"
                       :open="Boolean(composerPickerOpen)"
+                      :open-at="pickerOpenAt"
                       :close-on-select="composerPickerOpen !== 'profile'"
                       :query="composerPickerQuery"
                       :groups="composerPickerGroups"
@@ -1052,8 +1058,11 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                           :is-touch-pointer="ui.isTouchPointer"
                           :title="t('chat.skills.attach')"
                           :aria-label="t('chat.skills.attach')"
+                          aria-haspopup="dialog"
+                          :aria-expanded="skillPickerOpen"
                           @mousedown.prevent
-                          @click.stop="setSkillPickerOpen(!skillPickerOpen)"
+                          @click.stop="toggleFooterPicker('skills')"
+                          @keydown="toggleFooterPicker('skills', $event)"
                         >
                           <RiBookOpenLine class="h-4 w-4" />
                         </IconButton>
@@ -1069,6 +1078,8 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                           :is-touch-pointer="ui.isTouchPointer"
                           :title="t('chat.page.attachments')"
                           :aria-label="t('chat.page.attachments')"
+                          aria-haspopup="dialog"
+                          :aria-expanded="attachmentsPanelOpen"
                           @mousedown.prevent
                           @click.stop="toggleAttachmentsPanel"
                         >

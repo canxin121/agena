@@ -76,6 +76,12 @@ export function useChatProfilePicker(options: {
     useSnapshot.value ? (snapshotState.value ?? chat.selectedSessionState) : chat.selectedSessionState,
   )
   const isDefault = computed(() => execution.value?.profile_is_default || !execution.value?.profile)
+  const defaultLabel = computed(() => {
+    const name = isDefault.value ? execution.value?.profile : ''
+    return [st('Restore default role'), name || (session.value?.owner_bot_id ? '' : fallback.value)]
+      .filter(Boolean)
+      .join(' · ')
+  })
   const selected = computed(() => (isDefault.value ? '' : execution.value?.profile || ''))
   const busy = computed(
     () =>
@@ -116,7 +122,7 @@ export function useChatProfilePicker(options: {
         items: [
           {
             id: 'profile:restore',
-            label: `${st('Restore default role')} · ${fallback.value}`,
+            label: defaultLabel.value,
             checked: isDefault.value,
             disabled,
           },

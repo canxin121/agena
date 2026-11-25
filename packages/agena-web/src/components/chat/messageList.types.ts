@@ -63,7 +63,7 @@ export type TranscriptPartKind =
   | 'reasoning'
   | 'operation'
   | 'resource'
-  | 'command'
+  | 'skill'
   | 'notice'
   | 'compaction'
   | 'context_cleared'

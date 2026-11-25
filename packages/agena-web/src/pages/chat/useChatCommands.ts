@@ -3,7 +3,7 @@ import { useI18n } from 'vue-i18n'
 import { RiCommandLine, RiFlashlightLine } from '@remixicon/vue'
 
 import { readPluginCommandCatalog } from '../../lib/pluginCommandRead'
-import { isImeComposing } from '@/lib/imeKeyboard'
+import { isPlainNavigationKey } from '@/lib/keyboardNavigation'
 import { getComposerInput, type ComposerExpose } from './composerInput'
 import type { ComposerPickerKind } from './composerPickerTypes'
 import {
@@ -158,7 +158,6 @@ export function useChatCommands(opts: {
    * the server did not publish.
    */
   function pluginCommandFromCatalog(command: PluginCommandCatalogItem): PluginCommand | null {
-    if (command.category?.trim().toLowerCase() === 'skill') return null
     const pluginId = text(command.plugin_id)
     const commandId = text(command.id)
     const slash = text(command.slash)
@@ -331,7 +330,7 @@ export function useChatCommands(opts: {
     // The palette is opened from the composer while the user is typing. An IME
     // confirm must never pick the highlighted command, close the palette, or
     // move the selection: those keys belong to the candidate window.
-    if (isImeComposing(event)) return
+    if (!isPlainNavigationKey(event) || event.shiftKey) return
     if (event.key === 'Escape') {
       event.preventDefault()
       closeCommandPalette()
@@ -347,7 +346,7 @@ export function useChatCommands(opts: {
       moveCommandSelection(-1)
       return
     }
-    if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+    if (event.key === 'Enter') {
       event.preventDefault()
       const command = filteredCommands.value[commandIndex.value] || null
       if (command) {

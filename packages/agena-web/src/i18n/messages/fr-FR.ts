@@ -1326,6 +1326,12 @@ export default {
       sectionTitle: 'BTW',
       sideChip: 'Branche',
     },
+    mcpApp: {
+      open: 'Ouvrir l’application',
+      loading: 'Chargement de l’application MCP…',
+      timeout: 'L’application MCP n’a pas répondu.',
+      unavailable: 'L’application MCP est indisponible.',
+    },
     toolDetails: {
       errorUnavailable: 'Cet outil a échoué, mais le serveur n’a pas fourni la raison de l’erreur.',
       copyDiff: 'Copier les différences',
@@ -1640,11 +1646,6 @@ export default {
     composer: {
       actions: {
         compact: { label: 'Compacter la session', description: 'Résumer avec le modèle sélectionné' },
-        init: { label: 'Initialiser AGENTS.md', description: 'Insérer la commande /init dans le champ de saisie' },
-        review: {
-          label: 'Examiner les modifications',
-          description: 'Insérer la commande /review dans le champ de saisie',
-        },
       },
       picker: {
         modelTitle: 'Modèle',
@@ -2416,9 +2417,8 @@ export default {
             description: 'Fichiers, images et autres ressources provenant des sections file_ref.',
           },
           skill_reference: {
-            label: 'Référence de commande',
-            description:
-              'Noms et descriptions de commandes, ainsi que métadonnées de référence provenant des sections skill_ref.',
+            label: 'Référence de compétence',
+            description: 'Noms, descriptions et métadonnées de référence des compétences.',
           },
           interaction: {
             label: 'Interaction utilisateur',

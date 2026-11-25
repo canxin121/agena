@@ -6,7 +6,9 @@ import { RiAddLine, RiEditLine, RiArchiveLine, RiCheckLine } from '@remixicon/vu
 import Dialog from '@/components/ui/Dialog.vue'
 import Input from '@/components/ui/Input.vue'
 import Button from '@/components/ui/Button.vue'
-import PromptReferenceList from '@/components/settings/PromptReferenceList.vue'
+import AgentProfilesPanel from '@/components/settings/AgentProfilesPanel.vue'
+import BotAgentProfilePicker from '@/features/bots/BotAgentProfilePicker.vue'
+import BotPromptEditor from '@/features/bots/BotPromptEditor.vue'
 import { archiveBot, createBot, emptyBotPersona, getBot, updateBot, type BotPersona, type BotProfile } from '@/lib/bots'
 import { botDraftFields, instructionsBytes, MAX_INSTRUCTIONS_BYTES } from '@/features/bots/draft'
 import BotAvatar from '@/features/bots/BotAvatar.vue'
@@ -14,13 +16,13 @@ import { BOT_AVATAR_ACCEPT, MAX_BOT_AVATAR_DIMENSION, MAX_BOT_AVATAR_PIXELS } fr
 import { useBotAvatarDraft } from '@/features/bots/avatarDraft'
 import { SaveOwnership } from '@/features/bots/saveOwnership'
 import { useBotsStore } from '@/stores/bots'
+import { useChatStoreUnscoped } from '@/stores/chat'
 import { useToastsStore } from '@/stores/toasts'
 import { useUiStore } from '@/stores/ui'
 import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
-import { availableSavedPrompts } from '@/lib/promptLibrary'
-import { emptyPromptScopeConfig, normalizePromptScopeConfig, type PromptFragment } from '@/lib/promptLayers'
-import { getRuntimeSettingLayer } from '@/lib/runtimeSettings'
+import { handleOptionKeydown } from '@/lib/keyboardNavigation'
 const bots = useBotsStore()
+const chat = useChatStoreUnscoped()
 const ui = useUiStore()
 const toasts = useToastsStore()
 const navigation = useWorkspaceNavigation()
@@ -40,8 +42,8 @@ const error = ref('')
 const editing = ref<BotProfile | null>(null)
 const draftName = ref('')
 const persona = ref<BotPersona>(emptyBotPersona())
-const promptOptions = ref<PromptFragment[]>([])
-const promptError = ref('')
+const agentProfile = ref('')
+const creatingAgentProfile = ref(false)
 const avatarInput = ref<HTMLInputElement | null>(null)
 const avatarDraft = useBotAvatarDraft()
 const { avatar: draftAvatar, change: avatarChange, loading: avatarLoading, error: avatarError } = avatarDraft
@@ -105,6 +107,8 @@ function create() {
   editing.value = null
   draftName.value = ''
   persona.value = emptyBotPersona()
+  agentProfile.value = ''
+  creatingAgentProfile.value = false
   avatarDraft.reset()
   error.value = ''
   receipt = null
@@ -126,6 +130,8 @@ async function edit(id?: string | null, rename = false) {
     editing.value = profile
     draftName.value = profile.name
     persona.value = { ...profile.persona }
+    agentProfile.value = profile.agent_profile ?? ''
+    creatingAgentProfile.value = false
     avatarDraft.reset(profile.avatar)
     receipt = null
     managerOpen.value = false
@@ -151,6 +157,7 @@ async function save() {
   const base = botDraftFields(draftName.value, persona.value.instructions, avatarChange.value)
   const fields = {
     ...base,
+    ...((current?.agent_profile ?? '') !== agentProfile.value ? { agent_profile: agentProfile.value } : {}),
     persona: { ...base.persona, ...(persona.value.prompts ? { prompts: persona.value.prompts } : {}) },
   }
   try {
@@ -165,6 +172,16 @@ async function save() {
     receipt = null
     editorOpen.value = false
     bots.apply(profile)
+    if (current && current.agent_profile !== profile.agent_profile) {
+      const sessions = new Set([
+        profile.local_session_id,
+        selectedId.value === profile.id ? route.query.sessionId : null,
+      ])
+      for (const id of sessions) {
+        if (typeof id === 'string' || typeof id === 'number')
+          void chat.refreshExecutionStatus(String(id), true).catch(() => {})
+      }
+    }
     if (!current && saveOwnership?.canNavigate(navigationVersion, route.fullPath, ui.activeWorkspaceWindowId))
       choose(profile.id)
     else if (!current) toasts.push('success', t('bot.profiles.created', { name: profile.name }))
@@ -180,28 +197,6 @@ async function save() {
   }
 }
 
-watch(editorOpen, async (open, _, onCleanup) => {
-  if (!open) return
-  const abort = new AbortController()
-  onCleanup(() => abort.abort())
-  promptOptions.value = []
-  promptError.value = ''
-  try {
-    const result = await getRuntimeSettingLayer('global', 'prompts', { signal: abort.signal })
-    if (abort.signal.aborted) return
-    promptOptions.value = availableSavedPrompts(
-      normalizePromptScopeConfig(result.value),
-      emptyPromptScopeConfig(),
-      'global',
-    ).map(({ fragment }) => fragment)
-  } catch (reason) {
-    if (!abort.signal.aborted) promptError.value = reason instanceof Error ? reason.message : String(reason)
-  }
-})
-
-function setBotPrompts(ids: string[], publish = persona.value.prompts?.publish_to_channels === true) {
-  persona.value.prompts = { ids, publish_to_channels: publish }
-}
 function confirmArchive(profile: BotProfile) {
   error.value = ''
   receipt = null
@@ -289,9 +284,16 @@ onBeforeUnmount(() => {
     :open="managerOpen"
     :title="t('bot.profiles.choose')"
     :description="t('bot.profiles.scope')"
+    initial-focus="[data-bot-choices]"
     @update:open="setManagerOpen"
   >
-    <div class="space-y-3" data-testid="bot-manager">
+    <div
+      data-testid="bot-manager"
+      data-bot-choices
+      tabindex="-1"
+      class="space-y-3 focus-visible:outline-2 focus-visible:outline-ring"
+      @keydown="handleOptionKeydown($event, $event.currentTarget as HTMLElement)"
+    >
       <p v-if="loading" role="status" class="text-sm text-muted-foreground">{{ t('common.loading') }}</p>
       <div v-if="listError || error" role="alert" class="space-y-2 break-words text-sm text-destructive">
         <p>{{ listError || error }}</p>
@@ -309,6 +311,7 @@ onBeforeUnmount(() => {
       >
         <button
           type="button"
+          data-keyboard-option
           class="flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-lg px-2 text-start hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
           :data-bot-select="profile.id"
           @click="choose(profile.id)"
@@ -349,11 +352,25 @@ onBeforeUnmount(() => {
   <Dialog
     :return-focus="returnFocus"
     :open="editorOpen"
-    :title="editing ? t('bot.profiles.editNamed', { name: editing.name }) : t('bot.profiles.create')"
-    :description="t('bot.profiles.scope')"
+    :title="
+      creatingAgentProfile
+        ? $st('New profile')
+        : editing
+          ? t('bot.profiles.editNamed', { name: editing.name })
+          : t('bot.profiles.create')
+    "
+    :description="creatingAgentProfile ? undefined : t('bot.profiles.scope')"
+    max-width="max-w-2xl"
     @update:open="setEditorOpen"
   >
-    <form :id="`${uid}-form`" class="space-y-4" data-testid="bot-persona-form" @submit.prevent="save">
+    <AgentProfilesPanel
+      v-if="creatingAgentProfile"
+      scope="global"
+      create-for-bot
+      @cancel-create="creatingAgentProfile = false"
+      @profile-created="(name) => ((agentProfile = name), (creatingAgentProfile = false))"
+    />
+    <form v-else :id="`${uid}-form`" class="space-y-4" data-testid="bot-persona-form" @submit.prevent="save">
       <div class="space-y-2">
         <label :for="`${uid}-avatar`" class="text-sm font-medium">{{ t('bot.profiles.avatar') }}</label>
         <div class="flex min-w-0 items-center gap-3">
@@ -422,47 +439,18 @@ onBeforeUnmount(() => {
           :disabled="busy"
         />
       </div>
-      <div class="space-y-2">
-        <label :for="`${uid}-instructions`" class="text-sm font-medium">{{ t('bot.profiles.instructions') }}</label>
-        <textarea
-          :id="`${uid}-instructions`"
-          v-model="persona.instructions"
-          rows="7"
-          class="min-h-40 w-full resize-y rounded-lg border border-input bg-background px-3 py-2.5 text-base leading-relaxed shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:text-sm"
-          data-testid="bot-edit-instructions"
-          :aria-describedby="`${uid}-instructions-count`"
-          :aria-invalid="byteCount > MAX_INSTRUCTIONS_BYTES"
-          :disabled="busy"
-        />
-        <p
-          :id="`${uid}-instructions-count`"
-          class="text-xs"
-          :class="byteCount > MAX_INSTRUCTIONS_BYTES ? 'text-destructive' : 'text-muted-foreground'"
-          aria-live="polite"
-          data-testid="bot-instructions-count"
-        >
-          {{ t('bot.profiles.instructionsCount', { count: byteCount, max: MAX_INSTRUCTIONS_BYTES }) }}
-        </p>
-      </div>
-      <div v-if="promptOptions.length || persona.prompts?.ids.length || promptError" class="grid min-w-0 gap-2">
-        <span class="text-sm font-medium">{{ $st('Saved prompts') }}</span>
-        <PromptReferenceList
-          :model-value="persona.prompts?.ids ?? []"
-          :options="promptOptions"
-          :disabled="busy"
-          @update:model-value="setBotPrompts($event)"
-        />
-        <label v-if="persona.prompts?.ids.length" class="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            :checked="persona.prompts.publish_to_channels"
-            :disabled="busy"
-            @change="setBotPrompts(persona.prompts.ids, ($event.target as HTMLInputElement).checked)"
-          />
-          {{ $st('Use these prompts in connected channels') }}
-        </label>
-        <p v-if="promptError" role="alert" class="break-words text-xs text-destructive">{{ promptError }}</p>
-      </div>
+      <BotAgentProfilePicker
+        v-if="editorOpen"
+        v-model="agentProfile"
+        :disabled="busy"
+        @create="creatingAgentProfile = true"
+      />
+      <BotPromptEditor
+        v-if="editorOpen"
+        :key="editing ? `${editing.id}:${editing.revision}` : 'new'"
+        v-model="persona"
+        :disabled="busy"
+      />
       <p v-if="error" role="alert" class="whitespace-pre-wrap break-words text-sm text-destructive">{{ error }}</p>
       <button
         v-if="error && editing"
@@ -474,7 +462,7 @@ onBeforeUnmount(() => {
         {{ t('bot.profiles.reload') }}
       </button>
     </form>
-    <template #footer
+    <template v-if="!creatingAgentProfile" #footer
       ><Button variant="outline" @click="cancelEditor">{{ t('common.cancel') }}</Button
       ><Button
         type="submit"

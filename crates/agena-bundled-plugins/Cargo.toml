@@ -40,7 +40,6 @@ hex = { workspace = true }
 hmac = "0.13.0"
 image = { workspace = true }
 ipnet = { workspace = true }
-jsonschema = { workspace = true }
 moka = { workspace = true }
 regex = { workspace = true }
 viperjs = { workspace = true }

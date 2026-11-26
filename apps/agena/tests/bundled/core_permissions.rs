@@ -60,10 +60,9 @@ async fn path_rules(user: &UserSession, rules: &[(PathBuf, &str, &str)]) -> Resu
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn filesystem_and_notebook_denials_precede_io_and_leave_no_side_effects() -> TestResult {
+async fn filesystem_denials_precede_io_and_leave_no_side_effects() -> TestResult {
     fixture()
         .expect_plugin("agena.fs")
-        .expect_plugin("agena.notebook")
         .run(|case| async move {
             let user = user(&case).await?;
             path_rules(
@@ -73,7 +72,6 @@ async fn filesystem_and_notebook_denials_precede_io_and_leave_no_side_effects() 
                     (case.workspace().join("missing.txt"), "deny", "deny"),
                     (case.workspace().join("other.txt"), "deny", "deny"),
                     (case.workspace().join("missing.pdf"), "deny", "deny"),
-                    (case.workspace().join("missing.ipynb"), "allow", "deny"),
                 ],
             )
             .await?;
@@ -85,19 +83,16 @@ async fn filesystem_and_notebook_denials_precede_io_and_leave_no_side_effects() 
             failure(&write, ModelFeedbackKind::PermissionDenied)?;
             ensure!(!case.workspace().join("blocked").exists());
 
-            // These files do not exist. A metadata/conversion/notebook error would
+            // These files do not exist. A metadata or conversion error would
             // prove that the product accessed them before checking permission.
             for (tool, input) in [
                 ("fs.stat", json!({"path":"missing.txt"})),
                 ("fs.read_many", json!({"paths":["missing.txt","other.txt"]})),
                 ("fs.document", json!({"path":"missing.pdf"})),
-                ("notebook.edit_cell", json!({
-                    "path":"missing.ipynb","action":"delete","cell_index":0,"expected_sha256":"abc"
-                })),
             ] {
                 failure(&user.call_tool(tool, input).await?, ModelFeedbackKind::PermissionDenied)?;
             }
-            for path in ["missing.txt", "other.txt", "missing.pdf", "missing.ipynb"] {
+            for path in ["missing.txt", "other.txt", "missing.pdf"] {
                 ensure!(!case.workspace().join(path).exists());
             }
             Ok(())

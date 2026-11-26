@@ -11,7 +11,6 @@ pub mod inline_ui;
 pub mod interaction;
 pub mod lsp;
 pub mod mcp;
-pub mod notebook;
 pub mod notifications;
 pub mod planning;
 pub(crate) mod provider;

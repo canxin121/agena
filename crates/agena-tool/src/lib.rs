@@ -716,28 +716,6 @@ fn tool_result_fragment(
                 return Some(fragment);
             }
         }
-        "notebook.edit_cell" => {
-            let action = object
-                .get("action")
-                .and_then(serde_json::Value::as_str)
-                .map(|value| normalize_tool_title(value.replace('_', " ")));
-            let cell_index = object
-                .get("cell_index")
-                .and_then(value_as_u64)
-                .map(|value| format!("cell {value}"));
-            let cell_count = object
-                .get("cell_count")
-                .and_then(value_as_u64)
-                .map(|value| format_count(value as usize, "cells"));
-            let parts = action
-                .into_iter()
-                .chain(cell_index)
-                .chain(cell_count)
-                .collect::<Vec<_>>();
-            if !parts.is_empty() {
-                return Some(parts.join(" · "));
-            }
-        }
         "snapshot.enter" => {
             let branch = object
                 .get("branch")
@@ -2305,7 +2283,6 @@ fn tool_action_label(tool_name: &str) -> String {
         "memory.list" => "List memories".to_owned(),
         "memory.write" => "Save memory".to_owned(),
         "memory.delete" => "Delete memory".to_owned(),
-        "notebook.edit_cell" => "Edit notebook cell".to_owned(),
         "settings.inspect" => "Inspect settings".to_owned(),
         "settings.set" => "Update settings".to_owned(),
         "settings.reset" => "Reset settings".to_owned(),
@@ -2455,11 +2432,8 @@ pub fn invocation_title_subject(tool_name: &str, input: &serde_json::Value) -> S
         &["file_path", "path", "name"]
     } else if key.ends_with("fs.read_many") {
         &["paths", "path"]
-    } else if key.ends_with("fs.replace")
-        || key.ends_with("fs.stat")
-        || key.ends_with("notebook.edit_cell")
-    {
-        &["file_path", "path", "notebook_path", "name"]
+    } else if key.ends_with("fs.replace") || key.ends_with("fs.stat") {
+        &["file_path", "path", "name"]
     } else if key.ends_with("fs.grep") || key.ends_with("fs.glob") {
         &["pattern", "path", "include"]
     } else if key.ends_with("web.search")

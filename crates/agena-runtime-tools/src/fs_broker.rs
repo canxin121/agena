@@ -408,16 +408,6 @@ impl Drop for PendingFile {
 /// Verify all snapshots before mutation, publish destinations before deletes,
 /// and restore every completed mutation if a later publication fails.
 pub(crate) fn commit(changes: Vec<(FileCapability, SandboxFileChange)>) -> Result<(), ToolError> {
-    commit_with_file_limit(changes, MAX_PATCH_FILE_BYTES as usize)
-}
-
-/// Trusted callers may carry their operation's file bound through staging and
-/// publication. The limit is never supplied by worker output or tool JSON;
-/// ordinary filesystem/patch callers retain commit's 16 MiB default.
-pub(crate) fn commit_with_file_limit(
-    changes: Vec<(FileCapability, SandboxFileChange)>,
-    max_file_bytes: usize,
-) -> Result<(), ToolError> {
     if changes.len() > MAX_PATCH_OPERATIONS * 2 {
         return Err(ToolError::invalid_patch(format!(
             "sandbox transaction exceeds {} file targets",
@@ -440,10 +430,10 @@ pub(crate) fn commit_with_file_limit(
             )));
         }
         for bytes in [&change.original, &change.updated].into_iter().flatten() {
-            if bytes.len() > max_file_bytes {
+            if bytes.len() > MAX_PATCH_FILE_BYTES as usize {
                 return Err(ToolError::invalid_patch(format!(
                     "sandbox target exceeds the {} MiB limit: {}",
-                    max_file_bytes / 1024 / 1024,
+                    MAX_PATCH_FILE_BYTES / 1024 / 1024,
                     change.path.display()
                 )));
             }
@@ -629,9 +619,9 @@ mod tests {
     }
 
     #[test]
-    fn fs_broker_default_limit_stays_16_mib_for_notebook_filenames() {
+    fn fs_broker_rejects_oversized_files() {
         let directory = tempdir();
-        let path = canonical(&directory.path().join("notebook.ipynb"));
+        let path = canonical(&directory.path().join("file.txt"));
         std::fs::write(&path, b"before").unwrap();
         let error = commit(vec![(
             FileCapability::open(&path, false).unwrap(),
@@ -645,77 +635,6 @@ mod tests {
         .unwrap_err();
         assert!(error.to_string().contains("16 MiB limit"));
         assert_eq!(std::fs::read(path).unwrap(), b"before");
-    }
-
-    #[test]
-    fn fs_broker_notebook_limit_accepts_32_mib_and_preserves_revision_checks() {
-        let maximum = 32 * 1024 * 1024;
-        let directory = tempdir();
-        let path = canonical(&directory.path().join("notebook.ipynb"));
-        let original = vec![b'a'; maximum];
-        std::fs::write(&path, &original).unwrap();
-        let mut updated = original.clone();
-        updated[maximum - 1] = b'b';
-        commit_with_file_limit(
-            vec![(
-                FileCapability::open(&path, false).unwrap(),
-                SandboxFileChange {
-                    path: path.clone(),
-                    original: Some(original),
-                    updated: Some(updated),
-                    permissions: None,
-                },
-            )],
-            maximum,
-        )
-        .unwrap();
-        let published = std::fs::read(&path).unwrap();
-        assert_eq!(published.len(), maximum);
-        assert!(published[..maximum - 1].iter().all(|byte| *byte == b'a'));
-        assert_eq!(published[maximum - 1], b'b');
-
-        assert!(
-            commit_with_file_limit(
-                vec![(
-                    FileCapability::open(&path, false).unwrap(),
-                    change(&path, Some(b"stale revision"), Some(b"must not replace")),
-                )],
-                maximum,
-            )
-            .is_err()
-        );
-        assert_eq!(std::fs::read(path).unwrap(), published);
-    }
-
-    #[test]
-    fn fs_broker_notebook_limit_rejects_oversized_originals_and_outputs() {
-        let maximum = 32 * 1024 * 1024;
-        let directory = tempdir();
-        let path = canonical(&directory.path().join("notebook.ipynb"));
-        std::fs::write(&path, b"before").unwrap();
-        for oversized_original in [true, false] {
-            let change = SandboxFileChange {
-                path: path.clone(),
-                original: Some(if oversized_original {
-                    vec![b'x'; maximum + 1]
-                } else {
-                    b"before".to_vec()
-                }),
-                updated: Some(if oversized_original {
-                    b"after".to_vec()
-                } else {
-                    vec![b'x'; maximum + 1]
-                }),
-                permissions: None,
-            };
-            let error = commit_with_file_limit(
-                vec![(FileCapability::open(&path, false).unwrap(), change)],
-                maximum,
-            )
-            .unwrap_err();
-            assert!(error.to_string().contains("32 MiB limit"));
-            assert_eq!(std::fs::read(&path).unwrap(), b"before");
-        }
     }
 
     #[test]

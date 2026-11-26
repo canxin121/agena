@@ -120,7 +120,6 @@ fn bundled_plugins() -> Vec<(Box<dyn Plugin>, Option<String>)> {
         "runtime:mcp-manager"
     );
     add!(crate::tool::new_memory_plugin());
-    add!(crate::tool::new_notebook_plugin());
     add!(crate::tool::new_notifications_plugin());
     add!(crate::tool::new_plan_plugin());
     add!(crate::tool::new_report_plugin());

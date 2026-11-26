@@ -5,8 +5,8 @@ use std::sync::Arc;
 pub use agena_runtime_tools::tool::*;
 
 use crate::plugins::provided::{
-    agent, bot, commands, cron, fs, interaction, lsp, mcp, notebook, notifications, planning,
-    report, session, settings, shell, skills, telegram, tool_script,
+    agent, bot, commands, cron, fs, interaction, lsp, mcp, notifications, planning, report,
+    session, settings, shell, skills, telegram, tool_script,
 };
 
 pub fn commands_plugin_id() -> &'static str {
@@ -158,14 +158,6 @@ pub fn report_plugin_id() -> &'static str {
 
 pub fn new_report_plugin() -> impl agena_plugin_host::sdk::Plugin {
     report::ReportPlugin::new()
-}
-
-pub fn notebook_plugin_id() -> &'static str {
-    notebook::NOTEBOOK_PLUGIN_ID
-}
-
-pub fn new_notebook_plugin() -> impl agena_plugin_host::sdk::Plugin {
-    notebook::NotebookPlugin::new()
 }
 
 pub fn mcp_plugin_id() -> &'static str {

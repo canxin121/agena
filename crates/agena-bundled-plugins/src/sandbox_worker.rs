@@ -16,9 +16,6 @@ pub fn execute_sandbox_tool(
         "fs.write" | "fs.replace" | "fs.read_many" | "fs.stat" => {
             crate::plugins::provided::fs::execute_sandbox_tool(operation, input, workspace_root)
         }
-        "notebook.edit_cell" => {
-            crate::plugins::provided::notebook::execute_sandbox_tool(input, workspace_root)
-        }
         _ => Err(PluginError::invalid_params(format!(
             "unsupported sandbox worker operation: {operation}"
         ))),

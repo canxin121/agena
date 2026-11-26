@@ -21,10 +21,7 @@ pub(super) async fn validate(
         .name
         .strip_prefix("agena.")
         .unwrap_or(&invocation.name);
-    if !matches!(
-        name,
-        "fs.write" | "fs.replace" | "fs.apply_patch" | "notebook.edit_cell"
-    ) {
+    if !matches!(name, "fs.write" | "fs.replace" | "fs.apply_patch") {
         return;
     }
     let Some(registry) = executor.lsp_registry() else {

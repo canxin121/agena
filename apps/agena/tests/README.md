@@ -202,7 +202,6 @@ Rust 测试发现，按名称筛选即可，不需要再维护第二套测试入
 | commands | 工作区命令包安装、别名和资源、路径边界、移除 |
 | skills | 创建更新、资源 CRUD、revision、启停、删除 |
 | memory | 存储搜索、revision、重启持久化、retrieval 设置、真实模型上下文、第二工作区和记录/索引权限 |
-| notebook | cell 更新插入删除、输出清理、ID/metadata、错误输入 |
 | inline_ui | guide/schema、prepare/read/update、HTTP/SSE、revision、会话边界、错误修复和字段上限 |
 | report | finding 的位置、severity、confidence、持久化结构、错误范围 |
 | settings | 文件层和生效值、插件默认设置、dry-run、revision、校验、重载、删除 |

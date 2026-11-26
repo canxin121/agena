@@ -59,7 +59,7 @@ cargo test --offline -p agena-runtime-session --lib queue_tests
 |---|---|
 | `structural_directory_search_checks_children_and_preserves_denial` | `core_permissions::structural_search_checks_children_and_preview_respects_write_denial`：真实 AST 目录搜索独立检查子文件，拒绝类型正确，私有标记不泄漏。 |
 | `ast_preview_only_needs_read_but_application_needs_write` | 同一新场景：只读权限下预览成功，携带有效 SHA 的应用被拒，原文件不变。 |
-| `filesystem_mutation_requires_write_and_does_not_touch_denied_files`、`filesystem_reads_authorize_before_metadata_or_conversion`、`notebook_denial_precedes_file_access` | `core_permissions::filesystem_and_notebook_denials_precede_io_and_leave_no_side_effects`：拒绝先于不存在路径的读取、转换和编辑；写入连父目录都不能创建。 |
+| `filesystem_mutation_requires_write_and_does_not_touch_denied_files`、`filesystem_reads_authorize_before_metadata_or_conversion` | `core_permissions::filesystem_denials_precede_io_and_leave_no_side_effects` 验证权限拒绝发生在尝试读取或转换前，并检查被拒绝的写入不会创建父目录。 |
 | `memory_index_permission_is_checked_before_creating_a_record`、`memory_mutation_honors_path_denial_before_creating_a_record`、`memory_authorization_uses_the_invoking_workspace_instead_of_initial_state_root` | `core_permissions::memory_record_and_index_denials_use_the_invoking_workspace`：真实第二工作区会话；分别拒绝记录与索引路径，确认记录、索引及其他 store 没有错误副作用。 |
 | `skills_denied_create_authorizes_the_invoking_workspace_without_creating_files`、`skills_source_read_denial_precedes_folder_or_archive_access` | `core_permissions::skill_source_denials_precede_access_and_create_denial_uses_workspace`：真实第二工作区创建，以及 folder/archive 的 preview/install 读取拒绝。 |
 | `skills_network_decline_is_preserved_before_downloading_any_archive` | `core_permissions::skill_downloads_wait_for_permission_and_preserve_user_declines`：正式审批 archive/GitHub 来源，验证重写后的授权目标、UserDeclined、零 HTTP 和无安装目录。 |

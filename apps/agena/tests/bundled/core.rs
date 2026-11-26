@@ -4,8 +4,6 @@
 //! UserSession::call_tool. Disk assertions are independent observations of the
 //! product's effects; no plugin Rust method is called from these tests.
 
-use std::path::Path;
-
 use agena_testkit::{
     EditOptions, Reply, RequestMatch, SettingsLayer, TestCase, TestResult, ToolResult, UserSession,
 };
@@ -43,10 +41,6 @@ pub(super) const CASES: &[(&str, fn() -> TestResult)] = &[
         memory_persists_and_honors_retrieval_settings,
     ),
     (
-        "agena.notebook",
-        notebook_edits_cells_without_retaining_stale_output,
-    ),
-    (
         "agena.inline_ui",
         inline_ui_publishes_and_updates_session_content,
     ),
@@ -77,12 +71,6 @@ fn string(value: &Value, pointer: &str) -> Result<String> {
         .and_then(Value::as_str)
         .map(str::to_owned)
         .with_context(|| format!("missing string {pointer} in durable tool data: {value}"))
-}
-
-async fn read_json(path: impl AsRef<Path>) -> Result<Value> {
-    let path = path.as_ref();
-    serde_json::from_slice(&tokio::fs::read(path).await?)
-        .with_context(|| format!("read JSON artifact {}", path.display()))
 }
 
 fn text_payload_json(result: &ToolResult) -> Result<Value> {
@@ -586,113 +574,6 @@ async fn memory_persists_and_honors_retrieval_settings() -> TestResult {
                     .len(),
                 0
             );
-            Ok(())
-        })
-        .await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn notebook_edits_cells_without_retaining_stale_output() -> TestResult {
-    let notebook = json!({
-        "nbformat":4,"nbformat_minor":5,"metadata":{},
-        "cells":[
-            {
-                "cell_type":"code","id":"seed-code",
-                "metadata":{"keep":"notebook-metadata-marker"},
-                "execution_count":7,
-                "outputs":[{"output_type":"stream","name":"stdout","text":["stale-output-marker\n"]}],
-                "source":["print('old')\n"]
-            },
-            {"cell_type":"markdown","id":"seed-note","metadata":{},"source":["# Original note\n"]}
-        ]
-    });
-    fixture()
-        .expect_plugin("agena.notebook")
-        .seed_file("workspace/notebook.ipynb", serde_json::to_vec(&notebook)?)
-        .run(|case| async move {
-            let user = user(&case).await?;
-            let path = case.workspace().join("notebook.ipynb");
-            let stat = call(
-                &user,
-                "fs.stat",
-                json!({"path":"notebook.ipynb","hash":true}),
-            )
-            .await?;
-            let original_revision = string(stat.data()?, "/sha256")?;
-            let replaced = call(
-                &user,
-                "notebook.edit_cell",
-                json!({
-                    "path":"notebook.ipynb","action":"replace","cell_index":0,
-                    "source":"print('new')\n","expected_sha256":original_revision
-                }),
-            )
-            .await?;
-            assert_eq!(replaced.data()?["outputs_may_be_stale"], false);
-            let document = read_json(&path).await?;
-            assert_eq!(document["cells"][0]["source"], json!(["print('new')\n"]));
-            assert_eq!(document["cells"][0]["outputs"], json!([]));
-            assert_eq!(document["cells"][0]["execution_count"], Value::Null);
-            assert_eq!(document["cells"][0]["id"], "seed-code");
-            assert_eq!(
-                document["cells"][0]["metadata"]["keep"],
-                "notebook-metadata-marker"
-            );
-
-            let inserted = call(
-                &user,
-                "notebook.edit_cell",
-                json!({
-                    "path":"notebook.ipynb","action":"insert_after","cell_index":0,
-                    "cell_type":"markdown","source":"# Added cell\n",
-                    "expected_sha256":string(replaced.data()?, "/after_sha256")?
-                }),
-            )
-            .await?;
-            assert_eq!(inserted.data()?["cell_count"], 3);
-            let document = read_json(&path).await?;
-            assert_eq!(document["cells"][1]["cell_type"], "markdown");
-            assert_eq!(document["cells"][1]["source"], json!(["# Added cell\n"]));
-            ensure!(
-                document["cells"][1]["id"]
-                    .as_str()
-                    .is_some_and(|id| !id.is_empty())
-            );
-            let bytes_before_stale_edit = tokio::fs::read(&path).await?;
-            user.call_tool(
-                "notebook.edit_cell",
-                json!({
-                    "path":"notebook.ipynb","action":"delete","cell_index":0,
-                    "expected_sha256":original_revision
-                }),
-            )
-            .await?
-            .assert_failed()?;
-            assert_eq!(tokio::fs::read(&path).await?, bytes_before_stale_edit);
-
-            let deleted = call(
-                &user,
-                "notebook.edit_cell",
-                json!({
-                    "path":"notebook.ipynb","action":"delete","cell_index":1,
-                    "expected_sha256":string(inserted.data()?, "/after_sha256")?
-                }),
-            )
-            .await?;
-            assert_eq!(deleted.data()?["cell_count"], 2);
-            let document = read_json(&path).await?;
-            assert_eq!(document["cells"][1]["id"], "seed-note");
-            let bytes_before_invalid_index = tokio::fs::read(&path).await?;
-            user.call_tool(
-                "notebook.edit_cell",
-                json!({
-                    "path":"notebook.ipynb","action":"delete","cell_index":99,
-                    "expected_sha256":string(deleted.data()?, "/after_sha256")?
-                }),
-            )
-            .await?
-            .assert_failed()?;
-            assert_eq!(tokio::fs::read(&path).await?, bytes_before_invalid_index);
             Ok(())
         })
         .await

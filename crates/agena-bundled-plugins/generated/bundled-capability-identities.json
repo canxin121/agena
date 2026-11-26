@@ -2,8 +2,8 @@
   "schema_version": 3,
   "snapshot_date": "2026-07-27",
   "counts": {
-    "plugins": 32,
-    "tools": 219,
+    "plugins": 31,
+    "tools": 218,
     "bundled_commands": 50
   },
   "plugins": [
@@ -2128,28 +2128,6 @@
         "init",
         "tool.invoke",
         "chat.messages"
-      ],
-      "conditional": null
-    },
-    {
-      "id": "agena.notebook",
-      "version": "0.1.0",
-      "tools": [
-        {
-          "canonical_name": "agena.notebook.edit_cell",
-          "conditional": null,
-          "tags": [
-            "mutate",
-            "filesystem"
-          ],
-          "definition_identity": "4ee1687651cafa5c631e807f39ecef79c0ef20c811171eb70b48f5d86f801553",
-          "input_schema_sha256": "e0a094f4a26529f661e12356c8b249a394d6729577fb10a082643a9682822ac9",
-          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
-        }
-      ],
-      "hooks": [
-        "init",
-        "tool.invoke"
       ],
       "conditional": null
     },

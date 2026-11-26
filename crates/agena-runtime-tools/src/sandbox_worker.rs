@@ -1,4 +1,4 @@
-//! Isolated workers for native filesystem and syntax tools. Parent-side code
+//! Isolated workers for native filesystem tools. Parent-side code
 //! owns approval, cross-process mutation locks and exact-path publication.
 //! Workers receive only the invocation and its resource snapshot, never the
 //! application configuration, model credentials or a live storage handle.
@@ -32,7 +32,6 @@ pub use media::{inspect_media_bytes_with_policy, read_media_with_policy};
 const WORKER_ARGUMENT: &str = "--agena-tool-worker";
 const MAX_TRANSFER: usize = 96 * 1024 * 1024;
 const MAX_FILE: usize = 16 * 1024 * 1024;
-const MAX_NOTEBOOK_FILE: usize = 32 * 1024 * 1024;
 const MAX_TRANSACTION: usize = 64 * 1024 * 1024;
 static WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(8);
 
@@ -92,7 +91,6 @@ pub(crate) fn plan(
         ("fs", "replace") => "fs.replace",
         ("fs", "read_many") => "fs.read_many",
         ("fs", "stat") => "fs.stat",
-        ("notebook", "edit_cell") => "notebook.edit_cell",
         _ => return Ok(None),
     };
     let mut input = Value::from(invocation.input.clone());
@@ -181,7 +179,7 @@ pub(crate) fn plan(
             let path = resolve(&label)?;
             input[field] = Value::String(path.to_string_lossy().into_owned());
             reads.push(path.clone());
-            if matches!(operation, "fs.write" | "fs.replace" | "notebook.edit_cell") {
+            if matches!(operation, "fs.write" | "fs.replace") {
                 writes.push(path.clone());
             }
             labels.push((label, path));
@@ -305,11 +303,6 @@ fn execute_locked(
 ) -> Result<ToolInvocationExecution, ToolError> {
     executor.ensure_not_cancelled()?;
     executor.authorize_sandbox_paths(&plan.reads, &plan.writes)?;
-    let max_file = if plan.operation == "notebook.edit_cell" {
-        MAX_NOTEBOOK_FILE
-    } else {
-        MAX_FILE
-    };
     let mut policy =
         crate::shell_sandbox::policy_for_paths(executor, &plan.reads, &plan.writes, &[])?;
     // Kernel mount policies resolve symlinks. Preserve lstat's lexical-link
@@ -370,7 +363,7 @@ fn execute_locked(
             // Keep the same directory object from the initial read through
             // publication and rollback, even if its ambient path is replaced.
             let capability = FileCapability::open(&path, create_parents)?;
-            let (original, permissions) = match capability.read_existing(max_file)? {
+            let (original, permissions) = match capability.read_existing(MAX_FILE)? {
                 Some((bytes, permissions)) => (Some(bytes), Some(permissions)),
                 None => (None, None),
             };
@@ -479,7 +472,7 @@ fn execute_locked(
         for file in &staged {
             let updated = file
                 .output_capability
-                .read_existing(max_file)?
+                .read_existing(MAX_FILE)?
                 .map(|(bytes, _)| bytes);
             if plan.operation != "apply_patch" && updated.is_none() {
                 return Err(ToolError::invalid_input(
@@ -523,13 +516,7 @@ fn execute_locked(
             .map(|file| file.capability.clone())
             .zip(changes)
             .collect();
-        if plan.operation == "notebook.edit_cell" {
-            // Carry the same trusted notebook limit through the final revision
-            // check and atomic publication, including the original snapshot.
-            crate::fs_broker::commit_with_file_limit(changes, max_file)?;
-        } else {
-            crate::fs_broker::commit(changes)?;
-        }
+        crate::fs_broker::commit(changes)?;
         let mut value = serde_json::to_value(response)
             .map_err(|error| ToolError::invalid_input_error(&error))?;
         for file in &staged {
@@ -843,80 +830,6 @@ mod tests {
         };
         assert!(runtime.block_on(execute(&executor, denied)).is_err());
         assert_eq!(fs::read_to_string(readonly).unwrap(), "unchanged");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    #[ignore = "requires AGENA_TEST_SANDBOX_LAUNCHER and native MXC prerequisites"]
-    fn native_notebook_worker_preserves_large_notebooks_and_revision_checks() {
-        use sha2::Digest;
-
-        let launcher = std::env::var_os("AGENA_TEST_SANDBOX_LAUNCHER")
-            .expect("set AGENA_TEST_SANDBOX_LAUNCHER to an existing Agena executable");
-        agena_process::sandbox::configure_launcher(PathBuf::from(launcher)).unwrap();
-        let directory = tempfile::tempdir().unwrap();
-        let root = fs::canonicalize(directory.path()).unwrap();
-        let path = root.join("notebook.ipynb");
-        let original = serde_json::to_vec(&serde_json::json!({
-            "nbformat": 4, "nbformat_minor": 5,
-            "metadata": {"large": "x".repeat(17 * 1024 * 1024)},
-            "cells": [{"id": "cell-one", "cell_type": "code", "metadata": {},
-                "source": ["print(1)"], "execution_count": 1,
-                "outputs": [{"output_type": "stream", "name": "stdout", "text": ["1"]}]}]
-        }))
-        .unwrap();
-        assert!(original.len() > MAX_FILE && original.len() < MAX_NOTEBOOK_FILE);
-        fs::write(&path, &original).unwrap();
-        let executor = ToolExecutor::new(
-            &root,
-            ExecutionPrincipal::new(
-                PermissionPolicy::allow_all(),
-                ToolPermissionPolicy::allow_all(),
-            ),
-            PluginHost::new_empty(),
-            None,
-            None,
-        )
-        .with_permission_config(
-            &serde_json::from_value(serde_json::json!({
-                "path": {"workspace":"readonly", "external":"deny",
-                    "rules":{"<workspace>/notebook.ipynb":"readwrite"}},
-                "network":{"default":"deny"}
-            }))
-            .unwrap(),
-        );
-        let plan = Plan {
-            operation: "notebook.edit_cell".into(),
-            input: serde_json::json!({
-                "path":path, "expected_sha256":hex::encode(sha2::Sha256::digest(&original)),
-                "action":"replace", "cell_index":0, "source":"print(2)"
-            }),
-            workspace_root: root,
-            reads: vec![path.clone()],
-            writes: vec![path.clone()],
-            labels: vec![("notebook.ipynb".into(), path.clone())],
-            moves: vec![],
-        };
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        runtime.block_on(execute(&executor, plan.clone())).unwrap();
-        let updated = fs::read(&path).unwrap();
-        let document: Value = serde_json::from_slice(&updated).unwrap();
-        assert_eq!(
-            document["metadata"]["large"].as_str().unwrap().len(),
-            17 * 1024 * 1024
-        );
-        assert!(
-            document["cells"][0]["outputs"]
-                .as_array()
-                .unwrap()
-                .is_empty()
-        );
-        assert!(document["cells"][0]["execution_count"].is_null());
-        assert!(runtime.block_on(execute(&executor, plan)).is_err());
-        assert_eq!(fs::read(&path).unwrap(), updated);
     }
 
     #[test]

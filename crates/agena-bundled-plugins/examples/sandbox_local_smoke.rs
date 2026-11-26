@@ -12,7 +12,6 @@ use agena_skills::{
     worker::{SkillWorkerOperation, SkillWorkerRequest},
 };
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::{error::Error, io, path::Path, time::Duration};
 
 type CheckResult<T> = Result<T, Box<dyn Error>>;
@@ -22,11 +21,6 @@ fn main() -> CheckResult<()> {
         std::process::exit(code);
     }
     if let Some(code) = agena_bundled_plugins::worker::try_run_worker() {
-        std::process::exit(code);
-    }
-    if let Some(code) = agena_runtime_tools::sandbox_worker::try_run_worker(
-        agena_bundled_plugins::execute_sandbox_tool,
-    ) {
         std::process::exit(code);
     }
     tokio::runtime::Builder::new_multi_thread()
@@ -364,43 +358,5 @@ async fn checks() -> CheckResult<()> {
     );
     assert!(!denied.join("memory").exists());
     println!("PASS: memory write/get/search/delete and denied directory in MXC");
-
-    let notebook = allowed.join("notebook.ipynb");
-    let original = serde_json::to_vec(&json!({
-        "nbformat": 4, "nbformat_minor": 5, "metadata": {},
-        "cells": [{"id": "original", "cell_type": "code", "metadata": {},
-            "source": ["print(1)"], "execution_count": null, "outputs": []}]
-    }))?;
-    std::fs::write(&notebook, &original)?;
-    let notebook_request = |path: &Path| {
-        json!({
-            "operation": "notebook.edit_cell",
-            "input": {"path": path, "expected_sha256": hex::encode(Sha256::digest(&original)),
-                "cell_index": 0, "action": "replace", "source": "print(2)"},
-            "workspace_root": allowed, "snapshot": snapshot(&allowed),
-            "read_paths": [path], "write_paths": [path]
-        })
-    };
-    raw("--agena-tool-worker", notebook_request(&notebook), &policy).await?;
-    let updated: Value = serde_json::from_slice(&std::fs::read(&notebook)?)?;
-    assert_eq!(updated["cells"][0]["source"], json!(["print(2)"]));
-    assert!(
-        raw("--agena-tool-worker", notebook_request(&notebook), &policy)
-            .await
-            .is_err()
-    );
-    let blocked_notebook = denied.join("notebook.ipynb");
-    std::fs::write(&blocked_notebook, &original)?;
-    assert!(
-        raw(
-            "--agena-tool-worker",
-            notebook_request(&blocked_notebook),
-            &policy
-        )
-        .await
-        .is_err()
-    );
-    assert_eq!(std::fs::read(&blocked_notebook)?, original);
-    println!("PASS: notebook edit, stale revision and denied file in MXC");
     Ok(())
 }

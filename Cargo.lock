@@ -444,7 +444,6 @@ dependencies = [
  "hmac 0.13.0",
  "image",
  "ipnet",
- "jsonschema",
  "libc",
  "moka",
  "portable-atomic",

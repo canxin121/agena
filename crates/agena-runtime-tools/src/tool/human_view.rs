@@ -4823,26 +4823,6 @@ impl BuiltinHumanRenderer {
         blocks
     }
 
-    fn specific_notebook_blocks(object: &serde_json::Map<String, Value>) -> Vec<ViewBlock> {
-        let mut blocks = Self::file_mutation_blocks(
-            "notebook-edit",
-            "Notebook cell",
-            object,
-            &[
-                ("Action", Self::object_text(object, "action")),
-                ("Cell", Self::object_text(object, "cell_index")),
-                ("Cells", Self::object_text(object, "cell_count")),
-            ],
-        );
-        if object.get("outputs_may_be_stale").and_then(Value::as_bool) == Some(true) {
-            blocks.push(Self::markdown_block(
-                "notebook-outputs",
-                "_Cell outputs were preserved and may be stale._",
-            ));
-        }
-        blocks
-    }
-
     fn file_mutation_blocks(
         id: &str,
         title: &str,
@@ -4998,7 +4978,6 @@ impl BuiltinHumanRenderer {
             "repo.status" | "snapshot.status" | "snapshot.enter" | "snapshot.exit" => {
                 blocks.extend(Self::specific_repository_blocks(key.as_str(), &object));
             }
-            "notebook.edit_cell" => blocks.extend(Self::specific_notebook_blocks(&object)),
             _ => {}
         }
         if let Some(files) = object

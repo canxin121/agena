@@ -65,5 +65,6 @@ pub use crate::{MonitorError, MonitorRead, MonitorReadParams, MonitorService, Mo
 pub use output_helpers::{bounded_model_output_preview, line_count, model_output_exceeds_boundary};
 pub use output_streams::ToolOutputStreams;
 pub use payload::{ToolPayloadInput, ToolPayloadOutput};
+pub use post_edit::POST_EDIT_VALIDATION;
 pub use result::{ToolExecutionView, ToolInvocationExecution, ToolPayloadExecution};
 pub use tool_registry::{ExecutionPermissionInspector, ExecutionTool, ToolError, ToolExecutor};

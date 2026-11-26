@@ -3,7 +3,7 @@
   "snapshot_date": "2026-07-27",
   "counts": {
     "plugins": 32,
-    "tools": 214,
+    "tools": 219,
     "bundled_commands": 50
   },
   "plugins": [
@@ -1643,8 +1643,8 @@
             "filesystem",
             "read_only"
           ],
-          "definition_identity": "8c4eb1698d1de89e05533564d5e191918cc80fa9332abd8177936e3bd42afd5a",
-          "input_schema_sha256": "99fd806c9faeadc93645d83e814fb2517aa67dc1c594bd62754cf753789a12ae",
+          "definition_identity": "5ca18b845bd310c124ea804e6977526349e586ce764401fa79b7ffca97c0a552",
+          "input_schema_sha256": "3c843c79e04fdbc3fe460e0856a27fedb697dd9b212598f96385a3262333c042",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
         },
         {
@@ -1656,8 +1656,21 @@
             "filesystem",
             "read_only"
           ],
-          "definition_identity": "0d84b0d4fe19a6fd50a10c02cf8ef501d18e7e3f81f02de1b78453e1e039ecbe",
-          "input_schema_sha256": "00017cedd5cd53a484c802b12ec0b39e9ebdab8a97e0d21cc89b6d1d52167206",
+          "definition_identity": "339d7aeb2b3a25903283c32260aa78470f99ed803e672063e08727a3ecd3b9af",
+          "input_schema_sha256": "d8220119bf373718c6a91585454c84b92cb41847c3a3a3b2fb2b612a6a8f04c4",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+        },
+        {
+          "canonical_name": "agena.lsp.diagnostics_many",
+          "conditional": null,
+          "tags": [
+            "query",
+            "lsp",
+            "filesystem",
+            "read_only"
+          ],
+          "definition_identity": "8a332c75d03d8d065514192f20bc7fe3b55f050e3b2e6bef161820d766ff7b16",
+          "input_schema_sha256": "371d027a17f0ae7c5478ee7316a44f93059d5ff05a71cbce0eb9b4cd8e2edd51",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
         },
         {
@@ -1669,8 +1682,21 @@
             "filesystem",
             "read_only"
           ],
-          "definition_identity": "b41e839b08d8869246e164e041d3e71bd08634a9de53d7e18663ac7eb07efdf3",
-          "input_schema_sha256": "3e108578ea26755c87d8d919254879f66b5b832f00a533db5ea8510642e72047",
+          "definition_identity": "9367fdff70d4f58869c58ff7ab1586d3943d38bc06e30a06f71ac8afb6882d3c",
+          "input_schema_sha256": "8ca519d7057d21b952f8cb7f3e04d86e3d52e3eff70edde099ec5c0d6c5cd9e5",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+        },
+        {
+          "canonical_name": "agena.lsp.implementation",
+          "conditional": null,
+          "tags": [
+            "query",
+            "lsp",
+            "filesystem",
+            "read_only"
+          ],
+          "definition_identity": "e8a00af28e59dcd0b12f6ca4b8558d67bf483ed87d04d8fcfa893ef464296122",
+          "input_schema_sha256": "284dea48fc7bb276cb8ceb1363cc00b45993e97c697c8db8631c6d07f8dc0ca3",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
         },
         {
@@ -1682,8 +1708,8 @@
             "filesystem",
             "read_only"
           ],
-          "definition_identity": "0b730980b53600893ddfa07d51a2995f33e02301f8ef105ca651e230b9561014",
-          "input_schema_sha256": "26306c15b2343514ad3e8a7a1cfcda06a158b42cea8055b2f6ea403972bf12f5",
+          "definition_identity": "48242d59759c28e04919354a18fab4c92ea7a31e555d976f256484da82383000",
+          "input_schema_sha256": "18b35910a4b7d6c5d823d25fab4987f860e85cb17b00dc2aa33e59342a8a1ab0",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
         },
         {
@@ -1697,6 +1723,43 @@
           ],
           "definition_identity": "cf7fcae4a17d6af7a98eef6e54a1f8a9e44e84f1c31b8e8bc50d9ad842d78068",
           "input_schema_sha256": "c891cf2445087af59e0336855a83add164516ad33268063fa9d09110dd47ace7",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+        },
+        {
+          "canonical_name": "agena.lsp.start",
+          "conditional": null,
+          "tags": [
+            "execute",
+            "lsp",
+            "filesystem",
+            "mutate"
+          ],
+          "definition_identity": "e7fa4c70f09c35ede9366aef850abc28f7e5d378831945fb257349e4a17ea616",
+          "input_schema_sha256": "de57dea05d622076c3c3f82995bfcf321251657be5fefc8d3f2898e15f82969b",
+          "output_schema_sha256": "3df52b72226f0d41fc5d9be57f691e43e60e04c671f6c8838c4d80aef0976ec1"
+        },
+        {
+          "canonical_name": "agena.lsp.stop",
+          "conditional": null,
+          "tags": [
+            "lsp",
+            "mutate"
+          ],
+          "definition_identity": "1d064856e86638fccd895a9cf165e53274cc09c73100df5eb14a3c04f2042c9b",
+          "input_schema_sha256": "178e2f409c0d6be52386efb982fe9edab9c00f226e6e2084f2dc88a0ff18bb6e",
+          "output_schema_sha256": "abae01bee1b2413cdae35600b9846d60dca2d8509b5d4259318cd964142521e2"
+        },
+        {
+          "canonical_name": "agena.lsp.symbols",
+          "conditional": null,
+          "tags": [
+            "query",
+            "lsp",
+            "filesystem",
+            "read_only"
+          ],
+          "definition_identity": "17addc5c5a23318355e68b874ea4406c60ccfa800944a316e5b103f0edd48fa7",
+          "input_schema_sha256": "f422f529d14ec192c0a87f5186ee6cb6d7fa872e8b79e3950a2eeb9b694ab202",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
         }
       ],

@@ -246,6 +246,9 @@ impl ToolExecutor {
                         require_path(Some(&path), input.folder.as_deref())?;
                     }
                 }
+                ToolPayloadInput::LspStart(input) => {
+                    require_path(Some(input.file_path.trim()), input.folder.as_deref())?;
+                }
                 ToolPayloadInput::LspDefinition(input) => require_path(
                     Some(&input.position.file_path),
                     input.position.folder.as_deref(),
@@ -260,6 +263,21 @@ impl ToolExecutor {
                 )?,
                 ToolPayloadInput::LspDiagnostics(input) => {
                     require_path(Some(&input.file_path), input.folder.as_deref())?
+                }
+                ToolPayloadInput::LspImplementation(input) => {
+                    require_path(Some(input.file_path.trim()), input.folder.as_deref())?;
+                }
+                ToolPayloadInput::LspSymbols(input) => {
+                    require_path(
+                        Some(input.file.file_path.trim()),
+                        input.file.folder.as_deref(),
+                    )?;
+                }
+                ToolPayloadInput::LspDiagnosticsMany(input) => {
+                    crate::tool::lsp::validate_diagnostic_paths(&input.file_paths)?;
+                    for path in &input.file_paths {
+                        require_path(Some(path.trim()), input.folder.as_deref())?;
+                    }
                 }
                 ToolPayloadInput::Shell(input) => {
                     if let Some((_, command)) = input.launch_command() {
@@ -308,11 +326,19 @@ impl ToolExecutor {
                     );
                 }
             }
+            ToolPayloadInput::LspStart(input) => {
+                self.push_folder_resolved_path_check(
+                    checks,
+                    AccessKind::Read,
+                    input.file_path.trim(),
+                    input.folder.as_deref(),
+                );
+            }
             ToolPayloadInput::LspDefinition(input) => {
                 self.push_folder_resolved_path_check(
                     checks,
                     AccessKind::Read,
-                    input.position.file_path.as_str(),
+                    input.position.file_path.trim(),
                     input.position.folder.as_deref(),
                 );
             }
@@ -320,7 +346,7 @@ impl ToolExecutor {
                 self.push_folder_resolved_path_check(
                     checks,
                     AccessKind::Read,
-                    input.position.file_path.as_str(),
+                    input.position.file_path.trim(),
                     input.position.folder.as_deref(),
                 );
             }
@@ -328,7 +354,7 @@ impl ToolExecutor {
                 self.push_folder_resolved_path_check(
                     checks,
                     AccessKind::Read,
-                    input.position.file_path.as_str(),
+                    input.position.file_path.trim(),
                     input.position.folder.as_deref(),
                 );
             }
@@ -336,9 +362,36 @@ impl ToolExecutor {
                 self.push_folder_resolved_path_check(
                     checks,
                     AccessKind::Read,
-                    input.file_path.as_str(),
+                    input.file_path.trim(),
                     input.folder.as_deref(),
                 );
+            }
+            ToolPayloadInput::LspImplementation(input) => {
+                self.push_folder_resolved_path_check(
+                    checks,
+                    AccessKind::Read,
+                    input.file_path.trim(),
+                    input.folder.as_deref(),
+                );
+            }
+            ToolPayloadInput::LspSymbols(input) => {
+                self.push_folder_resolved_path_check(
+                    checks,
+                    AccessKind::Read,
+                    input.file.file_path.trim(),
+                    input.file.folder.as_deref(),
+                );
+            }
+            ToolPayloadInput::LspDiagnosticsMany(input) => {
+                crate::tool::lsp::validate_diagnostic_paths(&input.file_paths)?;
+                for path in &input.file_paths {
+                    self.push_folder_resolved_path_check(
+                        checks,
+                        AccessKind::Read,
+                        path.trim(),
+                        input.folder.as_deref(),
+                    );
+                }
             }
             ToolPayloadInput::Shell(input) => {
                 self.collect_shell_effect_checks(checks, &input)?;

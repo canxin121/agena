@@ -993,6 +993,14 @@ pub struct LspPositionToolInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[arg(trim, non_empty_if_present)]
     pub folder: Option<String>,
+    /// A specific configured server when multiple servers handle the file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(trim, non_empty_if_present)]
+    pub server: Option<String>,
+    /// Expected SHA-256 from an earlier LSP result for this file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(trim, non_empty_if_present)]
+    pub expected_revision: Option<String>,
     /// Zero-based source line.
     pub line: u32,
     /// Zero-based UTF-16 code-unit offset within the line (LSP default encoding).
@@ -1043,6 +1051,93 @@ pub struct LspDiagnosticsToolInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[arg(trim, non_empty_if_present)]
     pub folder: Option<String>,
+    /// A specific configured server when multiple servers handle the file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(trim, non_empty_if_present)]
+    pub server: Option<String>,
+    /// Expected SHA-256 from an earlier LSP result for this file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(trim, non_empty_if_present)]
+    pub expected_revision: Option<String>,
+}
+
+/// List document symbols, or search the selected server's workspace by name.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+pub struct LspSymbolsToolInput {
+    #[input(flatten_shape)]
+    #[serde(flatten)]
+    pub file: LspDiagnosticsToolInput,
+    /// With a query, search the workspace of the server selected by file_path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(trim, non_empty_if_present)]
+    pub query: Option<String>,
+}
+
+/// Read diagnostics for up to 16 files with a shared deadline.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[input(
+    trim("file_paths[]"),
+    non_empty("file_paths[]"),
+    min_items("file_paths", 1),
+    max_items("file_paths", 16)
+)]
+pub struct LspDiagnosticsManyToolInput {
+    /// One to sixteen source files. Use workspace-relative paths in project sessions.
+    pub file_paths: Vec<String>,
+    /// Absolute base folder for relative paths in a global (Bot) session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(trim, non_empty_if_present)]
+    pub folder: Option<String>,
+    /// Select a specific server for the given files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(trim, non_empty_if_present)]
+    pub server: Option<String>,
+}
+
+/// Start the language server selected by a source file.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[serde(deny_unknown_fields)]
+pub struct LspStartToolInput {
+    /// An existing source file used to select the server and resolve its project root.
+    #[arg(trim, non_empty)]
+    pub file_path: String,
+    /// Absolute base folder for relative paths in a global (Bot) session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(trim, non_empty_if_present)]
+    pub folder: Option<String>,
+    /// Select a specific server when several routes match.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(trim, non_empty_if_present)]
+    pub server: Option<String>,
+}
+
+/// Stop language servers owned by the current session.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema, ToolInput)]
+#[serde(deny_unknown_fields)]
+pub struct LspStopToolInput {
+    /// Only stop this named server. Omit it to stop all servers in this session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[arg(trim, non_empty_if_present)]
+    pub server: Option<String>,
+}
+
+/// The language server instance made available to the calling session.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct LspStartToolOutput {
+    /// The route name shown by the server inventory.
+    pub server: String,
+    /// The project root, workspace-relative in project sessions when possible.
+    pub root: String,
+}
+
+/// Result of stopping cached language server instances.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
+pub struct LspStopToolOutput {
+    /// The selected server, if the caller limited the operation to one route.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<String>,
+    /// The number of running instances stopped in the calling session.
+    pub stopped_instances: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

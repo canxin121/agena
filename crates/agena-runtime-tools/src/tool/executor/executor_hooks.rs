@@ -387,7 +387,25 @@ fn raw_model_fallback(output: &agena_domain::RawOutput) -> String {
             output.text_content().to_owned()
         }
         Some(payload) => match serde_json::to_string(payload) {
-            Ok(payload) => payload,
+            Ok(text) => {
+                if text.len() > 40 * 1024
+                    && let Some(validation) = payload.get(crate::tool::POST_EDIT_VALIDATION)
+                {
+                    let preview = crate::tool::bounded_model_output_preview(
+                        &text,
+                        "[Write result preview limited.]",
+                        200,
+                        12 * 1024,
+                    );
+                    serde_json::json!({
+                        "post_edit_validation": validation,
+                        "write_result_preview": preview,
+                    })
+                    .to_string()
+                } else {
+                    text
+                }
+            }
             Err(error) => {
                 tracing::error!(
                     diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(

@@ -1,6 +1,7 @@
 //! Typed configuration for each LSP server (command, args, root).
 
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -10,9 +11,12 @@ use serde::{Deserialize, Serialize};
 /// the server's project root for a given file path; the registry walks up
 /// the file's ancestor directories until one is found, falling back to the
 /// workspace root if none of them are.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LspServerSpec {
     pub name: String,
+    /// Runtime-provided servers follow explicitly configured extension routes.
+    #[serde(skip)]
+    pub built_in: bool,
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
@@ -23,10 +27,16 @@ pub struct LspServerSpec {
     /// generic ctags daemon.
     #[serde(default)]
     pub file_extensions: Vec<String>,
+    #[serde(default)]
+    pub language_ids: BTreeMap<String, String>,
     /// Names looked up in each ancestor of a file path until one is
     /// found. Examples: `Cargo.toml`, `package.json`, `.git`.
     #[serde(default)]
     pub root_markers: Vec<String>,
+    #[serde(default)]
+    pub prefer_outermost_root: bool,
+    #[serde(default)]
+    pub configuration: serde_json::Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initialization_options: Option<serde_json::Value>,
 }
@@ -54,16 +64,29 @@ impl LspServerSpec {
         if self.root_markers.is_empty() {
             return workspace_root.to_path_buf();
         }
-        let mut current = Some(start_dir.to_path_buf());
-        while let Some(dir) = current {
-            for marker in &self.root_markers {
-                if dir.join(marker).exists() {
-                    return dir;
-                }
-            }
-            current = dir.parent().map(std::path::Path::to_path_buf);
-        }
-        workspace_root.to_path_buf()
+        self.resolve_root_with_boundary(start_dir, workspace_root, Some(workspace_root))
+    }
+
+    pub(crate) fn resolve_root_with_boundary(
+        &self,
+        start_dir: &Path,
+        fallback: &Path,
+        boundary: Option<&Path>,
+    ) -> PathBuf {
+        let ancestors = start_dir.ancestors().take_while(|dir| {
+            boundary.is_none_or(|root| !start_dir.starts_with(root) || dir.starts_with(root))
+        });
+        let mut candidates = ancestors.filter(|dir| {
+            self.root_markers
+                .iter()
+                .any(|marker| dir.join(marker).exists())
+        });
+        let found = if self.prefer_outermost_root {
+            candidates.last()
+        } else {
+            candidates.next()
+        };
+        found.unwrap_or(fallback).to_path_buf()
     }
 }
 
@@ -84,7 +107,7 @@ mod tests {
             env: Default::default(),
             file_extensions: vec![],
             root_markers: vec!["marker".into()],
-            initialization_options: None,
+            ..Default::default()
         };
         assert_eq!(spec.resolve_root(&nested, &fallback), fallback);
         std::fs::write(dir.join("project/marker"), "").unwrap();
@@ -92,5 +115,24 @@ mod tests {
         spec.root_markers.clear();
         assert_eq!(spec.resolve_root(&nested, &fallback), fallback);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn project_roots_respect_the_workspace_and_can_prefer_outer_markers() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let outer = root.join("workspace");
+        let member = outer.join("member");
+        std::fs::create_dir_all(member.join("src")).unwrap();
+        std::fs::write(root.join("Cargo.toml"), "").unwrap();
+        let mut spec = LspServerSpec {
+            root_markers: vec!["Cargo.toml".into()],
+            ..Default::default()
+        };
+        assert_eq!(spec.resolve_root(&member.join("src"), &outer), outer);
+        std::fs::write(outer.join("Cargo.toml"), "").unwrap();
+        std::fs::write(member.join("Cargo.toml"), "").unwrap();
+        assert_eq!(spec.resolve_root(&member.join("src"), &outer), member);
+        spec.prefer_outermost_root = true;
+        assert_eq!(spec.resolve_root(&member.join("src"), &outer), outer);
     }
 }

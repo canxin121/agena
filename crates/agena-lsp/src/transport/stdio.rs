@@ -123,11 +123,23 @@ impl StdioTransport {
 
 #[async_trait]
 impl LspTransport for StdioTransport {
+    fn is_alive(&self) -> bool {
+        !self.writer.is_closed()
+    }
+
     async fn send(&self, payload: Value) -> LspResult<()> {
         let body = JSON_WORKERS
             .run(move || serde_json::to_vec(&payload))
             .await
             .map_err(|error| LspError::transport_error(&error))??;
+        // Reject a locally oversized frame before it reaches the writer.
+        // The peer and its framing state are still usable.
+        if body.len() > MAX_FRAME_BYTES {
+            return Err(LspError::MessageTooLarge {
+                actual: body.len(),
+                limit: MAX_FRAME_BYTES,
+            });
+        }
         let body = Bytes::from(body);
         let (completion, result) = tokio::sync::oneshot::channel();
         self.writer
@@ -254,4 +266,43 @@ fn spawn_stderr_reader(name: String, stderr: tokio::process::ChildStderr) {
             tracing::debug!(target: "agena_lsp::stderr", server = %name, "{line}");
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn oversized_json_never_reaches_or_closes_the_writer() {
+        let (writer, mut writes) = mpsc::channel::<WriteRequest>(1);
+        let (_inbound, inbox) = mpsc::channel(1);
+        let transport = StdioTransport {
+            server_name: "test".into(),
+            writer,
+            inbox: Mutex::new(inbox),
+            _child: Mutex::new(None),
+        };
+        // The original text fits, but JSON escaping doubles each newline.
+        let oversized = serde_json::json!({"text": "\n".repeat(9 * 1024 * 1024)});
+        assert!(matches!(
+            transport.send(oversized).await,
+            Err(LspError::MessageTooLarge { .. })
+        ));
+        assert!(matches!(
+            writes.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+        assert!(transport.is_alive());
+
+        let writer = tokio::spawn(async move {
+            let frame = writes.recv().await.unwrap();
+            assert_eq!(frame.body, Bytes::from_static(b"{\"text\":\"ok\"}"));
+            frame.completion.send(Ok(())).unwrap();
+        });
+        transport
+            .send(serde_json::json!({"text": "ok"}))
+            .await
+            .unwrap();
+        writer.await.unwrap();
+    }
 }

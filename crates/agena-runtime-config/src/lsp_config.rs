@@ -13,6 +13,7 @@ pub const LSP_PLUGIN_ID: &str = "agena.lsp";
 /// LSP server configuration.
 pub struct LspConfig {
     pub defaults: LspServerDefaultsConfig,
+    /// Custom servers and overrides of built-in servers, keyed by name.
     pub servers: BTreeMap<String, LspServerConfig>,
 }
 
@@ -33,6 +34,9 @@ pub struct LspServerDefaultsConfig {
 #[serde(default, deny_unknown_fields)]
 /// Configuration of one LSP server.
 pub struct LspServerConfig {
+    /// Remove this server from routing, including a built-in server with the same name.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub disabled: bool,
     pub process: LspServerProcessConfig,
     pub routing: LspServerRoutingConfig,
     pub session: LspServerSessionConfig,
@@ -57,6 +61,10 @@ pub struct LspServerRoutingConfig {
     pub file_extensions: Vec<String>,
     #[serde(default)]
     pub root_markers: Vec<String>,
+    /// Override the language identifier sent for an extension.
+    pub language_ids: BTreeMap<String, String>,
+    /// Prefer the outermost marker within the workspace.
+    pub prefer_outermost_root: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -66,6 +74,9 @@ pub struct LspServerSessionConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(schema_with = "agena_plugin_host::sdk::bounded_json_schema")]
     pub initialization_options: Option<serde_json::Value>,
+    /// Settings returned to the server through workspace/configuration.
+    #[schemars(schema_with = "agena_plugin_host::sdk::bounded_json_schema")]
+    pub configuration: Option<serde_json::Value>,
 }
 
 pub fn lsp_config_from_plugins(plugins: &PluginsConfig) -> Result<LspConfig, String> {

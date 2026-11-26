@@ -633,7 +633,16 @@ fn tool_result_fragment(
                 return Some(fragment);
             }
         }
-        "lsp.servers" | "lsp.definition" | "lsp.references" | "lsp.hover" | "lsp.diagnostics" => {
+        "lsp.servers"
+        | "lsp.start"
+        | "lsp.stop"
+        | "lsp.definition"
+        | "lsp.references"
+        | "lsp.hover"
+        | "lsp.diagnostics"
+        | "lsp.implementation"
+        | "lsp.symbols"
+        | "lsp.diagnostics_many" => {
             if let Some(fragment) = lsp_result_fragment(key, object) {
                 return Some(fragment);
             }
@@ -1637,6 +1646,15 @@ fn lsp_result_fragment(
             .get("servers")
             .and_then(serde_json::Value::as_array)
             .map(|servers| format_count(servers.len(), "servers")),
+        "lsp.start" => object
+            .get("server")
+            .and_then(title_value_text)
+            .map(|server| format!("{server} running")),
+        "lsp.stop" => object
+            .get("stopped_instances")
+            .and_then(value_as_u64)
+            .and_then(|count| usize::try_from(count).ok())
+            .map(|count| format_count(count, "instances stopped")),
         "lsp.definition" => object
             .get("locations")
             .and_then(serde_json::Value::as_array)
@@ -1645,6 +1663,18 @@ fn lsp_result_fragment(
             .get("locations")
             .and_then(serde_json::Value::as_array)
             .map(|locations| format_count(locations.len(), "references")),
+        "lsp.implementation" => object
+            .get("locations")
+            .and_then(serde_json::Value::as_array)
+            .map(|locations| format_count(locations.len(), "implementations")),
+        "lsp.symbols" => object
+            .get("symbols")
+            .and_then(serde_json::Value::as_array)
+            .map(|symbols| format_count(symbols.len(), "symbols")),
+        "lsp.diagnostics_many" => object
+            .get("files")
+            .and_then(serde_json::Value::as_array)
+            .map(|files| format_count(files.len(), "files")),
         "lsp.hover" => object
             .get("contents")
             .filter(|value| match value {
@@ -2252,6 +2282,11 @@ fn tool_action_label(tool_name: &str) -> String {
         "lsp.hover" | "lsp_hover" => "Inspect symbol".to_owned(),
         "lsp.diagnostics" | "lsp_diagnostics" => "Check diagnostics".to_owned(),
         "lsp.servers" => "List language servers".to_owned(),
+        "lsp.start" | "lsp_start" => "Start language server".to_owned(),
+        "lsp.stop" | "lsp_stop" => "Stop language servers".to_owned(),
+        "lsp.implementation" | "lsp_implementation" => "Find implementations".to_owned(),
+        "lsp.symbols" | "lsp_symbols" => "Find symbols".to_owned(),
+        "lsp.diagnostics_many" | "lsp_diagnostics_many" => "Check file diagnostics".to_owned(),
         "mcp.tools.call" => "Call MCP tool".to_owned(),
         "mcp.tools.search" => "Search MCP tools".to_owned(),
         "mcp.tools" => "List MCP tools".to_owned(),
@@ -2685,7 +2720,10 @@ fn lsp_title_subject(input: &serde_json::Value) -> String {
         .or_else(|| object.get("character"))
         .and_then(value_as_u64);
     let Some(path) = path else {
-        return String::new();
+        return object
+            .get("server")
+            .and_then(title_value_text)
+            .unwrap_or_default();
     };
     match (line, character) {
         (Some(line), Some(character)) => format!("{path}:{}:{}", line + 1, character + 1),
@@ -2809,6 +2847,7 @@ fn format_count(count: usize, label: &str) -> String {
         (1, "tokens") => "token",
         (1, "resource templates") => "resource template",
         (1, "servers") => "server",
+        (1, "instances stopped") => "instance stopped",
         (1, "definitions") => "definition",
         (1, "references") => "reference",
         (1, "diagnostics") => "diagnostic",

@@ -695,6 +695,7 @@ impl SessionManager {
         })
         .await
         .map_err(kernel_error)?;
+        self.stop_session_lsp(id).await;
         Ok(())
     }
     pub async fn withdraw_user_message(&self, id: i64, message: i64) -> Result<Session, AppError> {

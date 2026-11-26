@@ -2,7 +2,7 @@
 
 > Generated from the bundled plugin manifests. Regenerate with the `generate_tools_reference` Cargo example or `agena inspect --tools-reference`.
 
-The compiled catalog contains **32 plugins and 214 execution tools**. Open a plugin to browse its declarations and tools. Each tool lists its canonical ID, applicable session types, and declared input and output contracts.
+The compiled catalog contains **32 plugins and 219 execution tools**. Open a plugin to browse its declarations and tools. Each tool lists its canonical ID, applicable session types, and declared input and output contracts.
 
 For a running instance, use `agena plugin status` and `agena plugin inspect <plugin-id>`. Within a session, `plugins_list` and `tools_list` discover its live catalog. Pass the tool ID to `tools_help` before using `tools_call`. Output schemas describe the business payload. Some tools also return text, metadata, or attachments through the tool protocol.
 
@@ -25,7 +25,7 @@ For a running instance, use `agena plugin status` and `agena plugin inspect <plu
 | [`agena.gemini`](#plugin-agena.gemini) | Gemini | 29 | 0 | Model-based tools default to the current session model. Use a Google Gemini model that supports the requested operation; if the current model is from another vendor or lacks that capability, explicitly pass model. Uses the current session’s provider connection. Google cloud inference, search, files, knowledge stores, images, audio, video, music, Live voice and agent APIs. Inputs leave this computer; no local execution fallback. |
 | [`agena.inline_ui`](#plugin-agena.inline_ui) | Interactive UI | 4 | 0 | Inline Generative UI: composable, stateful interfaces and live work updates inside answers. guide() teaches the complete core workflow; use sections only for advanced references. prepare/read/update. |
 | [`agena.interaction`](#plugin-agena.interaction) | User Input | 2 | 0 | User interaction tools. |
-| [`agena.lsp`](#plugin-agena.lsp) | Language Servers | 5 | 0 | LSP read-only observability and navigation tools. |
+| [`agena.lsp`](#plugin-agena.lsp) | Language Servers | 10 | 0 | Manage language servers and query code through LSP. |
 | [`agena.mcp`](#plugin-agena.mcp) | MCP Connections | 24 | 0 | MCP discovery and bridge tools. |
 | [`agena.memory`](#plugin-agena.memory) | Memory | 5 | 0 | Persistent memory with searchable retrieval and write tools. |
 | [`agena.notebook`](#plugin-agena.notebook) | Notebooks | 1 | 0 | Revision-safe Jupyter notebook cell editing. |
@@ -23076,11 +23076,11 @@ Show a non-blocking Markdown notification to the user.
 
 **Language Servers**
 
-**Version** `0.1.0` · **Tools** 5 · **Authors** canxin121 · **Tags** `lsp` `discovery`
+**Version** `0.1.0` · **Tools** 10 · **Authors** canxin121 · **Tags** `lsp` `discovery`
 
-LSP read-only observability and navigation tools.
+Manage language servers and query code through LSP.
 
-> Inspect language-server availability and diagnostics, read hover documentation, and navigate symbols and references. Queries use the workspace language-server connections.
+> Language servers start on explicit queries or lsp.start. Use symbols to explore a file, definition and references for precise navigation, and diagnostics_many to check several files. Use lsp.stop to release this session's instances early. Idle instances stop automatically.
 
 ### Tool index
 
@@ -23088,9 +23088,14 @@ LSP read-only observability and navigation tools.
 | --- | --- | --- |
 | [`definition`](#tool-agena.lsp.definition) | Project, Bot | Resolve symbol definitions. |
 | [`diagnostics`](#tool-agena.lsp.diagnostics) | Project, Bot | Fetch file diagnostics. |
+| [`diagnostics_many`](#tool-agena.lsp.diagnostics_many) | Project, Bot | Check diagnostics for several files. |
 | [`hover`](#tool-agena.lsp.hover) | Project, Bot | Fetch hover text. |
+| [`implementation`](#tool-agena.lsp.implementation) | Project, Bot | Find implementations of a symbol. |
 | [`references`](#tool-agena.lsp.references) | Project, Bot | Find symbol references. |
 | [`servers`](#tool-agena.lsp.servers) | Project, Bot | List configured language servers and executable availability. |
+| [`start`](#tool-agena.lsp.start) | Project, Bot | Start the language server selected by a file. |
+| [`stop`](#tool-agena.lsp.stop) | Project, Bot | Stop language servers in the current session. |
+| [`symbols`](#tool-agena.lsp.symbols) | Project, Bot | List file symbols or search workspace symbols. |
 
 ### Settings
 
@@ -23106,20 +23111,25 @@ Shared defaults and per-server settings for the agena.lsp plugin.
 | `/defaults/initialization_options` | `json` | No | `null` | Default JSON initialization options sent during server startup. |
 | `/defaults/root_markers` | `list` | No | `[]` | Marker files used to discover project roots when a server does not define its own routing markers. |
 | `/defaults/root_markers/*` | `text` | Yes | — | Root Markers Item |
-| `/servers` | `record` | No | `{}` | Named language server definitions keyed by server identifier. |
+| `/servers` | `record` | No | `{}` | Custom servers or replacements for named built-ins. |
 | `/servers/*` | `object` | Yes | — | A single named language server definition. |
+| `/servers/*/disabled` | `boolean` | No | — | Remove the named server from routing. |
 | `/servers/*/process` | `object` | No | `{"command":"","args":[],"env":{}}` | Executable command, arguments, and environment for this language server. |
 | `/servers/*/process/args` | `list` | No | `[]` | Command-line arguments passed to the language server process. |
 | `/servers/*/process/args/*` | `text` | Yes | — | Args Item |
 | `/servers/*/process/command` | `text` | No | `""` | Executable used to start the language server. |
 | `/servers/*/process/env` | `record` | No | `{}` | Environment variables merged on top of the shared LSP defaults for this server. |
 | `/servers/*/process/env/*` | `text` | Yes | — | Env Value |
-| `/servers/*/routing` | `object` | No | `{"file_extensions":[],"root_markers":[]}` | File matching and root detection rules for this server. |
+| `/servers/*/routing` | `object` | No | `{"file_extensions":[],"root_markers":[],"language_ids":{},"prefer_outermost_root":false}` | File matching and root detection rules for this server. |
 | `/servers/*/routing/file_extensions` | `list` | No | `[]` | File extensions routed to this server. Leave empty to match all files. |
 | `/servers/*/routing/file_extensions/*` | `text` | Yes | — | File Extensions Item |
+| `/servers/*/routing/language_ids` | `record` | No | `{}` | Extension-to-language ID overrides for synchronization. |
+| `/servers/*/routing/language_ids/*` | `text` | Yes | — | Language Ids Value |
+| `/servers/*/routing/prefer_outermost_root` | `boolean` | No | `false` | Prefer the outermost marker within the workspace when several ancestors match. |
 | `/servers/*/routing/root_markers` | `list` | No | `[]` | Project-root markers used for this server. Leave empty to inherit the shared defaults. |
 | `/servers/*/routing/root_markers/*` | `text` | Yes | — | Root Markers Item |
-| `/servers/*/session` | `object` | No | `{}` | Per-server LSP session settings such as initialization options. |
+| `/servers/*/session` | `object` | No | `{"configuration":null}` | Per-server LSP session settings such as initialization options. |
+| `/servers/*/session/configuration` | `json` | No | `null` | Settings returned to the server when it requests workspace configuration. |
 | `/servers/*/session/initialization_options` | `json` | No | — | Server-specific JSON initialization options. Leave unset to inherit the shared defaults. |
 
 ### Hooks
@@ -23140,12 +23150,18 @@ Resolve symbol definitions.
 
 **Output delivery** `buffered` · **Sessions** Project, Bot
 
+#### Usage
+
+> Use the current source position in zero-based UTF-16. Pass expected_revision from a previous result to reject changed source. Use targets[].selection_range or targets[].range for follow-up queries.
+
 #### Input parameters
 
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `file_path` | `string` | Yes | — |  |
 | `folder` | `string / null` | No | — | Base folder for a relative `file_path`. Only global (Bot) sessions use<br>it; a project session keeps resolving against its project root. |
+| `server` | `string / null` | No | — | A specific configured server when multiple servers handle the file. |
+| `expected_revision` | `string / null` | No | — | Expected SHA-256 from an earlier LSP result for this file. |
 | `line` | `integer` | Yes | — | Zero-based source line. |
 | `character` | `integer` | Yes | — | Zero-based UTF-16 code-unit offset within the line (LSP default encoding). |
 
@@ -23184,19 +23200,47 @@ Resolve symbol definitions.
         "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
       }
     },
+    "server": {
+      "description": "A specific configured server when multiple servers handle the file.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000.000002",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "expected_revision": {
+      "description": "Expected SHA-256 from an earlier LSP result for this file.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000.000003",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
     "line": {
       "description": "Zero-based source line.",
       "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "x-agena-order": "000000.000002"
+      "x-agena-order": "000000.000004"
     },
     "character": {
       "description": "Zero-based UTF-16 code-unit offset within the line (LSP default encoding).",
       "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "x-agena-order": "000000.000003"
+      "x-agena-order": "000000.000005"
     }
   },
   "description": "Input of the LSP definition tool.",
@@ -23261,12 +23305,18 @@ Fetch file diagnostics.
 
 **Output delivery** `buffered` · **Sessions** Project, Bot
 
+#### Usage
+
+> Only current diagnostics confirm a clean synchronized version. A stale, unversioned, disconnected or timed-out result can be rechecked with lsp.diagnostics or the project check command.
+
 #### Input parameters
 
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `file_path` | `string` | Yes | — |  |
 | `folder` | `string / null` | No | — | Base folder for a relative `file_path`. Only global (Bot) sessions use<br>it; a project session keeps resolving against its project root. |
+| `server` | `string / null` | No | — | A specific configured server when multiple servers handle the file. |
+| `expected_revision` | `string / null` | No | — | Expected SHA-256 from an earlier LSP result for this file. |
 
 <details>
 <summary>Input JSON Schema</summary>
@@ -23294,6 +23344,34 @@ Fetch file diagnostics.
         "null"
       ],
       "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "server": {
+      "description": "A specific configured server when multiple servers handle the file.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "expected_revision": {
+      "description": "Expected SHA-256 from an earlier LSP result for this file.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003",
       "x-agena-non-empty": true,
       "minLength": 1,
       "not": {
@@ -23352,6 +23430,148 @@ Fetch file diagnostics.
 
 </details>
 
+<a id="tool-agena.lsp.diagnostics_many"></a>
+
+### diagnostics_many
+
+**Tool ID** `agena.lsp.diagnostics_many`
+
+Check diagnostics for several files.
+
+**Tags** `query` `lsp` `filesystem` `read_only`
+
+**Output delivery** `buffered` · **Sessions** Project, Bot
+
+#### Usage
+
+> Pass one to sixteen file_paths. Each file reports its version, diagnostic count, and state under a shared deadline.
+
+#### Input parameters
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `file_paths` | `array<string>` | Yes | — | One to sixteen source files. Use workspace-relative paths in project sessions. |
+| `folder` | `string / null` | No | — | Absolute base folder for relative paths in a global (Bot) session. |
+| `server` | `string / null` | No | — | Select a specific server for the given files. |
+
+<details>
+<summary>Input JSON Schema</summary>
+
+```json
+{
+  "required": [
+    "file_paths"
+  ],
+  "properties": {
+    "file_paths": {
+      "description": "One to sixteen source files. Use workspace-relative paths in project sessions.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "x-agena-non-empty": true,
+        "minLength": 1,
+        "not": {
+          "type": "string",
+          "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+        }
+      },
+      "x-agena-order": "000000",
+      "minItems": 1,
+      "maxItems": 16
+    },
+    "folder": {
+      "description": "Absolute base folder for relative paths in a global (Bot) session.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "server": {
+      "description": "Select a specific server for the given files.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    }
+  },
+  "description": "Read diagnostics for up to 16 files with a shared deadline.",
+  "type": "object",
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "file_paths": {
+              "type": "array",
+              "not": {
+                "items": {
+                  "not": {}
+                }
+              }
+            }
+          },
+          "required": [
+            "file_paths"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "file_paths": {
+            "type": "array",
+            "not": {
+              "items": {
+                "not": {
+                  "anyOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+                    },
+                    {
+                      "type": "array",
+                      "maxItems": 0
+                    },
+                    {
+                      "type": "object",
+                      "maxProperties": 0,
+                      "properties": {}
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "file_paths"
+        ]
+      }
+    ]
+  }
+}
+```
+
+</details>
+
 <a id="tool-agena.lsp.hover"></a>
 
 ### hover
@@ -23370,6 +23590,8 @@ Fetch hover text.
 | --- | --- | --- | --- | --- |
 | `file_path` | `string` | Yes | — |  |
 | `folder` | `string / null` | No | — | Base folder for a relative `file_path`. Only global (Bot) sessions use<br>it; a project session keeps resolving against its project root. |
+| `server` | `string / null` | No | — | A specific configured server when multiple servers handle the file. |
+| `expected_revision` | `string / null` | No | — | Expected SHA-256 from an earlier LSP result for this file. |
 | `line` | `integer` | Yes | — | Zero-based source line. |
 | `character` | `integer` | Yes | — | Zero-based UTF-16 code-unit offset within the line (LSP default encoding). |
 
@@ -23408,22 +23630,205 @@ Fetch hover text.
         "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
       }
     },
+    "server": {
+      "description": "A specific configured server when multiple servers handle the file.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000.000002",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "expected_revision": {
+      "description": "Expected SHA-256 from an earlier LSP result for this file.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000.000003",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
     "line": {
       "description": "Zero-based source line.",
       "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "x-agena-order": "000000.000002"
+      "x-agena-order": "000000.000004"
     },
     "character": {
       "description": "Zero-based UTF-16 code-unit offset within the line (LSP default encoding).",
       "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "x-agena-order": "000000.000003"
+      "x-agena-order": "000000.000005"
     }
   },
   "description": "Input of the LSP hover tool.",
+  "type": "object",
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "file_path": {}
+          },
+          "required": [
+            "file_path"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "file_path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "file_path"
+        ]
+      }
+    ]
+  }
+}
+```
+
+</details>
+
+<a id="tool-agena.lsp.implementation"></a>
+
+### implementation
+
+**Tool ID** `agena.lsp.implementation`
+
+Find implementations of a symbol.
+
+**Tags** `query` `lsp` `filesystem` `read_only`
+
+**Output delivery** `buffered` · **Sessions** Project, Bot
+
+#### Usage
+
+> Use the zero-based UTF-16 position of an interface, trait, or member. Results contain exact ranges when the server supports implementation queries.
+
+#### Input parameters
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `file_path` | `string` | Yes | — |  |
+| `folder` | `string / null` | No | — | Base folder for a relative `file_path`. Only global (Bot) sessions use<br>it; a project session keeps resolving against its project root. |
+| `server` | `string / null` | No | — | A specific configured server when multiple servers handle the file. |
+| `expected_revision` | `string / null` | No | — | Expected SHA-256 from an earlier LSP result for this file. |
+| `line` | `integer` | Yes | — | Zero-based source line. |
+| `character` | `integer` | Yes | — | Zero-based UTF-16 code-unit offset within the line (LSP default encoding). |
+
+<details>
+<summary>Input JSON Schema</summary>
+
+```json
+{
+  "required": [
+    "file_path",
+    "line",
+    "character"
+  ],
+  "properties": {
+    "file_path": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "folder": {
+      "description": "Base folder for a relative `file_path`. Only global (Bot) sessions use\nit; a project session keeps resolving against its project root.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "server": {
+      "description": "A specific configured server when multiple servers handle the file.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "expected_revision": {
+      "description": "Expected SHA-256 from an earlier LSP result for this file.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000003",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "line": {
+      "description": "Zero-based source line.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "x-agena-order": "000004"
+    },
+    "character": {
+      "description": "Zero-based UTF-16 code-unit offset within the line (LSP default encoding).",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "x-agena-order": "000005"
+    }
+  },
+  "description": "Input of an LSP position query.",
   "type": "object",
   "not": {
     "anyOf": [
@@ -23485,12 +23890,18 @@ Find symbol references.
 
 **Output delivery** `buffered` · **Sessions** Project, Bot
 
+#### Usage
+
+> Use a zero-based UTF-16 source position. The result includes target ranges and indicates when some locations were omitted.
+
 #### Input parameters
 
 | Field | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `file_path` | `string` | Yes | — |  |
 | `folder` | `string / null` | No | — | Base folder for a relative `file_path`. Only global (Bot) sessions use<br>it; a project session keeps resolving against its project root. |
+| `server` | `string / null` | No | — | A specific configured server when multiple servers handle the file. |
+| `expected_revision` | `string / null` | No | — | Expected SHA-256 from an earlier LSP result for this file. |
 | `line` | `integer` | Yes | — | Zero-based source line. |
 | `character` | `integer` | Yes | — | Zero-based UTF-16 code-unit offset within the line (LSP default encoding). |
 | `include_declaration` | `boolean` | No | `true` |  |
@@ -23530,19 +23941,47 @@ Find symbol references.
         "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
       }
     },
+    "server": {
+      "description": "A specific configured server when multiple servers handle the file.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000.000002",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "expected_revision": {
+      "description": "Expected SHA-256 from an earlier LSP result for this file.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000.000003",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
     "line": {
       "description": "Zero-based source line.",
       "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "x-agena-order": "000000.000002"
+      "x-agena-order": "000000.000004"
     },
     "character": {
       "description": "Zero-based UTF-16 code-unit offset within the line (LSP default encoding).",
       "type": "integer",
       "format": "uint32",
       "minimum": 0,
-      "x-agena-order": "000000.000003"
+      "x-agena-order": "000000.000005"
     },
     "include_declaration": {
       "type": "boolean",
@@ -23614,7 +24053,7 @@ List configured language servers and executable availability.
 
 #### Usage
 
-> Checks each command against its configured PATH from the workspace root without executing it; command_available=null means lookup was inconclusive. Presence does not guarantee successful initialization. Relative commands can resolve differently in individual project roots. running_roots lists initialized instances. Extension-specific servers take priority over catch-all servers; ties use lexical server name.
+> Lists built-in and custom routes. Checks command availability from the workspace root. command_available=null means lookup was inconclusive. running_roots lists live instances in the current session. Specific extension routes take priority over catch-all routes. Custom routes take priority over equally specific built-in routes.
 
 <details>
 <summary>Input JSON Schema</summary>
@@ -23624,6 +24063,403 @@ List configured language servers and executable availability.
   "additionalProperties": false,
   "type": "object",
   "properties": {}
+}
+```
+
+</details>
+
+<a id="tool-agena.lsp.start"></a>
+
+### start
+
+**Tool ID** `agena.lsp.start`
+
+Start the language server selected by a file.
+
+**Tags** `execute` `lsp` `filesystem` `mutate`
+
+**Output delivery** `buffered` · **Sessions** Project, Bot
+
+#### Usage
+
+> Use file_path to select a language and project root. Call this to warm up the server before editing. Explicit LSP queries can also start it on demand. Reuse across calls requires persistent read access to the project root. Idle instances stop automatically. The result identifies the route and root, for example {"server":"rust-analyzer","root":"."}.
+
+#### Input parameters
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `file_path` | `string` | Yes | — | An existing source file used to select the server and resolve its project root. |
+| `folder` | `string / null` | No | — | Absolute base folder for relative paths in a global (Bot) session. |
+| `server` | `string / null` | No | — | Select a specific server when several routes match. |
+
+<details>
+<summary>Input JSON Schema</summary>
+
+```json
+{
+  "required": [
+    "file_path"
+  ],
+  "additionalProperties": false,
+  "description": "Start the language server selected by a source file.",
+  "type": "object",
+  "properties": {
+    "file_path": {
+      "description": "An existing source file used to select the server and resolve its project root.",
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "folder": {
+      "description": "Absolute base folder for relative paths in a global (Bot) session.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "server": {
+      "description": "Select a specific server when several routes match.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    }
+  },
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "file_path": {}
+          },
+          "required": [
+            "file_path"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "file_path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "file_path"
+        ]
+      }
+    ]
+  }
+}
+```
+
+</details>
+
+#### Output payload fields
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `root` | `string` | Yes | — | The project root, workspace-relative in project sessions when possible. |
+| `server` | `string` | Yes | — | The route name shown by the server inventory. |
+
+<details>
+<summary>Output JSON Schema</summary>
+
+```json
+{
+  "required": [
+    "server",
+    "root"
+  ],
+  "properties": {
+    "server": {
+      "description": "The route name shown by the server inventory.",
+      "type": "string"
+    },
+    "root": {
+      "description": "The project root, workspace-relative in project sessions when possible.",
+      "type": "string"
+    }
+  },
+  "description": "The language server instance made available to the calling session.",
+  "type": "object"
+}
+```
+
+</details>
+
+<a id="tool-agena.lsp.stop"></a>
+
+### stop
+
+**Tool ID** `agena.lsp.stop`
+
+Stop language servers in the current session.
+
+**Tags** `lsp` `mutate`
+
+**Output delivery** `buffered` · **Sessions** Project, Bot
+
+#### Usage
+
+> Omit server to stop all cached instances in the current session. Pass a server name from lsp.servers to stop its instances across this session's project roots. A later explicit start or query can open it again. The result counts running instances stopped, for example {"server":"rust-analyzer","stopped_instances":1}.
+
+#### Input parameters
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `server` | `string / null` | No | — | Only stop this named server. Omit it to stop all servers in this session. |
+
+<details>
+<summary>Input JSON Schema</summary>
+
+```json
+{
+  "additionalProperties": false,
+  "properties": {
+    "server": {
+      "description": "Only stop this named server. Omit it to stop all servers in this session.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    }
+  },
+  "description": "Stop language servers owned by the current session.",
+  "type": "object"
+}
+```
+
+</details>
+
+#### Output payload fields
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `server` | `string / null` | No | — | The selected server, if the caller limited the operation to one route. |
+| `stopped_instances` | `integer` | Yes | — | The number of running instances stopped in the calling session. |
+
+<details>
+<summary>Output JSON Schema</summary>
+
+```json
+{
+  "required": [
+    "stopped_instances"
+  ],
+  "properties": {
+    "server": {
+      "description": "The selected server, if the caller limited the operation to one route.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "stopped_instances": {
+      "description": "The number of running instances stopped in the calling session.",
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    }
+  },
+  "description": "Result of stopping cached language server instances.",
+  "type": "object"
+}
+```
+
+</details>
+
+<a id="tool-agena.lsp.symbols"></a>
+
+### symbols
+
+**Tool ID** `agena.lsp.symbols`
+
+List file symbols or search workspace symbols.
+
+**Tags** `query` `lsp` `filesystem` `read_only`
+
+**Output delivery** `buffered` · **Sessions** Project, Bot
+
+#### Usage
+
+> Pass file_path to list functions, types and other symbols in a document. Also pass query to search the workspace of the language server selected by that file. Result ranges use zero-based UTF-16.
+
+#### Input parameters
+
+| Field | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `query` | `string / null` | No | — | With a query, search the workspace of the server selected by file_path. |
+| `file_path` | `string` | Yes | — |  |
+| `folder` | `string / null` | No | — | Base folder for a relative `file_path`. Only global (Bot) sessions use<br>it; a project session keeps resolving against its project root. |
+| `server` | `string / null` | No | — | A specific configured server when multiple servers handle the file. |
+| `expected_revision` | `string / null` | No | — | Expected SHA-256 from an earlier LSP result for this file. |
+
+<details>
+<summary>Input JSON Schema</summary>
+
+```json
+{
+  "required": [
+    "file_path"
+  ],
+  "properties": {
+    "file_path": {
+      "type": "string",
+      "x-agena-order": "000000.000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "folder": {
+      "description": "Base folder for a relative `file_path`. Only global (Bot) sessions use\nit; a project session keeps resolving against its project root.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000.000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "server": {
+      "description": "A specific configured server when multiple servers handle the file.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000.000002",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "expected_revision": {
+      "description": "Expected SHA-256 from an earlier LSP result for this file.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000.000003",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "query": {
+      "description": "With a query, search the workspace of the server selected by file_path.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    }
+  },
+  "description": "List document symbols, or search the selected server's workspace by name.",
+  "type": "object",
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "file_path": {}
+          },
+          "required": [
+            "file_path"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "file_path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "file_path"
+        ]
+      }
+    ]
+  }
 }
 ```
 

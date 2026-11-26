@@ -79,7 +79,17 @@ impl ToolExecutionView {
         // Presentation metadata is string-valued. Keeping it out of the
         // result's field namespace also preserves typed defaults that serde
         // omits, such as Read::truncated=false. Tool-owned metadata wins.
-        let mut public_metadata = self.public_metadata().peekable();
+        if let Some(report) = self.metadata.get(super::POST_EDIT_VALIDATION)
+            && let Ok(report) = serde_json::from_str(report)
+        {
+            payload
+                .entry(super::POST_EDIT_VALIDATION.to_owned())
+                .or_insert(report);
+        }
+        let mut public_metadata = self
+            .public_metadata()
+            .filter(|(key, _)| key.as_str() != super::POST_EDIT_VALIDATION)
+            .peekable();
         if public_metadata.peek().is_some()
             && let serde_json::Value::Object(metadata) = payload
                 .entry("metadata".to_owned())

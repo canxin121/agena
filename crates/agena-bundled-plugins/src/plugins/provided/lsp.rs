@@ -1,5 +1,4 @@
-//! `agena.lsp` plugin: read-only observability of the configured
-//! LSP servers plus model-visible navigation commands.
+//! Model tools for language server lifecycle, navigation, and diagnostics.
 
 use std::sync::{Arc, RwLock};
 
@@ -7,7 +6,9 @@ use crate::LspConfig;
 use serde::Serialize;
 
 use crate::part::{
-    LspDefinitionToolInput, LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput,
+    LspDefinitionToolInput, LspDiagnosticsManyToolInput, LspDiagnosticsToolInput,
+    LspHoverToolInput, LspPositionToolInput, LspReferencesToolInput, LspStartToolInput,
+    LspStartToolOutput, LspStopToolInput, LspStopToolOutput, LspSymbolsToolInput,
 };
 use crate::plugins::provided::router;
 use agena_plugin_host::PluginError;
@@ -44,12 +45,17 @@ fn lsp_settings_metadata() -> &'static [(&'static str, &'static str, &'static st
         (
             "/servers",
             "Servers",
-            "Named language server definitions keyed by server identifier.",
+            "Custom servers or replacements for named built-ins.",
         ),
         (
             "/servers/*",
             "Server",
             "A single named language server definition.",
+        ),
+        (
+            "/servers/*/disabled",
+            "Disabled",
+            "Remove the named server from routing.",
         ),
         (
             "/servers/*/process",
@@ -90,6 +96,21 @@ fn lsp_settings_metadata() -> &'static [(&'static str, &'static str, &'static st
             "/servers/*/routing/root_markers",
             "Root Markers",
             "Project-root markers used for this server. Leave empty to inherit the shared defaults.",
+        ),
+        (
+            "/servers/*/routing/language_ids",
+            "Language IDs",
+            "Extension-to-language ID overrides for synchronization.",
+        ),
+        (
+            "/servers/*/routing/prefer_outermost_root",
+            "Prefer Outermost Root",
+            "Prefer the outermost marker within the workspace when several ancestors match.",
+        ),
+        (
+            "/servers/*/session/configuration",
+            "Workspace Configuration",
+            "Settings returned to the server when it requests workspace configuration.",
         ),
         (
             "/servers/*/session/initialization_options",
@@ -159,20 +180,20 @@ struct LspServerSummary {
     display_name = "Language Servers",
     icon = crate::plugin_metadata::icon(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/plugin-icons/lsp.svg"))),
     authors = ["canxin121"],
-    help = "Inspect language-server availability and diagnostics, read hover documentation, and navigate symbols and references. Queries use the workspace language-server connections.",
+    help = "Language servers start on explicit queries or lsp.start. Use symbols to explore a file, definition and references for precise navigation, and diagnostics_many to check several files. Use lsp.stop to release this session's instances early. Idle instances stop automatically.",
     tags(agena_plugin_host::sdk::ToolTag::Lsp, agena_plugin_host::sdk::ToolTag::Discovery),
-    summary = "LSP read-only observability and navigation tools.",
+    summary = "Manage language servers and query code through LSP.",
     translations(
-        locale("zh-CN", summary = "通过 LSP 只读查看语言服务状态并导航代码。", help = "检查语言服务器的可用性和诊断，读取悬浮文档，并导航符号和引用。查询使用工作区的语言服务器连接。"),
-        locale("zh-TW", summary = "透過 LSP 唯讀檢視語言伺服器狀態並瀏覽程式碼。"),
-        locale("ja-JP", summary = "LSP を使って言語サーバーの状態を読み取り、コードをナビゲートします。"),
-        locale("ko-KR", summary = "LSP로 언어 서버 상태를 읽고 코드 위치를 탐색합니다."),
-        locale("fr-FR", summary = "Observer les serveurs de langage en lecture seule et naviguer dans le code via LSP."),
-        locale("de-DE", summary = "Sprachserver per LSP schreibgeschützt prüfen und im Code navigieren."),
-        locale("es-ES", summary = "Consulta en modo de solo lectura los servidores de lenguaje y navega por el código mediante LSP."),
-        locale("hi-IN", summary = "LSP के माध्यम से भाषा सर्वर की स्थिति केवल पढ़ें और कोड में नेविगेट करें।"),
-        locale("ar-SA", summary = "افحص خوادم اللغة للقراءة فقط وانتقل في الشيفرة عبر LSP."),
-        locale("pt-BR", summary = "Consulte servidores de linguagem em modo somente leitura e navegue pelo código via LSP.")
+        locale("zh-CN", summary = "启停语言服务器并通过 LSP 导航代码。", help = "显式查询或调用 lsp.start 时启动服务。用 lsp.stop 回收当前会话的进程。空闲实例会自动关闭。"),
+        locale("zh-TW", summary = "管理語言伺服器，並透過 LSP 瀏覽程式碼。"),
+        locale("ja-JP", summary = "言語サーバーを管理し、LSP でコードをナビゲートします。"),
+        locale("ko-KR", summary = "언어 서버를 관리하고 LSP로 코드를 탐색합니다."),
+        locale("fr-FR", summary = "Gérer les serveurs de langage et naviguer dans le code via LSP."),
+        locale("de-DE", summary = "Sprachserver verwalten und per LSP im Code navigieren."),
+        locale("es-ES", summary = "Gestiona los servidores de lenguaje y navega por el código mediante LSP."),
+        locale("hi-IN", summary = "भाषा सर्वर प्रबंधित करें और LSP के माध्यम से कोड में नेविगेट करें।"),
+        locale("ar-SA", summary = "أدر خوادم اللغة وتنقّل في الشيفرة عبر LSP."),
+        locale("pt-BR", summary = "Gerencie servidores de linguagem e navegue pelo código via LSP.")
     ),
     settings = LspConfig,
     settings_default = default,
@@ -253,57 +274,57 @@ impl LspPlugin {
     #[tool(
         tags(query, lsp, discovery, read_only),
         summary = "List configured language servers and executable availability.",
-        help = "Checks each command against its configured PATH from the workspace root without executing it; command_available=null means lookup was inconclusive. Presence does not guarantee successful initialization. Relative commands can resolve differently in individual project roots. running_roots lists initialized instances. Extension-specific servers take priority over catch-all servers; ties use lexical server name.",
+        help = "Lists built-in and custom routes. Checks command availability from the workspace root. command_available=null means lookup was inconclusive. running_roots lists live instances in the current session. Specific extension routes take priority over catch-all routes. Custom routes take priority over equally specific built-in routes.",
         translations(
             locale(
                 "zh-CN",
                 summary = "列出已配置的语言服务器及其可执行文件是否可用。",
-                help = "从工作区根目录按服务器配置的 PATH 检查命令，不会执行命令；`command_available=null` 表示无法确定是否存在。命令可用不代表服务器一定能初始化。相对命令在不同项目根目录下可能解析到不同位置。`running_roots` 列出已初始化的实例。针对特定扩展名的服务器优先于通用服务器；优先级相同时按服务器名称排序。"
+                help = "列出内置和自定义路由，并从工作区根目录检查命令可用性。`command_available=null` 表示无法确定。`running_roots` 列出当前会话中正在运行的实例。扩展名专用路由优先于通配路由，同类路由中自定义配置优先。"
             ),
             locale(
                 "zh-TW",
                 summary = "列出已設定的語言伺服器及其執行檔可用狀態。",
-                help = "從工作區根目錄依伺服器設定的 PATH 檢查命令，不會執行命令；`command_available=null` 表示無法判定是否存在。命令存在不代表伺服器一定能初始化。相對命令在不同專案根目錄可能解析到不同位置。`running_roots` 列出已初始化的執行個體。副檔名專用伺服器優先於通用伺服器；同級時依伺服器名稱排序。"
+                help = "從工作區根目錄依伺服器設定的 PATH 檢查命令，不會執行命令；`command_available=null` 表示無法判定是否存在。命令存在不代表伺服器一定能初始化。相對命令在不同專案根目錄可能解析到不同位置。`running_roots` 列出已初始化的執行個體。"
             ),
             locale(
                 "ja-JP",
                 summary = "設定済み言語サーバーと実行ファイルの有無を一覧表示します。",
-                help = "ワークスペースのルートから、設定された PATH に基づいて各コマンドを確認します。実行はしません。`command_available=null` は判定できなかったことを示し、存在しても初期化成功を保証しません。相対コマンドの解決先はプロジェクトルートごとに異なる場合があります。`running_roots` は初期化済みのインスタンスです。拡張子専用サーバーは汎用サーバーより優先され、同順位はサーバー名順です。"
+                help = "ワークスペースのルートから、設定された PATH に基づいて各コマンドを確認します。実行はしません。`command_available=null` は判定できなかったことを示し、存在しても初期化成功を保証しません。相対コマンドの解決先はプロジェクトルートごとに異なる場合があります。`running_roots` は初期化済みのインスタンスです。"
             ),
             locale(
                 "ko-KR",
                 summary = "구성된 언어 서버와 실행 파일 사용 가능 여부를 나열합니다.",
-                help = "작업 공간 루트에서 설정된 PATH를 기준으로 명령을 확인하며 실행하지는 않습니다. `command_available=null`은 확인할 수 없다는 뜻입니다. 명령이 존재해도 서버 초기화가 성공한다는 보장은 없습니다. 상대 경로 명령은 프로젝트 루트마다 다르게 해석될 수 있습니다. `running_roots`는 초기화된 인스턴스를 나타냅니다. 확장자 전용 서버가 범용 서버보다 우선하며, 우선순위가 같으면 서버 이름순입니다."
+                help = "작업 공간 루트에서 설정된 PATH를 기준으로 명령을 확인하며 실행하지는 않습니다. `command_available=null`은 확인할 수 없다는 뜻입니다. 명령이 존재해도 서버 초기화가 성공한다는 보장은 없습니다. 상대 경로 명령은 프로젝트 루트마다 다르게 해석될 수 있습니다. `running_roots`는 초기화된 인스턴스를 나타냅니다."
             ),
             locale(
                 "fr-FR",
                 summary = "Lister les serveurs de langage configurés et la disponibilité de leurs exécutables.",
-                help = "Depuis la racine de l’espace de travail, vérifie chaque commande avec le PATH configuré sans l’exécuter. `command_available=null` signifie que la vérification n’a pas pu conclure ; la présence ne garantit pas l’initialisation. Les commandes relatives peuvent varier selon la racine du projet. `running_roots` répertorie les instances initialisées. Les serveurs propres à une extension sont prioritaires sur les serveurs génériques ; à égalité, le nom du serveur départage."
+                help = "Depuis la racine de l’espace de travail, vérifie chaque commande avec le PATH configuré sans l’exécuter. `command_available=null` signifie que la vérification n’a pas pu conclure ; la présence ne garantit pas l’initialisation. Les commandes relatives peuvent varier selon la racine du projet. `running_roots` répertorie les instances initialisées."
             ),
             locale(
                 "de-DE",
                 summary = "Konfigurierte Sprachserver und verfügbare Programme auflisten.",
-                help = "Prüft jede Konfiguration vom Workspace-Stamm aus gegen den festgelegten PATH, ohne den Befehl auszuführen. `command_available=null` bedeutet, dass die Prüfung unklar blieb; ein vorhandener Befehl garantiert keine erfolgreiche Initialisierung. Relative Befehle können je nach Projektstamm anders aufgelöst werden. `running_roots` enthält initialisierte Instanzen. Erweiterungsspezifische Server haben Vorrang vor allgemeinen; bei Gleichstand entscheidet der Servername alphabetisch."
+                help = "Prüft jede Konfiguration vom Workspace-Stamm aus gegen den festgelegten PATH, ohne den Befehl auszuführen. `command_available=null` bedeutet, dass die Prüfung unklar blieb; ein vorhandener Befehl garantiert keine erfolgreiche Initialisierung. Relative Befehle können je nach Projektstamm anders aufgelöst werden. `running_roots` enthält initialisierte Instanzen."
             ),
             locale(
                 "es-ES",
                 summary = "Enumera los servidores de lenguaje configurados y si sus ejecutables están disponibles.",
-                help = "Comprueba cada comando desde la raíz del espacio de trabajo usando el PATH configurado, sin ejecutarlo. `command_available=null` indica que no se pudo determinar; que exista no garantiza que el servidor se inicialice. Los comandos relativos pueden resolverse de forma distinta según la raíz del proyecto. `running_roots` enumera las instancias inicializadas. Los servidores específicos de una extensión tienen prioridad sobre los genéricos; en caso de empate, se ordenan por nombre."
+                help = "Comprueba la disponibilidad de cada comando desde la raíz del espacio de trabajo usando el PATH configurado. `command_available=null` indica que la comprobación no fue concluyente. `running_roots` enumera las instancias activas de la sesión actual."
             ),
             locale(
                 "hi-IN",
                 summary = "कॉन्फ़िगर किए गए भाषा सर्वर और उनके executable की उपलब्धता दिखाएँ।",
-                help = "कार्यस्थान की मूल डायरेक्टरी से कॉन्फ़िगर किए गए PATH के अनुसार हर कमांड जाँचता है, चलाता नहीं। `command_available=null` का अर्थ है कि उपलब्धता तय नहीं हो सकी; मौजूद होने से initialization सफल होना सुनिश्चित नहीं होता। अलग-अलग प्रोजेक्ट रूट में सापेक्ष कमांड अलग तरह से मिल सकते हैं। `running_roots` शुरू किए गए इंस्टेंस दिखाता है। एक्सटेंशन-विशिष्ट सर्वर सामान्य सर्वर से पहले चुने जाते हैं; बराबरी पर सर्वर नाम क्रम लागू होता है।"
+                help = "कार्यस्थान की मूल डायरेक्टरी से कॉन्फ़िगर किए गए PATH के अनुसार कमांड की उपलब्धता जाँचता है। `command_available=null` का अर्थ है कि उपलब्धता तय नहीं हो सकी। `running_roots` मौजूदा सत्र में चल रहे सर्वर इंस्टेंस दिखाता है।"
             ),
             locale(
                 "ar-SA",
                 summary = "اعرض خوادم اللغة المُهيأة ومدى توفر ملفاتها التنفيذية.",
-                help = "يفحص كل أمر انطلاقًا من جذر مساحة العمل ووفق PATH المُهيأ، من دون تشغيله. تعني `command_available=null` تعذر الجزم بالتوفر، كما أن وجود الأمر لا يضمن نجاح التهيئة. قد تُحل الأوامر النسبية إلى مواقع مختلفة بحسب جذر المشروع. تعرض `running_roots` النسخ التي تمت تهيئتها. تتقدم الخوادم الخاصة بامتداد على الخوادم العامة، وعند التعادل يُرتب الاسم معجميًا."
+                help = "يتحقق من توفر كل أمر انطلاقًا من جذر مساحة العمل ووفق PATH المُهيأ. تعني `command_available=null` تعذّر تحديد التوفر. تعرض `running_roots` مثيلات الخوادم النشطة في الجلسة الحالية."
             ),
             locale(
                 "pt-BR",
                 summary = "Liste os servidores de linguagem configurados e a disponibilidade dos executáveis.",
-                help = "Verifica cada comando a partir da raiz do espaço de trabalho usando o PATH configurado, sem executá-lo. `command_available=null` significa que não foi possível concluir; encontrar o comando não garante a inicialização. Comandos relativos podem apontar para locais diferentes conforme a raiz do projeto. `running_roots` lista as instâncias inicializadas. Servidores específicos de extensão têm prioridade sobre os genéricos; em caso de empate, vale a ordem alfabética do nome."
+                help = "Verifica a disponibilidade de cada comando a partir da raiz do espaço de trabalho usando o PATH configurado. `command_available=null` indica que a verificação foi inconclusiva. `running_roots` lista as instâncias ativas na sessão atual."
             )
         )
     )]
@@ -340,8 +361,47 @@ impl LspPlugin {
     }
 
     #[tool(
+        tags(execute, lsp, filesystem, mutate),
+        output(LspStartToolOutput),
+        summary = "Start the language server selected by a file.",
+        help = "Use file_path to select a language and project root. Call this to warm up the server before editing. Explicit LSP queries can also start it on demand. Reuse across calls requires persistent read access to the project root. Idle instances stop automatically. The result identifies the route and root, for example {\"server\":\"rust-analyzer\",\"root\":\".\"}.",
+        translations(locale(
+            "zh-CN",
+            summary = "按文件启动语言服务器。",
+            help = "根据 file_path 选择语言和项目根。显式查询也可按需启动服务。需要持续读取项目根的权限，才能跨调用保留进程。"
+        ))
+    )]
+    async fn dispatch_start(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        args: LspStartToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.invoke_routed_tool("lsp_start", args, context.session_id, context.call_id)
+    }
+
+    #[tool(
+        tags(lsp, mutate),
+        output(LspStopToolOutput),
+        summary = "Stop language servers in the current session.",
+        help = "Omit server to stop all cached instances in the current session. Pass a server name from lsp.servers to stop its instances across this session's project roots. A later explicit start or query can open it again. The result counts running instances stopped, for example {\"server\":\"rust-analyzer\",\"stopped_instances\":1}.",
+        translations(locale(
+            "zh-CN",
+            summary = "停止当前会话的语言服务器。",
+            help = "省略 server 会停止当前会话的所有实例。传入 lsp.servers 中的名称可停止指定服务器。以后可显式启动或查询以重新打开。"
+        ))
+    )]
+    async fn dispatch_stop(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        args: LspStopToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.invoke_routed_tool("lsp_stop", args, context.session_id, context.call_id)
+    }
+
+    #[tool(
         tags(query, lsp, filesystem, read_only),
         summary = "Resolve symbol definitions.",
+        help = "Use the current source position in zero-based UTF-16. Pass expected_revision from a previous result to reject changed source. Use targets[].selection_range or targets[].range for follow-up queries.",
         translations(
             locale("zh-CN", summary = "查找符号定义。"),
             locale("zh-TW", summary = "尋找符號定義。"),
@@ -366,6 +426,7 @@ impl LspPlugin {
     #[tool(
         tags(query, lsp, filesystem, read_only),
         summary = "Find symbol references.",
+        help = "Use a zero-based UTF-16 source position. The result includes target ranges and indicates when some locations were omitted.",
         translations(
             locale("zh-CN", summary = "查找符号引用。"),
             locale("zh-TW", summary = "尋找符號參照。"),
@@ -417,6 +478,7 @@ impl LspPlugin {
     #[tool(
         tags(query, lsp, filesystem, read_only),
         summary = "Fetch file diagnostics.",
+        help = "Only current diagnostics confirm a clean synchronized version. A stale, unversioned, disconnected or timed-out result can be rechecked with lsp.diagnostics or the project check command.",
         translations(
             locale("zh-CN", summary = "获取文件诊断信息。"),
             locale("zh-TW", summary = "取得檔案診斷資訊。"),
@@ -436,5 +498,57 @@ impl LspPlugin {
         args: LspDiagnosticsToolInput,
     ) -> SdkResult<ToolInvokeOutput> {
         self.invoke_routed_tool("lsp_diagnostics", args, context.session_id, context.call_id)
+    }
+
+    #[tool(
+        tags(query, lsp, filesystem, read_only),
+        summary = "Find implementations of a symbol.",
+        help = "Use the zero-based UTF-16 position of an interface, trait, or member. Results contain exact ranges when the server supports implementation queries.",
+        translations(locale("zh-CN", summary = "查找接口、trait 或成员的实现。"))
+    )]
+    async fn dispatch_implementation(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        args: LspPositionToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.invoke_routed_tool(
+            "lsp_implementation",
+            args,
+            context.session_id,
+            context.call_id,
+        )
+    }
+
+    #[tool(
+        tags(query, lsp, filesystem, read_only),
+        summary = "List file symbols or search workspace symbols.",
+        help = "Pass file_path to list functions, types and other symbols in a document. Also pass query to search the workspace of the language server selected by that file. Result ranges use zero-based UTF-16.",
+        translations(locale("zh-CN", summary = "列出文件符号，或按名称搜索工作区符号。"))
+    )]
+    async fn dispatch_symbols(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        args: LspSymbolsToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.invoke_routed_tool("lsp_symbols", args, context.session_id, context.call_id)
+    }
+
+    #[tool(
+        tags(query, lsp, filesystem, read_only),
+        summary = "Check diagnostics for several files.",
+        help = "Pass one to sixteen file_paths. Each file reports its version, diagnostic count, and state under a shared deadline.",
+        translations(locale("zh-CN", summary = "一次检查多个文件的语言服务诊断。"))
+    )]
+    async fn dispatch_diagnostics_many(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        args: LspDiagnosticsManyToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.invoke_routed_tool(
+            "lsp_diagnostics_many",
+            args,
+            context.session_id,
+            context.call_id,
+        )
     }
 }

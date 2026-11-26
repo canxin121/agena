@@ -2,23 +2,24 @@
 //! a background reader_loop demultiplexes inbound frames, request/response
 //! correlation lives in a DashMap keyed by request id.
 
+mod document;
 mod freshness;
+mod server;
+pub use document::valid_position;
 use freshness::PublishedDiagnostics;
 pub use freshness::{DiagnosticReport, DocumentReceipt};
 
 use portable_atomic::AtomicI64;
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Weak};
+use std::sync::{Arc, OnceLock, Weak};
 use std::time::Duration;
 
 use dashmap::DashMap;
 use lsp_types::{
-    ClientCapabilities, Diagnostic, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
-    InitializeParams, InitializeResult, Location, PartialResultParams, Position,
-    PublishDiagnosticsParams, ReferenceContext, ReferenceParams, TextDocumentContentChangeEvent,
-    TextDocumentIdentifier, TextDocumentItem, TextDocumentPositionParams, Uri,
-    VersionedTextDocumentIdentifier, WorkDoneProgressParams,
+    Diagnostic, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams, InitializeResult,
+    Location, PartialResultParams, Position, PublishDiagnosticsParams, ReferenceContext,
+    ReferenceParams, TextDocumentIdentifier, TextDocumentPositionParams, Uri,
+    WorkDoneProgressParams,
 };
 use serde::de::DeserializeOwned;
 use serde_json::Value;
@@ -49,9 +50,7 @@ const POST_SYNC_NAVIGATION_RETRY_DELAYS: &[Duration] = &[
     Duration::from_millis(200),
     Duration::from_millis(400),
     Duration::from_millis(800),
-    Duration::from_millis(1_000),
-    Duration::from_millis(1_500),
-    Duration::from_millis(2_000),
+    Duration::from_millis(1_600),
 ];
 
 /// Notification surfaced by a server (e.g. `textDocument/publishDiagnostics`).
@@ -94,21 +93,16 @@ struct Inner {
     document_sync: Mutex<()>,
     document_sequence: AtomicI64,
     initialized: arc_swap::ArcSwapOption<InitializeResult>,
-    shutdown: watch::Sender<bool>,
+    session: OnceLock<server::Session>,
+    closed: watch::Sender<Option<Arc<str>>>,
     /// Track which URIs we've sent didOpen for (and their content hash +
     /// version), so we can decide between didOpen / didChange.
-    open_docs: DashMap<Uri, OpenDocState>,
-}
-
-#[derive(Debug, Clone)]
-struct OpenDocState {
-    version: i32,
-    content_hash: u64,
+    open_docs: DashMap<Uri, document::OpenDocState>,
 }
 
 impl LspClient {
     pub fn new(transport: Arc<dyn LspTransport>) -> Arc<Self> {
-        let (shutdown, shutdown_rx) = watch::channel(false);
+        let (closed, closed_rx) = watch::channel(None);
         let inner = Arc::new(Inner {
             transport: Arc::clone(&transport),
             next_id: AtomicI64::new(1),
@@ -119,11 +113,12 @@ impl LspClient {
             document_sync: Mutex::new(()),
             document_sequence: AtomicI64::new(1),
             initialized: arc_swap::ArcSwapOption::from(None),
-            shutdown,
+            session: OnceLock::new(),
+            closed,
             open_docs: DashMap::new(),
         });
         let weak_inner = Arc::downgrade(&inner);
-        tokio::spawn(async move { reader_loop(weak_inner, transport, shutdown_rx).await });
+        tokio::spawn(async move { reader_loop(weak_inner, transport, closed_rx).await });
         Arc::new(Self { inner })
     }
 
@@ -140,24 +135,26 @@ impl LspClient {
     /// Latest diagnostics published for `uri` (drained from the per-uri
     /// cache, returning a clone). Empty vec for unknown URIs.
     pub fn diagnostics_for(&self, uri: &Uri) -> Vec<Diagnostic> {
-        self.inner
-            .diagnostics
-            .get(uri)
-            .map(|v| v.value().entries.clone())
-            .unwrap_or_default()
+        let version = self.inner.open_docs.get(uri).map(|doc| doc.version);
+        version.map_or_else(Vec::new, |version| {
+            self.diagnostic_report(uri, version).diagnostics
+        })
     }
 
     /// Snapshot every cached `(uri, diagnostics)` pair as plain strings. Used
     /// by read-only observability surfaces such as the `agena.lsp` plugin.
     pub fn diagnostics_snapshot(&self) -> Vec<(String, Vec<Diagnostic>)> {
-        self.inner
-            .diagnostics
+        let documents: Vec<_> = self
+            .inner
+            .open_docs
             .iter()
-            .map(|entry| {
-                (
-                    entry.key().as_str().to_string(),
-                    entry.value().entries.clone(),
-                )
+            .map(|entry| (entry.key().clone(), entry.version))
+            .collect();
+        documents
+            .into_iter()
+            .filter_map(|(uri, version)| {
+                let report = self.diagnostic_report(&uri, version);
+                (!report.diagnostics.is_empty()).then(|| (uri.to_string(), report.diagnostics))
             })
             .collect()
     }
@@ -166,39 +163,27 @@ impl LspClient {
         self.inner.initialized.load_full()
     }
 
-    pub async fn initialize(
-        &self,
-        root_uri: Option<Uri>,
-        client_name: &str,
-        client_version: &str,
-        initialization_options: Option<Value>,
-    ) -> LspResult<InitializeResult> {
-        #[allow(deprecated)]
-        let params = InitializeParams {
-            process_id: Some(std::process::id()),
-            root_path: None,
-            root_uri,
-            initialization_options,
-            capabilities: ClientCapabilities::default(),
-            trace: None,
-            workspace_folders: None,
-            client_info: Some(lsp_types::ClientInfo {
-                name: client_name.to_string(),
-                version: Some(client_version.to_string()),
-            }),
-            locale: None,
-            work_done_progress_params: WorkDoneProgressParams::default(),
-        };
-        let result: InitializeResult = self.request("initialize", params).await?;
-        self.inner.initialized.store(Some(Arc::new(result.clone())));
-        // The spec requires the initialized notification before any other
-        // request — in practice servers tolerate either order, but we send
-        // it eagerly for correctness.
-        self.notify("initialized", serde_json::json!({})).await?;
-        Ok(result)
+    /// A client cannot be reused after either direction of its transport fails.
+    pub fn is_alive(&self) -> bool {
+        self.inner.closed.borrow().is_none() && self.inner.transport.is_alive()
+    }
+
+    fn ensure_alive(&self) -> LspResult<()> {
+        if let Some(reason) = self.inner.closed.borrow().as_ref() {
+            return Err(LspError::TransportClosed(reason.to_string()));
+        }
+        if !self.inner.transport.is_alive() {
+            return Err(LspError::TransportClosed(
+                "LSP transport has stopped".into(),
+            ));
+        }
+        Ok(())
     }
 
     pub async fn shutdown(&self) -> LspResult<()> {
+        if !self.is_alive() {
+            return self.close_transport().await;
+        }
         let handshake = tokio::time::timeout(
             SHUTDOWN_REQUEST_TIMEOUT,
             self.request_opt::<Value, Value>("shutdown", Value::Null),
@@ -209,16 +194,7 @@ impl LspClient {
         } else {
             Ok(())
         };
-        let close_result = self.inner.transport.close().await;
-        if let Err(error) = self.inner.shutdown.send(true) {
-            tracing::debug!(
-                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                    "failed to notify the LSP reader about shutdown because it had already exited",
-                    &error,
-                ),
-                "LSP shutdown notification had no active receiver"
-            );
-        }
+        let close_result = self.close_transport().await;
         match handshake {
             Ok(Ok(_)) => match (exit_result, close_result) {
                 (Ok(()), result) | (result, Ok(())) => result,
@@ -265,129 +241,8 @@ impl LspClient {
     /// Used when initialization itself failed: no initialized peer exists to
     /// answer `shutdown`, but the child process must not be leaked.
     pub(crate) async fn close_transport(&self) -> LspResult<()> {
+        self.inner.disconnect("LSP client closed");
         self.inner.transport.close().await
-    }
-
-    /// Make sure the server has the current contents of `uri`. Sends
-    /// `didOpen` on first sight, `didChange` if we've already opened it
-    /// and the content hash differs, and is a no-op otherwise. Safe to
-    /// call before every LSP request.
-    pub async fn sync_document(&self, uri: Uri, text: String, language_id: &str) -> LspResult<()> {
-        self.sync_document_with_status(uri, text, language_id)
-            .await
-            .map(|_| ())
-    }
-
-    /// Synchronize a document and report whether the server needs to process
-    /// a new version. Callers that issue semantic navigation immediately can
-    /// pass the returned status to the `*_after_sync` methods below, which
-    /// retry transient empty responses while the server builds its index.
-    pub async fn sync_document_with_status(
-        &self,
-        uri: Uri,
-        text: String,
-        language_id: &str,
-    ) -> LspResult<DocumentSyncStatus> {
-        self.sync_document_with_receipt(uri, text, language_id)
-            .await
-            .map(|receipt| receipt.status)
-    }
-    pub async fn sync_document_with_receipt(
-        &self,
-        uri: Uri,
-        text: String,
-        language_id: &str,
-    ) -> LspResult<DocumentReceipt> {
-        let _gate = self.inner.document_sync.lock().await;
-        let hash = hash_str(&text);
-        let previous = self
-            .inner
-            .open_docs
-            .get(&uri)
-            .map(|entry| entry.value().clone());
-        if let Some(previous) = previous
-            .as_ref()
-            .filter(|previous| previous.content_hash == hash)
-        {
-            return Ok(DocumentReceipt {
-                status: DocumentSyncStatus::Unchanged,
-                version: previous.version,
-            });
-        }
-        let version = i32::try_from(self.inner.document_sequence.fetch_add(1, Ordering::SeqCst))
-            .map_err(|_| {
-                LspError::Protocol("LSP document version space exhausted; restart server".into())
-            })?;
-        self.inner.open_docs.insert(
-            uri.clone(),
-            OpenDocState {
-                version,
-                content_hash: hash,
-            },
-        );
-        let mut rollback = freshness::SyncRollback {
-            inner: Arc::clone(&self.inner),
-            uri: uri.clone(),
-            previous: previous.clone(),
-            armed: true,
-        };
-        let status = if previous.is_none() {
-            DocumentSyncStatus::Opened
-        } else {
-            DocumentSyncStatus::Changed
-        };
-        let result = if previous.is_none() {
-            self.notify(
-                "textDocument/didOpen",
-                DidOpenTextDocumentParams {
-                    text_document: TextDocumentItem {
-                        language_id: language_id.into(),
-                        uri: uri.clone(),
-                        version,
-                        text,
-                    },
-                },
-            )
-            .await
-        } else {
-            self.notify(
-                "textDocument/didChange",
-                DidChangeTextDocumentParams {
-                    text_document: VersionedTextDocumentIdentifier {
-                        uri: uri.clone(),
-                        version,
-                    },
-                    content_changes: vec![TextDocumentContentChangeEvent {
-                        range: None,
-                        range_length: None,
-                        text,
-                    }],
-                },
-            )
-            .await
-        };
-        result?;
-        rollback.armed = false;
-        self.inner
-            .diagnostics_changed
-            .send_modify(|generation| *generation = generation.wrapping_add(1));
-        Ok(DocumentReceipt { status, version })
-    }
-
-    /// Tell the server to drop a document we previously opened.
-    pub async fn close_document(&self, uri: Uri) -> LspResult<()> {
-        let _gate = self.inner.document_sync.lock().await;
-        self.inner.diagnostics.remove(&uri);
-        self.inner
-            .diagnostics_changed
-            .send_modify(|generation| *generation = generation.wrapping_add(1));
-        if self.inner.open_docs.remove(&uri).is_some() {
-            let params = DidCloseTextDocumentParams {
-                text_document: TextDocumentIdentifier { uri },
-            };
-            self.notify("textDocument/didClose", params).await?;
-        }
-        Ok(())
     }
 
     pub async fn definition(
@@ -403,7 +258,8 @@ impl LspClient {
             work_done_progress_params: WorkDoneProgressParams::default(),
             partial_result_params: PartialResultParams::default(),
         };
-        self.request_opt("textDocument/definition", params).await
+        self.request_feature("textDocument/definition", params)
+            .await
     }
 
     /// Resolve a definition after a document synchronization. A freshly
@@ -418,6 +274,62 @@ impl LspClient {
     ) -> LspResult<Option<GotoDefinitionResponse>> {
         self.retry_navigation_after_sync(sync_status, || self.definition(uri.clone(), position))
             .await
+    }
+
+    /// Find implementations of the symbol at a synchronized position.
+    pub async fn implementation_after_sync(
+        &self,
+        uri: Uri,
+        position: Position,
+        status: DocumentSyncStatus,
+    ) -> LspResult<Option<GotoDefinitionResponse>> {
+        self.retry_navigation_after_sync(status, || {
+            self.request_feature(
+                "textDocument/implementation",
+                GotoDefinitionParams {
+                    text_document_position_params: TextDocumentPositionParams {
+                        text_document: TextDocumentIdentifier { uri: uri.clone() },
+                        position,
+                    },
+                    work_done_progress_params: WorkDoneProgressParams::default(),
+                    partial_result_params: PartialResultParams::default(),
+                },
+            )
+        })
+        .await
+    }
+
+    pub async fn document_symbols(
+        &self,
+        uri: Uri,
+    ) -> LspResult<Option<lsp_types::DocumentSymbolResponse>> {
+        self.request_feature(
+            "textDocument/documentSymbol",
+            lsp_types::DocumentSymbolParams {
+                text_document: TextDocumentIdentifier { uri },
+                work_done_progress_params: WorkDoneProgressParams::default(),
+                partial_result_params: PartialResultParams::default(),
+            },
+        )
+        .await
+    }
+
+    pub async fn workspace_symbols(
+        &self,
+        query: String,
+        status: DocumentSyncStatus,
+    ) -> LspResult<Option<lsp_types::WorkspaceSymbolResponse>> {
+        self.retry_navigation_after_sync(status, || {
+            self.request_feature(
+                "workspace/symbol",
+                lsp_types::WorkspaceSymbolParams {
+                    query: query.clone(),
+                    work_done_progress_params: WorkDoneProgressParams::default(),
+                    partial_result_params: PartialResultParams::default(),
+                },
+            )
+        })
+        .await
     }
 
     pub async fn references(
@@ -437,7 +349,8 @@ impl LspClient {
                 include_declaration,
             },
         };
-        self.request_opt("textDocument/references", params).await
+        self.request_feature("textDocument/references", params)
+            .await
     }
 
     /// Find references after synchronizing the document. See
@@ -464,7 +377,7 @@ impl LspClient {
             },
             work_done_progress_params: WorkDoneProgressParams::default(),
         };
-        self.request_opt("textDocument/hover", params).await
+        self.request_feature("textDocument/hover", params).await
     }
 
     /// Fetch hover information after synchronizing the document. See
@@ -537,23 +450,33 @@ impl LspClient {
             method: method.to_string(),
             params: Some(params),
         };
+        self.ensure_alive()?;
+        let payload = serde_json::to_value(&req)?;
         let (tx, rx) = oneshot::channel();
         self.inner.pending.insert(id, tx);
-        let payload = serde_json::to_value(&req)?;
-        if let Err(err) = self.inner.transport.send(payload).await {
-            self.inner.pending.remove(&id);
-            return Err(err);
-        }
-        let resp = match tokio::time::timeout(DEFAULT_REQUEST_TIMEOUT, rx).await {
-            Ok(Ok(resp)) => resp,
-            Ok(Err(error)) => {
-                return Err(LspError::transport_closed(
-                    format!("response channel closed for LSP request `{method}` (id {id})"),
-                    &error,
-                ));
+        let mut pending = PendingRequest {
+            inner: &self.inner,
+            id,
+            cancel_on_drop: !matches!(method, "initialize" | "shutdown"),
+        };
+        let response = async {
+            self.send(payload).await?;
+            self.ensure_alive()?;
+            rx.await.map_err(|error| {
+                self.ensure_alive().err().unwrap_or_else(|| {
+                    LspError::transport_closed(
+                        format!("response channel closed for LSP request `{method}` (id {id})"),
+                        &error,
+                    )
+                })
+            })
+        };
+        let resp = match tokio::time::timeout(DEFAULT_REQUEST_TIMEOUT, response).await {
+            Ok(response) => {
+                pending.cancel_on_drop = false;
+                response?
             }
             Err(source) => {
-                self.inner.pending.remove(&id);
                 return Err(LspError::Timeout {
                     operation: format!("LSP request `{method}` (id {id})"),
                     timeout_ms: DEFAULT_REQUEST_TIMEOUT.as_millis() as u64,
@@ -579,7 +502,19 @@ impl LspClient {
             method: method.to_string(),
             params: Some(serde_json::to_value(params)?),
         };
-        self.inner.transport.send(serde_json::to_value(&n)?).await
+        self.send(serde_json::to_value(&n)?).await
+    }
+
+    async fn send(&self, payload: Value) -> LspResult<()> {
+        self.ensure_alive()?;
+        let result = self.inner.transport.send(payload).await;
+        if let Err(
+            error @ (LspError::Io(_) | LspError::Transport(_) | LspError::TransportClosed(_)),
+        ) = &result
+        {
+            self.inner.disconnect(&error.to_string());
+        }
+        result
     }
 }
 
@@ -609,6 +544,15 @@ impl NavigationResult for Hover {
     }
 }
 
+impl NavigationResult for lsp_types::WorkspaceSymbolResponse {
+    fn is_empty_navigation_result(&self) -> bool {
+        match self {
+            Self::Flat(symbols) => symbols.is_empty(),
+            Self::Nested(symbols) => symbols.is_empty(),
+        }
+    }
+}
+
 fn should_retry_navigation<T: NavigationResult>(result: &LspResult<Option<T>>) -> bool {
     match result {
         Ok(None) => true,
@@ -621,25 +565,20 @@ fn should_retry_navigation<T: NavigationResult>(result: &LspResult<Option<T>>) -
 async fn reader_loop(
     weak_inner: Weak<Inner>,
     transport: Arc<dyn LspTransport>,
-    mut shutdown: watch::Receiver<bool>,
+    mut closed: watch::Receiver<Option<Arc<str>>>,
 ) {
     loop {
         let frame = tokio::select! {
             biased;
-            changed = shutdown.changed() => {
-                if changed.is_err() || *shutdown.borrow() {
-                    return;
-                }
-                continue;
-            }
+            _ = closed.changed() => return,
             frame = transport.recv() => frame,
         };
         let frame = match frame {
-            Ok(f) => f,
-            Err(err) => {
-                tracing::debug!(target: "agena_lsp::reader", "transport ended: {err}");
+            Ok(frame) => frame,
+            Err(error) => {
+                tracing::debug!(target: "agena_lsp::reader", %error, "LSP transport ended");
                 if let Some(inner) = weak_inner.upgrade() {
-                    inner.pending.clear();
+                    inner.disconnect(&error.to_string());
                 }
                 return;
             }
@@ -649,7 +588,9 @@ async fn reader_loop(
         };
         match frame {
             InboundMessage::Response(resp) => {
-                let RequestId::Number(id) = resp.id;
+                let RequestId::Number(id) = resp.id else {
+                    continue;
+                };
                 if let Some((_, tx)) = inner.pending.remove(&id) {
                     if tx.send(resp).is_err() {
                         tracing::debug!(
@@ -669,49 +610,71 @@ async fn reader_loop(
                 handle_notification(&inner, n).await;
             }
             InboundMessage::Request(req) => {
-                // Reply with method-not-found so the server unblocks. We
-                // do not implement server→client requests beyond logging.
-                tracing::debug!(
-                    target: "agena_lsp::reader",
-                    method = %req.method,
-                    "ignoring server→client request"
-                );
-                let resp = JsonRpcResponse {
-                    jsonrpc: JSONRPC_VERSION.to_string(),
-                    id: req.id,
-                    result: None,
-                    error: Some(crate::protocol::JsonRpcError {
-                        code: -32601,
-                        message: format!("method '{}' not handled by client", req.method),
-                        data: None,
-                    }),
-                };
+                let reply = server::answer_request(inner.session.get(), req);
                 drop(inner);
-                let response = match serde_json::to_value(&resp) {
-                    Ok(response) => response,
-                    Err(error) => {
-                        tracing::error!(
-                            diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
-                            "failed to serialize the LSP method-not-found response"
-                        );
-                        continue;
-                    }
+                let sending = async { transport.send(serde_json::to_value(reply)?).await };
+                let result = tokio::select! {
+                    biased;
+                    _ = closed.changed() => return,
+                    result = tokio::time::timeout(DEFAULT_REQUEST_TIMEOUT, sending) => result,
                 };
-                if let Err(error) = transport.send(response).await {
-                    tracing::warn!(
-                        diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
-                        "failed to send the LSP method-not-found response"
-                    );
+                let reason = match result {
+                    Ok(Ok(())) => continue,
+                    Ok(Err(error)) => error.to_string(),
+                    Err(_) => "timed out replying to the language server".into(),
+                };
+                if let Some(inner) = weak_inner.upgrade() {
+                    inner.disconnect(&reason);
                 }
+                return;
             }
         }
     }
 }
 
-impl Drop for Inner {
+impl Inner {
+    fn disconnect(&self, reason: &str) {
+        self.closed.send_if_modified(|value| {
+            if value.is_some() {
+                return false;
+            }
+            *value = Some(Arc::from(reason));
+            true
+        });
+        self.pending.clear();
+        self.diagnostics_changed
+            .send_modify(|value| *value = value.wrapping_add(1));
+    }
+}
+
+struct PendingRequest<'a> {
+    inner: &'a Inner,
+    id: i64,
+    cancel_on_drop: bool,
+}
+
+impl Drop for PendingRequest<'_> {
     fn drop(&mut self) {
-        if self.shutdown.send(true).is_err() {
-            tracing::debug!("LSP shutdown signal had no active receivers");
+        let removed = self.inner.pending.remove(&self.id).is_some();
+        if removed
+            && self.cancel_on_drop
+            && self.inner.closed.borrow().is_none()
+            && let Ok(runtime) = tokio::runtime::Handle::try_current()
+        {
+            let transport = Arc::clone(&self.inner.transport);
+            let id = self.id;
+            runtime.spawn(async move {
+                let message = serde_json::json!({
+                    "jsonrpc": JSONRPC_VERSION,
+                    "method": "$/cancelRequest",
+                    "params": { "id": id },
+                });
+                if let Ok(Err(error)) =
+                    tokio::time::timeout(Duration::from_millis(500), transport.send(message)).await
+                {
+                    tracing::debug!(%error, request_id = id, "could not cancel LSP request");
+                }
+            });
         }
     }
 }
@@ -720,25 +683,25 @@ async fn handle_notification(inner: &Inner, n: JsonRpcNotification) {
     let params = n.params.unwrap_or(Value::Null);
     if n.method == "textDocument/publishDiagnostics"
         && let Ok(p) = serde_json::from_value::<PublishDiagnosticsParams>(params.clone())
+        && let Some(current_version) = inner.open_docs.get(&p.uri).map(|doc| doc.version)
+        && p.version.is_none_or(|version| version <= current_version)
     {
-        let mut existing =
-            inner
-                .diagnostics
-                .entry(p.uri.clone())
-                .or_insert_with(|| PublishedDiagnostics {
-                    version: p.version,
-                    entries: Vec::new(),
-                });
-        if !matches!((existing.version,p.version),(Some(old),Some(new)) if old>new) {
-            *existing = PublishedDiagnostics {
-                version: p.version,
-                entries: p.diagnostics,
+        inner.diagnostics_changed.send_modify(|generation| {
+            let existing = inner.diagnostics.get(&p.uri).and_then(|item| item.version);
+            // An unversioned publication cannot displace matching versioned evidence.
+            let older = match (existing, p.version) {
+                (Some(old), Some(new)) => old > new,
+                (Some(old), None) => old == current_version,
+                _ => false,
             };
-        }
-        drop(existing);
-        inner
-            .diagnostics_changed
-            .send_modify(|generation| *generation = generation.wrapping_add(1));
+            if !older {
+                *generation = generation.wrapping_add(1);
+                inner.diagnostics.insert(
+                    p.uri,
+                    PublishedDiagnostics::new(p.version, *generation, p.diagnostics),
+                );
+            }
+        });
     }
     let subscriber = inner.notifications.lock().await.clone();
     if let Some(tx) = subscriber {
@@ -768,3 +731,6 @@ fn hash_str(text: &str) -> u64 {
     text.hash(&mut h);
     h.finish()
 }
+
+#[cfg(test)]
+mod tests;

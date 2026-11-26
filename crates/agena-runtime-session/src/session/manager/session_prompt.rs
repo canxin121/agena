@@ -301,6 +301,43 @@ fn capability_sections(role: SessionRelationKind, tools: &AvailableTools) -> Vec
         ));
     }
 
+    if tools.keys().any(|id| id.starts_with("agena.lsp.")) {
+        let mut guidance = String::from(
+            "Explicit LSP queries start language servers on demand. Automatic edit diagnostics reuse running instances in this session. Idle instances stop automatically.",
+        );
+        if let Some(servers) = tools.get("agena.lsp.servers") {
+            guidance.push_str(&format!(
+                " Use `{servers}` to check installed executables and this session's running roots."
+            ));
+        }
+        if let Some(start) = tools.get("agena.lsp.start") {
+            guidance.push_str(&format!(
+                " Use `{start}` when you want the language server ready before a series of edits."
+            ));
+        }
+        if let Some(stop) = tools.get("agena.lsp.stop") {
+            guidance.push_str(&format!(
+                " Use `{stop}` to release one server or all of this session's instances when you finish using them."
+            ));
+        }
+        paragraphs.push(guidance);
+    }
+    if let Some(symbols) = tools.get("agena.lsp.symbols") {
+        paragraphs.push(format!(
+            "When the project has a language server, use `{symbols}` to list a file's functions and types or search for a symbol by name. Use result ranges directly for semantic navigation. LSP ranges and cursor inputs use zero-based UTF-16."
+        ));
+    }
+    let navigation = plugin_tools(
+        tools,
+        "agena.lsp",
+        &["definition", "implementation", "references"],
+    );
+    if !navigation.is_empty() {
+        paragraphs.push(format!(
+            "Use {navigation} when textual matches are ambiguous or before changing an interface and its callers. Treat LSP diagnostics as current only when the result marks them current."
+        ));
+    }
+
     // Inspect-then-answer guidance for the model's own identity and runtime
     // state. Only tools advertised to this session are named.
     let session_roles: &[(&str, &str)] = &[
@@ -878,6 +915,28 @@ mod tests {
 
     fn prompt(role: SessionRelationKind, enabled: bool, names: &[&str]) -> String {
         assemble_system_prompt(role, enabled, &catalog(names), None, None, "", None)
+    }
+
+    #[test]
+    fn language_server_guidance_uses_the_visible_lifecycle_tools() {
+        let mut tools = catalog(&["lsp.servers", "lsp.start", "lsp.stop", "lsp.symbols"]);
+        tools.insert("agena.lsp.stop".into(), "language.release".into());
+        let text = capability_sections(SessionRelationKind::Root, &tools).join("\n");
+        assert!(text.contains("start language servers on demand"));
+        assert!(text.contains("Idle instances stop automatically"));
+        for name in [
+            "lsp.servers",
+            "lsp.start",
+            "language.release",
+            "lsp.symbols",
+        ] {
+            assert!(text.contains(&format!("`{name}`")), "missing {name}");
+        }
+        assert!(!text.contains("`lsp.stop`"));
+        let query_only = prompt(SessionRelationKind::Subagent, true, &["lsp.hover"]);
+        assert!(query_only.contains("start language servers on demand"));
+        assert!(!query_only.contains("`lsp.start`"));
+        assert!(!query_only.contains("`lsp.stop`"));
     }
 
     #[test]

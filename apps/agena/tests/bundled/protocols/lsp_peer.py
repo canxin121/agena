@@ -5,6 +5,7 @@ third-party imports, user configuration, or command execution.
 """
 import json
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -86,10 +87,13 @@ while True:
         respond(request, {
             "capabilities": {
                 "positionEncoding": "utf-16",
-                "textDocumentSync": {"openClose": True, "change": 1},
+                "textDocumentSync": {"openClose": True, "change": 2, "save": {"includeText": True}},
                 "hoverProvider": True,
                 "definitionProvider": True,
                 "referencesProvider": True,
+                "implementationProvider": True,
+                "documentSymbolProvider": True,
+                "workspaceSymbolProvider": True,
             },
             "serverInfo": {"name": "local-system-lsp", "version": "1.0"},
         })
@@ -103,8 +107,13 @@ while True:
     elif method == "textDocument/didChange":
         document = params["textDocument"]
         changes = params["contentChanges"]
-        if len(changes) != 1 or "range" in changes[0]:
-            raise ValueError("the fixture negotiated full document synchronization")
+        previous = re.split(r"\r\n|\r|\n", documents[document["uri"]]["text"])
+        expected_range = {
+            "start": {"line": 0, "character": 0},
+            "end": {"line": len(previous) - 1, "character": len(previous[-1].encode("utf-16-le")) // 2},
+        }
+        if len(changes) != 1 or changes[0].get("range") != expected_range:
+            raise ValueError("the fixture negotiated incremental synchronization")
         documents[document["uri"]] = {
             "text": changes[0]["text"],
             "version": document["version"],
@@ -112,6 +121,9 @@ while True:
         diagnostics(document["uri"])
     elif method == "textDocument/hover":
         document = documents[params["textDocument"]["uri"]]
+        if "force_peer_exit" in document["text"]:
+            record({"event": "forced-exit"})
+            sys.exit(0)
         marker = "updated" if "updated_symbol" in document["text"] else "initial"
         respond(request, {
             "contents": {
@@ -119,7 +131,7 @@ while True:
                 "value": "lsp-hover-%s; version=%d" % (marker, document["version"]),
             }
         })
-    elif method in ("textDocument/definition", "textDocument/references"):
+    elif method in ("textDocument/definition", "textDocument/references", "textDocument/implementation"):
         uri = params["textDocument"]["uri"]
         locations = [{
             "uri": uri,
@@ -136,7 +148,30 @@ while True:
                     "end": {"line": 1, "character": 14},
                 },
             })
-        respond(request, locations)
+        if method == "textDocument/definition":
+            respond(request, [{
+                "targetUri": uri,
+                "targetRange": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 18}},
+                "targetSelectionRange": locations[0]["range"],
+            }])
+        else:
+            respond(request, locations)
+    elif method == "textDocument/documentSymbol":
+        respond(request, [{
+            "name": "initial_symbol",
+            "kind": 13,
+            "range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 18}},
+            "selectionRange": {"start": {"line": 0, "character": 4}, "end": {"line": 0, "character": 18}},
+        }])
+    elif method == "workspace/symbol":
+        respond(request, [{
+            "name": "initial_symbol",
+            "kind": 13,
+            "location": {
+                "uri": next(iter(documents)),
+                "range": {"start": {"line": 0, "character": 4}, "end": {"line": 0, "character": 18}},
+            },
+        }])
     elif method == "textDocument/didClose":
         documents.pop(params["textDocument"]["uri"], None)
     elif method == "shutdown":

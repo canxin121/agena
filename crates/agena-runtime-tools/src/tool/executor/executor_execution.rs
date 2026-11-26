@@ -416,6 +416,12 @@ impl ToolExecutor {
                     ToolPayloadInput::CronHistory(input) => {
                         crate::tool::cron::execute_history_async(self, &input, &context).await?
                     }
+                    ToolPayloadInput::LspStart(input) => {
+                        crate::tool::lsp::execute_start_async(self, &input).await?
+                    }
+                    ToolPayloadInput::LspStop(input) => {
+                        crate::tool::lsp::execute_stop_async(self, &input).await?
+                    }
                     ToolPayloadInput::LspDefinition(input) => {
                         crate::tool::lsp::execute_definition_async(self, &input).await?
                     }
@@ -427,6 +433,15 @@ impl ToolExecutor {
                     }
                     ToolPayloadInput::LspDiagnostics(input) => {
                         crate::tool::lsp::execute_diagnostics_async(self, &input).await?
+                    }
+                    ToolPayloadInput::LspImplementation(input) => {
+                        crate::tool::lsp::execute_implementation_async(self, &input).await?
+                    }
+                    ToolPayloadInput::LspSymbols(input) => {
+                        crate::tool::lsp::execute_symbols_async(self, &input).await?
+                    }
+                    ToolPayloadInput::LspDiagnosticsMany(input) => {
+                        crate::tool::lsp::execute_diagnostics_many_async(self, &input).await?
                     }
                     payload => {
                         let payload_name = payload.tool_name();

@@ -16,12 +16,12 @@ use serde_json::Value;
 
 pub const JSONRPC_VERSION: &str = "2.0";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
 /// Identifier of a JSON-RPC request.
 pub enum RequestId {
     Number(i64),
-    // Strings appear in the wild though we never produce them.
+    String(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

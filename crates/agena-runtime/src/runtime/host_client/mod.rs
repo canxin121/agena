@@ -220,16 +220,6 @@ impl RuntimeHostClient {
             .map_err(plugin_error)
     }
 
-    fn executor_feature<T>(
-        &self,
-        feature: impl FnOnce(&crate::tool::ToolExecutor) -> Option<T>,
-        unavailable: &'static str,
-    ) -> Result<(crate::tool::ToolExecutor, T), PluginError> {
-        let executor = self.tool_executor()?;
-        let feature = feature(&executor).ok_or_else(|| host_unavailable(unavailable))?;
-        Ok((executor, feature))
-    }
-
     async fn callback_scoped_tool_executor(
         &self,
     ) -> Result<
@@ -1562,12 +1552,17 @@ impl HostClient for RuntimeHostClient {
     }
 
     async fn lsp_list_servers(&self) -> Result<HostLspListServersResponse, PluginError> {
-        let (_, registry) = self.executor_feature(
-            |executor| executor.lsp_registry().cloned(),
-            "lsp registry is not enabled in this runtime",
-        )?;
+        let session = current_host_callback_context().and_then(|context| context.session_id);
+        let executor = if session.is_some() {
+            self.callback_scoped_resource_executor().await?
+        } else {
+            self.tool_executor()?
+        };
+        let registry = executor
+            .lsp_registry()
+            .ok_or_else(|| host_unavailable("lsp registry is not enabled in this runtime"))?;
         let specs = registry
-            .server_statuses()
+            .server_statuses_for_session(session)
             .await
             .map_err(|error| PluginError::internal_error(&error))?;
         let servers = specs

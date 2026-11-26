@@ -18,9 +18,13 @@ pub mod transport;
 
 pub use client::{
     DiagnosticReport, DocumentReceipt, DocumentSyncStatus, LspClient, ServerNotification,
+    valid_position,
 };
 pub use error::{LspError, LspResult};
-pub use registry::{LspRegistry, LspSandboxPolicyBuilder, LspScopedSandboxBuilder, ResolveError};
+pub use registry::{
+    LspClientMode, LspConnection, LspRegistry, LspSandboxPolicyBuilder, LspScopedSandboxBuilder,
+    ResolveError,
+};
 pub use server_spec::LspServerSpec;
 pub use transport::{LspTransport, StdioTransport};
 

@@ -448,6 +448,14 @@ impl SessionManager {
                 .await;
         }
     }
+    async fn stop_session_lsp(&self, session: i64) {
+        let project = self.state.load().executor.lsp_registry().cloned();
+        let global = self.global_state.load().executor.lsp_registry().cloned();
+        for registry in [project, global].into_iter().flatten() {
+            registry.stop_session(session).await;
+        }
+    }
+
     /// Close admission and cancel owned work without dropping its supervisors.
     /// The asynchronous drain remains responsible for fencing/persisting it.
     pub fn request_shutdown(&self) {
@@ -523,6 +531,11 @@ impl SessionManager {
         tokio::time::timeout(Duration::from_secs(5), drain)
             .await
             .map_err(|_| AppError::PersistenceBusy)??;
+        let project = self.state.load().executor.lsp_registry().cloned();
+        let global = self.global_state.load().executor.lsp_registry().cloned();
+        for registry in [project, global].into_iter().flatten() {
+            registry.shutdown_all().await;
+        }
         Ok(())
     }
 }

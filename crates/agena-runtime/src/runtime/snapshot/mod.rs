@@ -142,7 +142,7 @@ pub(crate) struct RuntimeSnapshot {
     desktop_windows: DesktopWindowPool,
     _global_mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
     _global_plugin_shutdown: Option<Arc<agena_runtime::CallbackOnDrop>>,
-    _global_lsp_registration: Option<Arc<agena_runtime::AbortOnDrop>>,
+    _global_lsp_maintenance: Option<Arc<agena_runtime::AbortOnDrop>>,
     state: SnapshotState,
     resolution_meta: ConfigResolutionMeta,
     pub(super) host_client: Arc<super::host_client::RuntimeHostClient>,
@@ -437,14 +437,14 @@ impl RuntimeSnapshot {
         if let Ok(value) = agena_runtime::config_resolution_json_value(&global_resolution) {
             agena_runtime::dispatch_config_if_nonempty(Arc::clone(&global_plugins), value).await;
         }
-        let (global_lsp_registry, global_lsp_registration) = agena_runtime::compose_lsp_services(
+        let (global_lsp_registry, global_lsp_maintenance) = agena_runtime::compose_lsp_services(
             &global_resolution.config.plugins,
             &global_internal_root,
             agena_runtime::RUNTIME_CODEX_ORIGINATOR,
             client_identity.codex_package_version(),
         )
         .map_err(AppError::Config)?;
-        let (lsp_registry, lsp_registration) = agena_runtime::compose_lsp_services(
+        let (lsp_registry, lsp_maintenance) = agena_runtime::compose_lsp_services(
             &resolution.config.plugins,
             workspace_root,
             agena_runtime::RUNTIME_CODEX_ORIGINATOR,
@@ -490,7 +490,7 @@ impl RuntimeSnapshot {
             session_manager,
             mcp_manager,
             lsp_registry,
-            lsp_registration,
+            lsp_maintenance,
             None,
             plugin_shutdown,
         );
@@ -510,7 +510,7 @@ impl RuntimeSnapshot {
             desktop_windows,
             _global_mcp_manager: global_mcp_manager,
             _global_plugin_shutdown: global_plugin_shutdown,
-            _global_lsp_registration: global_lsp_registration,
+            _global_lsp_maintenance: global_lsp_maintenance,
             state: agena_runtime::compose_runtime_snapshot_state(
                 agena_runtime::RuntimeSnapshotCompositionInputs {
                     generation,

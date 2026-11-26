@@ -11,7 +11,7 @@ use agena_testkit::TestResult;
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 
-use super::super::{allow_permissions, fixture};
+use super::super::{allow_permissions, fixture_without_memory};
 
 async fn records(path: &Path) -> Result<Vec<Value>> {
     tokio::fs::read_to_string(path)
@@ -20,6 +20,15 @@ async fn records(path: &Path) -> Result<Vec<Value>> {
         .lines()
         .map(|line| serde_json::from_str(line).context("invalid LSP peer transcript record"))
         .collect()
+}
+
+fn configured_server<'a>(inventory: &'a Value, name: &str) -> Result<&'a Value> {
+    inventory["servers"]
+        .as_array()
+        .context("LSP server inventory has no servers")?
+        .iter()
+        .find(|server| server["name"] == name)
+        .with_context(|| format!("LSP route {name} was not registered"))
 }
 
 #[cfg(unix)]
@@ -44,7 +53,9 @@ async fn assert_peer_exited(pid: u32) -> Result<()> {
 pub(super) async fn language_server_navigation_and_document_versions() -> TestResult {
     let pid = Arc::new(AtomicU32::new(0));
     let observed_pid = pid.clone();
-    let result = fixture()
+    let result = fixture_without_memory()
+        // The fixture records its protocol in a test-owned directory outside the indexed project.
+        .env("AGENA_SANDBOX", "disabled")
         .expect_plugin("agena.lsp")
         .seed_file(
             "fixtures/lsp_peer.py",
@@ -56,6 +67,7 @@ pub(super) async fn language_server_navigation_and_document_versions() -> TestRe
             b"let initial_symbol = 1;\ninitial_symbol;\n".to_vec(),
         )
         .seed_file("workspace/unrouted.unknown", b"no LSP route".to_vec())
+        .seed_file("workspace/crash.rs", b"let force_peer_exit = 0;".to_vec())
         .configure_global_with(|config, paths, _| {
             config["plugins"]["list"]["agena.lsp"]["package"] = json!({"kind": "static"});
             config["plugins"]["list"]["agena.lsp"]["settings"] = json!({
@@ -85,42 +97,52 @@ pub(super) async fn language_server_navigation_and_document_versions() -> TestRe
         .run(move |case| async move {
             let user = case.user().new_session().await?;
             allow_permissions(&user).await?;
+            let log = case.paths().root.join("fixtures/lsp-rpc.jsonl");
+            ensure!(!log.try_exists()?, "startup launched the LSP peer");
             let servers = user.call_tool("lsp.servers", json!({})).await?;
             servers.assert_succeeded()?;
-            let configured = servers.data()?["servers"]
-                .as_array()
-                .context("LSP server inventory has no servers")?;
-            let configured = configured
-                .iter()
-                .find(|server| server["name"] == "local-fixture")
-                .context("the configured LSP peer was not registered")?;
+            for name in ["clangd", "gopls", "local-fixture", "pyright", "rust-analyzer", "typescript"] {
+                let route = configured_server(servers.data()?, name)?;
+                ensure!(route["running_roots"] == json!([]), "{route}");
+            }
+            let configured = configured_server(servers.data()?, "local-fixture")?;
             ensure!(
                 configured["command_available"] == true,
                 "Python 3 is required for repository protocol fixtures: {configured}"
             );
+
+            let cold_write = user.call_tool(
+                "fs.write",
+                json!({"path": "cold.rs", "content": "fn cold_write() {}\n"}),
+            ).await?;
+            cold_write.assert_succeeded()?;
+            ensure!(cold_write.data()?.get("post_edit_validation").is_none());
             ensure!(
-                configured["running_roots"]
-                    .as_array()
-                    .is_some_and(Vec::is_empty),
-                "listing LSP configuration eagerly launched a process"
+                !log.try_exists()?,
+                "inventory or a file write launched the LSP peer"
             );
 
-            let position = json!({"file_path": "sample.rs", "line": 0, "character": 4});
-            let hover = user.call_tool("lsp.hover", position.clone()).await?;
-            let log = case.paths().root.join("fixtures/lsp-rpc.jsonl");
+            let start = user.call_tool("lsp.start", json!({"file_path": "sample.rs"})).await?;
+            start.assert_succeeded()?;
+            ensure!(start.data()?["server"] == "local-fixture");
             let first_records = records(&log).await?;
             let started = first_records
                 .iter()
                 .find(|entry| entry["event"] == "started")
                 .context("LSP peer did not record its actual process identity")?;
-            observed_pid.store(
-                u32::try_from(started["pid"].as_u64().context("invalid LSP peer PID")?)?,
-                Ordering::SeqCst,
-            );
-            hover.assert_succeeded()?;
-            hover.assert_text_contains("lsp-hover-initial")?;
+            let first_pid = u32::try_from(started["pid"].as_u64().context("invalid LSP peer PID")?)?;
+            observed_pid.store(first_pid, Ordering::SeqCst);
             ensure!(started["shared_env"] == "shared-default");
             ensure!(started["server_env"] == "server-specific");
+            let servers = user.call_tool("lsp.servers", json!({})).await?;
+            servers.assert_succeeded()?;
+            let running = &configured_server(servers.data()?, "local-fixture")?["running_roots"];
+            ensure!(running == &json!([case.workspace().canonicalize()?]), "{running}");
+
+            let position = json!({"file_path": "sample.rs", "line": 0, "character": 4});
+            let hover = user.call_tool("lsp.hover", position.clone()).await?;
+            hover.assert_succeeded()?;
+            hover.assert_text_contains("lsp-hover-initial")?;
 
             let definition = user.call_tool("lsp.definition", position.clone()).await?;
             definition.assert_succeeded()?;
@@ -134,6 +156,29 @@ pub(super) async fn language_server_navigation_and_document_versions() -> TestRe
                     .is_some_and(|location| location.ends_with("sample.rs:1:5")),
                 "LSP source coordinates were not projected as one-based locations: {locations:?}"
             );
+
+            let data = definition.data()?;
+            ensure!(data["targets"][0]["range"]["start"]["character"] == 0);
+            ensure!(data["targets"][0]["selection_range"]["start"]["character"] == 4);
+            ensure!(data["position_encoding"] == "utf-16");
+            let revision = data["source_revision"].clone();
+
+            let implementation = user
+                .call_tool("lsp.implementation", position.clone())
+                .await?;
+            implementation.assert_succeeded()?;
+            ensure!(implementation.data()?["total_locations"] == 1);
+
+            let symbols = user
+                .call_tool("lsp.symbols", json!({"file_path": "sample.rs"}))
+                .await?;
+            symbols.assert_succeeded()?;
+            ensure!(symbols.data()?["symbols"][0]["name"] == "initial_symbol");
+            let symbols = user.call_tool("lsp.symbols", json!({
+                "file_path": "sample.rs", "query": "initial_symbol", "server": "local-fixture",
+            })).await?;
+            symbols.assert_succeeded()?;
+            ensure!(symbols.data()?["symbols"][0]["name"] == "initial_symbol");
 
             let mut reference_input = position.clone();
             reference_input["include_declaration"] = json!(false);
@@ -161,11 +206,40 @@ pub(super) async fn language_server_navigation_and_document_versions() -> TestRe
             diagnostics
                 .assert_text_contains(&format!("lsp-diagnostic-version-{initial_version}"))?;
 
-            case.seed_file(
-                "workspace/sample.rs",
-                b"let updated_symbol = 2;\nupdated_symbol;\n",
-            )
-            .await?;
+            let batch = user
+                .call_tool(
+                    "lsp.diagnostics_many",
+                    json!({
+                        "file_paths": ["sample.rs", "unrouted.unknown"],
+                    }),
+                )
+                .await?;
+            batch.assert_succeeded()?;
+            let batch_data = batch.data()?;
+            ensure!(batch_data["files"][0]["state"] == "current", "{batch_data}");
+            ensure!(batch_data["files"][1]["state"] == "error", "{batch_data}");
+
+            let edit = user
+                .call_tool(
+                    "fs.replace",
+                    json!({
+                        "path": "sample.rs",
+                        "old": "let initial_symbol = 1;\ninitial_symbol;\n",
+                        "new": "let updated_symbol = 2;\nupdated_symbol;\n",
+                    }),
+                )
+                .await?;
+            edit.assert_succeeded()?;
+            let edit_data = edit.data()?;
+            let validation = &edit_data["post_edit_validation"]["files"][0];
+            ensure!(validation["state"] == "current", "{edit_data}");
+            ensure!(validation["total_diagnostics"] == 1, "{validation}");
+            let mut stale_query = position.clone();
+            stale_query["expected_revision"] = revision;
+            user.call_tool("lsp.definition", stale_query)
+                .await?
+                .assert_failed()?;
+
             let updated = user.call_tool("lsp.hover", position).await?;
             updated.assert_succeeded()?;
             updated.assert_text_contains("lsp-hover-updated")?;
@@ -231,6 +305,13 @@ pub(super) async fn language_server_navigation_and_document_versions() -> TestRe
                     == "let initial_symbol = 1;\ninitial_symbol;\n"
             );
             ensure!(changed[0]["params"]["textDocument"]["version"] == next_version);
+            let saved = requests("textDocument/didSave");
+            ensure!(saved.len() == 1);
+            ensure!(saved[0]["params"]["text"] == "let updated_symbol = 2;\nupdated_symbol;\n");
+            ensure!(
+                changed[0]["params"]["contentChanges"][0]["range"]["end"]
+                    == json!({"line":2,"character":0})
+            );
             ensure!(
                 changed[0]["params"]["contentChanges"][0]["text"]
                     == "let updated_symbol = 2;\nupdated_symbol;\n"
@@ -248,6 +329,56 @@ pub(super) async fn language_server_navigation_and_document_versions() -> TestRe
                     .iter()
                     .all(|entry| entry["params"]["position"] == json!({"line": 0, "character": 4}))
             );
+
+            let stop = user.call_tool("lsp.stop", json!({"server":"local-fixture"})).await?;
+            stop.assert_succeeded()?;
+            ensure!(stop.data()?["stopped_instances"] == 1);
+            #[cfg(unix)]
+            assert_peer_exited(first_pid).await?;
+            let servers = user.call_tool("lsp.servers", json!({})).await?;
+            servers.assert_succeeded()?;
+            ensure!(configured_server(servers.data()?, "local-fixture")?["running_roots"] == json!([]));
+
+            let edit = user.call_tool(
+                "fs.replace",
+                json!({"path":"cold.rs", "old":"cold_write", "new":"after_stop"}),
+            ).await?;
+            edit.assert_succeeded()?;
+            ensure!(edit.data()?.get("post_edit_validation").is_none());
+            let after_stop = records(&log).await?;
+            ensure!(after_stop.iter().any(|entry| entry["method"] == "shutdown"));
+            ensure!(after_stop.iter().filter(|entry| entry["event"] == "started").count() == 1);
+
+            let position = json!({"file_path": "sample.rs", "line": 0, "character": 4});
+            let reopened = user.call_tool("lsp.hover", position.clone()).await?;
+            reopened.assert_succeeded()?;
+            reopened.assert_text_contains("lsp-hover-updated")?;
+            user.call_tool(
+                "lsp.hover",
+                json!({"file_path":"crash.rs", "line":0, "character":4}),
+            )
+            .await?
+            .assert_failed()?;
+            let servers = user.call_tool("lsp.servers", json!({})).await?;
+            servers.assert_succeeded()?;
+            ensure!(
+                configured_server(servers.data()?, "local-fixture")?["running_roots"] == json!([])
+            );
+
+            let recovered = user.call_tool("lsp.hover", position).await?;
+            recovered.assert_succeeded()?;
+            recovered.assert_text_contains("lsp-hover-updated")?;
+            let after = records(&log).await?;
+            let pids = after
+                .iter()
+                .filter(|entry| entry["event"] == "started")
+                .filter_map(|entry| entry["pid"].as_u64())
+                .collect::<Vec<_>>();
+            ensure!(
+                pids.len() == 3 && pids.windows(2).all(|pair| pair[0] != pair[1]),
+                "expected one fresh process after stop and one after crash: {pids:?}"
+            );
+            observed_pid.store(u32::try_from(pids[2])?, Ordering::SeqCst);
             Ok(())
         })
         .await;

@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use super::lsp::{LspDiagnosticResult, LspHoverResult, LspLocationsResult, LspSource, LspSymbol};
 use agena_tool::{CronJobSummary, CronRunSummary};
 use serde::{Deserialize, Serialize};
 use strum::Display;
@@ -8,8 +9,10 @@ use crate::part::{
     ApplyPatchToolInput, AskUserToolInput, AttachmentKind, CronCreateToolInput,
     CronDeleteToolInput, CronHistoryToolInput, CronJobControlToolInput, CronListToolInput,
     CronUpdateToolInput, GlobToolInput, GrepToolInput, LspDefinitionToolInput,
-    LspDiagnosticsToolInput, LspHoverToolInput, LspReferencesToolInput, ReadToolInput,
-    ShellToolInput, ToolSearchToolInput, WebFetchToolInput, WebSearchToolInput,
+    LspDiagnosticsManyToolInput, LspDiagnosticsToolInput, LspHoverToolInput, LspPositionToolInput,
+    LspReferencesToolInput, LspStartToolInput, LspStartToolOutput, LspStopToolInput,
+    LspStopToolOutput, LspSymbolsToolInput, ReadToolInput, ShellToolInput, ToolSearchToolInput,
+    WebFetchToolInput, WebSearchToolInput,
 };
 use agena_domain::{
     FileChangeRecord, StructuredObject, ToolInvocation, ToolOutput, WebSearchResult,
@@ -43,10 +46,15 @@ pub enum ToolPayloadInput {
     CronPause(CronJobControlToolInput),
     CronResume(CronJobControlToolInput),
     CronHistory(CronHistoryToolInput),
+    LspStart(LspStartToolInput),
+    LspStop(LspStopToolInput),
     LspDefinition(LspDefinitionToolInput),
     LspReferences(LspReferencesToolInput),
     LspHover(LspHoverToolInput),
     LspDiagnostics(LspDiagnosticsToolInput),
+    LspImplementation(LspPositionToolInput),
+    LspSymbols(LspSymbolsToolInput),
+    LspDiagnosticsMany(LspDiagnosticsManyToolInput),
 }
 
 impl ToolPayloadInput {
@@ -69,10 +77,15 @@ impl ToolPayloadInput {
             Self::CronPause(_) => "cron_pause",
             Self::CronResume(_) => "cron_resume",
             Self::CronHistory(_) => "cron_history",
+            Self::LspStart(_) => "lsp_start",
+            Self::LspStop(_) => "lsp_stop",
             Self::LspDefinition(_) => "lsp_definition",
             Self::LspReferences(_) => "lsp_references",
             Self::LspHover(_) => "lsp_hover",
             Self::LspDiagnostics(_) => "lsp_diagnostics",
+            Self::LspDiagnosticsMany(_) => "lsp_diagnostics_many",
+            Self::LspSymbols(_) => "lsp_symbols",
+            Self::LspImplementation(_) => "lsp_implementation",
         }
     }
 
@@ -180,10 +193,15 @@ impl ToolPayloadInput {
             ("agena", "cron", "pause") => ("cron_pause", None),
             ("agena", "cron", "resume") => ("cron_resume", None),
             ("agena", "cron", "history") => ("cron_history", None),
+            ("agena", "lsp", "start") => ("lsp_start", None),
+            ("agena", "lsp", "stop") => ("lsp_stop", None),
             ("agena", "lsp", "definition") => ("lsp_definition", None),
             ("agena", "lsp", "references") => ("lsp_references", None),
             ("agena", "lsp", "hover") => ("lsp_hover", None),
             ("agena", "lsp", "diagnostics") => ("lsp_diagnostics", None),
+            ("agena", "lsp", "diagnostics_many") => ("lsp_diagnostics_many", None),
+            ("agena", "lsp", "symbols") => ("lsp_symbols", None),
+            ("agena", "lsp", "implementation") => ("lsp_implementation", None),
             _ => return None,
         };
 
@@ -494,24 +512,23 @@ pub enum ToolPayloadOutput {
     CronHistory {
         entries: Vec<CronRunSummary>,
     },
-    LspDefinition {
-        locations: Vec<String>,
+    LspStart(LspStartToolOutput),
+    LspStop(LspStopToolOutput),
+    LspDefinition(LspLocationsResult),
+    LspReferences(LspLocationsResult),
+    LspImplementation(LspLocationsResult),
+    LspHover(LspHoverResult),
+    LspDiagnostics(LspDiagnosticResult),
+    LspSymbols {
+        #[serde(flatten)]
+        source: LspSource,
+        symbols: Vec<LspSymbol>,
+        total_symbols: usize,
+        truncated: bool,
     },
-    LspReferences {
-        locations: Vec<String>,
-    },
-    LspHover {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        contents: Option<String>,
-    },
-    LspDiagnostics {
-        entries: Vec<String>,
-        #[serde(default)]
-        state: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        document_version: Option<i32>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        reported_version: Option<i32>,
+    LspDiagnosticsMany {
+        files: Vec<LspDiagnosticResult>,
+        truncated: bool,
     },
 }
 
@@ -696,6 +713,13 @@ const PAYLOAD_OUTPUT_TOOLS: &[(&str, &str, &str, &str)] = &[
         "agena_cron_history",
     ),
     (
+        "lsp_start",
+        "lsp.start",
+        "agena.lsp.start",
+        "agena_lsp_start",
+    ),
+    ("lsp_stop", "lsp.stop", "agena.lsp.stop", "agena_lsp_stop"),
+    (
         "lsp_definition",
         "lsp.definition",
         "agena.lsp.definition",
@@ -719,6 +743,24 @@ const PAYLOAD_OUTPUT_TOOLS: &[(&str, &str, &str, &str)] = &[
         "agena.lsp.diagnostics",
         "agena_lsp_diagnostics",
     ),
+    (
+        "lsp_diagnostics_many",
+        "lsp.diagnostics_many",
+        "agena.lsp.diagnostics_many",
+        "agena_lsp_diagnostics_many",
+    ),
+    (
+        "lsp_symbols",
+        "lsp.symbols",
+        "agena.lsp.symbols",
+        "agena_lsp_symbols",
+    ),
+    (
+        "lsp_implementation",
+        "lsp.implementation",
+        "agena.lsp.implementation",
+        "agena_lsp_implementation",
+    ),
 ];
 
 fn payload_name_for_table(tool_name: &str) -> Option<String> {
@@ -737,10 +779,15 @@ const DIRECT_TOOL_MAPPINGS: &[(&str, &str, &str)] = &[
     ("apply_patch", "agena.fs", "apply_patch"),
     ("task", "agena.agent", "run"),
     ("ask_user", "agena.interaction", "ask"),
+    ("lsp_start", "agena.lsp", "start"),
+    ("lsp_stop", "agena.lsp", "stop"),
     ("lsp_definition", "agena.lsp", "definition"),
     ("lsp_references", "agena.lsp", "references"),
     ("lsp_hover", "agena.lsp", "hover"),
     ("lsp_diagnostics", "agena.lsp", "diagnostics"),
+    ("lsp_diagnostics_many", "agena.lsp", "diagnostics_many"),
+    ("lsp_symbols", "agena.lsp", "symbols"),
+    ("lsp_implementation", "agena.lsp", "implementation"),
 ];
 
 fn canonical_registry_tool_name(plugin: &str, tool: &str) -> String {

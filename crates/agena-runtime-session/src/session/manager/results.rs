@@ -263,7 +263,9 @@ impl SessionManager {
                     },
                     format: ContentFormat::Json,
                 });
-                raw.payload = None;
+                raw.payload = payload
+                    .get(crate::tool::POST_EDIT_VALIDATION)
+                    .map(|report| json!({crate::tool::POST_EDIT_VALIDATION: report}));
             }
         }
         let value = json!({"raw_output":raw,"title":execution.view.title,"summary":execution.view.summary,"metadata":execution.view.metadata,"invocation":invocation});

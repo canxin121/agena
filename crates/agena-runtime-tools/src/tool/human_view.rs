@@ -2678,6 +2678,25 @@ impl BuiltinHumanRenderer {
     fn specific_lsp_blocks(key: &str, object: &serde_json::Map<String, Value>) -> Vec<ViewBlock> {
         let mut blocks = Vec::new();
         match key {
+            "lsp.start" => blocks.extend(Self::details_block_if_nonempty(
+                "lsp-start",
+                "Language server running",
+                &[
+                    ("Server", Self::object_text(object, "server")),
+                    ("Root", Self::object_text(object, "root")),
+                ],
+            )),
+            "lsp.stop" => blocks.extend(Self::details_block_if_nonempty(
+                "lsp-stop",
+                "Language servers stopped",
+                &[
+                    ("Server", Self::object_text(object, "server")),
+                    (
+                        "Instances stopped",
+                        Self::object_text(object, "stopped_instances"),
+                    ),
+                ],
+            )),
             "lsp.servers" => {
                 if let Some(servers) = Self::object_array(object, "servers")
                     && let Some(table) = Self::scalar_table(
@@ -2703,27 +2722,57 @@ impl BuiltinHumanRenderer {
                     ));
                 }
             }
-            "lsp.definition" | "lsp.references" => {
-                let title = if key == "lsp.definition" {
-                    "Definitions"
-                } else {
-                    "References"
-                };
-                let empty = if key == "lsp.definition" {
-                    "No definitions found."
-                } else {
-                    "No references found."
+            "lsp.definition" | "lsp.references" | "lsp.implementation" => {
+                let (id, title, empty) = match key {
+                    "lsp.definition" => ("lsp-definitions", "Definitions", "No definitions found."),
+                    "lsp.implementation" => (
+                        "lsp-implementations",
+                        "Implementations",
+                        "No implementations found.",
+                    ),
+                    _ => ("lsp-references", "References", "No references found."),
                 };
                 blocks.push(Self::string_list_block(
-                    if key == "lsp.definition" {
-                        "lsp-definitions"
-                    } else {
-                        "lsp-references"
-                    },
+                    id,
                     title,
                     object.get("locations").and_then(Value::as_array),
                     empty,
                 ));
+            }
+            "lsp.symbols" => {
+                if let Some(symbols) = Self::object_array(object, "symbols")
+                    && let Some(table) = Self::scalar_table(
+                        "lsp-symbols",
+                        "Symbols",
+                        symbols,
+                        &[
+                            ("name", "Name"),
+                            ("path", "File"),
+                            ("container", "Container"),
+                        ],
+                    )
+                {
+                    blocks.push(table);
+                } else {
+                    blocks.push(Self::markdown_block("lsp-symbols", "No symbols found."));
+                }
+            }
+            "lsp.diagnostics_many" => {
+                if let Some(files) = Self::object_array(object, "files")
+                    && let Some(table) = Self::scalar_table(
+                        "lsp-diagnostics-many",
+                        "File diagnostics",
+                        files,
+                        &[
+                            ("file", "File"),
+                            ("state", "State"),
+                            ("total_diagnostics", "Diagnostics"),
+                            ("error", "Issue"),
+                        ],
+                    )
+                {
+                    blocks.push(table);
+                }
             }
             "lsp.hover" => {
                 if let Some(contents) = object.get("contents") {
@@ -4952,6 +5001,23 @@ impl BuiltinHumanRenderer {
             "notebook.edit_cell" => blocks.extend(Self::specific_notebook_blocks(&object)),
             _ => {}
         }
+        if let Some(files) = object
+            .get(super::POST_EDIT_VALIDATION)
+            .and_then(|validation| validation.get("files"))
+            .and_then(Value::as_array)
+            && let Some(table) = Self::scalar_table(
+                "post-edit-validation",
+                "Post-edit diagnostics",
+                files,
+                &[
+                    ("file", "File"),
+                    ("state", "State"),
+                    ("total_diagnostics", "Diagnostics"),
+                ],
+            )
+        {
+            blocks.push(table);
+        }
         if blocks.is_empty() && raw.text_content().trim().is_empty() && object.is_empty() {
             blocks.push(Self::empty_state_block(&key));
         }
@@ -5640,7 +5706,9 @@ impl BuiltinHumanRenderer {
                         blocks.push(Self::markdown_block("cron-history", "No run history."));
                     }
                 }
-                ToolPayloadOutput::LspDefinition { locations } => {
+                ToolPayloadOutput::LspDefinition(result)
+                | ToolPayloadOutput::LspImplementation(result) => {
+                    let locations = result.locations;
                     let values = locations
                         .iter()
                         .map(|location| format!("`{location}`"))
@@ -5651,7 +5719,8 @@ impl BuiltinHumanRenderer {
                         blocks.push(Self::markdown_block("definitions", "No definitions found."));
                     }
                 }
-                ToolPayloadOutput::LspReferences { locations } => {
+                ToolPayloadOutput::LspReferences(result) => {
+                    let locations = result.locations;
                     let values = locations
                         .iter()
                         .map(|location| format!("`{location}`"))
@@ -5662,13 +5731,15 @@ impl BuiltinHumanRenderer {
                         blocks.push(Self::markdown_block("references", "No references found."));
                     }
                 }
-                ToolPayloadOutput::LspHover { contents } => {
+                ToolPayloadOutput::LspHover(result) => {
+                    let contents = result.contents;
                     blocks.push(Self::markdown_block(
                         "hover",
                         contents.unwrap_or_else(|| "No hover information.".into()),
                     ));
                 }
-                ToolPayloadOutput::LspDiagnostics { entries, state, .. } => {
+                ToolPayloadOutput::LspDiagnostics(result) => {
+                    let (entries, state) = (result.entries, result.state);
                     let values = entries
                         .iter()
                         .cloned()
@@ -5685,6 +5756,14 @@ impl BuiltinHumanRenderer {
                             "diagnostics",
                             if state=="current" {"### Diagnostics\nNo diagnostics for the synchronized version."} else {"### Diagnostics\nCurrent-version diagnostics are not confirmed; do not infer clean code."},
                         ));
+                    }
+                }
+                ToolPayloadOutput::LspStart(_)
+                | ToolPayloadOutput::LspStop(_)
+                | ToolPayloadOutput::LspSymbols { .. }
+                | ToolPayloadOutput::LspDiagnosticsMany { .. } => {
+                    if let Some(payload) = raw.payload.as_ref() {
+                        blocks.extend(Self::generic_payload_blocks(payload, "lsp-results", false));
                     }
                 }
             }

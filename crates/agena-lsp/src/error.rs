@@ -13,6 +13,10 @@ pub enum LspError {
     TransportClosed(String),
     #[error("protocol error: {0}")]
     Protocol(String),
+    #[error("LSP message is {actual} bytes and exceeds the {limit}-byte limit")]
+    MessageTooLarge { actual: usize, limit: usize },
+    #[error("language server does not support `{0}`")]
+    Unsupported(&'static str),
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
     #[error("LSP error response: code={code} message={message}")]
@@ -24,6 +28,14 @@ pub enum LspError {
         #[source]
         source: tokio::time::error::Elapsed,
     },
+    #[error(
+        "keeping a language server running requires persistent read access to its project root"
+    )]
+    PersistentAccessRequired,
+    #[error(
+        "all cached language servers are busy; stop an unused server or retry after the current queries"
+    )]
+    PoolBusy,
     #[error("server not initialized")]
     NotInitialized,
     #[error("unknown LSP server: {0}")]

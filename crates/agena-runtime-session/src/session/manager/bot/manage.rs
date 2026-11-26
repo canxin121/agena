@@ -297,6 +297,7 @@ impl SessionManager {
                 if let Some(monitors) = self.tool_executor().monitor_registry() {
                     monitors.stop_session(target);
                 }
+                self.stop_session_lsp(target).await;
                 Ok(
                     json!({"session_id":target,"workspace_id":metadata.workspace_id,"title":metadata.title,"version":metadata.metadata_version.get(),"outcome":"deleted","deleted":true,"soft_delete":true,"url":link(target)}),
                 )

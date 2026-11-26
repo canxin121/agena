@@ -522,7 +522,15 @@ impl TranscriptState {
     }
 
     pub(crate) fn reset(&mut self, session_id: i64, title: String) {
-        self.session_id = Some(session_id);
+        self.reset_view(Some(session_id), title);
+    }
+
+    pub(crate) fn clear_session(&mut self) {
+        self.reset_view(None, String::new());
+    }
+
+    fn reset_view(&mut self, session_id: Option<i64>, title: String) {
+        self.session_id = session_id;
         self.session_title = title;
         // A different conversation cannot inherit the previous one's owner.
         self.owner_bot_id = None;

@@ -146,6 +146,7 @@ export type AgenaExecutionState = {
     agent_id?: string
     external_agent_options?: ExternalAgentOptions
     external_agent_commands?: ExternalAgentCommand[]
+    external_agent_command_preview?: boolean
     external_agent_details?: ExternalAgentDetails
     model_provider_id?: string | null
     model_adapter_id?: string | null

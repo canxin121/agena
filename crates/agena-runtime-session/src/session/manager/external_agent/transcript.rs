@@ -8,7 +8,7 @@ use agena_domain::{
     RawOutput, StructuredObject, ToolInvocation, ViewBlock,
 };
 use agena_runtime_tools::{media_input::PreparedMedia, tool::human_view::BuiltinHumanRenderer};
-use agena_storage::kernel::DocumentOutput;
+use agena_storage::kernel::{DocumentOutput, ExternalAgentCursorEntity};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use sha2::{Digest, Sha256};
 
@@ -320,6 +320,22 @@ impl Transcript {
 
     pub(super) fn snapshot_state(&self) -> ExternalAgentState {
         self.state.clone()
+    }
+
+    pub(super) fn cursor_tail(&self) -> Option<ExternalAgentCursorEntity> {
+        self.state.cursor_tail.clone()
+    }
+
+    pub(super) async fn record_cursor_tail(
+        &mut self,
+        round: &RoundHandle,
+        tail: Option<ExternalAgentCursorEntity>,
+    ) -> Result<(), AppError> {
+        if self.state.cursor_tail != tail {
+            self.state.cursor_tail = tail;
+            self.persist_state(round).await?;
+        }
+        Ok(())
     }
 
     pub(super) fn child_label(&self, source: &str) -> Option<&str> {

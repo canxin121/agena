@@ -633,6 +633,9 @@ impl App {
 
     pub(crate) fn handle_confirm_action(&mut self, action: ConfirmAction) {
         match action {
+            ConfirmAction::NativeAgentChange { session_id, action } => {
+                self.change_native_management(session_id, action, None)
+            }
             ConfirmAction::Rewind {
                 session_id,
                 at_message_id,

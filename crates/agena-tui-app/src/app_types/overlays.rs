@@ -269,6 +269,7 @@ pub(crate) struct ChoiceOverlay {
 
 #[derive(Debug, Clone)]
 pub(crate) enum ChoiceOverlayAction {
+    NativeAgent(Box<crate::app_native_agent::NativeAgentMenu>),
     Exit,
     SessionProfile {
         session_id: i64,
@@ -555,6 +556,10 @@ pub(crate) type ConfirmOverlay = ConfirmDialogState<ConfirmAction>;
 
 #[derive(Debug, Clone)]
 pub(crate) enum ConfirmAction {
+    NativeAgentChange {
+        session_id: i64,
+        action: agena_domain::ExternalAgentSessionAction,
+    },
     SettingsRestoreDefault {
         field: SettingsFieldSpec,
     },

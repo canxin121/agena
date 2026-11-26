@@ -7,11 +7,16 @@ import sys
 
 directory = Path.cwd()
 version = int(Path(".archive-version").read_text())
+split_history = Path(".split-antigravity-history").is_file()
+previous = "--app-data-dir" in sys.argv
 state_file = Path(".archive-state")
 sessions = json.loads(state_file.read_text()) if state_file.is_file() else {
     "saved": {"archived": True, "active": False},
     "ready": {"archived": False, "active": True},
 }
+if split_history and not previous:
+    state_file = Path(".archive-managed-state")
+    sessions = json.loads(state_file.read_text()) if state_file.is_file() else {}
 
 
 def send(**message):
@@ -41,11 +46,19 @@ for line in sys.stdin:
             result = {"protocolVersion": 1, "agentCapabilities": {
                 "sessionCapabilities": capabilities, "loadSession": True,
             }}
+            if split_history and not previous:
+                capabilities["resume"] = {}
+                result["agentCapabilities"]["_meta"] = {
+                    "antigravity": {"systemPrompt": {"append": True}},
+                }
         else:
             result = {"protocolVersion": 2, "capabilities": {"session": capabilities}}
     elif method == "session/list":
         assert params["cwd"] == str(directory) and "_meta" not in params
         filter_state = params["archived"]
+        if split_history and not previous and not Path(".managed-signed-in").is_file():
+            send(id=request["id"], error={"code": -32000, "message": "Authentication required"})
+            continue
         assert filter_state in {"exclude", "include", "only"}
         expected_cursor = "" if version == 2 else f"second/{filter_state}"
         if "cursor" in params:
@@ -79,7 +92,26 @@ for line in sys.stdin:
                 data["active"] = False
         state_file.write_text(json.dumps(sessions))
         result = {}
+    elif method in {"session/new", "session/resume"} and split_history and not previous:
+        if method == "session/resume" and native_id not in sessions:
+            send(id=request["id"], error={"code": -32002, "message": "Session not found"})
+            continue
+        meta = params["_meta"]["antigravity"]
+        assert meta["eagerMcpServers"] == ["agena"]
+        log(f"{method}-system-prompt", meta["systemPrompt"]["append"])
+        if method == "session/new":
+            sessions["managed-run"] = {"archived": False, "active": True}
+            state_file.write_text(json.dumps(sessions))
+            result = {"sessionId": "managed-run"}
+        else:
+            log(method, native_id)
+            result = {}
     elif method in {"session/load", "session/resume"}:
+        if split_history:
+            log("history-port", "previous" if previous else "managed")
+            if native_id not in sessions:
+                send(id=request["id"], error={"code": -32002, "message": "Session not found"})
+                continue
         assert native_id in sessions and params["cwd"] == str(directory)
         assert method == ("session/load" if version == 1 else "session/resume")
         log(method, native_id)
@@ -90,6 +122,13 @@ for line in sys.stdin:
             assert params["replayFrom"] == {"type": "start"}
             send(method="session/update", params={"sessionId": native_id, "update": {"sessionUpdate": "replay_complete"}})
         result = {}
+    elif method == "session/prompt" and split_history:
+        assert not previous and native_id == "managed-run"
+        log(method, native_id)
+        send(method="session/update", params={"sessionId": native_id, "update": {
+            "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Restricted Antigravity"},
+        }})
+        result = {"stopReason": "end_turn"}
     elif method == "session/close":
         result = {}
     else:

@@ -104,7 +104,8 @@ pub enum Command {
         agent: agena_domain::ExternalAgent,
         title: String,
         link: ExternalAgentLink,
-        turns: Vec<ExternalAgentHistoryTurn>,
+        #[serde(with = "native_history_turns")]
+        turns: Arc<[ExternalAgentHistoryTurn]>,
         state: ExternalAgentState,
         replace_view: Option<SessionId>,
     },
@@ -156,6 +157,8 @@ pub enum Command {
     Truncate {
         session: SessionId,
         message: EntryId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        external_agent: Option<Box<ExternalAgentRewind>>,
     },
     /// Start this conversation over without deleting its history.
     ///
@@ -307,6 +310,13 @@ pub enum Command {
         native_id: String,
         state: ExternalAgentState,
     },
+    UpdateExternalAgentCursor {
+        session: SessionId,
+        round: RoundId,
+        active: Option<Scope>,
+        native_id: String,
+        change: ExternalAgentCursorChange,
+    },
     BeginCompactionRound {
         scope: Scope,
         max_entries: usize,
@@ -433,6 +443,23 @@ pub enum Command {
         content: ContentId,
         before: u64,
     },
+}
+
+mod native_history_turns {
+    use super::*;
+
+    pub(super) fn serialize<S: serde::Serializer>(
+        turns: &[ExternalAgentHistoryTurn],
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        turns.serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Arc<[ExternalAgentHistoryTurn]>, D::Error> {
+        Vec::<ExternalAgentHistoryTurn>::deserialize(deserializer).map(Arc::from)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

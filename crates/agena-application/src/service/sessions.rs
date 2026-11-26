@@ -48,7 +48,7 @@ impl ApplicationService {
             ApplicationError::internal("Session execution commands are unavailable.")
         })?;
         commands
-            .external_agent_options(session_id, request.change)
+            .external_agent_options(session_id, request.change, request.preview)
             .await
             .map_err(|error| ApplicationError::from_failure(error.failure))
     }

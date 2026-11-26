@@ -1359,9 +1359,38 @@ impl AgenaClient {
         session_id: i64,
         change: Option<agena_domain::ExternalAgentOptionChange>,
     ) -> Result<agena_domain::ExternalAgentOptions, ClientError> {
+        self.request_external_agent_options(
+            session_id,
+            agena_api::commands::ExternalAgentOptionsParams {
+                change,
+                preview: false,
+            },
+        )
+        .await
+    }
+
+    pub async fn preview_external_agent_options(
+        &self,
+        session_id: i64,
+    ) -> Result<agena_domain::ExternalAgentOptions, ClientError> {
+        self.request_external_agent_options(
+            session_id,
+            agena_api::commands::ExternalAgentOptionsParams {
+                change: None,
+                preview: true,
+            },
+        )
+        .await
+    }
+
+    async fn request_external_agent_options(
+        &self,
+        session_id: i64,
+        params: agena_api::commands::ExternalAgentOptionsParams,
+    ) -> Result<agena_domain::ExternalAgentOptions, ClientError> {
         self.post_json(
             &format!("/api/v1/sessions/{session_id}/agent-options"),
-            serde_json::to_value(agena_api::commands::ExternalAgentOptionsParams { change })?,
+            serde_json::to_value(params)?,
         )
         .await
     }

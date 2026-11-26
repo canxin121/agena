@@ -1,10 +1,8 @@
-use std::collections::BTreeMap;
-
 use agena_provider::CompletionUsage;
-use agena_storage::kernel::ExternalAgentNativeCursor;
+use agena_storage::kernel::{ExternalAgentCursorEntity, ExternalAgentNativeCursor};
 use serde_json::{Value, json};
 
-use super::{MAX_CURSOR_BYTES, bounded_string};
+use super::{MAX_CURSOR_BYTES, bounded_string, cursors};
 
 const MAX_PROMPT_CURSORS: usize = 64;
 
@@ -27,7 +25,7 @@ impl Version {
                     "elicitation": elicitation,
                     "plan": {},
                     "subagents": {},
-                    "session": {"notices": {}, "compaction": {}, "promptSuggestions": {}, "configOptions": {"boolean": {}}}
+                    "session": {"notices": {}, "compaction": {}, "promptSuggestions": {}, "configOptions": {"boolean": {}}, "cursors": {}}
                 },
                 "clientInfo": info
             }),
@@ -137,34 +135,27 @@ impl ActivitySnapshot {
 pub(super) struct PromptLifecycle {
     accepted: bool,
     message_id: Option<String>,
-    cursors: BTreeMap<String, String>,
+    cursors: cursors::Book,
+    preceding: Option<cursors::Entity>,
+    tail: cursors::Tail,
+    allow_rewind: bool,
     activity: ActivitySnapshot,
     started: bool,
     stop: Option<Value>,
 }
 
-pub(in crate::session::manager::external_agent) fn fork_cursor(
-    update: &Value,
-) -> Option<ExternalAgentNativeCursor> {
-    let grant = &update["capabilities"]["fork"];
-    let anchor = &update["anchor"];
-    if update["sessionUpdate"] != "cursor_update"
-        || !(grant.is_object() || grant == true)
-        || anchor["type"] != "user_message"
-        || anchor["position"] != "before"
-    {
-        return None;
-    }
-    Some(ExternalAgentNativeCursor {
-        message_id: bounded_string(&anchor["messageId"], MAX_CURSOR_BYTES)?,
-        cursor_id: bounded_string(&update["cursorId"], MAX_CURSOR_BYTES)?,
-    })
-}
-
 impl PromptLifecycle {
-    pub(super) fn new(activity: ActivitySnapshot) -> Self {
+    pub(super) fn new(
+        activity: ActivitySnapshot,
+        preceding: Option<ExternalAgentCursorEntity>,
+        allow_rewind: bool,
+    ) -> Self {
+        let preceding = preceding.and_then(cursors::Entity::restore);
         Self {
             activity,
+            tail: cursors::Tail::new(preceding.clone()),
+            preceding,
+            allow_rewind,
             ..Self::default()
         }
     }
@@ -175,20 +166,15 @@ impl PromptLifecycle {
         }
         self.accepted = true;
         self.message_id = bounded_string(&result["messageId"], MAX_CURSOR_BYTES);
-        self.cursors
-            .retain(|message, _| self.message_id.as_ref() == Some(message));
     }
 
     pub(super) fn observe(&mut self, update: &Value) {
-        if let Some(cursor) = fork_cursor(update) {
-            if (!self.accepted || self.message_id.as_ref() == Some(&cursor.message_id))
-                && (self.cursors.len() < MAX_PROMPT_CURSORS
-                    || self.cursors.contains_key(&cursor.message_id))
-            {
-                self.cursors.insert(cursor.message_id, cursor.cursor_id);
-            }
+        if update["sessionUpdate"] == "cursor_update" {
+            self.cursors
+                .observe(update, self.allow_rewind, MAX_PROMPT_CURSORS);
             return;
         }
+        self.tail.observe(update);
         let previous = self.activity.foreground;
         if !self.activity.observe(update) {
             return;
@@ -224,13 +210,13 @@ impl PromptLifecycle {
         }
     }
 
-    pub(super) fn into_fork_cursor(mut self) -> Option<ExternalAgentNativeCursor> {
-        let message_id = self.message_id?;
-        let cursor_id = self.cursors.remove(&message_id)?;
-        Some(ExternalAgentNativeCursor {
-            message_id,
-            cursor_id,
-        })
+    pub(super) fn into_fork_cursor(self) -> Option<ExternalAgentNativeCursor> {
+        self.cursors
+            .for_user(self.message_id.as_deref(), self.preceding.as_ref())
+    }
+
+    pub(super) fn cursor_tail(&self) -> Option<ExternalAgentCursorEntity> {
+        self.tail.latest()
     }
 }
 
@@ -323,7 +309,7 @@ mod tests {
         let mut snapshot = ActivitySnapshot::default();
         let running = json!({"sessionUpdate": "state_update", "state": "running"});
         snapshot.observe(&running);
-        let mut prompt = PromptLifecycle::new(snapshot);
+        let mut prompt = PromptLifecycle::new(snapshot, None, false);
         prompt.observe(&running);
         prompt.observe(
             &json!({"sessionUpdate": "state_update", "state": "idle", "stopReason": "max_tokens"}),
@@ -364,13 +350,31 @@ mod tests {
             turn.into_fork_cursor(),
             Some(ExternalAgentNativeCursor {
                 message_id: "input".into(),
-                cursor_id: "opaque-cursor".into(),
+                cursor_id: Some("opaque-cursor".into()),
+                fork: true,
+                rewind: false,
             })
         );
 
         let mut command = PromptLifecycle::default();
         command.observe(&update("other", "unrelated", "before"));
         command.acknowledge(&json!({"messageId": "command"}));
-        assert_eq!(command.into_fork_cursor(), None);
+        assert_eq!(command.into_fork_cursor().unwrap().cursor_id, None);
+    }
+
+    #[test]
+    fn accepts_a_capability_withdrawal_without_repeating_the_anchor() {
+        let mut turn = PromptLifecycle::default();
+        turn.acknowledge(&json!({"messageId": "input"}));
+        turn.observe(&json!({
+            "sessionUpdate":"cursor_update", "cursorId":"opaque", "capabilities":{"fork":{}},
+            "anchor":{"type":"user_message", "messageId":"input", "position":"before"},
+        }));
+        turn.observe(&json!({
+            "sessionUpdate":"cursor_update", "cursorId":"opaque", "capabilities":null,
+        }));
+        let position = turn.into_fork_cursor().unwrap();
+        assert_eq!(position.cursor_id.as_deref(), Some("opaque"));
+        assert!(!position.fork);
     }
 }

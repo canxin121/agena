@@ -186,6 +186,9 @@ impl App {
             Overlay::TranscriptSearch(dialog) | Overlay::SessionRename(dialog) => {
                 self.help_for_editor(dialog.title.clone(), false)
             }
+            Overlay::NativeAgentEdit(editor) => {
+                self.help_for_editor(editor.title.clone(), editor.multiline)
+            }
             Overlay::HubProject(dialog) => self.help_for_editor(dialog.editor.title.clone(), false),
             Overlay::SettingsValueEdit(dialog) => self.help_for_editor(dialog.title.clone(), false),
             Overlay::PermissionRawEdit(dialog) => {

@@ -58,7 +58,7 @@ for raw in sys.stdin:
         log.write(f"{'index' if indexed else 'ordinary'} {method}\n")
     if method == "initialize":
         air = params.get("clientCapabilities", {}).get("_meta", {}).get("jetbrains", {}).get("air")
-        indexed = air is not None
+        indexed = "sessionIndex" in (air or {}).get("capabilities", [])
         version = 1 if indexed else int((cwd / ".ordinary-acp-version").read_text())
         if indexed:
             assert air == {"version": 1, "capabilities": ["sessionIndex"]}
@@ -153,6 +153,7 @@ for raw in sys.stdin:
         result = {}
     elif method == "session/delete":
         assert not indexed and params == {"sessionId": archived_id}
+        assert air is None
         deleted.touch()
         result = {}
     else:

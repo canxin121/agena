@@ -120,6 +120,9 @@ pub struct ResolveWorkspaceParams {
 pub struct ExternalAgentOptionsParams {
     /// Without a change, inspect the installed agent's current choices.
     pub change: Option<agena_domain::ExternalAgentOptionChange>,
+    /// Read startup options without opening a native session, even on older peers.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub preview: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

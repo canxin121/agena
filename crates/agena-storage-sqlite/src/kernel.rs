@@ -66,10 +66,34 @@ mod usage;
 const MAX_PENDING_BYTES: usize = 2 * 1024 * 1024;
 const MAX_CONTENT_PENDING_BYTES: usize = 14 * 1024 * 1024;
 const MAX_COMMAND_BYTES: usize = 1024 * 1024;
+const MAX_ACP_IMPORT_COMMAND_BYTES: usize = MAX_EXTERNAL_AGENT_HISTORY_METADATA_BYTES + 128 * 1024;
 const MAX_BATCH_COMMANDS: usize = 64;
 const MAX_BATCH_BYTES: usize = 512 * 1024;
 
 type Reply = Result<CommitReceipt<Mutation>>;
+
+#[derive(Default)]
+struct AcpImportDigest {
+    hash: Sha256,
+    bytes: usize,
+}
+
+impl std::io::Write for AcpImportDigest {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if self.bytes + bytes.len() + 512 > MAX_ACP_IMPORT_COMMAND_BYTES {
+            return Err(std::io::Error::other(
+                "ACP history exceeds the import byte limit",
+            ));
+        }
+        self.hash.update(bytes);
+        self.bytes += bytes.len();
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 
 struct Pending {
     request: RequestId,
@@ -102,6 +126,7 @@ struct Backend {
     snapshot_opens: Arc<Semaphore>,
     exports: archive::Exports,
     imports: Arc<Semaphore>,
+    acp_views: bool,
     storage_inventory: session_storage::InventoryCache,
 }
 
@@ -152,7 +177,7 @@ pub struct SqliteKernel {
 /// data directory for this baseline.
 pub async fn open_kernel_runtime(url: &str) -> Result<SqliteKernel> {
     let database = KernelDatabase::open(url).await.map_err(storage)?;
-    compose_kernel_runtime(database).await
+    compose_kernel_runtime(database, false).await
 }
 
 /// A process-local runtime for live ACP views. A new ID range on restart keeps
@@ -160,7 +185,10 @@ pub async fn open_kernel_runtime(url: &str) -> Result<SqliteKernel> {
 pub async fn open_acp_kernel() -> Result<SqliteKernel> {
     use sea_orm::{ConnectionTrait, DbBackend, Statement};
 
-    let kernel = open_kernel_runtime("sqlite::memory:").await?;
+    let database = KernelDatabase::open("sqlite::memory:")
+        .await
+        .map_err(storage)?;
+    let kernel = compose_kernel_runtime(database, true).await?;
     let epoch = (uuid::Uuid::new_v4().as_u128() as i64) & ((1 << 30) - 1);
     let first = agena_domain::ACP_SESSION_ID_START + (epoch << 22);
     kernel
@@ -211,7 +239,7 @@ impl SqliteKernel {
     }
 }
 
-async fn compose_kernel_runtime(database: KernelDatabase) -> Result<SqliteKernel> {
+async fn compose_kernel_runtime(database: KernelDatabase, acp_views: bool) -> Result<SqliteKernel> {
     let writer = database.writer.clone();
     let reader = database.reader.clone();
     let workspaces = Arc::new(crate::SeaWorkspaceRepository::with_reader(
@@ -237,7 +265,7 @@ async fn compose_kernel_runtime(database: KernelDatabase) -> Result<SqliteKernel
         reader.clone(),
     ));
     let diagnostics = KernelDiagnostics::default();
-    let (ports, maintenance) = compose_database(database, diagnostics.clone()).await?;
+    let (ports, maintenance) = compose_database(database, diagnostics.clone(), acp_views).await?;
     Ok(SqliteKernel {
         database: writer,
         reader_database: reader,
@@ -256,6 +284,7 @@ async fn compose_kernel_runtime(database: KernelDatabase) -> Result<SqliteKernel
 async fn compose_database(
     database: KernelDatabase,
     diagnostics: KernelDiagnostics,
+    acp_views: bool,
 ) -> Result<(KernelPorts, port::KernelMaintenance)> {
     commands::recover(&database.writer).await?;
     let (sender, receiver) = mpsc::channel(1024);
@@ -290,6 +319,7 @@ async fn compose_database(
         snapshot_opens: Arc::new(Semaphore::new(8)),
         exports: archive::Exports::default(),
         imports: Arc::new(Semaphore::new(2)),
+        acp_views,
         storage_inventory: Default::default(),
     });
     let maintenance = port::KernelMaintenance::new(backend.clone());
@@ -1416,6 +1446,9 @@ impl KernelBackend for Backend {
     }
     async fn commit(&self, request: RequestId, command: Command) -> Reply {
         let _bulk_import = if let Command::ImportExternalAgent { turns, .. } = &command {
+            if !self.acp_views {
+                return Err(invalid("native history requires an in-memory ACP view"));
+            }
             let media_bytes = turns
                 .iter()
                 .flat_map(ExternalAgentHistoryTurn::blobs)
@@ -1425,8 +1458,8 @@ impl KernelBackend for Backend {
             if media_bytes > MAX_EXTERNAL_AGENT_HISTORY_MEDIA_BYTES {
                 return Err(invalid("ACP history exceeds the 8 MiB attachment limit"));
             }
-            // Use the same admission as archive imports. The regular command
-            // queue still accounts for the non-media metadata below.
+            // Admit one bounded projection per bulk slot independently of
+            // the regular command queue's byte budget.
             Some(
                 self.imports
                     .clone()
@@ -1446,30 +1479,36 @@ impl KernelBackend for Backend {
         } else {
             None
         };
-        let encoded = blobs::command_bytes(&command)?;
-        let bytes = encoded.len() + 512;
-        if bytes > MAX_COMMAND_BYTES {
-            return Err(invalid(
-                "command exceeds 1 MiB; large output needs a content stream",
-            ));
-        }
+        let (digest, bytes, queue_charge) = if _bulk_import.is_some() {
+            let mut encoded = AcpImportDigest::default();
+            serde_json::to_writer(&mut encoded, &command).map_err(invalid)?;
+            (encoded.hash.finalize().into(), encoded.bytes + 512, 512)
+        } else {
+            let encoded = blobs::command_bytes(&command)?;
+            let bytes = encoded.len() + 512;
+            if bytes > MAX_COMMAND_BYTES {
+                return Err(invalid(
+                    "command exceeds 1 MiB; large output needs a content stream",
+                ));
+            }
+            (Sha256::digest(encoded).into(), bytes, bytes)
+        };
         let permit = self
             .budget
             .clone()
-            .try_acquire_many_owned(bytes as u32)
+            .try_acquire_many_owned(queue_charge as u32)
             .map_err(|_| KernelError::Busy)?;
         let (response, receive) = oneshot::channel();
         let pending = Pending {
             request,
             command,
-            digest: Sha256::digest(&encoded).into(),
+            digest,
             bytes,
             response,
             _permit: permit,
             _retention_read,
             _bulk_import,
         };
-        drop(encoded);
         self.sender
             .try_send(Work::Command(Box::new(pending)))
             .map_err(|error| match error {
@@ -1959,17 +1998,18 @@ async fn writer(
                 continue;
             }
         };
+        let bulk = first._bulk_import.is_some();
         let mut bytes = first.bytes;
         let mut batch = vec![first];
         // A short bounded collection window permits real group commit while
         // keeping send/cancel/interaction latency independent of providers.
         tokio::time::sleep(Duration::from_millis(1)).await;
-        while batch.len() < MAX_BATCH_COMMANDS && bytes < MAX_BATCH_BYTES {
+        while !bulk && batch.len() < MAX_BATCH_COMMANDS && bytes < MAX_BATCH_BYTES {
             let Ok(next) = receiver.try_recv() else {
                 break;
             };
             let next = match next {
-                Work::Command(next) => *next,
+                Work::Command(next) if next._bulk_import.is_none() => *next,
                 other => {
                     // Never batch across an append or another FIFO boundary.
                     carry = Some(other);
@@ -2456,6 +2496,7 @@ fn previous_list_session(command: &Command) -> Option<SessionId> {
         | Command::PrepareBlob { session, .. }
         | Command::PinBlob { session, .. }
         | Command::RefreshIdleExternalAgentState { session, .. }
+        | Command::UpdateExternalAgentCursor { session, .. }
         | Command::PruneContent { session, .. } => *session,
         Command::Notice { scope, .. }
         | Command::RecordCompaction { scope, .. }
@@ -2539,7 +2580,8 @@ pub(super) async fn list_state(
 
 fn change_target(command: &Command, mutation: &Mutation) -> (SessionId, ChangeKind) {
     match command {
-        Command::RefreshIdleExternalAgentState { session, .. } => {
+        Command::RefreshIdleExternalAgentState { session, .. }
+        | Command::UpdateExternalAgentCursor { session, .. } => {
             (*session, ChangeKind::ExternalAgentState)
         }
         Command::RecordExternalAgentState { scope, .. } => {

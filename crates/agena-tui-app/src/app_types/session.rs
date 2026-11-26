@@ -47,6 +47,13 @@ pub(crate) enum CommandPaletteCommand {
     /// (docs, input contract) dwarfs the plugin variant.
     BuiltIn(Box<crate::commands::ClientCommand>),
     Plugin(Box<agena_plugin_sdk::inspection::CommandCatalogItem>),
+    NativeAgentBrowser,
+    NativeAgentManagement {
+        session_id: i64,
+    },
+    NativeAgentAuth {
+        session_id: i64,
+    },
     ExternalAgentActivity {
         session_id: i64,
     },

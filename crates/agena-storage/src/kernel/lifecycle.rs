@@ -147,10 +147,12 @@ pub struct ExternalAgentHistoryTurn {
 #[serde(deny_unknown_fields)]
 pub struct ExternalAgentNativeCursor {
     pub message_id: String,
-    pub cursor_id: String,
+    pub cursor_id: Option<String>,
+    pub fork: bool,
+    pub rewind: bool,
 }
 
-/// ACP cursor paired with an exact local user entry and native session binding.
+/// Native position paired with an exact local user entry and session binding.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExternalAgentForkCursor {
@@ -158,7 +160,32 @@ pub struct ExternalAgentForkCursor {
     pub incarnation: Option<RoundId>,
     pub message_id: EntryId,
     pub native_message_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor_id: Option<String>,
+    #[serde(default = "native_fork_default")]
+    pub fork: bool,
+    #[serde(default)]
+    pub rewind: bool,
+}
+
+fn native_fork_default() -> bool {
+    true
+}
+
+/// A replacement capability set on an opaque native cursor. A later update
+/// can omit the anchor and still change the cursor's available operations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExternalAgentCursorChange {
     pub cursor_id: String,
+    pub before_user: Option<String>,
+    pub fork: bool,
+    pub rewind: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExternalAgentCursorEntity {
+    pub kind: String,
+    pub id: String,
 }
 
 impl ExternalAgentHistoryTurn {
@@ -170,7 +197,8 @@ impl ExternalAgentHistoryTurn {
                     .iter()
                     .chain(&self.response)
                     .flat_map(|part| match part {
-                        ExternalAgentHistoryPart::Text { .. } => &[][..],
+                        ExternalAgentHistoryPart::Text { .. }
+                        | ExternalAgentHistoryPart::Notice { .. } => &[][..],
                         ExternalAgentHistoryPart::Tool { blobs, .. } => blobs.as_slice(),
                     }),
             )
@@ -184,6 +212,10 @@ pub enum ExternalAgentHistoryPart {
         text: String,
         reasoning: bool,
     },
+    /// A local notice generated while projecting the native history.
+    Notice {
+        text: String,
+    },
     Tool {
         start: ToolStart,
         result: ToolResult,
@@ -192,6 +224,7 @@ pub enum ExternalAgentHistoryPart {
     },
 }
 
+pub const MAX_EXTERNAL_AGENT_HISTORY_METADATA_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_EXTERNAL_AGENT_HISTORY_MEDIA_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -219,7 +252,7 @@ pub struct ExternalAgentImport {
     pub agent: agena_domain::ExternalAgent,
     pub title: String,
     pub link: ExternalAgentLink,
-    pub turns: Vec<ExternalAgentHistoryTurn>,
+    pub turns: Arc<[ExternalAgentHistoryTurn]>,
     pub state: ExternalAgentState,
     pub replace_view: Option<SessionId>,
 }
@@ -236,10 +269,21 @@ pub struct ExternalAgentFork {
     pub title: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExternalAgentRewind {
+    pub expected_membership: MembershipGeneration,
+    pub expected_native: ExternalAgentLink,
+    pub before: ExternalAgentForkCursor,
+}
+
 /// User-facing state published by the native session.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ExternalAgentState {
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub history_read_only: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor_tail: Option<ExternalAgentCursorEntity>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub plans: BTreeMap<String, ExternalAgentPlan>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -316,14 +360,19 @@ impl ExternalAgentState {
             } else if !snapshot.options.is_empty() {
                 snapshot.options.truncate(snapshot.options.len() / 2);
             } else {
-                return Self::default();
+                return Self {
+                    history_read_only: snapshot.history_read_only,
+                    ..Self::default()
+                };
             }
         }
         snapshot
     }
 
     pub fn is_empty(&self) -> bool {
-        self.plans.is_empty()
+        !self.history_read_only
+            && self.cursor_tail.is_none()
+            && self.plans.is_empty()
             && self.options.is_empty()
             && self.commands.is_empty()
             && self.metadata.is_empty()
@@ -993,6 +1042,25 @@ impl SessionCommands {
                 .await?,
         )
     }
+
+    pub async fn rewind_external_agent(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        rewind: ExternalAgentRewind,
+    ) -> Result<()> {
+        self.0
+            .command(
+                request,
+                Command::Truncate {
+                    session,
+                    message: rewind.before.message_id,
+                    external_agent: Some(Box::new(rewind)),
+                },
+            )
+            .await?;
+        Ok(())
+    }
     /// Soft-delete only an idle, unchanged, human-confirmed target.
     pub async fn delete_checked(
         &self,
@@ -1077,7 +1145,14 @@ impl SessionCommands {
     ) -> Result<CommitReceipt<RewindResult>> {
         let r = self
             .0
-            .command(request, Command::Truncate { session, message })
+            .command(
+                request,
+                Command::Truncate {
+                    session,
+                    message,
+                    external_agent: None,
+                },
+            )
             .await?;
         match r.value {
             Mutation::Rewind(value) => Ok(CommitReceipt {

@@ -105,6 +105,7 @@ impl App {
             composer_items: Vec::new(),
             composer_media_epoch: 0,
             slash_command_suggestions: None,
+            external_agent_command_preview: None,
             slash_command_suggestion_actions: BTreeMap::new(),
             dismissed_slash_command_suggestions_for: None,
             file_mention_suggestions: None,

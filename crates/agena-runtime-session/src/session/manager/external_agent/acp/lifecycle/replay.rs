@@ -12,8 +12,8 @@ use agena_domain::{
 use agena_runtime_tools::media_input;
 use agena_storage::kernel::{
     BlobDescriptor, ExternalAgentHistoryBlob, ExternalAgentHistoryPart, ExternalAgentHistoryTurn,
-    ExternalAgentNativeCursor, ExternalAgentState, MAX_EXTERNAL_AGENT_HISTORY_MEDIA_BYTES,
-    ToolResult, ToolStart,
+    ExternalAgentState, MAX_EXTERNAL_AGENT_HISTORY_MEDIA_BYTES,
+    MAX_EXTERNAL_AGENT_HISTORY_METADATA_BYTES, ToolResult, ToolStart,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde_json::{Map, Value, json};
@@ -24,14 +24,13 @@ use super::super::super::state::{
     command_name,
 };
 use super::super::super::transcript::{TOOL_DIFF_BYTES, bind_agent_attachment, capture_v2_diff};
-use super::super::fork_cursor;
+use super::super::cursors;
 use super::bounded_string;
 use crate::AppError;
 use crate::session::manager::media::MEDIA_WORKERS;
 use agena_domain::session_kernel::ToolPhase;
 
 const MAX_REPLAY_WIRE_BYTES: usize = 24 * 1024 * 1024;
-const MAX_REPLAY_METADATA_BYTES: usize = 896 * 1024;
 const MAX_REPLAY_RECORDS: usize = 6_000;
 const MAX_REPLAY_UPDATES: usize = 65_536;
 const MAX_ENTRY_BLOBS: usize = 16;
@@ -41,9 +40,11 @@ pub(in super::super) struct Replay {
     entries: Vec<Record>,
     messages: HashMap<MessageKey, Vec<usize>>,
     tools: HashMap<String, usize>,
-    cursors: HashMap<String, ExternalAgentNativeCursor>,
+    cursors: cursors::Book,
+    announced_entities: HashSet<cursors::Entity>,
+    allow_rewind: bool,
     state: ExternalAgentState,
-    wire: ReplayBudget,
+    wire: ReplayBudget<MAX_REPLAY_WIRE_BYTES>,
     updates: usize,
     pub(super) complete: bool,
     complete_children: HashSet<String>,
@@ -65,16 +66,17 @@ struct MessageKey {
 enum Record {
     Blocks { key: MessageKey, blocks: Vec<Value> },
     Tool(ReplayTool),
+    Anchor(cursors::Entity),
     Discarded,
 }
 
 #[derive(Default)]
-struct ReplayBudget(usize);
+struct ReplayBudget<const LIMIT: usize>(usize);
 
-impl Write for ReplayBudget {
+impl<const LIMIT: usize> Write for ReplayBudget<LIMIT> {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
         self.0 += bytes.len();
-        if self.0 > MAX_REPLAY_WIRE_BYTES {
+        if self.0 > LIMIT {
             return Err(io::Error::other("ACP replay payload limit"));
         }
         Ok(bytes.len())
@@ -86,6 +88,13 @@ impl Write for ReplayBudget {
 }
 
 impl Replay {
+    pub(super) fn new(allow_rewind: bool) -> Self {
+        Self {
+            allow_rewind,
+            ..Self::default()
+        }
+    }
+
     pub(super) fn apply_setup_response(&mut self, response: &Value, v2: bool) {
         apply_setup_response(&mut self.state, response, v2);
     }
@@ -152,11 +161,22 @@ impl Replay {
         let cursor = kind == "cursor_update";
         if message.is_none() && !tool && !cursor {
             apply_native_update(&mut self.state, root, source, update);
+            if !self.complete
+                && let Some(entity) = cursors::Entity::from_update(update)
+                && self.announced_entities.insert(entity.clone())
+            {
+                self.account(update)?;
+                self.push(Record::Anchor(entity))?;
+            }
             return Ok(());
         }
         // Live transcript events can arrive before the response. The marker
         // ends the historical range, even if the peer keeps streaming.
         if self.complete {
+            if cursor {
+                self.account(update)?;
+                self.cursors.observe(update, self.allow_rewind, 0);
+            }
             return Ok(());
         }
         self.account(update)?;
@@ -164,8 +184,9 @@ impl Replay {
             self.message(role, replace, update)?;
         } else if tool {
             self.tool(update)?;
-        } else if let Some(cursor) = fork_cursor(update) {
-            self.cursors.insert(cursor.message_id.clone(), cursor);
+        } else {
+            self.cursors
+                .observe(update, self.allow_rewind, MAX_REPLAY_RECORDS);
         }
         Ok(())
     }
@@ -278,22 +299,44 @@ impl Replay {
         };
         let mut turns = Vec::<ExternalAgentHistoryTurn>::new();
         let mut prelude = Vec::new();
+        let mut preceding = None;
         for record in self.entries {
             match record {
                 Record::Blocks { key, blocks } if key.role == Role::User => {
                     let (document, blobs) = projection.user(blocks).await?;
                     if !document.is_empty() {
-                        let cursor = key.id.as_ref().and_then(|id| self.cursors.remove(id));
+                        let mut cursor =
+                            self.cursors.for_user(key.id.as_deref(), preceding.as_ref());
+                        if !self.complete
+                            && let Some(cursor) = &mut cursor
+                        {
+                            cursor.fork = false;
+                            cursor.rewind = false;
+                            cursor.cursor_id = None;
+                        }
                         turns.push(ExternalAgentHistoryTurn {
                             user: document,
-                            cursor: cursor.filter(|_| self.complete && !turns.is_empty()),
+                            cursor,
                             blobs,
                             prelude: std::mem::take(&mut prelude),
                             response: Vec::new(),
                         });
                     }
+                    preceding = key
+                        .id
+                        .as_deref()
+                        .map(|id| cursors::Entity::message("user_message", id));
                 }
                 Record::Blocks { key, blocks } => {
+                    let kind = if key.role == Role::Thought {
+                        "agent_thought"
+                    } else {
+                        "agent_message"
+                    };
+                    preceding = key
+                        .id
+                        .as_deref()
+                        .map(|id| cursors::Entity::message(kind, id));
                     let output = turns
                         .last_mut()
                         .map_or(&mut prelude, |turn| &mut turn.response);
@@ -302,12 +345,14 @@ impl Replay {
                         .await?;
                 }
                 Record::Tool(tool) => {
+                    preceding = Some(cursors::Entity::message("tool_call", &tool.id));
                     let part = tool.finish(&mut projection).await?;
                     turns
                         .last_mut()
                         .map_or(&mut prelude, |turn| &mut turn.response)
                         .push(part);
                 }
+                Record::Anchor(entity) => preceding = Some(entity),
                 Record::Discarded => {}
             }
         }
@@ -316,13 +361,48 @@ impl Replay {
                 "This native history has no recorded user message to associate with its assistant output.".into(),
             ));
         }
-        // The immutable attachment bytes are admitted separately. Reserve
-        // room in the 1 MiB writer command for the session state and identity.
-        if serde_json::to_vec(&turns)?.len() > MAX_REPLAY_METADATA_BYTES {
-            return Err(history_budget());
-        }
+        self.state.cursor_tail = preceding.map(cursors::Entity::saved);
+        retain_recent_turns(&mut turns)?;
         Ok((turns, self.state.bounded_snapshot(MAX_STATE_SNAPSHOT_BYTES)))
     }
+}
+
+fn retain_recent_turns(turns: &mut Vec<ExternalAgentHistoryTurn>) -> Result<(), AppError> {
+    type ProjectionBudget = ReplayBudget<MAX_EXTERNAL_AGENT_HISTORY_METADATA_BYTES>;
+    if serde_json::to_writer(ProjectionBudget::default(), &turns).is_ok() {
+        return Ok(());
+    }
+    // The retained view must be a contiguous suffix ending at the real
+    // conversation head. Reserve space for its array and projection notice.
+    let mut remaining = MAX_EXTERNAL_AGENT_HISTORY_METADATA_BYTES - 1024;
+    let available_turns = turns.len();
+    let mut retained_turns = 0;
+    for turn in turns.iter().rev() {
+        let mut budget = ProjectionBudget::default();
+        if serde_json::to_writer(&mut budget, turn).is_err() || budget.0 + 1 > remaining {
+            break;
+        }
+        remaining -= budget.0 + 1;
+        retained_turns += 1;
+    }
+    if retained_turns == 0 {
+        return Err(AppError::Config(
+            "The latest native turn exceeds the size limit for an Agena ACP history view.".into(),
+        ));
+    }
+    turns.drain(..available_turns - retained_turns);
+    let first = &mut turns[0];
+    // There is no local predecessor for a native cut before this user input.
+    first.cursor = None;
+    first.prelude.insert(0, ExternalAgentHistoryPart::Notice {
+        text: serde_json::to_string(&agena_runtime_contracts::NoticePart {
+            kind: "external_agent_history_window".into(),
+            summary: format!("Agena loaded the latest {retained_turns} of {available_turns} turns. The earlier turns remain in the native conversation."),
+            detail: None,
+            title: Some("Native history".into()),
+        })?,
+    });
+    serde_json::to_writer(ProjectionBudget::default(), &turns).map_err(|_| history_budget())
 }
 
 #[derive(Default)]
@@ -474,7 +554,17 @@ impl Projection<'_> {
         for block in blocks {
             if block["type"] == "skill" {
                 if let Some(name) = command_name(&block["name"]) {
-                    push_user_text(&mut document, format!("[Skill: {name}] "));
+                    document.0.push(ComposerNode::activity(ComposerActivity {
+                        id: ActivityId::new(),
+                        payload: ActivityPayload::SkillReference(
+                            agena_domain::SkillReferenceActivity::external(
+                                self.agent,
+                                name.to_owned(),
+                                String::new(),
+                            ),
+                        ),
+                        provenance: Default::default(),
+                    }));
                 }
                 continue;
             }

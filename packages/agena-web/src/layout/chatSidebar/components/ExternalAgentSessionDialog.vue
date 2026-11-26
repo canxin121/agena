@@ -26,6 +26,7 @@ const mutation = ref<NativeSessionAction['action'] | null>(null)
 const title = ref('')
 const directories = ref('')
 const beforeMessageId = ref<number | null>(null)
+const rewindMessageId = ref<number | null>(null)
 const error = ref('')
 let read: AbortController | undefined
 
@@ -43,6 +44,9 @@ async function refresh() {
     directories.value = response.additional_directories.join('\n')
     if (!response.fork_points?.some((point) => point.message_id === beforeMessageId.value)) {
       beforeMessageId.value = null
+    }
+    if (!response.rewind_points?.some((point) => point.message_id === rewindMessageId.value)) {
+      rewindMessageId.value = null
     }
   } catch (failure) {
     if (!request.signal.aborted) error.value = failure instanceof Error ? failure.message : String(failure)
@@ -92,9 +96,16 @@ function forkBeforeMessage() {
   }
 }
 
+function rewindBeforeMessage() {
+  if (rewindMessageId.value !== null) {
+    void manage({ action: 'rewind', before_message_id: rewindMessageId.value })
+  }
+}
+
 watch(() => props.session, () => {
   state.value = null
   beforeMessageId.value = null
+  rewindMessageId.value = null
   void refresh()
 }, { immediate: true })
 onBeforeUnmount(() => read?.abort())
@@ -116,6 +127,7 @@ onBeforeUnmount(() => read?.abort())
             <p class="break-all font-mono">{{ state.session.native_id }}</p>
             <p v-if="state.native_status === 'open'">{{ t('chat.nativeAgent.open') }}</p>
             <p v-else-if="state.native_status === 'saved'">{{ t('chat.nativeAgent.saved') }}</p>
+            <p v-if="state.capabilities.continue_conversation === false">{{ t('chat.nativeAgent.readOnlyHistory') }}</p>
           </div>
           <form v-if="state.capabilities.title" class="flex gap-2" @submit.prevent="manage({ action: 'set_title', title })">
             <Input
@@ -168,6 +180,34 @@ onBeforeUnmount(() => read?.abort())
               {{ t('chat.nativeAgent.forkBeforeMessage') }}
             </Button>
           </form>
+          <div v-if="state.capabilities.rewind_before_message && state.rewind_points?.length" class="flex flex-wrap gap-2">
+            <select
+              v-model="rewindMessageId"
+              :aria-label="t('chat.nativeAgent.chooseRewindMessage')"
+              :disabled="loading || mutation !== null"
+              class="min-w-0 flex-1 rounded-md border border-input bg-background px-2 py-1 text-sm"
+            >
+              <option :value="null" disabled>{{ t('chat.nativeAgent.chooseRewindMessage') }}</option>
+              <option v-for="point in state.rewind_points" :key="point.message_id" :value="point.message_id">
+                {{ point.label }}
+              </option>
+            </select>
+            <ConfirmPopover
+              :title="t('chat.nativeAgent.rewindBeforeMessage')"
+              :description="t('chat.nativeAgent.nativeRewindDescription')"
+              :confirm-text="t('chat.nativeAgent.rewindBeforeMessage')"
+              variant="destructive"
+              :busy="mutation !== null"
+              @confirm="rewindBeforeMessage"
+            >
+              <Button variant="outline" :disabled="loading || mutation !== null || rewindMessageId === null">
+                {{ t('chat.nativeAgent.rewindBeforeMessage') }}
+              </Button>
+            </ConfirmPopover>
+          </div>
+          <p v-else-if="state.capabilities.rewind_before_message" class="text-sm text-muted-foreground">
+            {{ t('chat.nativeAgent.reopenForRewind') }}
+          </p>
         </div>
         <p v-else class="text-sm text-muted-foreground">{{ t('chat.nativeAgent.notStarted') }}</p>
         <form

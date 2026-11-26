@@ -201,6 +201,7 @@ impl App {
                 Overlay::TranscriptSearch(dialog) | Overlay::SessionRename(dialog) => {
                     dialog.input.insert_str(text.as_str());
                 }
+                Overlay::NativeAgentEdit(editor) => editor.input.insert_str(text.as_str()),
                 Overlay::HubProject(dialog) => {
                     if !dialog.submitting {
                         dialog.error = None;

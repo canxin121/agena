@@ -7,6 +7,46 @@ use agena_tui::choice::ChoicePresentationStyle;
 use crate::{App, ChoiceItem, ChoiceOverlayAction, ui_text};
 
 impl App {
+    pub(crate) fn load_external_agent_command_preview(&mut self) {
+        let Some((session_id, _, _)) = self.external_agent_commands() else {
+            return;
+        };
+        if !self.can_preview_external_agent_commands(session_id)
+            || self
+                .external_agent_command_preview
+                .as_ref()
+                .is_some_and(|(id, _)| *id == session_id)
+        {
+            return;
+        }
+        self.external_agent_command_preview = Some((session_id, Vec::new()));
+        self.dispatch_backend_operation(
+            move |backend| async move {
+                backend
+                    .client()
+                    .preview_external_agent_options(session_id)
+                    .await
+            },
+            move |app, result| {
+                if app
+                    .external_agent_command_preview
+                    .as_ref()
+                    .is_none_or(|(id, _)| *id != session_id)
+                {
+                    return;
+                }
+                app.external_agent_command_preview = result
+                    .ok()
+                    .filter(|_| app.can_preview_external_agent_commands(session_id))
+                    .map(|options| (session_id, options.preview_commands));
+                if app.external_agent_command_preview.is_some() {
+                    app.refresh_command_palette();
+                    app.refresh_slash_command_suggestions();
+                }
+            },
+        );
+    }
+
     pub(crate) fn request_external_agent_work(
         &mut self,
         session_id: i64,

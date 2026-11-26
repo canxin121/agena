@@ -536,6 +536,12 @@ async fn external_agent_commands_follow_their_native_conversation() -> TestResul
             let antigravity_id = create(ExternalAgent::Antigravity).await?.id;
             let claude = case.user().attach_session(claude_id).await?;
             let antigravity = case.user().attach_session(antigravity_id).await?;
+            let preview = antigravity
+                .client()
+                .preview_external_agent_options(antigravity_id)
+                .await?;
+            ensure!(preview.options.is_empty() && preview.preview_commands.is_empty());
+            ensure!(!case.workspace().join(".acp-options-opened").exists());
             ensure!(
                 claude
                     .snapshot()
@@ -601,7 +607,28 @@ async fn external_agent_commands_follow_their_native_conversation() -> TestResul
                 .await?
                 .execution
                 .external_agent_commands;
-            ensure!(other_commands.len() == 1 && other_commands[0].name == "status");
+            ensure!(
+                other_commands
+                    .iter()
+                    .map(|command| command.name.as_str())
+                    .eq(["status", "compact"])
+            );
+            let run = antigravity
+                .send("/agent:compact")
+                .await?
+                .wait_settled()
+                .await?;
+            run.assert_succeeded()?;
+            ensure!(
+                antigravity
+                    .snapshot()
+                    .await?
+                    .execution
+                    .external_agent_details
+                    .compactions
+                    .iter()
+                    .any(|item| item.id == "agy-checkpoint-4" && item.status == "completed")
+            );
             ensure!(claude.snapshot().await?.execution.external_agent_commands == commands);
 
             let claude = case.user().attach_session(claude_id).await?;

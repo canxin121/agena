@@ -223,6 +223,17 @@ pub(crate) fn validate_session_input(
             }
             ActivityPayload::SkillReference(skill) => {
                 skills = skills.saturating_add(1);
+                if skill.external_agent.is_some() {
+                    if !acp
+                        || !agena_domain::ExternalAgentCommand::accepts_name(&skill.name)
+                        || skill.skill_id.is_some()
+                    {
+                        return Err(ApplicationError::bad_request(
+                            "The native Skill reference requires an ACP session and a valid Skill name.",
+                        ));
+                    }
+                    continue;
+                }
                 if skill.name.trim().is_empty()
                     || skill.content_hash.trim().is_empty()
                     || skill.source.trim().is_empty()

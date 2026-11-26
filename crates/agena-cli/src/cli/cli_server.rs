@@ -1653,13 +1653,20 @@ impl AgenaCli {
                         kind,
                         value: (!value.is_empty()).then_some(value),
                     });
-                let options = server
-                    .client
-                    .external_agent_options(args.session_id, change)
-                    .await
-                    .map_err(|error| {
-                        client_error("failed to configure external agent options", error)
-                    })?;
+                let options = if args.preview {
+                    server
+                        .client
+                        .preview_external_agent_options(args.session_id)
+                        .await
+                } else {
+                    server
+                        .client
+                        .external_agent_options(args.session_id, change)
+                        .await
+                }
+                .map_err(|error| {
+                    client_error("failed to read or change external agent options", error)
+                })?;
                 render_serialized(args.format, &options)
             }
             SessionsSubcommand::AgentAuth(args) => {
@@ -1787,6 +1794,9 @@ impl AgenaCli {
                         title,
                         before_message_id,
                     },
+                    super::AgentSessionAction::Rewind { before_message_id } => {
+                        ExternalAgentSessionAction::Rewind { before_message_id }
+                    }
                 };
                 let result = server
                     .client

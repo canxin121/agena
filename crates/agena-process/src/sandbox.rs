@@ -103,6 +103,9 @@ pub struct SandboxPolicy {
     /// itself and must never be filled from a tool's resource declaration.
     #[serde(default)]
     pub private_paths: Vec<PathBuf>,
+    /// Caller-owned private directory to use as the workload's HOME.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workload_home: Option<PathBuf>,
     #[serde(default)]
     pub network: SandboxNetwork,
     #[serde(default)]
@@ -764,6 +767,11 @@ fn mxc_request(payload: &LauncherRequest, scratch: &Path) -> io::Result<Containe
     reject_denied_runtime(&payload.policy, &[scratch.to_path_buf()])?;
     let mut environment = payload.environment.clone();
     private_environment(&mut environment, scratch)?;
+    if let Some(home) = &payload.policy.workload_home {
+        let home = utf8(home.as_os_str(), "workload home")?;
+        environment.insert("HOME".to_owned(), home.to_owned());
+        environment.insert("USERPROFILE".to_owned(), home.to_owned());
+    }
     if payload.policy.private_build_cache {
         environment.retain(|name, _| !name.eq_ignore_ascii_case("CARGO_TARGET_DIR"));
         let target = scratch.join("cache").join("cargo-target");
@@ -990,6 +998,13 @@ fn validate_policy_for_root(policy: &SandboxPolicy, temporary_root: &Path) -> io
         .cloned()
         .collect::<Vec<_>>();
     reject_shared_temporary_grants(&granted, temporary_root, &policy.private_paths)?;
+    if let Some(home) = &policy.workload_home
+        && (!policy.private_paths.contains(home) || !granted.contains(home) || !home.is_dir())
+    {
+        return Err(invalid(
+            "sandbox workload HOME must be an existing caller-owned private grant",
+        ));
+    }
     // A granted child below a denied parent has different semantics on the
     // supported OSes. Refuse it instead of accidentally re-exposing the child.
     for granted in policy

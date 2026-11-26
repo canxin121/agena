@@ -19,6 +19,10 @@ pub(crate) fn routes() -> Router<AppState> {
         )
         .route("/sessions/{session_id}/state", get(rest::get_session_state))
         .route(
+            "/sessions/{session_id}/prompts/preview",
+            get(rest::get_session_prompt_preview),
+        )
+        .route(
             "/sessions/{session_id}/parts",
             get(rest::list_session_parts),
         )

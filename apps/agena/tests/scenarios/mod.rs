@@ -36,6 +36,8 @@ mod external_agent_mcp;
 #[cfg(unix)]
 mod external_agent_providers;
 #[cfg(unix)]
+mod external_agent_startup;
+#[cfg(unix)]
 mod external_agent_transport;
 mod fault_lifecycle;
 mod git;

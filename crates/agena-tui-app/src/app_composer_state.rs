@@ -346,6 +346,21 @@ impl App {
         &mut self,
         skill: &agena_api::skills::SkillSummary,
     ) -> UiResult<()> {
+        self.stage_skill_activity(agena_domain::SkillReferenceActivity {
+            name: skill.name.clone(),
+            description: skill.description.clone(),
+            content_hash: skill.revision.clone(),
+            source: "agena.skills".into(),
+            external_agent: None,
+            skill_id: Some(skill.id.clone()),
+            aliases: Vec::new(),
+        })
+    }
+
+    pub(crate) fn stage_skill_activity(
+        &mut self,
+        skill: agena_domain::SkillReferenceActivity,
+    ) -> UiResult<()> {
         let references = self
             .composer_items
             .iter()
@@ -363,17 +378,13 @@ impl App {
             )));
         }
 
-        let plugin_id = "agena.skills".to_owned();
-        let content_hash = skill.revision.clone();
-        let payload =
-            agena_domain::ActivityPayload::SkillReference(agena_domain::SkillReferenceActivity {
-                name: skill.name.clone(),
-                description: skill.description.clone(),
-                content_hash: content_hash.clone(),
-                source: plugin_id.clone(),
-                skill_id: Some(skill.id.clone()),
-                aliases: Vec::new(),
-            });
+        let name = skill.name.clone();
+        let provenance = agena_domain::ActivityProvenance {
+            source: Some(skill.source.clone()),
+            content_hash: (!skill.content_hash.is_empty()).then(|| skill.content_hash.clone()),
+            plugin_id: skill.external_agent.is_none().then(|| skill.source.clone()),
+        };
+        let payload = agena_domain::ActivityPayload::SkillReference(skill);
         let placeholder =
             crate::composer_state_impls::composer_activity_presentation(&payload, &self.i18n).0;
         let placeholder = self.make_unique_composer_placeholder(placeholder);
@@ -382,21 +393,17 @@ impl App {
             activity: agena_domain::ComposerActivity {
                 id: agena_domain::ActivityId::new(),
                 payload,
-                provenance: agena_domain::ActivityProvenance {
-                    source: Some(plugin_id.clone()),
-                    content_hash: Some(content_hash),
-                    plugin_id: Some(plugin_id),
-                },
+                provenance,
             },
             placeholder,
             state: agena_api::part::PartExecutionStatusResource::Completed,
             recovery_text: None,
         });
         self.after_composer_text_mutated();
-        self.flash_success(self.i18n.text_args(
-            "flash-skill-attached",
-            &agena_tui::fl_args!("name" => skill.name.clone()),
-        ));
+        self.flash_success(
+            self.i18n
+                .text_args("flash-skill-attached", &agena_tui::fl_args!("name" => name)),
+        );
         Ok(())
     }
 

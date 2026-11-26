@@ -1,4 +1,5 @@
-use agena_domain::ExternalAgent;
+use agena_domain::{ExternalAgent, SessionRelationKind};
+use agena_storage::backend::content_blocks::DEFAULT_TEXT_BLOCK_BYTES;
 
 use super::*;
 
@@ -99,6 +100,9 @@ pub(super) async fn fork_points(
            AND r.provider_state_json ->> '$.replay.native_id' = ?2
            AND r.provider_state_json ->> '$.replay.incarnation' = ?3
            AND r.provider_state_json ->> '$.replay.message_id' = x.message_id
+           AND r.provider_state_json ->> '$.replay.cursor_id' IS NOT NULL
+           AND (COALESCE(r.provider_state_json ->> '$.replay.fork',1)=1
+                OR r.provider_state_json ->> '$.replay.rewind'=1)
            AND EXISTS(SELECT 1 FROM agena_segment_entries m
                       JOIN agena_session_segments s ON s.segment_id=m.segment_id
                       WHERE s.session_id=x.session_id AND m.entry_id=x.message_id
@@ -128,6 +132,59 @@ pub(super) async fn fork_points(
         .collect()
 }
 
+pub(super) async fn update_cursor(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+    link: &ExternalAgentLink,
+    change: &ExternalAgentCursorChange,
+) -> Result<()> {
+    let Some(incarnation) = link.incarnation else {
+        return Ok(());
+    };
+    let known: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM agena_rounds
+         WHERE session_id=?1 AND phase='succeeded'
+           AND provider_state_json ->> '$.replay.native_id'=?2
+           AND provider_state_json ->> '$.replay.incarnation'=?3
+           AND provider_state_json ->> '$.replay.cursor_id'=?4)",
+    )
+    .bind(session.get())
+    .bind(&link.native_id)
+    .bind(incarnation.get())
+    .bind(&change.cursor_id)
+    .fetch_one(&mut *connection)
+    .await
+    .map_err(sql_error)?;
+    let new_user = (!known && (change.fork || change.rewind))
+        .then_some(change.before_user.as_deref())
+        .flatten();
+    if !known && new_user.is_none() {
+        return Ok(());
+    }
+    // A previously announced cursor keeps its original user anchor. A new
+    // cursor can only attach to an exact native message ID we already hold.
+    sqlx::query(
+        "UPDATE agena_rounds SET provider_state_json=json_set(provider_state_json,
+          '$.replay.cursor_id',?4,'$.replay.fork',json(?5),'$.replay.rewind',json(?6))
+         WHERE session_id=?1 AND phase='succeeded'
+           AND provider_state_json ->> '$.replay.native_id'=?2
+           AND provider_state_json ->> '$.replay.incarnation'=?3
+           AND (provider_state_json ->> '$.replay.cursor_id'=?4
+                OR provider_state_json ->> '$.replay.native_message_id'=?7)",
+    )
+    .bind(session.get())
+    .bind(&link.native_id)
+    .bind(incarnation.get())
+    .bind(&change.cursor_id)
+    .bind(if change.fork { "true" } else { "false" })
+    .bind(if change.rewind { "true" } else { "false" })
+    .bind(new_user)
+    .execute(connection)
+    .await
+    .map_err(sql_error)?;
+    Ok(())
+}
+
 pub(super) async fn import(
     connection: &mut SqliteConnection,
     workspace: i64,
@@ -142,22 +199,49 @@ pub(super) async fn import(
     if title.trim().is_empty() || title.len() > 4096 || title.chars().any(char::is_control) {
         return Err(invalid("invalid native session title"));
     }
-    if let Some(existing) = existing_link(connection, workspace, agent, link).await? {
+    let previous = if let Some(existing) = existing_link(connection, workspace, agent, link).await?
+    {
         if replace_view != Some(existing) {
             return Ok(Mutation::Session(Box::new(
                 reads::metadata(connection, existing).await?,
             )));
         }
         require_idle(connection, existing).await?;
+        let metadata = reads::metadata(connection, existing).await?;
+        let configuration = super::lifecycle::configuration(connection, existing).await?;
         super::lifecycle::delete(connection, existing).await?;
-    }
+        Some((metadata, configuration))
+    } else {
+        None
+    };
+    let (previous_metadata, mut configuration) = match previous {
+        Some((metadata, config)) => (Some(metadata), config),
+        None => (None, SessionConfiguration::default()),
+    };
+    let title = previous_metadata
+        .as_ref()
+        .filter(|_| configuration.title_state.source == SessionTitleSource::Manual)
+        .map_or(title, |metadata| metadata.title.as_str());
     let now = now_ms();
-    let Mutation::Session(created) =
+    let Mutation::Session(mut created) =
         commands::create_session(connection, Some(workspace), title, now).await?
     else {
         return Err(storage("invalid native session creation"));
     };
     let session = created.id;
+    if let Some(metadata) = previous_metadata {
+        created.selection = metadata.selection;
+        created.favorite = metadata.favorite;
+        created.pinned = metadata.pinned;
+        sqlx::query(
+            "UPDATE agena_permission_rules SET session_id=? WHERE session_id=? AND scope='session'",
+        )
+        .bind(session.get())
+        .bind(metadata.id.get())
+        .execute(&mut *connection)
+        .await
+        .map_err(sql_error)?;
+    }
     let mut link = link.clone();
     let record_cursors = turns.iter().any(|turn| turn.cursor.is_some());
     for turn in turns {
@@ -189,15 +273,21 @@ pub(super) async fn import(
     link.resume_at = Some(ExternalAgentHistoryAnchor {
         tail: tail.map(EntryId::try_from).transpose().map_err(storage)?,
     });
-    let mut configuration = SessionConfiguration {
-        external_agent: Some(agent),
-        external_agent_link: Some(link),
-        external_agent_state: state.clone(),
-        ..Default::default()
-    };
+    configuration.external_agent = Some(agent);
+    configuration.external_agent_link = Some(link);
+    configuration.external_agent_state = state.clone();
+    configuration.external_agent_resume = None;
+    configuration.external_agent_inputs = None;
+    configuration.parent_session_id = None;
+    configuration.relation_kind = SessionRelationKind::Root;
+    configuration.conversation = None;
+    configuration.agent = None;
     bound_configuration_state(&mut configuration)?;
-    sqlx::query("UPDATE agena_sessions SET configuration_json=? WHERE id=?")
+    sqlx::query("UPDATE agena_sessions SET configuration_json=?,selection_json=?,favorite=?,pinned=? WHERE id=?")
         .bind(encode(&configuration)?)
+        .bind(created.selection.as_ref().map(encode).transpose()?)
+        .bind(created.favorite)
+        .bind(created.pinned)
         .bind(session.get())
         .execute(&mut *connection)
         .await
@@ -291,6 +381,8 @@ async fn import_turn(
             message_id: EntryId::try_from(user).map_err(storage)?,
             native_message_id: cursor.message_id.clone(),
             cursor_id: cursor.cursor_id.clone(),
+            fork: cursor.fork,
+            rewind: cursor.rewind,
         };
         let provider_state =
             serde_json::json!({"version": 1, "model": agent.run_identity(), "replay": cursor});
@@ -314,6 +406,19 @@ async fn import_turn(
                 import_text(connection, &round, text, *reasoning).await?
             }
             ExternalAgentHistoryPart::Text { .. } => continue,
+            ExternalAgentHistoryPart::Notice { text } => sqlx::query_scalar(
+                "INSERT INTO agena_entries (origin_session_id,execution_id,generation,message_id,
+                                                kind,body_json,created_at_ms)
+                     VALUES (?,?,1,?,'notice',?,?) RETURNING id",
+            )
+            .bind(session.get())
+            .bind(&execution)
+            .bind(user)
+            .bind(encode(text)?)
+            .bind(now)
+            .fetch_one(&mut *connection)
+            .await
+            .map_err(sql_error)?,
             ExternalAgentHistoryPart::Tool {
                 start,
                 result,
@@ -486,7 +591,7 @@ async fn publish_history_blobs(
 async fn write_text(connection: &mut SqliteConnection, source: i64, text: &str) -> Result<()> {
     let mut start = 0;
     while start < text.len() {
-        let end = text.floor_char_boundary(start + content::BLOCK_PIECE_BYTES);
+        let end = text.floor_char_boundary(start + DEFAULT_TEXT_BLOCK_BYTES);
         let body = &text.as_bytes()[start..end];
         let digest = Sha256::digest(body);
         sqlx::query(

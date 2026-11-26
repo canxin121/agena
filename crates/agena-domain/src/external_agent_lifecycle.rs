@@ -149,6 +149,9 @@ pub enum ExternalAgentSessionAction {
         title: Option<String>,
         before_message_id: Option<i64>,
     },
+    Rewind {
+        before_message_id: i64,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -161,6 +164,8 @@ pub enum ExternalAgentSessionResult {
         capabilities: ExternalAgentSessionCapabilities,
         #[serde(default)]
         fork_points: Vec<ExternalAgentForkPoint>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        rewind_points: Vec<ExternalAgentForkPoint>,
     },
     Title {
         title: String,
@@ -171,6 +176,9 @@ pub enum ExternalAgentSessionResult {
     Closed,
     Deleted,
     Forked {
+        session_id: i64,
+    },
+    Rewound {
         session_id: i64,
     },
 }
@@ -190,6 +198,13 @@ pub struct ExternalAgentSessionCapabilities {
     pub delete: bool,
     pub fork: bool,
     pub fork_before_message: bool,
+    pub rewind_before_message: bool,
     pub additional_directories: bool,
     pub system_prompt: bool,
+    #[serde(default = "can_continue_by_default")]
+    pub continue_conversation: bool,
+}
+
+fn can_continue_by_default() -> bool {
+    true
 }

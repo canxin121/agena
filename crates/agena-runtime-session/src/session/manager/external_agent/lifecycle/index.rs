@@ -262,7 +262,7 @@ async fn standard_history(
         } => {
             let archive = client.supports_native_archive(cancel).await?;
             let page = client
-                .list_native(cwd, cursor.as_deref(), archived, cancel)
+                .list_workspace_native(cwd, cursor.as_deref(), archived, cancel)
                 .await?;
             Ok(ExternalAgentWorkspaceResult::IndexPage {
                 sessions: page.sessions,

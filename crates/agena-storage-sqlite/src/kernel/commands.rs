@@ -466,29 +466,18 @@ pub(super) async fn apply(
             let Mutation::Round(round) = round else {
                 unreachable!("begin-round result")
             };
-            let mut config = lifecycle::configuration(connection, scope.session).await?;
+            let config = lifecycle::configuration(connection, scope.session).await?;
             if config.external_agent.is_none() {
                 return Err(invalid(
                     "external agent round requires an external agent session",
                 ));
             }
             let link = config.native_session_link();
-            let previous = config.external_agent_resume.take();
-            if previous.is_some() || link.as_ref().is_some_and(|value| value.resume_at.is_some()) {
-                config.external_agent_link = link.clone().map(|mut value| {
-                    value.resume_at = None;
-                    value
-                });
-                sqlx::query("UPDATE agena_sessions SET configuration_json=? WHERE id=?")
-                    .bind(encode(&config)?)
-                    .bind(scope.session.get())
-                    .execute(&mut *connection)
-                    .await
-                    .map_err(sql_error)?;
-            }
             Ok(Mutation::ExternalAgentRound {
                 round,
-                previous: previous.filter(|resume| resume.session == scope.session),
+                previous: config
+                    .external_agent_resume
+                    .filter(|resume| resume.session == scope.session),
                 link,
                 selection: config.external_agent_selection,
                 state: Box::new(config.external_agent_state),
@@ -557,6 +546,36 @@ pub(super) async fn apply(
                 return Err(KernelError::Ownership);
             }
             sync_external_agent_title(connection, *session, state).await?;
+            Ok(Mutation::Round(*round))
+        }
+        Command::UpdateExternalAgentCursor {
+            session,
+            round,
+            active,
+            native_id,
+            change,
+        } => {
+            let configuration = lifecycle::configuration(connection, *session).await?;
+            let link = configuration
+                .native_session_link()
+                .filter(|link| &link.native_id == native_id)
+                .ok_or(KernelError::Ownership)?;
+            if let Some(scope) = active {
+                if scope.session != *session {
+                    return Err(KernelError::Ownership);
+                }
+                check_scope(connection, *scope, true).await?;
+                check_round(connection, *scope, *round).await?;
+            } else {
+                let resume = configuration.external_agent_resume.as_ref();
+                if !resume
+                    .is_some_and(|resume| resume.round == *round && &resume.native_id == native_id)
+                {
+                    return Err(KernelError::Ownership);
+                }
+                super::external_agent::require_idle(connection, *session).await?;
+            }
+            super::external_agent::update_cursor(connection, *session, &link, change).await?;
             Ok(Mutation::Round(*round))
         }
         Command::SetExternalAgentInput {
@@ -1070,23 +1089,22 @@ async fn bind_external_agent_link(
     let workspace = metadata.workspace_id.ok_or(KernelError::Ownership)?;
     let mut configuration = lifecycle::configuration(connection, scope.session).await?;
     let agent = configuration.external_agent.ok_or(KernelError::Ownership)?;
-    if configuration.external_agent_resume.is_some()
-        || link.resume_at.is_some()
-        || link.incarnation.is_none()
-    {
+    if link.resume_at.is_some() || link.incarnation.is_none() {
         return Err(KernelError::Ownership);
     }
-    let current = configuration.external_agent_link.as_ref();
-    if current == Some(link) {
+    let current = configuration.native_session_link();
+    let same_link = current.as_ref() == Some(link);
+    if same_link && configuration.external_agent_resume.is_none() {
         return Ok(Mutation::Round(round));
     }
-    let resumes_import = current.is_some_and(|current| {
+    let resumes_import = current.as_ref().is_some_and(|current| {
         current.resume_at.is_some()
             && current.cwd == link.cwd
             && current.native_id == link.native_id
             && current.incarnation == link.incarnation
     });
-    if !resumes_import
+    if !same_link
+        && !resumes_import
         && (link.incarnation != Some(round)
             || current.is_some_and(|current| current.incarnation == Some(round)))
     {
@@ -1101,6 +1119,7 @@ async fn bind_external_agent_link(
         ));
     }
     let state = std::mem::take(&mut configuration.external_agent_state);
+    configuration.external_agent_resume = None;
     configuration.external_agent_link = Some(link.clone());
     let base_bytes = encode(&configuration)?.len();
     configuration.external_agent_state =

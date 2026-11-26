@@ -15,7 +15,6 @@ import uuid
 
 PROGRAM = Path(sys.argv[0]).name
 assert PROGRAM in ("agy", "claude-agent-acp")
-assert sys.argv[1:] == (["acp", "--process-per-session"] if PROGRAM == "agy" else [])
 assert "AGENA_TEST_NEVER_FORWARD" not in os.environ
 assert "CLAUDE_CODE_EXECUTABLE" not in os.environ
 
@@ -25,6 +24,32 @@ def record_exception(*error):
 
 
 sys.excepthook = record_exception
+
+if PROGRAM == "agy" and sys.argv[1:2] == ["--agent"]:
+    _, _, agent, resume, session, print_flag, prompt, output, output_format = sys.argv
+    assert (resume, print_flag, prompt, output, output_format) == (
+        "--resume", "--print", "/compact", "--output-format", "stream-json",
+    )
+    assert Path(f".acp-closed-{session}").is_file()
+    profile = Path.home() / ".gemini"
+    definition = (profile / "config" / "agents" / f"{agent}.md").read_text()
+    assert "tools: []" in definition and "inheritMcp: false" in definition
+    print(json.dumps({
+        "event": "step_update", "step_update": {
+            "conversation_id": session, "step_type": "checkpoint", "step_index": 4,
+            "state": "DONE",
+        },
+    }))
+    print(json.dumps({
+        "event": "result", "result": {"conversation_id": session, "status": "SUCCESS"},
+    }))
+    sys.exit(0)
+if PROGRAM == "agy":
+    assert sys.argv[1:3] == ["acp", "--process-per-session"]
+    assert "--gemini-dir" in sys.argv and "--agent" in sys.argv
+    assert "--include-default-customizations=false" in sys.argv
+else:
+    assert sys.argv[1:] == []
 
 client = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -116,6 +141,11 @@ def call_fixture(name, arguments):
     })
     mcp("notifications/initialized", {}, request_id=None)
     listing = mcp("tools/list", {})["result"]["tools"]
+    if PROGRAM == "agy":
+        assert [tool["name"] for tool in listing] == ["tool"]
+        return mcp("tools/call", {
+            "name": "tool", "arguments": {"name": name, "arguments": arguments},
+        })["result"]
     tool = next(tool for tool in listing if tool["name"] == name)
     assert tool["inputSchema"]["type"] == "object"
     return mcp("tools/call", {"name": tool["name"], "arguments": arguments})["result"]
@@ -188,6 +218,7 @@ for line in sys.stdin:
             assert method == "session/new"
             probe = True
             session = uuid.uuid4().hex
+            Path(".acp-options-opened").touch()
             Path(f".acp-probe-{session}").touch()
             send(id=identifier, result={"sessionId": session, "configOptions": config_options()})
             continue
@@ -248,9 +279,13 @@ for line in sys.stdin:
             raise AssertionError("unrelated native configuration was sent")
         result = {"configOptions": config_options()}
     elif method in ("session/close", "session/delete"):
-        assert probe and params["sessionId"] == session, "closed an actual conversation"
+        assert params["sessionId"] == session
         if method == "session/delete":
+            assert probe, "deleted an actual conversation"
             Path(f".acp-probe-{session}").unlink()
+        elif not probe:
+            assert PROGRAM == "agy" and Path(".acp-catalog").is_file()
+            Path(f".acp-closed-{session}").touch()
         result = {}
     elif method == "session/prompt":
         assert not probe, "a configuration probe sent a prompt"

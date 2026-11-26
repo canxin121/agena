@@ -266,21 +266,71 @@ fn resolve_prompt_layers(
     Ok(resolution)
 }
 
-/// Compose configured instruction layers for an external agent's own system prompt.
-pub(super) fn resolve_configured_prompts(
+/// Assemble the additional instructions sent to the external agent.
+pub(super) async fn external_agent_system_prompt(
+    executor: &ToolExecutor,
     state: &ExecutionState,
-    inputs: &PromptInputs<'_>,
-) -> String {
-    match resolve_prompt_layers(state, inputs, &[]) {
+    context: &crate::session::model::SessionExecutionContext,
+    agent: agena_domain::ExternalAgent,
+    session: agena_storage::kernel::SessionId,
+    system: Option<&str>,
+) -> PromptResolution {
+    let model = agent.run_identity();
+    let request_layer = request_system_layer(system);
+    let inputs = PromptInputs {
+        profile: &context.profile_prompts,
+        project_instructions_on_demand: context.project_instructions_on_demand,
+        preload_skills: &context.preload_skills,
+        assignment: &context.agent_assignment,
+        profile_from_bot: context.profile_from_bot,
+        session: &context.prompts,
+        bot: None,
+        request_layer: request_layer.as_ref(),
+        model: &model,
+        session_id: session.get(),
+        workspace: executor.workspace_root().to_string_lossy().into_owned(),
+        global: context.global,
+        tools_enabled: true,
+    };
+    let mut resolution = match resolve_prompt_layers(state, &inputs, &[]) {
         Ok(resolution) => {
             log_prompt_warnings(&resolution.warnings);
-            resolution.text
+            resolution
         }
         Err(error) => {
             tracing::error!(%error, "prompt layers could not be assembled");
-            format!("[Additional instructions could not be assembled: {error}]")
+            PromptResolution::from_fragments(
+                vec![runtime_fragment(
+                    "agena.runtime.prompt-resolution",
+                    "Prompt resolution error",
+                    &format!("[Additional instructions could not be assembled: {error}]"),
+                )],
+                Vec::new(),
+            )
         }
+    };
+    if !inputs.preload_skills.is_empty() {
+        append_profile_skills(&mut resolution, executor, inputs.preload_skills).await;
     }
+    let project = project_instructions(executor, &inputs);
+    if !project.trim().is_empty() {
+        resolution.fragments.push(runtime_fragment(
+            "agena.runtime.project",
+            "Project instructions",
+            &project,
+        ));
+    }
+    PromptResolution::from_fragments(resolution.fragments, resolution.warnings)
+}
+
+fn project_instructions(executor: &ToolExecutor, inputs: &PromptInputs<'_>) -> String {
+    if !inputs.project_instructions_on_demand {
+        return executor.project_instruction_section(&[]);
+    }
+    if inputs.global {
+        return String::new();
+    }
+    "Project instructions are loaded on demand for this role. Read the repository guidance relevant to the directories in your assignment before using or changing them.".into()
 }
 
 fn log_prompt_warnings(warnings: &[PromptWarning]) {
@@ -778,15 +828,7 @@ impl SessionManager {
                 &assignment,
             ));
         }
-        let project = if inputs.project_instructions_on_demand {
-            if inputs.global {
-                String::new()
-            } else {
-                "Project instructions are loaded on demand for this role. Read the repository guidance relevant to the directories in your assignment before using or changing them.".into()
-            }
-        } else {
-            executor.project_instruction_section(&[])
-        };
+        let project = project_instructions(executor, inputs);
         let profile_text = profile_context_section(
             &AgentProfilePromptContext {
                 config: &state.config,

@@ -40,6 +40,7 @@ export type NativeSessionStatus = {
   native_status: string | null
   additional_directories: string[]
   fork_points?: { message_id: number; label: string }[]
+  rewind_points?: { message_id: number; label: string }[]
   capabilities: {
     status: boolean
     title: boolean
@@ -47,6 +48,8 @@ export type NativeSessionStatus = {
     delete: boolean
     fork: boolean
     fork_before_message?: boolean
+    rewind_before_message?: boolean
+    continue_conversation?: boolean
     additional_directories: boolean
     system_prompt: boolean
   }
@@ -58,10 +61,11 @@ export type NativeSessionAction =
   | { action: 'set_directories'; directories: string[] }
   | { action: 'close' | 'delete' }
   | { action: 'fork'; title?: string; before_message_id?: number }
+  | { action: 'rewind'; before_message_id: number }
 
 type NativeSessionResult =
   | NativeSessionStatus
-  | { kind: 'forked'; session_id: number }
+  | { kind: 'forked' | 'rewound'; session_id: number }
   | { kind: 'title'; title: string }
   | { kind: 'directories'; directories: string[] }
   | { kind: 'closed' | 'deleted' }

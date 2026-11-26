@@ -25,6 +25,19 @@ transport = Path(".acp-transport").read_text()
 version = int(Path(".acp-mcp-version").read_text())
 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 session = "native-mcp"
+antigravity = Path(sys.argv[0]).name == "agy"
+
+if antigravity:
+    arguments = sys.argv[1:]
+    assert "--process-per-session" in arguments
+    assert "--include-default-customizations=false" in arguments
+    profile = Path(arguments[arguments.index("--gemini-dir") + 1])
+    name = arguments[arguments.index("--agent") + 1]
+    definition = (profile / "config" / "agents" / (name + ".md")).read_text()
+    assert profile.parent == Path.home() / ".gemini"
+    assert definition.startswith(f"---\nname: {name}\n")
+    for field in ("tools: []", "inheritMcp: false", "inheritCustomizations: false"):
+        assert field in definition
 
 
 def send(**message):
@@ -162,10 +175,24 @@ def verify_tools(client):
     assert "tools" in info["capabilities"] and not {"resources", "prompts"} & info["capabilities"].keys()
     call(None, "notifications/initialized")
     tools = call(2, "tools/list")["tools"]
-    assert any(tool["name"] == "fs_read" for tool in tools)
-    shared = call(3, "tools/call", {"name": "fs_read", "arguments": {"file_path": "shared.txt"}})
+    if antigravity:
+        assert [tool["name"] for tool in tools] == ["tool"]
+        listed = call(5, "tools/call", {"name": "tool", "arguments": {}})
+        assert any(tool["name"] == "fs_read" for tool in json.loads(listed["content"][0]["text"])["tools"])
+        described = call(6, "tools/call", {"name": "tool", "arguments": {"name": "fs_read"}})
+        assert "file_path" in json.loads(described["content"][0]["text"])["inputSchema"]["properties"]
+    else:
+        assert any(tool["name"] == "fs_read" for tool in tools)
+
+    def read(identifier, path):
+        args = {"file_path": path}
+        if antigravity:
+            return call(identifier, "tools/call", {"name": "tool", "arguments": {"name": "fs_read", "arguments": args}})
+        return call(identifier, "tools/call", {"name": "fs_read", "arguments": args})
+
+    shared = read(3, "shared.txt")
     assert not shared.get("isError") and "expected MCP payload" in json.dumps(shared)
-    denied = call(4, "tools/call", {"name": "fs_read", "arguments": {"file_path": "private.txt"}})
+    denied = read(4, "private.txt")
     assert denied.get("isError") and "withheld MCP payload" not in json.dumps(denied)
 
 
@@ -188,6 +215,14 @@ for line in sys.stdin:
                                         "capabilities": {"session": capabilities}})
     elif method == "session/new":
         servers = params["mcpServers"]
+        if antigravity:
+            assert params["_meta"]["antigravity"]["eagerMcpServers"] == ["agena"]
+            assert servers[0]["_meta"]["antigravity"]["forceAllToolsEager"] is True
+        else:
+            options = params["_meta"]["claudeCode"]["options"]
+            assert options["tools"] == []
+            assert options["strictMcpConfig"] and options["settingSources"] == []
+            assert options["allowDangerouslySkipPermissions"] is False
         if transport == "none":
             assert not servers
         else:

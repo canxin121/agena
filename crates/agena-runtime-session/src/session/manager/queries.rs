@@ -307,6 +307,11 @@ impl SessionManager {
         id: SessionId,
         model: &agena_domain::ModelRef,
     ) -> Result<agena_prompt_layers::PromptResolution, AppError> {
+        if self.is_acp_scope()
+            && let Some(agent) = self.external_agent(id).await?
+        {
+            return self.external_agent_prompt_preview(id, agent).await;
+        }
         let state = self.state_for_session(id).await?;
         let context = self.execution_context_with_state(id, &state).await?;
         let executor = state.executor.for_session_context_async(&context).await;
@@ -1250,6 +1255,14 @@ impl SessionQueryService for SessionManager {
         id: i64,
     ) -> Result<agena_prompt_layers::PromptResolution, SessionQueryError> {
         let session = super::session_id(id).map_err(query_error)?;
+        if self.is_acp_scope()
+            && let Some(agent) = self.external_agent(session).await.map_err(query_error)?
+        {
+            return self
+                .external_agent_prompt_preview(session, agent)
+                .await
+                .map_err(query_error);
+        }
         let context = self
             .execution_context_value(session)
             .await

@@ -83,6 +83,51 @@ impl SessionManager {
         Ok(agent)
     }
 
+    pub(super) async fn external_agent_prompt_preview(
+        &self,
+        session: SessionId,
+        agent: ExternalAgent,
+    ) -> Result<agena_prompt_layers::PromptResolution, AppError> {
+        use agena_prompt_layers::{
+            FragmentId, PromptResolution, PromptScope, PromptWarning, PromptWarningKind,
+        };
+
+        let _permit = self.reserve_execution()?;
+        let state = self.state_for_session(session).await?;
+        let context = self.execution_context_with_state(session, &state).await?;
+        let executor = state.executor.for_session_context_async(&context).await;
+        let cwd = executor.workspace_root();
+        if !cwd.is_absolute() {
+            return Err(AppError::Config(
+                "External agent sessions require a project workspace.".into(),
+            ));
+        }
+        let mut client = acp::AcpClient::spawn(agent, cwd)?;
+        let supports_prompt = client
+            .lifecycle_capabilities(&self.shutdown.child_token())
+            .await;
+        client.close().await;
+        if !supports_prompt?.system_prompt {
+            return Ok(PromptResolution::from_fragments(
+                Vec::new(),
+                vec![PromptWarning {
+                    id: FragmentId::parse("agena.runtime.acp-system-prompt")
+                        .expect("valid ACP fragment id"),
+                    scope: PromptScope::Runtime,
+                    kind: PromptWarningKind::ConditionNotMatched,
+                    detail: format!(
+                        "{} does not advertise appended system instructions over ACP.",
+                        agent.label()
+                    ),
+                }],
+            ));
+        }
+        Ok(super::session_prompt::external_agent_system_prompt(
+            &executor, &state, &context, agent, session, None,
+        )
+        .await)
+    }
+
     pub(super) async fn inspect_external_agent_providers(
         &self,
         id: i64,
@@ -119,6 +164,7 @@ impl SessionManager {
         execution: &ExecutionView,
         control: Arc<RunControl>,
         state: Arc<ExecutionState>,
+        system: Option<&str>,
     ) -> Result<(), AppError> {
         self.close_idle_external_agent(control.session).await;
         self.flush_hook_runs(attempt, control.session, &state)
@@ -142,20 +188,36 @@ impl SessionManager {
             self.kernel().reader.configuration(control.session)
         })
         .await?;
+        if configuration.external_agent_state.history_read_only {
+            return Err(AppError::Config(
+                "This native Antigravity conversation uses its original tools. Start a new ACP conversation to continue with Agena's restricted tools.".into(),
+            ));
+        }
         let directories = lifecycle::directories_for_agent(
             &executor,
             &cwd,
             &configuration.external_agent_directories,
         )
         .await?;
-        let session_context =
-            lifecycle::session_context(agent, control.session, &cwd, &state, &context, directories);
+        let mut session_context = lifecycle::session_context(
+            agent,
+            control.session,
+            &executor,
+            &state,
+            &context,
+            directories,
+            system,
+        )
+        .await;
 
         let command = RequestId::new();
         let opened = persist(|| attempt.begin_external_agent_round(command))
             .await
             .map_err(kernel_error)?
             .value;
+        session_context
+            .selected_options
+            .clone_from(&opened.selection);
         let round = opened.round;
         let facts =
             read_with_busy_retry(control.session, "external_agent_prompt", || round.prompt())
@@ -180,7 +242,11 @@ impl SessionManager {
                     })
                     .map(|link| link.native_id.as_str())
             });
-        let mut client = acp::AcpClient::spawn(agent, &cwd)?;
+        let mut client = acp::AcpClient::spawn_with_directories(
+            agent,
+            &cwd,
+            &session_context.additional_directories,
+        )?;
         client.track_auth_status(auth::LiveStatus::register(self, control.session));
         let capabilities = client.prompt_capabilities(&control.cancel).await?;
         let (mut blocks, media_leases) = input
@@ -193,6 +259,20 @@ impl SessionManager {
                 capabilities,
             )
             .await?;
+        let native_command = blocks
+            .first()
+            .and_then(|block| block["text"].as_str())
+            .and_then(agena_domain::external_agent_command_input)
+            .map(str::trim_end);
+        let antigravity_compact = agent == ExternalAgent::Antigravity
+            && native_command
+                .is_some_and(|command| command.split_whitespace().next() == Some("compact"));
+        let bare_compact = native_command == Some("compact") && blocks.len() == 1;
+        if antigravity_compact && native_resume.is_none() {
+            return Err(AppError::Config(
+                "Antigravity needs an existing conversation to compact.".into(),
+            ));
+        }
         let has_images = blocks.iter().any(|block| block["type"] == "image");
         let turn = Arc::new(ExternalTurn {
             manager: self.clone(),
@@ -206,6 +286,7 @@ impl SessionManager {
         });
         let bridge = client.bridge(turn.clone()).await?;
         let mut native = None;
+        let mut used_compaction_cli = false;
         let outcome = async {
             let mut session = client
                 .start_with_context(
@@ -213,10 +294,22 @@ impl SessionManager {
                     bridge.as_ref().map(mcp::Bridge::descriptor),
                     native_resume.map(|id| (id, &opened.state)),
                     has_images,
+                    antigravity_compact,
                     &session_context,
                     &control.cancel,
                 )
                 .await?;
+            let compact_via_cli = antigravity_compact
+                && !session
+                    .state
+                    .commands
+                    .iter()
+                    .any(|command| command.name == "compact");
+            if compact_via_cli && !bare_compact {
+                return Err(AppError::Config(
+                    "Send /agent:compact on its own in this Antigravity session.".into(),
+                ));
+            }
             let incarnation = opened
                 .link
                 .as_ref()
@@ -238,7 +331,7 @@ impl SessionManager {
                     .set_option(&mut session, kind, value, &control.cancel)
                     .await?;
             }
-            prompt::route_command(&mut blocks, &session.state.commands);
+            prompt::route_command(&mut blocks, &session.state.commands, capabilities)?;
             session.state.options = session.options.clone();
             turn.transcript
                 .lock()
@@ -253,13 +346,21 @@ impl SessionManager {
                 .await?;
             // ACP owns the conversation history. A new native session receives
             // the current user's composer document.
-            if !session.resumed && input.has_prior_turns() {
-                let notice = serde_json::to_string(&agena_runtime_contracts::NoticePart {
-                    kind: "external_agent_context_reset".into(),
-                    summary: format!(
+            if !session.resumed && (input.has_prior_turns() || session.missing_previous) {
+                let summary = if session.missing_previous {
+                    format!(
+                        "{} no longer has the linked conversation and opened a new one.",
+                        agent.label()
+                    )
+                } else {
+                    format!(
                         "{} opened a new conversation with fresh context.",
                         agent.label()
-                    ),
+                    )
+                };
+                let notice = serde_json::to_string(&agena_runtime_contracts::NoticePart {
+                    kind: "external_agent_context_reset".into(),
+                    summary,
                     detail: None,
                     title: Some("External agent context".into()),
                 })?;
@@ -269,6 +370,31 @@ impl SessionManager {
                     .map_err(kernel_error)?;
             }
             control.phase(agena_domain::ExecutionPhase::StreamingModel);
+            if compact_via_cli {
+                let checkpoint = client
+                    .compact_antigravity(&link.native_id, &control.cancel)
+                    .await?;
+                used_compaction_cli = true;
+                turn.transcript
+                    .lock()
+                    .await
+                    .update(
+                        &turn,
+                        &link.native_id,
+                        &link.native_id,
+                        &json!({
+                            "sessionUpdate": "compaction_update",
+                            "compactionId": format!("agy-checkpoint-{checkpoint}"),
+                            "status": "completed",
+                        }),
+                    )
+                    .await?;
+                return Ok(acp::PromptResult {
+                    stop_reason: Some("end_turn".into()),
+                    usage: None,
+                    fork_cursor: None,
+                });
+            }
             client
                 .prompt(&link.native_id, blocks, session.activity, &turn)
                 .await
@@ -320,6 +446,8 @@ impl SessionManager {
                 message_id: execution.message_id,
                 native_message_id: cursor.message_id,
                 cursor_id: cursor.cursor_id,
+                fork: cursor.fork,
+                rewind: cursor.rewind,
             })?
         } else {
             Value::Null
@@ -357,8 +485,12 @@ impl SessionManager {
                 Err(error) => return Err(kernel_error(error)),
             }
         }
-        let state = turn.transcript.lock().await.snapshot_state();
-        self.park_external_agent(client, resume, state).await;
+        if used_compaction_cli {
+            client.close().await;
+        } else {
+            let state = turn.transcript.lock().await.snapshot_state();
+            self.park_external_agent(client, resume, state).await;
+        }
         Ok(())
     }
 }

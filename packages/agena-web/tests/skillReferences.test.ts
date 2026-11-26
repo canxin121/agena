@@ -3,6 +3,7 @@ import type { SkillSummary } from '../src/lib/skillsApi'
 import {
   createSkillReferenceAttachment,
   managedSkillCatalog,
+  nativeSkillCatalog,
   skillCatalogKey,
   skillReferenceKeyFromAttachment,
 } from '../src/pages/chat/skillReferences'
@@ -96,5 +97,23 @@ describe('skill references', () => {
     expect(restored?.filename).toBe('Skill: review')
     expect(restored?.composerKind).toBe('skill_ref')
     expect(restored && skillReferenceKeyFromAttachment(restored)).toBe('agena.commands/review')
+  })
+
+  test('keeps native inline selections tied to the active agent when restoring a draft', () => {
+    const entries = nativeSkillCatalog('claude-code', [
+      { name: 'leading', description: '', skill: true },
+      { name: 'status', description: '' },
+      { name: 'code-review', description: 'Review with Claude Code', skill: true, skill_inline: true },
+    ])
+    expect(entries.map((entry) => entry.id)).toEqual(['code-review'])
+    const native = createSkillReferenceAttachment(entries[0]!)
+    const managed = createSkillReferenceAttachment(managedSkillCatalog([skill()])[0]!)
+    const [restored] = restoredComposerFiles([native.composerNode!])
+    expect(restored?.composerNode).toEqual(native.composerNode)
+    expect(skillReferenceKeyFromAttachment(restored!)).toBe('acp:claude-code/code-review')
+    expect(skillReferenceKeyFromAttachment(managed)).toBe('agena.skills/workspace-opaque-id')
+    expect(native.composerNode).toMatchObject({
+      activity: { payload: { activity_type: 'skill_reference', name: 'code-review', external_agent: 'claude-code' } },
+    })
   })
 })

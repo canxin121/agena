@@ -1326,8 +1326,9 @@ impl SessionExecutionCommandService for SessionManager {
         &self,
         session_id: i64,
         change: Option<agena_domain::ExternalAgentOptionChange>,
+        preview: bool,
     ) -> Result<agena_domain::ExternalAgentOptions, SessionExecutionCommandError> {
-        self.inspect_external_agent_options(session_id, change)
+        self.inspect_external_agent_options(session_id, change, preview)
             .await
             .map_err(command_error)
     }

@@ -206,7 +206,10 @@ impl SessionManager {
                 let external = manager.external_agent(session).await?;
                 if let Some(agent) = external {
                     super::external_agent::require_direct_user(author.as_ref(), origin.as_ref())?;
-                    options = SessionRunOptions::for_external_agent(agent);
+                    options = SessionRunOptions {
+                        system: options.system,
+                        ..SessionRunOptions::for_external_agent(agent)
+                    };
                 } else {
                     manager.prepare_options_for_selection(
                         &context.selection,
@@ -498,7 +501,7 @@ impl SessionManager {
         let mut timed_out = false;
         let result=async {
             if let Some(agent) = external_agent {
-                self.run_external_agent(agent, &attempt, &execution, control.clone(), state.clone()).await?;
+                self.run_external_agent(agent, &attempt, &execution, control.clone(), state.clone(), options.system.as_deref()).await?;
                 completed = true;
                 return Ok(());
             }
@@ -1366,7 +1369,10 @@ impl SessionManager {
         state: &ExecutionState,
     ) -> Result<(), AppError> {
         if let Some(agent) = self.external_agent(session).await? {
-            *options = SessionRunOptions::for_external_agent(agent);
+            *options = SessionRunOptions {
+                system: options.system.take(),
+                ..SessionRunOptions::for_external_agent(agent)
+            };
             return Ok(());
         }
         let context = self.execution_context_with_state(session, state).await?;

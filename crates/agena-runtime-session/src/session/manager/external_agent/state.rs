@@ -16,7 +16,6 @@ const MAX_PLANS: usize = 8;
 const MAX_ENTRIES: usize = 128;
 const MAX_PLAN_BYTES: usize = 16 * 1024;
 const MAX_COMMANDS: usize = 256;
-const MAX_COMMAND_NAME_BYTES: usize = 256;
 const MAX_NOTICES: usize = 8;
 const MAX_COMPACTIONS: usize = 12;
 const MAX_SUMMARY_BYTES: usize = 6 * 1024;
@@ -589,7 +588,7 @@ fn absolute_path(value: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn available_commands(value: &Value) -> Option<Vec<ExternalAgentCommand>> {
+pub(super) fn available_commands(value: &Value) -> Option<Vec<ExternalAgentCommand>> {
     let mut names = HashSet::new();
     Some(
         value
@@ -621,6 +620,7 @@ fn available_commands(value: &Value) -> Option<Vec<ExternalAgentCommand>> {
                         .and_then(|input| input["hint"].as_str())
                         .map(|hint| bounded(hint.trim(), 128)),
                     skill,
+                    skill_inline: skill && command["inline"] == true,
                     skill_path: if skill {
                         absolute_path(&command["path"])
                     } else {
@@ -634,9 +634,9 @@ fn available_commands(value: &Value) -> Option<Vec<ExternalAgentCommand>> {
 }
 
 pub(super) fn command_name(value: &Value) -> Option<&str> {
-    value.as_str().filter(|name| {
-        name.len() <= MAX_COMMAND_NAME_BYTES && ExternalAgentCommand::accepts_name(name)
-    })
+    value
+        .as_str()
+        .filter(|name| ExternalAgentCommand::accepts_name(name))
 }
 
 fn plan_id(value: &Value) -> Option<&str> {

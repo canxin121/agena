@@ -32,6 +32,7 @@ import { useChatAttachments, type AttachedFile } from './chat/useChatAttachments
 import {
   createSkillReferenceAttachment,
   managedSkillCatalog,
+  nativeSkillCatalog,
   type SkillCatalogEntry,
   skillCatalogKey,
   skillReferenceKeyFromAttachment,
@@ -77,7 +78,7 @@ import { deriveSendRunConfig } from './chat/modelSendDefaults'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import type { TranscriptDisplayPart } from '@/components/chat/messageList.types'
-import { externalAgentLabels, type ExternalAgentSuggestion, type MessageFold } from '@/types/chat'
+import { externalAgentLabels, type ExternalAgentCommand, type ExternalAgentOptions, type ExternalAgentSuggestion, type MessageFold } from '@/types/chat'
 import { isAcpSessionId, sessionApiPath } from '@/lib/acpSession'
 import type { JsonObject, JsonValue } from '@/types/json'
 import type { PluginCommandResult } from '@/lib/pluginOperations'
@@ -307,6 +308,11 @@ const sessionDirectory = computed(() =>
     : chat.selectedSessionDirectory || directoryStore.currentDirectory || '',
 )
 const skillCatalog = ref<SkillCatalogEntry[]>([])
+const nativeSkills = computed(() => {
+  const agent = chat.selectedSession?.external_agent
+  return agent ? nativeSkillCatalog(agent, chat.selectedSessionExecution?.external_agent_commands ?? []) : []
+})
+const composerSkills = computed(() => [...nativeSkills.value, ...skillCatalog.value])
 const skillCatalogLoading = ref(false)
 let skillCatalogDirectory: string | null = null
 let skillCatalogLoad: Promise<void> | null = null
@@ -356,8 +362,11 @@ function loadSkillCatalog(): Promise<void> {
 async function attachSkill(skillKey: string) {
   const sessionId = chat.selectedSessionId
   const directory = sessionDirectory.value
-  if (skillCatalogDirectory !== directory || skillCatalogLoading.value) return
-  const skill = skillCatalog.value.find((item) => skillCatalogKey(item) === skillKey)
+  const native = nativeSkills.value.find((item) => skillCatalogKey(item) === skillKey)
+  const managed = skillCatalogDirectory === directory && !skillCatalogLoading.value
+    ? skillCatalog.value.find((item) => skillCatalogKey(item) === skillKey)
+    : undefined
+  const skill = native ?? managed
   if (!skill) return
   if (attachedFiles.value.some((file) => skillReferenceKeyFromAttachment(file) === skillKey)) {
     await nextTick()
@@ -519,6 +528,10 @@ function getRecord(value: JsonValue, key: string): JsonObject {
   return typeof nested === 'object' && nested !== null ? (nested as JsonObject) : {}
 }
 
+const previewCommandSessionId = computed(() =>
+  chat.selectedSessionExecution?.external_agent_command_preview ? chat.selectedSessionId : null,
+)
+const agentCommandPreview = ref<{ sessionId: string; commands: ExternalAgentCommand[] }>()
 const chatCommands = useChatCommands({
   draft,
   composerRef,
@@ -528,7 +541,11 @@ const chatCommands = useChatCommands({
     const sessionId = chat.selectedSessionId
     const label = externalAgentLabel.value
     if (!sessionId || !label) return null
-    return { sessionId, label, commands: chat.selectedSessionExecution?.external_agent_commands ?? [] }
+    const preview = agentCommandPreview.value
+    const commands = previewCommandSessionId.value === sessionId && preview?.sessionId === sessionId
+      ? preview.commands
+      : chat.selectedSessionExecution?.external_agent_commands ?? []
+    return { sessionId, label, commands }
   }),
   onSend: send,
   onCommandSelected: handleCommandSelected,
@@ -550,6 +567,25 @@ const {
   handleDraftInput: handleDraftInputBase,
   handleDraftKeydown: handleDraftKeydownInner,
 } = chatCommands
+
+watch([previewCommandSessionId, commandOpen], ([sessionId, open], _previous, onCleanup) => {
+  if (agentCommandPreview.value?.sessionId !== sessionId) agentCommandPreview.value = undefined
+  if (!sessionId || !open || agentCommandPreview.value) return
+  const controller = new AbortController()
+  onCleanup(() => controller.abort())
+  void apiJson<ExternalAgentOptions>(`${sessionApiPath(sessionId)}/agent-options`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ preview: true }),
+    signal: controller.signal,
+  }).then((options) => {
+    if (!controller.signal.aborted) {
+      agentCommandPreview.value = { sessionId, commands: options.preview_commands ?? [] }
+    }
+  }).catch(() => {
+    // The native session publishes its own catalog once opened.
+  })
+})
 
 const promptHistory = useComposerPromptHistory()
 const {
@@ -2581,7 +2617,7 @@ const viewCtx = {
   promptHistoryAutoFocus: promptHistoryOpen,
   handleFileInputChange,
   removeAttachment,
-  skillCatalog,
+  skillCatalog: composerSkills,
   skillCatalogLoading,
   loadSkillCatalog,
   attachSkill,

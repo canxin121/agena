@@ -188,6 +188,7 @@ export type ExternalAgent = keyof typeof externalAgentLabels
 
 export type ExternalAgentOptions = {
   selection: Record<string, string | undefined>
+  preview_commands?: ExternalAgentCommand[]
   options: {
     id: string
     kind: string
@@ -205,6 +206,7 @@ export type ExternalAgentCommand = {
   description: string
   argument_hint?: string | null
   skill?: boolean
+  skill_inline?: boolean
   skill_path?: string | null
 }
 

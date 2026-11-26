@@ -8,9 +8,11 @@ use agena_domain::{
 use agena_storage::kernel::{ExternalAgentFork, ExternalAgentImport, ExternalAgentLink};
 
 use super::*;
-use crate::session::manager::session_prompt::{PromptInputs, resolve_configured_prompts};
+use crate::session::manager::session_prompt::external_agent_system_prompt;
 
 mod index;
+
+static NATIVE_REPLAYS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 
 pub(super) fn apply_info_update(state: &mut ExternalAgentState, update: &Value) -> bool {
     let Some(next) = update.as_object() else {
@@ -151,22 +153,48 @@ impl SessionManager {
                 {
                     return Ok(attached);
                 }
-                Ok(_) => {
-                    self.close_idle_external_agent_for_management(*id).await;
-                    Some((*id, submission, execution))
-                }
+                Ok(snapshot) => Some((
+                    *id,
+                    submission,
+                    execution,
+                    snapshot.configuration.external_agent_directories.clone(),
+                )),
                 Err(KernelError::NotFound(_)) => None,
                 Err(error) => return Err(kernel_error(error)),
             }
         } else {
             None
         };
+        let _replay_slot = if import.is_some() {
+            Some(
+                NATIVE_REPLAYS
+                    .try_acquire()
+                    .map_err(|_| AppError::PersistenceBusy)?,
+            )
+        } else {
+            None
+        };
+        let replay_context = if let Some((id, _, _, directories)) = &held {
+            let state = self.state_for_session(*id).await?;
+            let context = self
+                .execution_context_for_execution(*id, &state, None)
+                .await?;
+            let executor = state.executor.for_session_context_async(&context).await;
+            let directories = directories_for_agent(&executor, &cwd, directories).await?;
+            session_context(agent, *id, &executor, &state, &context, directories, None).await
+        } else {
+            acp::SessionContext::default()
+        };
         let cancel = self.shutdown.child_token();
-        let mut client = acp::AcpClient::spawn(agent, &cwd)?;
+        let mut client = acp::AcpClient::spawn_with_directories(
+            agent,
+            &cwd,
+            &replay_context.additional_directories,
+        )?;
         let outcome = async {
             let Some(native_id) = import else {
                 let page = client
-                    .list_native(
+                    .list_workspace_native(
                         &cwd,
                         cursor.as_deref(),
                         ExternalAgentArchiveFilter::Unarchived,
@@ -184,7 +212,7 @@ impl SessionManager {
                 ExternalAgentArchiveFilter::Unarchived
             };
             let record = match client
-                .find_native(&cwd, &native_id, filter, &cancel)
+                .find_workspace_native(&cwd, &native_id, filter, &cancel)
                 .await?
             {
                 Some(row) => row.session,
@@ -198,8 +226,11 @@ impl SessionManager {
                     ));
                 }
             };
+            if let Some((id, _, _, _)) = &held {
+                self.close_idle_external_agent_for_management(*id).await;
+            }
             let (turns, mut state) = client
-                .replay_native(&cwd, &native_id, &acp::SessionContext::default(), &cancel)
+                .replay_native(&cwd, &native_id, &replay_context, &cancel)
                 .await?;
             if client.lifecycle_capabilities(&cancel).await?.close {
                 let _ = client.release_native(&native_id, false, &cancel).await;
@@ -224,9 +255,9 @@ impl SessionManager {
                 agent,
                 title,
                 link,
-                turns,
+                turns: turns.into(),
                 state,
-                replace_view: held.as_ref().map(|(id, _, _)| *id),
+                replace_view: held.as_ref().map(|(id, _, _, _)| *id),
             };
             let created = persist(|| {
                 self.kernel()
@@ -301,9 +332,31 @@ impl SessionManager {
         }
         let _permit = self.reserve_execution()?;
         let cancel = self.shutdown.child_token();
-        let mut client = acp::AcpClient::spawn(agent, &cwd)?;
+        let native_directories = if matches!(
+            action,
+            ExternalAgentSessionAction::Fork { .. } | ExternalAgentSessionAction::Rewind { .. }
+        ) {
+            directories_for_agent(&executor, &cwd, &configuration.external_agent_directories)
+                .await?
+        } else {
+            Vec::new()
+        };
+        let mut client = acp::AcpClient::spawn_with_directories(agent, &cwd, &native_directories)?;
+        if matches!(action, ExternalAgentSessionAction::Delete) {
+            // Claude v1 maps Delete to Archive on legacy AIR connections.
+            client.use_plain_delete();
+        }
         let outcome = async {
-            let capabilities = client.lifecycle_capabilities(&cancel).await?;
+            if client.has_previous_history() && let Some(link) = link.as_ref().filter(|link| link.cwd == cwd) {
+                let filter = if client.supports_native_archive(&cancel).await? {
+                    ExternalAgentArchiveFilter::All
+                } else {
+                    ExternalAgentArchiveFilter::Unarchived
+                };
+                client.find_workspace_native(&cwd, &link.native_id, filter, &cancel).await?;
+            }
+            let mut capabilities = client.lifecycle_capabilities(&cancel).await?;
+            capabilities.continue_conversation &= !configuration.external_agent_state.history_read_only;
             if matches!(action, ExternalAgentSessionAction::Status) {
                 let native_status = match &link {
                     Some(_) if running => Some("open".to_owned()),
@@ -311,13 +364,20 @@ impl SessionManager {
                     _ => None,
                 };
                 let mut fork_points = Vec::new();
+                let mut rewind_points = Vec::new();
                 if let Some(link) = link.as_ref().filter(|link| link.cwd == cwd)
-                    && capabilities.fork_before_message
+                    && (capabilities.fork_before_message || capabilities.rewind_before_message)
                 {
-                    fork_points = self.kernel().reader.external_agent_fork_points(session, link, None)
-                        .await.map_err(kernel_error)?.into_iter()
-                        .map(|(cursor, label)| ExternalAgentForkPoint { message_id: cursor.message_id.get(), label })
-                        .collect();
+                    for (cursor, label) in self.kernel().reader.external_agent_fork_points(session, link, None)
+                        .await.map_err(kernel_error)? {
+                        let point = ExternalAgentForkPoint { message_id: cursor.message_id.get(), label };
+                        if cursor.fork && capabilities.fork_before_message {
+                            fork_points.push(point.clone());
+                        }
+                        if cursor.rewind && capabilities.rewind_before_message {
+                            rewind_points.push(point);
+                        }
+                    }
                 }
                 return Ok(ExternalAgentSessionResult::Status {
                     session: link.map(|link| ExternalAgentSessionInfo {
@@ -330,6 +390,7 @@ impl SessionManager {
                     additional_directories: configuration.external_agent_directories.clone(),
                     capabilities,
                     fork_points,
+                    rewind_points,
                 });
             }
             if let ExternalAgentSessionAction::SetDirectories { directories } = action {
@@ -382,6 +443,29 @@ impl SessionManager {
                     })).await.map_err(kernel_error)?;
                     Ok(ExternalAgentSessionResult::Title { title })
                 }
+                ExternalAgentSessionAction::Rewind { before_message_id } => {
+                    if !capabilities.rewind_before_message {
+                        return Err(AppError::Config("The installed agent does not offer native rewind over this ACP connection.".into()));
+                    }
+                    let message = entry_id(before_message_id)?;
+                    self.close_idle_external_agent(session).await;
+                    let (before, _) = self.kernel().reader.external_agent_fork_points(session, &link, Some(message))
+                        .await.map_err(kernel_error)?.into_iter().find(|(cursor, _)| cursor.rewind).ok_or_else(|| {
+                            AppError::Config("That message has no native rewind point. Reopen the native history to refresh available positions.".into())
+                        })?;
+                    let cursor = before.cursor_id.as_deref().ok_or_else(|| AppError::Internal("Missing native rewind cursor.".into()))?;
+                    let context = session_context(agent, session, &executor, &state, &context, native_directories, None).await;
+                    client.rewind_native(&cwd, &link.native_id, cursor, &context, &cancel).await?;
+                    let rewind = agena_storage::kernel::ExternalAgentRewind {
+                        expected_membership: snapshot.metadata.membership_generation,
+                        expected_native: link,
+                        before,
+                    };
+                    let request = RequestId::new();
+                    persist(|| self.kernel().sessions.rewind_external_agent(request, session, rewind.clone()))
+                        .await.map_err(kernel_error)?;
+                    Ok(ExternalAgentSessionResult::Rewound { session_id: id })
+                }
                 ExternalAgentSessionAction::Fork { title, before_message_id } => {
                     let title = title.map(validated_title).transpose()?;
                     let history = self.kernel().reader.history(session, None, 1).await.map_err(kernel_error)?;
@@ -394,7 +478,7 @@ impl SessionManager {
                         }
                         let message = entry_id(message_id)?;
                         let (cursor, _) = self.kernel().reader.external_agent_fork_points(session, &link, Some(message))
-                            .await.map_err(kernel_error)?.pop().ok_or_else(|| {
+                            .await.map_err(kernel_error)?.into_iter().find(|(cursor, _)| cursor.fork).ok_or_else(|| {
                                 AppError::Config("That message has no native fork point in this conversation. See native session status for available messages.".into())
                             })?;
                         Some(cursor)
@@ -406,13 +490,13 @@ impl SessionManager {
                         }
                         None
                     };
-                    let directories = directories_for_agent(&executor, &cwd, &configuration.external_agent_directories).await?;
-                    let context = session_context(agent, session, &cwd, &state, &context, directories);
+                    let mut context = session_context(agent, session, &executor, &state, &context, native_directories, None).await;
+                    context.selected_options.clone_from(&configuration.external_agent_selection);
                     if capabilities.fork {
                         self.close_idle_external_agent(session).await;
                     }
                     let new_id = client.fork_native(
-                        &cwd, &link.native_id, before.as_ref().map(|cursor| cursor.cursor_id.as_str()), &context, &cancel,
+                        &cwd, &link.native_id, before.as_ref().and_then(|cursor| cursor.cursor_id.as_deref()), &context, &cancel,
                     ).await?;
                     let request = RequestId::new();
                     let through = before.as_ref().map_or(head, |cursor| cursor.message_id);
@@ -440,36 +524,23 @@ impl SessionManager {
     }
 }
 
-pub(super) fn session_context(
+pub(super) async fn session_context(
     agent: ExternalAgent,
     session: SessionId,
-    cwd: &Path,
+    executor: &ToolExecutor,
     state: &ExecutionState,
     context: &crate::session::model::SessionExecutionContext,
     additional_directories: Vec<PathBuf>,
+    system: Option<&str>,
 ) -> acp::SessionContext {
-    let model = agent.run_identity();
-    let system_prompt = resolve_configured_prompts(
-        state,
-        &PromptInputs {
-            profile: &context.profile_prompts,
-            project_instructions_on_demand: context.project_instructions_on_demand,
-            preload_skills: &context.preload_skills,
-            assignment: &context.agent_assignment,
-            profile_from_bot: context.profile_from_bot,
-            session: &context.prompts,
-            bot: None,
-            request_layer: None,
-            model: &model,
-            session_id: session.get(),
-            workspace: cwd.to_string_lossy().into_owned(),
-            global: false,
-            tools_enabled: true,
-        },
-    );
+    let system_prompt =
+        external_agent_system_prompt(executor, state, context, agent, session, system)
+            .await
+            .text;
     acp::SessionContext {
         system_prompt,
         additional_directories,
+        ..Default::default()
     }
 }
 

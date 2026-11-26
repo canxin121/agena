@@ -92,6 +92,7 @@ pub trait SessionExecutionCommandService: Send + Sync {
         &self,
         session_id: i64,
         change: Option<agena_domain::ExternalAgentOptionChange>,
+        preview: bool,
     ) -> Result<agena_domain::ExternalAgentOptions, SessionExecutionCommandError>;
 
     async fn external_agent_workspace(

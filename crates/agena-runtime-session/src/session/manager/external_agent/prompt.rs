@@ -22,19 +22,21 @@ pub(super) struct PromptCapabilities {
     pub(super) image: bool,
     pub(super) audio: bool,
     pub(super) embedded_context: bool,
+    pub(super) skill: bool,
+    pub(super) skill_inline: bool,
 }
 
 impl<'a> TurnInput<'a> {
     pub(super) fn new(facts: &'a PromptView, execution: &ExecutionView) -> Result<Self, AppError> {
-        let entry = facts
+        let message_index = facts
             .entries
             .iter()
-            .find(|entry| entry.entry.id == execution.message_id);
+            .position(|entry| entry.entry.id == execution.message_id);
         let Some(EntryPayload::User {
             document,
             author,
             origin,
-        }) = entry.map(|entry| &entry.entry.payload)
+        }) = message_index.map(|index| &facts.entries[index].entry.payload)
         else {
             return Err(AppError::Config(
                 "Send a user message to start an external agent turn.".into(),
@@ -42,10 +44,18 @@ impl<'a> TurnInput<'a> {
         };
         require_direct_user(author.as_ref(), origin.as_ref())?;
         validate_document(document)?;
-        let resume_anchor = facts.entries.split_last().and_then(|(current, history)| {
-            (current.entry.id == execution.message_id).then(|| ExternalAgentHistoryAnchor {
-                tail: history.last().map(|entry| entry.entry.id),
-            })
+        let resume_anchor = message_index.and_then(|index| {
+            // Failure notices attached after this same input are outside the
+            // native context. Preserve the original cut when retrying it.
+            facts.entries[index + 1..]
+                .iter()
+                .all(|entry| {
+                    entry.entry.message_id == execution.message_id
+                        && matches!(entry.entry.payload, EntryPayload::Notice { .. })
+                })
+                .then(|| ExternalAgentHistoryAnchor {
+                    tail: facts.entries[..index].last().map(|entry| entry.entry.id),
+                })
         });
         Ok(Self {
             entries: facts
@@ -220,7 +230,18 @@ impl<'a> TurnInput<'a> {
                     }
                     block
                 }
-                ActivityPayload::SkillReference(skill) => text_block(skill.model_context_text()),
+                ActivityPayload::SkillReference(skill) => {
+                    if let Some(owner) = skill.external_agent {
+                        if owner != agent || !capabilities.skill {
+                            return Err(AppError::Config(
+                                "The current ACP agent does not accept this native Skill reference.".into(),
+                            ));
+                        }
+                        json!({"type":"skill", "name":skill.name})
+                    } else {
+                        text_block(skill.model_context_text())
+                    }
+                }
                 ActivityPayload::TextArtifact(artifact) => text_block(artifact.text.clone()),
                 _ => unreachable!("external agent document was validated"),
             };
@@ -251,29 +272,49 @@ fn embedded_resource(uri: String, mime: &str, data: String) -> Value {
     }
 }
 
-pub(super) fn route_command(blocks: &mut Vec<Value>, commands: &[ExternalAgentCommand]) {
-    let Some(first) = blocks.first_mut().filter(|block| block["type"] == "text") else {
-        return;
+pub(super) fn route_command(
+    blocks: &mut Vec<Value>,
+    commands: &[ExternalAgentCommand],
+    capabilities: PromptCapabilities,
+) -> Result<(), AppError> {
+    let is_skill = |name: &str| {
+        commands
+            .iter()
+            .any(|entry| entry.skill && entry.name == name)
     };
-    let Some(input) = first["text"]
-        .as_str()
-        .and_then(external_agent_command_input)
-    else {
-        return;
-    };
-    let (name, args) = input.split_once(char::is_whitespace).unwrap_or((input, ""));
-    if let Some(skill) = commands
-        .iter()
-        .find(|command| command.skill && command.name == name)
+    if let Some(first) = blocks.first_mut().filter(|block| block["type"] == "text")
+        && let Some(input) = first["text"]
+            .as_str()
+            .and_then(external_agent_command_input)
     {
-        let args = args.trim_start().to_owned();
-        *first = json!({"type": "skill", "name": skill.name});
-        if !args.is_empty() {
-            blocks.insert(1, text_block(args));
+        let (name, args) = input.split_once(char::is_whitespace).unwrap_or((input, ""));
+        if capabilities.skill && is_skill(name) {
+            let args = args.trim_start().to_owned();
+            *first = json!({"type": "skill", "name": name});
+            if !args.is_empty() {
+                blocks.insert(1, text_block(args));
+            }
+        } else {
+            *first = text_block(format!("/{input}"));
         }
-    } else {
-        *first = text_block(format!("/{input}"));
     }
+    for (index, block) in blocks
+        .iter()
+        .enumerate()
+        .filter(|(_, block)| block["type"] == "skill")
+    {
+        if !capabilities.skill || (!capabilities.skill_inline && index != 0) {
+            return Err(AppError::Config(
+                "This ACP agent accepts a single native Skill at the start of a prompt.".into(),
+            ));
+        }
+        if !block["name"].as_str().is_some_and(is_skill) {
+            return Err(AppError::Config(
+                "A native Skill in the prompt is no longer advertised by the current agent.".into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn text_block(text: String) -> Value {

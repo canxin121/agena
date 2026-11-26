@@ -116,6 +116,7 @@ mod app_integrations;
 mod app_lifecycle;
 mod app_message_queue;
 mod app_mouse;
+mod app_native_agent;
 mod app_navigation;
 mod app_overlays;
 mod app_paste;

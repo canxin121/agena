@@ -1274,11 +1274,19 @@ pub enum AgentSessionAction {
         #[arg(long)]
         before_message_id: Option<i64>,
     },
+    /// Rewind the native conversation to an advertised user message boundary.
+    Rewind {
+        #[arg(long)]
+        before_message_id: i64,
+    },
 }
 
 #[derive(Debug, Clone, Args)]
 pub struct SessionAgentOptionsArgs {
     pub session_id: i64,
+    /// Read the Agent's advertised startup options and command preview.
+    #[arg(long, conflicts_with_all = ["model", "thinking", "option"])]
+    pub preview: bool,
     /// Select an advertised model. An empty value follows the agent's settings.
     #[arg(long, conflicts_with = "thinking", value_name = "ID")]
     pub model: Option<String>,

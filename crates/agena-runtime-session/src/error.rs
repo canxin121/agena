@@ -60,6 +60,10 @@ pub enum AppError {
     },
     #[error("execution cancelled")]
     Cancelled,
+    #[error(
+        "The external agent could not resume the linked conversation. Check the agent and retry this message."
+    )]
+    ExternalAgentResumeUnavailable,
     #[error("operation blocked by permission policy: {}", .0.reason)]
     PolicyDenied(Box<agena_domain::PolicyDeniedResult>),
     #[error("permission request declined by user")]
@@ -191,6 +195,9 @@ impl AppError {
                 "The session changed while the request was running. Refresh and try again."
             }
             Self::Cancelled => "Response cancelled.",
+            Self::ExternalAgentResumeUnavailable => {
+                "The external agent could not resume the linked conversation. Check the agent and retry this message."
+            }
             Self::AutoApproveClassifyFailed(_) => {
                 "Automatic approval could not classify this request. Choose an option below."
             }
@@ -509,6 +516,13 @@ impl AppError {
                 Retry::AfterUserAction,
                 Recovery::ChooseAlternative,
             ),
+            Self::ExternalAgentResumeUnavailable => (
+                "external_agent.resume_unavailable",
+                Category::DependencyUnavailable,
+                Responsibility::Dependency,
+                Retry::Backoff,
+                Recovery::Retry,
+            ),
             Self::Cancelled => (
                 // Cancellation is a terminal outcome. If it reaches a
                 // failure-only boundary, report the invariant violation
@@ -765,6 +779,7 @@ impl AppError {
                 *retryable
             }
             Self::Http(err) => err.is_timeout() || err.is_connect(),
+            Self::ExternalAgentResumeUnavailable => true,
             _ => false,
         }
     }

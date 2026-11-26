@@ -371,6 +371,13 @@ impl App {
                             self.prepare_composer_command(command_name.as_str());
                         }
                     }
+                    CommandPaletteCommand::NativeAgentBrowser => self.open_native_agent_browser(),
+                    CommandPaletteCommand::NativeAgentManagement { session_id } => {
+                        self.open_native_agent_management(session_id)
+                    }
+                    CommandPaletteCommand::NativeAgentAuth { session_id } => {
+                        self.open_native_agent_auth(session_id)
+                    }
                     CommandPaletteCommand::ExternalAgentActivity { session_id } => {
                         self.open_external_agent_activity(session_id);
                     }

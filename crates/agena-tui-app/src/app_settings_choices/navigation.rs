@@ -39,6 +39,7 @@ impl App {
     }
 
     pub(crate) fn open_command_palette(&mut self) {
+        self.load_external_agent_command_preview();
         let (items, actions) = self.command_palette_items();
         let presentation = agena_tui::command_palette::new_presentation(
             ui_text::t(&self.i18n, "overlay-commands-title"),
@@ -103,7 +104,37 @@ impl App {
             ));
             actions.insert(key, CommandPaletteCommand::Plugin(Box::new(entry)));
         }
-        if let Some((session_id, agent, commands)) = self.external_agent_commands() {
+        let key = "agena:native-agent-browser".to_owned();
+        let label = self.i18n.text("external-agent-browser");
+        items.push(CommandPaletteItem::new(
+            key.clone(),
+            label.clone(),
+            "ACP",
+            format!("{label} acp claude code antigravity"),
+        ));
+        actions.insert(key, CommandPaletteCommand::NativeAgentBrowser);
+        if let Some((session_id, agent, commands)) = self.external_agent_command_catalog() {
+            for (key, text, action) in [
+                (
+                    "agena:native-agent-manage",
+                    "external-agent-manage",
+                    CommandPaletteCommand::NativeAgentManagement { session_id },
+                ),
+                (
+                    "agena:native-agent-auth",
+                    "external-agent-auth",
+                    CommandPaletteCommand::NativeAgentAuth { session_id },
+                ),
+            ] {
+                let label = self.i18n.text(text);
+                items.push(CommandPaletteItem::new(
+                    key,
+                    label.clone(),
+                    agent.label(),
+                    format!("{label} {} acp", agent.label()),
+                ));
+                actions.insert(key.into(), action);
+            }
             let key = "agena:external-agent-activity".to_owned();
             let label = ui_text::t(&self.i18n, "external-agent-activity-title");
             let detail = agent.label();
@@ -202,6 +233,31 @@ impl App {
             execution.session.external_agent?,
             &execution.execution.external_agent_commands,
         ))
+    }
+
+    pub(crate) fn can_preview_external_agent_commands(&self, session_id: i64) -> bool {
+        self.current_or_selected_session_id() == Some(session_id)
+            && self.transcript.execution.as_ref().is_some_and(|execution| {
+                execution.session.id == session_id
+                    && execution.execution.external_agent_command_preview
+            })
+    }
+
+    pub(crate) fn external_agent_command_catalog(
+        &self,
+    ) -> Option<(
+        i64,
+        agena_domain::ExternalAgent,
+        &[agena_domain::ExternalAgentCommand],
+    )> {
+        let (session_id, agent, commands) = self.external_agent_commands()?;
+        if self.can_preview_external_agent_commands(session_id)
+            && let Some((id, preview)) = &self.external_agent_command_preview
+            && *id == session_id
+        {
+            return Some((session_id, agent, preview));
+        }
+        Some((session_id, agent, commands))
     }
 
     /// The built-in commands this client runs, in catalog order.

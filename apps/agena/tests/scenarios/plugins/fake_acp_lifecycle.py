@@ -4,6 +4,7 @@ import base64
 import json
 from pathlib import Path
 import sys
+import uuid
 import traceback
 
 
@@ -69,6 +70,9 @@ cwd = Path.cwd()
 version = int((cwd / ".native-protocol-version").read_text())
 historical_fork = (cwd / ".historical-fork-support").is_file()
 native_skills = (cwd / ".native-skills").is_file()
+view_settings = (cwd / ".native-view-settings").is_file()
+resume_errors = (cwd / ".native-resume-errors").is_file()
+history_window = (cwd / ".native-history-window").is_file()
 skills_disabled = (cwd / ".native-disable-skills").is_file()
 skill_name = "summarize-fixture"
 skill_path = cwd / ".agents" / "skills" / skill_name / "SKILL.md"
@@ -79,6 +83,17 @@ commands = [
     {"type": "skill", "name": "builtin-skill", "description": "No local file", "path": "relative"},
     {"type": "command", "name": "status", "description": "Report saved status"},
 ]
+
+
+def model_options(value="default"):
+    return {"configOptions": [{
+        "id": "model", "type": "select", "category": "model", "name": "Model",
+        "currentValue": value, "options": [
+            {"value": "default", "name": "Default"}, {"value": "retained", "name": "Retained"},
+        ],
+    }]}
+
+
 current = None
 prompted = False
 for raw in sys.stdin:
@@ -88,6 +103,12 @@ for raw in sys.stdin:
         continue
     session = params.get("sessionId", "")
     log(method, session)
+    if method in {"session/new", "session/load", "session/resume", "session/fork"}:
+        options = params["_meta"]["claudeCode"]["options"]
+        assert options["tools"] == [] and options["strictMcpConfig"] is True
+        assert options["settingSources"] == []
+        assert "restricted" in options["extraArgs"]
+        assert "disable-slash-commands" not in options["extraArgs"]
     if method == "initialize":
         if version == 1 and params["protocolVersion"] == 2:
             send(id=req["id"], result={"protocolVersion": 1})
@@ -110,6 +131,8 @@ for raw in sys.stdin:
                     result["capabilities"]["session"]["prompt"]["skill"] = {}
         else:
             lifecycle.update(list={}, resume={}, close={})
+            if resume_errors:
+                del lifecycle["resume"]
             result = {
                 "protocolVersion": 1,
                 "agentCapabilities": {
@@ -136,12 +159,17 @@ for raw in sys.stdin:
                 "sessions": [{"sessionId": "foreign", "cwd": str(cwd.parent)}],
                 "nextCursor": next_cursor,
             }
-    elif method == "session/load" or (
+    elif (method == "session/load" and not params["mcpServers"]) or (
         method == "session/resume" and params.get("replayFrom") == {"type": "start"}
     ):
         assert method == ("session/load" if version == 1 else "session/resume"), params
         assert session == "native-project" and Path(params["cwd"]) == cwd
         assert params["mcpServers"] == []
+        if view_settings and (cwd / ".native-expect-reopen-settings").is_file():
+            assert params["additionalDirectories"] == [str(cwd / "extra")]
+            assert any("Retain my custom Agena prompt" in block.get("text", "")
+                       for block in params["systemPrompt"]["content"])
+            log("replayed-with-custom-context", session)
         current = session
         if version == 2:
             post_text(session, "user", "Obsolete user", "user-1")
@@ -216,6 +244,12 @@ for raw in sys.stdin:
         if outside.is_file():
             post_text(session, "user", "From the agent CLI", "outside-user")
             post_text(session, "agent", outside.read_text(), "outside-answer")
+        if history_window:
+            for number in range(1, 4):
+                user_id = f"window-user-{number}"
+                fork_cursor(session, user_id, f"fixture/window/{number}")
+                post_text(session, "user", f"Window turn {number}", user_id)
+                post_text(session, "agent", str(number) * (6 * 1024 * 1024), f"window-answer-{number}")
         if version == 2:
             update(session, sessionUpdate="replay_complete")
             post_text(nested, "agent", "Descendant history", "assistant-1")
@@ -232,12 +266,22 @@ for raw in sys.stdin:
             session, sessionUpdate="session_info_update", title="Native history",
             updatedAt="2026-11-25T00:00:00Z",
         )
-        result = {"availableCommands": commands} if native_skills else {}
-    elif method == "session/resume":
+        result = {"availableCommands": commands} if native_skills else model_options() if view_settings else {}
+    elif method in {"session/resume", "session/load"}:
         assert session in {"native-project", "native-fork", "native-fork-imported", "native-fork-live"}
         assert Path(params["cwd"]) == cwd
         assert len(params["mcpServers"]) == 1
-        if session == "native-project" and not (historical_fork or native_skills):
+        if resume_errors:
+            error = (cwd / ".native-resume-errors").read_text().strip()
+            if error:
+                if error == "transient":
+                    code, data = -32603, {}
+                else:
+                    code = -32002
+                    data = {"sessionId": session if error == "missing" else "different-native-id"}
+                send(id=req["id"], error={"code": code, "message": "Fixture refuses resume", "data": data})
+                continue
+        if session == "native-project" and not (historical_fork or native_skills or resume_errors or history_window):
             assert params["additionalDirectories"] == [str(cwd / "extra")], params
             system_prompt = params["systemPrompt"]
             assert system_prompt["mode"] == "append"
@@ -246,10 +290,13 @@ for raw in sys.stdin:
                 for block in system_prompt["content"]
             )
         current = session
-        result = {"availableCommands": commands} if native_skills else {}
+        result = {"availableCommands": commands} if native_skills else model_options() if view_settings else {}
     elif method == "session/new":
         current = "native-new"
-        result = {"sessionId": current}
+        result = {"sessionId": current, **(model_options() if view_settings else {})}
+    elif method == "session/set_config_option" and view_settings:
+        assert session == current and params["configId"] == "model", params
+        result = model_options(params["value"])
     elif method == "session/prompt":
         assert session == current
         prompted = True
@@ -289,7 +336,7 @@ for raw in sys.stdin:
                 ])
                 post_text(session, "agent", "Structured skill accepted", "skill-invocation")
         else:
-            post_text(session, "agent", f"Reply from {session}", "fresh-assistant")
+            post_text(session, "agent", f"Reply from {session}", str(uuid.uuid4()))
         if version == 2:
             update(session, sessionUpdate="state_update", state="idle", stopReason="end_turn")
             continue
@@ -321,7 +368,7 @@ for raw in sys.stdin:
             current = None
         result = {}
     elif method == "session/delete":
-        assert session == "native-fork"
+        assert session == "native-fork" or (view_settings and session == "native-new")
         result = {}
     else:
         raise AssertionError(f"Unexpected ACP method: {method}")

@@ -48,7 +48,10 @@ impl ApplicationService {
             .await
             .map_err(crate::kernel_error)?;
         if let Some(agent) = configuration.external_agent {
-            return Ok(agena_runtime::SessionRunOptions::for_external_agent(agent));
+            return Ok(agena_runtime::SessionRunOptions {
+                system: request.system,
+                ..agena_runtime::SessionRunOptions::for_external_agent(agent)
+            });
         }
 
         let inherited_selection = execution_control
@@ -408,6 +411,24 @@ impl ApplicationService {
             })
             .collect::<Vec<_>>();
         queued_messages.sort_by_key(|message| message.message_id);
+        let configuration = &snapshot.configuration;
+        let native_linked = configuration.native_session_link().is_some();
+        let mut external_agent_commands = configuration.external_agent_state.commands.clone();
+        if configuration.external_agent == Some(agena_domain::ExternalAgent::Antigravity)
+            && native_linked
+            && !external_agent_commands
+                .iter()
+                .any(|command| command.name == "compact")
+        {
+            external_agent_commands.push(agena_domain::ExternalAgentCommand {
+                name: "compact".into(),
+                description: "Compact the native Antigravity conversation".into(),
+                argument_hint: None,
+                skill: false,
+                skill_inline: false,
+                skill_path: None,
+            });
+        }
         Ok(SessionExecutionResource {
             receipt: None,
             queued_messages,
@@ -435,12 +456,11 @@ impl ApplicationService {
                 .then(|| agena_domain::ExternalAgentOptions {
                     selection: snapshot.configuration.external_agent_selection.clone(),
                     options: snapshot.configuration.external_agent_state.options.clone(),
+                    preview_commands: Vec::new(),
                 }),
-                external_agent_commands: snapshot
-                    .configuration
-                    .external_agent_state
-                    .commands
-                    .clone(),
+                external_agent_commands,
+                external_agent_command_preview: configuration.external_agent.is_some()
+                    && !native_linked,
                 external_agent_details: snapshot.configuration.external_agent_state.details.clone(),
                 selected_permission: agena_api::resource::PermissionConfigResource::from(
                     &context.selected_permission,

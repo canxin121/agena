@@ -60,9 +60,10 @@ for line in sys.stdin:
             methods = [{method_key: "terminal", "type": "terminal", "name": "Terminal", "args": ["--login"]}]
         if version == 1:
             air_meta = capabilities.get("_meta", {}).get("jetbrains", {}).get("air")
-            air = air_meta is not None
+            air = air_meta is not None and "asyncTasks" in air_meta["capabilities"]
             if air:
-                assert CLAUDE and air_meta == {"version": 1, "capabilities": ["asyncTasks"]}, params
+                assert CLAUDE and air_meta["version"] == 1, params
+                assert set(air_meta["capabilities"]) == {"asyncTasks", "sessionRewind"}, params
                 assert terminal is None, params
             agent = {"mcpCapabilities": {"http": True}, "sessionCapabilities": {"close": {}}}
             if CLAUDE:

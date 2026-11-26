@@ -59,6 +59,18 @@ impl App {
                     &dialog.input,
                 );
             }
+            Overlay::NativeAgentEdit(editor) => {
+                agena_tui_components::render_workbench_editor_dialog(
+                    frame,
+                    area,
+                    SurfaceMode::Overlay,
+                    sanitize_display_text(editor.title.as_str()).into(),
+                    sanitize_display_text(editor.prompt.as_str()).into(),
+                    sanitize_display_text(editor.footer.as_str()).into(),
+                    editor.multiline,
+                    &editor.input,
+                );
+            }
             Overlay::TranscriptFoldLoad(dialog) => {
                 render_overlay_line_input_dialog(
                     frame,

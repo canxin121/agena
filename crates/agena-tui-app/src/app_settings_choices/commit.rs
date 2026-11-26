@@ -5,6 +5,9 @@ impl App {
         selection: agena_tui::choice::ChoiceSelection,
     ) -> bool {
         match dialog.action.clone() {
+            ChoiceOverlayAction::NativeAgent(menu) => {
+                self.commit_native_agent_choice(*menu, &choice_selection_value(&selection), dialog)
+            }
             ChoiceOverlayAction::ExternalAgentOptions {
                 session_id,
                 agent,
@@ -114,6 +117,32 @@ impl App {
                 let value = choice_selection_value(&selection);
                 if value == "file" {
                     self.request_file_attachment(false);
+                    return true;
+                }
+                if let Some(name) = value.strip_prefix("native-skill:") {
+                    let Some(skill) =
+                        self.external_agent_commands()
+                            .and_then(|(_, agent, commands)| {
+                                commands
+                                    .iter()
+                                    .find(|command| command.skill_inline && command.name == name)
+                                    .map(|command| {
+                                        agena_domain::SkillReferenceActivity::external(
+                                            agent,
+                                            command.name.clone(),
+                                            command.description.clone(),
+                                        )
+                                    })
+                            })
+                    else {
+                        self.flash_warning(
+                            "This Skill is no longer advertised by the active ACP agent.",
+                        );
+                        return true;
+                    };
+                    if let Err(error) = self.stage_skill_activity(skill) {
+                        self.flash_error(error);
+                    }
                     return true;
                 }
                 let Some(id) = value.strip_prefix("skill:") else {

@@ -597,6 +597,9 @@ pub struct SessionExecutionContextResource {
     /// The native slash commands last advertised by this external agent session.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub external_agent_commands: Vec<agena_domain::ExternalAgentCommand>,
+    /// A fresh ACP view can query an advisory list before opening a native session.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub external_agent_command_preview: bool,
     #[serde(
         default,
         skip_serializing_if = "agena_domain::ExternalAgentDetails::is_empty"

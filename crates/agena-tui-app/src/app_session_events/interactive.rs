@@ -8,6 +8,29 @@ enum ExecutionTranscript {
 }
 
 impl App {
+    pub(crate) fn leave_deleted_native_view(&mut self, session_id: i64) {
+        self.transcript_cache.remove(&session_id);
+        self.clear_draft_for_slot(DraftSlot::Session(session_id));
+        if self.transcript.session_id != Some(session_id) {
+            return;
+        }
+        if let Some(subscription) = self.active_subscription.take() {
+            subscription.abort();
+        }
+        self.subscription_generation = self.subscription_generation.wrapping_add(1);
+        self.session_controller = Default::default();
+        self.transcript.clear_session();
+        self.current_lineage = None;
+        self.pending_refresh = None;
+        self.session_plan = Default::default();
+        self.run_options.clear_model_stack();
+        self.clear_composer_state();
+        self.restore_draft_for_slot(DraftSlot::NewSession);
+        self.sync_open_pending_interactive_overlay();
+        self.focus = Focus::Composer;
+        self.request_sessions(false);
+    }
+
     pub(crate) fn open_session(&mut self, session_id: i64, title: String) {
         self.bot.cancel();
         self.bot.cancel_scope();
@@ -209,8 +232,17 @@ impl App {
             .map_or(&[][..], |current| {
                 current.execution.external_agent_commands.as_slice()
             });
-        let commands_changed =
-            previous_commands != execution.execution.external_agent_commands.as_slice();
+        let preview_ended = self
+            .external_agent_command_preview
+            .as_ref()
+            .is_some_and(|(id, _)| {
+                *id == session_id && !execution.execution.external_agent_command_preview
+            });
+        if preview_ended {
+            self.external_agent_command_preview = None;
+        }
+        let commands_changed = preview_ended
+            || previous_commands != execution.execution.external_agent_commands.as_slice();
         let suggestions_changed = self.transcript.execution.as_ref().map_or(
             !execution
                 .execution
@@ -238,10 +270,8 @@ impl App {
         if commands_changed || suggestions_changed {
             self.refresh_command_palette();
         }
-        if commands_changed {
-            if self.slash_command_suggestions.take().is_some() {
-                self.sync_slash_command_suggestions();
-            }
+        if commands_changed && self.slash_command_suggestions.is_some() {
+            self.refresh_slash_command_suggestions();
         }
         if is_terminal && was_running && self.is_bot_session() {
             self.refresh_bot_registry(false);

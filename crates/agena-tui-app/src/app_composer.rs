@@ -144,11 +144,29 @@ impl App {
             search_text: "file folder path attachment document image".to_owned(),
             current: false,
         };
+        let mut builtin_items = vec![file];
+        if let Some((_, agent, commands)) = self.external_agent_commands() {
+            let label = ui_text::t(&self.i18n, "insert-content-skill-label");
+            builtin_items.extend(commands.iter().filter(|command| command.skill_inline).map(
+                |command| ChoiceItem {
+                    label: format!("{label}: {}", command.name),
+                    detail: format!("{} · {}", agent.label(), command.description),
+                    value: format!("native-skill:{}", command.name),
+                    search_text: format!(
+                        "{} {} {}",
+                        command.name,
+                        agent.label(),
+                        command.description
+                    ),
+                    current: false,
+                },
+            ));
+        }
         let mut dialog = self.build_choice_overlay(
             ui_text::t(&self.i18n, "overlay-insert-content-title"),
             ui_text::t(&self.i18n, "overlay-insert-content-prompt"),
             None,
-            vec![file.clone()],
+            builtin_items.clone(),
             ChoiceOverlayAction::InsertContent {
                 workspace_id,
                 draft_slot,
@@ -194,7 +212,7 @@ impl App {
                             left.name.cmp(&right.name).then(left.id.cmp(&right.id))
                         });
                         let label = ui_text::t(&app.i18n, "insert-content-skill-label");
-                        let mut items = vec![file];
+                        let mut items = builtin_items;
                         items.extend(catalog.skills.iter().map(|skill| {
                             let scope = match skill.scope {
                                 agena_api::skills::SkillScope::Workspace => "Workspace",
@@ -934,6 +952,7 @@ impl App {
             return;
         }
 
+        self.load_external_agent_command_preview();
         if self
             .slash_command_suggestions
             .as_ref()
@@ -965,6 +984,17 @@ impl App {
         state.replace_items(items);
         self.slash_command_suggestions = Some(state);
         self.slash_command_suggestion_actions = actions;
+    }
+
+    pub(crate) fn refresh_slash_command_suggestions(&mut self) {
+        if let Some(mut suggestions) = self.slash_command_suggestions.take() {
+            let (items, actions) = self.slash_command_suggestion_items("");
+            suggestions.replace_items(items);
+            self.slash_command_suggestions = Some(suggestions);
+            self.slash_command_suggestion_actions = actions;
+        } else {
+            self.sync_slash_command_suggestions();
+        }
     }
 
     pub(crate) fn slash_command_suggestion_context(&self) -> Option<SlashCommandSuggestionContext> {
@@ -1035,7 +1065,7 @@ impl App {
                 detail: plugin_command_detail(&entry),
             });
         }
-        if let Some((_, agent, commands)) = self.external_agent_commands() {
+        if let Some((_, agent, commands)) = self.external_agent_command_catalog() {
             for command in commands {
                 let slash_name = command.qualified_name();
                 let detail =

@@ -13,7 +13,13 @@ impl SessionManager {
         &self,
         id: i64,
         change: Option<ExternalAgentOptionChange>,
+        preview: bool,
     ) -> Result<ExternalAgentOptions, AppError> {
+        if preview && change.is_some() {
+            return Err(AppError::Config(
+                "An ACP startup preview cannot change session options.".into(),
+            ));
+        }
         let session = session_id(id)?;
         self.require_writable_bot_history(id).await?;
         let configuration = read_with_busy_retry(session, "external_agent_options", || {
@@ -24,10 +30,15 @@ impl SessionManager {
             .external_agent
             .ok_or_else(|| AppError::Config("This session has no external agent.".into()))?;
         let expected = &configuration.external_agent_selection;
-        if change.is_none() && !configuration.external_agent_state.options.is_empty() {
+        let native_linked = configuration.native_session_link().is_some();
+        if change.is_none()
+            && ((!preview && !configuration.external_agent_state.options.is_empty())
+                || (preview && native_linked))
+        {
             return Ok(ExternalAgentOptions {
                 selection: expected.clone(),
                 options: configuration.external_agent_state.options.clone(),
+                preview_commands: Vec::new(),
             });
         }
         let _permit = self.reserve_execution()?;
@@ -42,6 +53,12 @@ impl SessionManager {
                 "External agent options require a project workspace.".into(),
             ));
         }
+        let additional_directories = super::lifecycle::directories_for_agent(
+            &executor,
+            cwd,
+            &configuration.external_agent_directories,
+        )
+        .await?;
 
         let mut selection = expected.clone();
         if let Some(change) = &change {
@@ -59,21 +76,34 @@ impl SessionManager {
             selection.remove(&Kind::ThoughtLevel);
         }
         let cancel = self.shutdown.child_token();
-        let mut client = acp::AcpClient::spawn(agent, cwd)?;
+        let mut client =
+            acp::AcpClient::spawn_with_directories(agent, cwd, &additional_directories)?;
         let outcome = async {
             client.prepare_provider_routes(&cancel).await?;
-            if change.is_none() && selection.is_empty() {
+            if preview || (change.is_none() && selection.is_empty()) {
                 let previous = configuration.external_agent_resume.as_ref()
                     .filter(|prior| prior.session == session && prior.cwd == cwd)
                     .map(|prior| prior.native_id.as_str());
-                match client.session_options(cwd, previous, &cancel).await {
-                    Ok(Some(options)) => return Ok(options),
+                match client.session_options(cwd, previous, &additional_directories, &cancel).await {
+                    Ok(Some(response)) => {
+                        let commands = if !native_linked && client.uses_v2() {
+                            super::state::available_commands(&response["availableCommands"])
+                                .unwrap_or_default()
+                        } else {
+                            Vec::new()
+                        };
+                        return Ok((config_options(&response), commands));
+                    }
                     Ok(None) => {}
                     Err(AppError::Cancelled) => return Err(AppError::Cancelled),
+                    Err(error) if preview => return Err(error),
                     Err(error) => tracing::debug!(%error, "could not inspect ACP options without opening a session"),
                 }
             }
-            let mut opened = client.start(cwd, None, None, false, &cancel).await?;
+            if preview {
+                return Ok((Vec::new(), Vec::new()));
+            }
+            let mut opened = client.start_probe(cwd, additional_directories, &cancel).await?;
             let result = async {
                 for (kind, value) in selection.clone() {
                     if !opened.offers(&kind, &value) {
@@ -92,11 +122,11 @@ impl SessionManager {
             .await;
             client.close_probe(&opened, &cancel).await;
             result?;
-            Ok::<_, AppError>(opened.options)
+            Ok::<_, AppError>((opened.options, Vec::new()))
         }
         .await;
         client.close().await;
-        let options = outcome?;
+        let (options, preview_commands) = outcome?;
 
         if change.is_some() {
             let request = RequestId::new();
@@ -115,7 +145,11 @@ impl SessionManager {
             .await
             .map_err(kernel_error)?;
         }
-        Ok(ExternalAgentOptions { selection, options })
+        Ok(ExternalAgentOptions {
+            selection,
+            options,
+            preview_commands,
+        })
     }
 }
 

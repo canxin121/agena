@@ -81,7 +81,7 @@ impl TryFrom<String> for ExternalAgentOptionKind {
     }
 }
 
-/// Explicit choices survive new native sessions and server restarts.
+/// Explicit choices apply when the Agena session opens a native conversation.
 pub type ExternalAgentSelection = BTreeMap<ExternalAgentOptionKind, String>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,6 +128,9 @@ pub struct ExternalAgentOption {
 pub struct ExternalAgentOptions {
     pub selection: ExternalAgentSelection,
     pub options: Vec<ExternalAgentOption>,
+    /// Advisory commands for a view that has yet to open a native session.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub preview_commands: Vec<ExternalAgentCommand>,
 }
 
 /// Sign-in is performed by the installed agent using its own credential store.
@@ -293,6 +296,8 @@ pub struct ExternalAgentCommand {
     pub argument_hint: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub skill: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub skill_inline: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skill_path: Option<String>,
 }
@@ -312,6 +317,7 @@ pub fn is_acp_session_id(id: i64) -> bool {
 impl ExternalAgentCommand {
     pub fn accepts_name(name: &str) -> bool {
         !name.is_empty()
+            && name.len() <= 256
             && !name.starts_with('/')
             && !name.chars().any(|ch| ch.is_whitespace() || ch.is_control())
     }

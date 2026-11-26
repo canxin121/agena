@@ -10,7 +10,7 @@ use agena_domain::{
     ExternalAgent, ExternalAgentAuthStatus, ExternalAgentOption, ExternalAgentOptionKind,
 };
 use agena_process::ManagedChild;
-use agena_provider::CompletionUsage;
+use agena_provider::{CompletionUsage, ProviderErrorKind};
 use agena_storage::kernel::ExternalAgentNativeCursor;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
@@ -35,14 +35,18 @@ use super::{
     transcript::message::{MessageTarget, MessageUpdate, NativeMessages},
 };
 
+mod antigravity;
+mod cursors;
 mod index;
+mod isolation;
 mod lifecycle;
+mod policy;
 mod protocol;
 mod providers;
+mod startup_options;
 
 pub(super) use index::MAX_BATCH_IDS;
 pub(super) use lifecycle::{SessionContext, bounded_string, bounded_title};
-pub(super) use protocol::fork_cursor;
 use protocol::{ActivitySnapshot, PromptLifecycle, Version};
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
@@ -70,6 +74,10 @@ async fn abandoned_steering(requests: &mut HashMap<u64, steering::Request>) -> u
 pub(super) struct AcpClient {
     agent: ExternalAgent,
     cwd: PathBuf,
+    additional_directories: Vec<PathBuf>,
+    previous_antigravity_history: bool,
+    agent_arguments: Vec<String>,
+    isolation: Option<isolation::Isolation>,
     child: ManagedChild,
     input: ChildStdin,
     output: FramedRead<ChildStdout, LinesCodec>,
@@ -80,6 +88,7 @@ pub(super) struct AcpClient {
     live_auth: Option<super::auth::LiveStatus>,
     reported_auth: Option<ExternalAgentAuthStatus>,
     air_index: bool,
+    plain_delete: bool,
     providers_prepared: bool,
     capabilities: Option<Capabilities>,
     initialization: Option<Value>,
@@ -173,6 +182,13 @@ pub(super) struct OpeningMessages {
     frames: VecDeque<(Value, usize)>,
     bytes: usize,
     snapshots_only: bool,
+    resume_rejection: Option<ResumeRejection>,
+}
+
+#[derive(Clone, Copy)]
+enum ResumeRejection {
+    Missing,
+    Unsupported,
 }
 
 impl OpeningMessages {
@@ -260,6 +276,7 @@ struct Capabilities {
     version: Version,
     auth_status: bool,
     air_tasks: bool,
+    air_rewind: bool,
     http_mcp: bool,
     acp_mcp: bool,
     sse_mcp: bool,
@@ -268,6 +285,7 @@ struct Capabilities {
     audio: bool,
     embedded_context: bool,
     skill: bool,
+    skill_inline: bool,
     load: bool,
     resume: bool,
     close: bool,
@@ -279,6 +297,7 @@ struct Capabilities {
 pub(super) struct OpenedSession {
     pub(super) id: String,
     pub(super) resumed: bool,
+    pub(super) missing_previous: bool,
     pub(super) options: Vec<ExternalAgentOption>,
     pub(super) state: ExternalAgentState,
     pub(super) activity: ActivitySnapshot,
@@ -301,66 +320,102 @@ impl OpenedSession {
     }
 }
 
+fn agent_environment(command: &mut Command) {
+    // Preserve the user's native configuration and network settings. Do
+    // not give a coding agent the Agena server's environment or credentials.
+    command
+        .env_clear()
+        .envs(std::env::vars_os().filter(|(key, _)| {
+            let key = key.to_string_lossy();
+            matches!(
+                key.to_ascii_uppercase().as_str(),
+                "PATH"
+                    | "HOME"
+                    | "USER"
+                    | "LOGNAME"
+                    | "SHELL"
+                    | "LANG"
+                    | "LANGUAGE"
+                    | "TZ"
+                    | "TMPDIR"
+                    | "TMP"
+                    | "TEMP"
+                    | "SYSTEMROOT"
+                    | "WINDIR"
+                    | "COMSPEC"
+                    | "PATHEXT"
+                    | "USERPROFILE"
+                    | "APPDATA"
+                    | "LOCALAPPDATA"
+                    | "HOMEDRIVE"
+                    | "HOMEPATH"
+                    | "SSL_CERT_FILE"
+                    | "SSL_CERT_DIR"
+                    | "NODE_EXTRA_CA_CERTS"
+                    | "HTTP_PROXY"
+                    | "HTTPS_PROXY"
+                    | "ALL_PROXY"
+                    | "NO_PROXY"
+                    | "CLAUDE_CONFIG_DIR"
+                    | "DBUS_SESSION_BUS_ADDRESS"
+            ) || key.starts_with("XDG_")
+                || key.starts_with("LC_")
+        }));
+    let no_proxy = std::env::var("no_proxy")
+        .or_else(|_| std::env::var("NO_PROXY"))
+        .unwrap_or_default();
+    let no_proxy = format!("{no_proxy},127.0.0.1,localhost,::1");
+    command
+        .env("NO_PROXY", &no_proxy)
+        .env("no_proxy", &no_proxy);
+}
+
 impl AcpClient {
     pub(super) fn spawn(agent: ExternalAgent, cwd: &Path) -> Result<Self, AppError> {
+        Self::spawn_with_directories(agent, cwd, &[])
+    }
+
+    pub(super) fn spawn_with_directories(
+        agent: ExternalAgent,
+        cwd: &Path,
+        directories: &[PathBuf],
+    ) -> Result<Self, AppError> {
+        Self::spawn_profile(agent, cwd, false, directories)
+    }
+
+    fn spawn_profile(
+        agent: ExternalAgent,
+        cwd: &Path,
+        previous_antigravity_history: bool,
+        directories: &[PathBuf],
+    ) -> Result<Self, AppError> {
         let (program, arguments) = agent.command();
+        let agent_arguments = match agent {
+            ExternalAgent::Antigravity => {
+                policy::antigravity_arguments(previous_antigravity_history)?
+            }
+            ExternalAgent::ClaudeCode => Vec::new(),
+        };
         let mut command = Command::new(program);
-        command.args(arguments);
-        // Preserve the user's native configuration and network settings. Do
-        // not give a coding agent the Agena server's environment or credentials.
+        command.args(arguments).args(&agent_arguments);
+        agent_environment(&mut command);
+        command.current_dir(cwd);
+        let isolation = isolation::wrap(
+            &mut command,
+            agent,
+            cwd,
+            directories,
+            previous_antigravity_history,
+            None,
+        )?;
         command
-            .env_clear()
-            .envs(std::env::vars_os().filter(|(key, _)| {
-                let key = key.to_string_lossy();
-                matches!(
-                    key.to_ascii_uppercase().as_str(),
-                    "PATH"
-                        | "HOME"
-                        | "USER"
-                        | "LOGNAME"
-                        | "SHELL"
-                        | "LANG"
-                        | "LANGUAGE"
-                        | "TZ"
-                        | "TMPDIR"
-                        | "TMP"
-                        | "TEMP"
-                        | "SYSTEMROOT"
-                        | "WINDIR"
-                        | "COMSPEC"
-                        | "PATHEXT"
-                        | "USERPROFILE"
-                        | "APPDATA"
-                        | "LOCALAPPDATA"
-                        | "HOMEDRIVE"
-                        | "HOMEPATH"
-                        | "SSL_CERT_FILE"
-                        | "SSL_CERT_DIR"
-                        | "NODE_EXTRA_CA_CERTS"
-                        | "HTTP_PROXY"
-                        | "HTTPS_PROXY"
-                        | "ALL_PROXY"
-                        | "NO_PROXY"
-                        | "CLAUDE_CONFIG_DIR"
-                        | "DBUS_SESSION_BUS_ADDRESS"
-                ) || key.starts_with("XDG_")
-                    || key.starts_with("LC_")
-            }));
-        let no_proxy = std::env::var("no_proxy")
-            .or_else(|_| std::env::var("NO_PROXY"))
-            .unwrap_or_default();
-        let no_proxy = format!("{no_proxy},127.0.0.1,localhost,::1");
-        command
-            .env("NO_PROXY", &no_proxy)
-            .env("no_proxy", &no_proxy)
-            .current_dir(cwd)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
 
         let mut child = agena_process::spawn(command).map_err(|error| {
             let setup = match agent {
-                ExternalAgent::Antigravity => "Install the official Antigravity CLI with ACP support and sign in using agy.",
+                ExternalAgent::Antigravity => "Install the official Antigravity CLI with custom Agent support and sign in from the ACP session.",
                 ExternalAgent::ClaudeCode => "Install Claude Code and the claude-agent-acp adapter on the server's PATH, then sign in using claude.",
             };
             AppError::Config(format!("Could not start {}: {error}. {setup}", agent.label()))
@@ -376,6 +431,10 @@ impl AcpClient {
         Ok(Self {
             agent,
             cwd: cwd.to_owned(),
+            additional_directories: directories.to_vec(),
+            previous_antigravity_history,
+            agent_arguments,
+            isolation,
             child,
             input,
             output: FramedRead::new(output, LinesCodec::new_with_max_length(MAX_FRAME_BYTES)),
@@ -386,6 +445,7 @@ impl AcpClient {
             live_auth: None,
             reported_auth: None,
             air_index: false,
+            plain_delete: false,
             providers_prepared: false,
             capabilities: None,
             initialization: None,
@@ -395,6 +455,10 @@ impl AcpClient {
             pending: HashMap::new(),
             url_elicitations: HashSet::new(),
         })
+    }
+
+    pub(super) fn use_plain_delete(&mut self) {
+        self.plain_delete = true;
     }
 
     async fn initialize(&mut self, cancel: &CancellationToken) -> Result<Capabilities, AppError> {
@@ -411,9 +475,13 @@ impl AcpClient {
             let mut params = requested.initialize_params(self.terminal_auth);
             if requested == Version::V1
                 && self.agent == ExternalAgent::ClaudeCode
-                && self.live_auth.is_some()
+                && !self.air_index
+                && !self.plain_delete
             {
-                protocol::add_air_capability(&mut params, cancellation::ASYNC_TASKS_CAPABILITY);
+                protocol::add_air_capability(&mut params, cursors::REWIND_CAPABILITY);
+                if self.live_auth.is_some() {
+                    protocol::add_air_capability(&mut params, cancellation::ASYNC_TASKS_CAPABILITY);
+                }
             }
             if self.air_index {
                 protocol::add_air_capability(&mut params, "sessionIndex");
@@ -443,8 +511,14 @@ impl AcpClient {
                         if cancel.is_cancelled() {
                             return Err(AppError::Cancelled);
                         }
-                        let mut replacement = Self::spawn(self.agent, &self.cwd)?;
+                        let mut replacement = Self::spawn_profile(
+                            self.agent,
+                            &self.cwd,
+                            self.previous_antigravity_history,
+                            &self.additional_directories,
+                        )?;
                         replacement.terminal_auth = self.terminal_auth;
+                        replacement.plain_delete = self.plain_delete;
                         replacement.live_auth = self.live_auth.take();
                         std::mem::replace(self, replacement).close().await;
                         requested = Version::V1;
@@ -486,6 +560,9 @@ impl AcpClient {
                 value == &Value::Bool(true) || value.is_object()
             }
         };
+        let antigravity_prompt_append = !v2
+            && self.agent == ExternalAgent::Antigravity
+            && v1["_meta"]["antigravity"]["systemPrompt"]["append"] == Value::Bool(true);
         let capabilities = Capabilities {
             version,
             auth_status: initialized
@@ -502,6 +579,9 @@ impl AcpClient {
                     &initialized,
                     cancellation::ASYNC_TASKS_CAPABILITY,
                 ),
+            air_rewind: !v2
+                && self.agent == ExternalAgent::ClaudeCode
+                && protocol::advertises_air_capability(&initialized, cursors::REWIND_CAPABILITY),
             http_mcp: supports(&mcp["http"]),
             acp_mcp: supports(&mcp["acp"]),
             sse_mcp: !v2 && supports(&mcp["sse"]),
@@ -510,12 +590,17 @@ impl AcpClient {
             audio: supports(&prompt["audio"]),
             embedded_context: supports(&prompt["embeddedContext"]),
             skill: v2 && supports(&prompt["skill"]),
+            skill_inline: v2 && supports(&prompt["skill"]["inline"]),
             load: !v2 && v1["loadSession"] == Value::Bool(true),
             resume: v2 || session["resume"].is_object(),
             close: v2 || session["close"].is_object(),
             delete: session["delete"].is_object(),
             options: session["options"].is_object(),
-            lifecycle: lifecycle::LifecycleCapabilities::read(session, v2),
+            lifecycle: lifecycle::LifecycleCapabilities::read(
+                session,
+                v2,
+                antigravity_prompt_append,
+            ),
         };
         self.capabilities = Some(capabilities);
         self.initialization = Some(initialized);
@@ -540,6 +625,10 @@ impl AcpClient {
 
     pub(super) fn agent(&self) -> ExternalAgent {
         self.agent
+    }
+
+    pub(super) fn agent_arguments(&self) -> &[String] {
+        &self.agent_arguments
     }
 
     pub(super) fn enable_terminal_auth(&mut self) {
@@ -578,6 +667,8 @@ impl AcpClient {
             image: caps.image,
             audio: caps.audio,
             embedded_context: caps.embedded_context,
+            skill: caps.skill,
+            skill_inline: caps.skill_inline,
         })
     }
 
@@ -627,9 +718,17 @@ impl AcpClient {
             self.native_work = Some(cancellation::Connection::register(&turn, caps.air_tasks));
         }
         let supported = [
-            ("http", caps.http_mcp, mcp::Kind::Http),
+            (
+                "http",
+                caps.http_mcp && self.isolation.is_none(),
+                mcp::Kind::Http,
+            ),
             ("acp", caps.acp_mcp, mcp::Kind::Acp),
-            ("sse", caps.sse_mcp, mcp::Kind::Sse),
+            (
+                "sse",
+                caps.sse_mcp && self.isolation.is_none(),
+                mcp::Kind::Sse,
+            ),
             ("stdio", caps.stdio_mcp, mcp::Kind::Stdio { typed: v2 }),
         ];
         let preference = std::env::var("AGENA_ACP_MCP_TRANSPORT").ok();
@@ -639,79 +738,34 @@ impl AcpClient {
             .find(|(name, _, _)| preference.as_deref() == Some(*name))
             .or_else(|| available.into_iter().next())
         else {
+            if self.isolation.is_some() {
+                return Err(AppError::Config(
+                    "This isolated external agent must provide ACP or stdio MCP transport.".into(),
+                ));
+            }
             return Ok(None);
         };
-        let bridge = mcp::Bridge::start(turn, kind).await?;
+        let relay = self
+            .isolation
+            .as_ref()
+            .map(isolation::Isolation::relay_socket);
+        let bridge = mcp::Bridge::start(turn, kind, relay).await?;
         self.mcp = bridge.acp_endpoint();
         Ok(Some(bridge))
     }
 
-    pub(super) async fn session_options(
+    pub(super) async fn start_probe(
         &mut self,
         cwd: &Path,
-        previous: Option<&str>,
-        cancel: &CancellationToken,
-    ) -> Result<Option<Vec<ExternalAgentOption>>, AppError> {
-        let request = async {
-            if !self.initialize(cancel).await?.options {
-                return Ok(None);
-            }
-            if let Some(session) = previous {
-                match self
-                    .request(
-                        "session/options",
-                        json!({"cwd": cwd, "sessionId": session}),
-                        SessionUpdates::Ignore,
-                        cancel,
-                    )
-                    .await
-                {
-                    Ok(result) => return Ok(Some(config_options(&result))),
-                    Err(AppError::Cancelled) => return Err(AppError::Cancelled),
-                    Err(error) => {
-                        tracing::debug!(%error, "could not inspect saved external agent options")
-                    }
-                }
-            }
-            let result = self
-                .request(
-                    "session/options",
-                    json!({"cwd": cwd}),
-                    SessionUpdates::Ignore,
-                    cancel,
-                )
-                .await?;
-            Ok(Some(config_options(&result)))
-        };
-        let result = tokio::time::timeout(STARTUP_TIMEOUT, request).await;
-        if result.is_err() {
-            self.abandon_request().await;
-        }
-        result.map_err(|_| {
-            AppError::Config(format!(
-                "{} timed out while reading session options.",
-                self.agent.label()
-            ))
-        })?
-    }
-
-    pub(super) async fn start(
-        &mut self,
-        cwd: &Path,
-        mcp: Option<Value>,
-        previous: Option<(&str, &ExternalAgentState)>,
-        has_images: bool,
+        additional_directories: Vec<PathBuf>,
         cancel: &CancellationToken,
     ) -> Result<OpenedSession, AppError> {
-        self.start_with_context(
-            cwd,
-            mcp,
-            previous,
-            has_images,
-            &SessionContext::default(),
-            cancel,
-        )
-        .await
+        let context = SessionContext {
+            additional_directories,
+            ..Default::default()
+        };
+        self.start_with_context(cwd, None, None, false, false, &context, cancel)
+            .await
     }
 
     pub(super) async fn start_with_context(
@@ -720,9 +774,15 @@ impl AcpClient {
         mcp: Option<Value>,
         previous: Option<(&str, &ExternalAgentState)>,
         has_images: bool,
+        require_existing: bool,
         context: &SessionContext,
         cancel: &CancellationToken,
     ) -> Result<OpenedSession, AppError> {
+        if self.previous_antigravity_history {
+            return Err(AppError::Config(
+                "Start a new Agena ACP session to use Antigravity tools through Agena.".into(),
+            ));
+        }
         self.prepare_provider_routes(cancel).await?;
         let setup = async {
             let capabilities = self.initialize(cancel).await?;
@@ -752,6 +812,7 @@ impl AcpClient {
                     activity,
                     id,
                     resumed,
+                    missing_previous: false,
                     replacements,
                     close_supported: capabilities.close,
                     delete_supported: capabilities.delete,
@@ -760,7 +821,13 @@ impl AcpClient {
             let mcp_servers = Vec::from_iter(mcp);
             let mut params = json!({"cwd": cwd, "mcpServers": mcp_servers});
             context.apply(&mut params, capabilities.lifecycle)?;
+            policy::apply_to_session(self.agent, &mut params);
+            let mut missing_previous = false;
             if let Some((previous, state)) = previous {
+                let mut resume = params.clone();
+                resume["sessionId"] = json!(previous);
+                self.apply_initial_config_options(cwd, &mut resume, context, cancel)
+                    .await?;
                 let methods = [
                     ("session/resume", capabilities.resume),
                     ("session/load", capabilities.load),
@@ -779,12 +846,10 @@ impl AcpClient {
                         },
                     )]);
                     let mut replacements = OpeningMessages::default();
-                    let mut resume = params.clone();
-                    resume["sessionId"] = json!(previous);
                     match self
                         .request(
                             method,
-                            resume,
+                            resume.clone(),
                             SessionUpdates::Opening(
                                 &mut states,
                                 Some((previous, &mut replacements)),
@@ -803,16 +868,39 @@ impl AcpClient {
                             ));
                         }
                         Err(AppError::Cancelled) => return Err(AppError::Cancelled),
+                        Err(
+                            error @ AppError::ProviderClassified {
+                                kind: ProviderErrorKind::Authentication,
+                                ..
+                            },
+                        ) => {
+                            return Err(error);
+                        }
                         Err(error) => {
-                            tracing::debug!(%error, %method, "could not reopen external agent session")
+                            tracing::debug!(%error, %method, "could not reopen external agent session");
+                            match replacements.resume_rejection {
+                                Some(ResumeRejection::Missing) => missing_previous = true,
+                                Some(ResumeRejection::Unsupported) => {}
+                                None => return Err(AppError::ExternalAgentResumeUnavailable),
+                            }
                         }
                     }
                 }
+                if !missing_previous {
+                    return Err(AppError::ExternalAgentResumeUnavailable);
+                }
+            }
+            if require_existing {
+                return Err(AppError::Config(
+                    "Antigravity could not resume the existing conversation to compact.".into(),
+                ));
             }
             let mut states = OpeningStates::new();
             if let Some(work) = &self.native_work {
                 work.set_root(None);
             }
+            self.apply_initial_config_options(cwd, &mut params, context, cancel)
+                .await?;
             let created = self
                 .request(
                     "session/new",
@@ -831,19 +919,27 @@ impl AcpClient {
             if let Some(work) = &self.native_work {
                 work.set_root(Some(&id));
             }
-            Ok(opened(
+            let mut session = opened(
                 id.to_owned(),
                 false,
                 &created,
                 &mut states,
                 OpeningMessages::default(),
-            ))
+            );
+            session.missing_previous = missing_previous;
+            Ok(session)
         };
         let result = tokio::time::timeout(STARTUP_TIMEOUT, setup).await;
         if result.is_err() {
             self.abandon_request().await;
         }
-        result.map_err(|_| AppError::Config("The external agent timed out while opening a conversation. Check its installation and sign-in.".into()))?
+        result.map_err(|_| {
+            if previous.is_some() {
+                AppError::ExternalAgentResumeUnavailable
+            } else {
+                AppError::Config("The external agent timed out while opening a conversation. Check its installation and sign-in.".into())
+            }
+        })?
     }
 
     pub(super) async fn set_option(
@@ -973,6 +1069,11 @@ impl AcpClient {
         activity: ActivitySnapshot,
         turn: &Arc<ExternalTurn>,
     ) -> Result<PromptResult, AppError> {
+        if self.previous_antigravity_history {
+            return Err(AppError::Internal(
+                "Cannot prompt an Antigravity history connection.".into(),
+            ));
+        }
         if let Some(work) = &self.native_work {
             work.set_root(Some(session));
         }
@@ -1000,7 +1101,13 @@ impl AcpClient {
             lease = Some(registration);
             (method, receiver)
         });
-        let mut lifecycle = self.uses_v2().then(|| PromptLifecycle::new(activity));
+        let v2 = self.uses_v2();
+        let previous_tail = turn.transcript.lock().await.cursor_tail();
+        let mut lifecycle = PromptLifecycle::new(
+            activity,
+            previous_tail,
+            self.capabilities.is_some_and(|caps| caps.air_rewind),
+        );
         let result = self
             .request(
                 "session/prompt",
@@ -1009,13 +1116,20 @@ impl AcpClient {
                     turn,
                     session,
                     steering,
-                    lifecycle: lifecycle.as_mut(),
+                    lifecycle: Some(&mut lifecycle),
                 },
                 &turn.control.cancel,
             )
             .await;
         drop(lease);
         if !turn.control.cancel.is_cancelled() {
+            if result.is_ok() {
+                turn.transcript
+                    .lock()
+                    .await
+                    .record_cursor_tail(&turn.round, lifecycle.cursor_tail())
+                    .await?;
+            }
             turn.finish_transcript().await?;
         }
         let result = result?;
@@ -1023,17 +1137,17 @@ impl AcpClient {
         match stop_reason {
             Some("cancelled") => Err(AppError::Cancelled),
             Some("error") => Err(self.peer_error("session/prompt", &result["error"])),
-            None if lifecycle.is_none() => Err(AppError::Internal(
+            None if !v2 => Err(AppError::Internal(
                 "external agent did not return a turn outcome".into(),
             )),
             _ => Ok(PromptResult {
                 stop_reason: stop_reason.map(str::to_owned),
                 // The Claude v1 adapter resets prompt-response usage at turn
                 // activation. Other v1 agents can use cumulative counters.
-                usage: (lifecycle.is_some() || self.agent == ExternalAgent::ClaudeCode)
+                usage: (v2 || self.agent == ExternalAgent::ClaudeCode)
                     .then(|| protocol::foreground_usage(&result["usage"]))
                     .flatten(),
-                fork_cursor: lifecycle.and_then(PromptLifecycle::into_fork_cursor),
+                fork_cursor: lifecycle.into_fork_cursor(),
             }),
         }
     }
@@ -1141,9 +1255,10 @@ impl AcpClient {
         // make progress while the stream loop records updates.
         let mut replies = JoinSet::new();
         loop {
-            if let Some(result) = prompt
-                .as_mut()
-                .and_then(|prompt| prompt.take_result(!steering_requests.is_empty()))
+            if v2
+                && let Some(result) = prompt
+                    .as_mut()
+                    .and_then(|prompt| prompt.take_result(!steering_requests.is_empty()))
             {
                 self.finish_interactions(&mut replies, cancel).await?;
                 return Ok(result);
@@ -1212,10 +1327,16 @@ impl AcpClient {
                 }
                 line = self.output.next() => line,
             };
-            let line = line.ok_or_else(|| AppError::Config(format!(
-                "{} closed its ACP connection during {method}. Check the official agent's sign-in and version.",
-                self.agent.label()
-            )))?.map_err(|error| AppError::Internal(format!("invalid ACP frame: {error}")))?;
+            let line = line.ok_or_else(|| {
+                let hint = if self.isolation.is_some() {
+                    "Check the Linux MXC prerequisites, ACP sandbox policy, and agent installation."
+                } else {
+                    "Check the official agent's sign-in and version."
+                };
+                AppError::Config(format!(
+                    "{} closed its ACP connection during {method}. {hint}", self.agent.label()
+                ))
+            })?.map_err(|error| AppError::Internal(format!("invalid ACP frame: {error}")))?;
             if line.trim().is_empty() {
                 continue;
             }
@@ -1390,6 +1511,23 @@ impl AcpClient {
                             {
                                 lifecycle.observe(&update);
                             }
+                            if session == *root
+                                && let Some(change) = cursors::change(
+                                    &update,
+                                    self.capabilities.is_some_and(|caps| caps.air_rewind),
+                                )
+                            {
+                                let request = super::RequestId::new();
+                                super::persist(|| {
+                                    turn.round.update_external_agent_cursor(
+                                        request,
+                                        root,
+                                        change.clone(),
+                                    )
+                                })
+                                .await
+                                .map_err(super::kernel_error)?;
+                            }
                             turn.update_native(root, session, &update).await?;
                         }
                         SessionUpdates::Replay(replay, expected) => {
@@ -1458,6 +1596,21 @@ impl AcpClient {
                 .awaiting_reply = false;
             if let Some(error) = message.get("error") {
                 self.finish_interactions(&mut replies, cancel).await?;
+                if matches!(method, "session/resume" | "session/load")
+                    && let SessionUpdates::Opening(_, Some((session, captured))) = &mut updates
+                {
+                    let missing_id = &error["data"]["sessionId"];
+                    captured.resume_rejection = match error["code"].as_i64() {
+                        Some(-32002)
+                            if missing_id.as_str() == Some(*session)
+                                || (!v2 && missing_id.is_null()) =>
+                        {
+                            Some(ResumeRejection::Missing)
+                        }
+                        Some(-32601) => Some(ResumeRejection::Unsupported),
+                        _ => None,
+                    };
+                }
                 if matches!(method, "session/close" | "session/delete")
                     && error["code"].as_i64() == Some(-32002)
                 {
@@ -1468,7 +1621,7 @@ impl AcpClient {
             let mut result = message.get("result").cloned().ok_or_else(|| {
                 AppError::Internal("external agent returned an invalid ACP response".into())
             })?;
-            if let Some(prompt) = &mut prompt {
+            if v2 && let Some(prompt) = &mut prompt {
                 prompt.acknowledge(&result);
                 continue;
             }
@@ -1627,11 +1780,18 @@ impl AcpClient {
     }
 
     fn filter_skill_commands(&self, message: &mut Value) {
-        if !self.capabilities.is_some_and(|caps| caps.skill)
-            && let Some(commands) = message
-                .get_mut("availableCommands")
-                .and_then(Value::as_array_mut)
-        {
+        let Some(commands) = message
+            .get_mut("availableCommands")
+            .and_then(Value::as_array_mut)
+        else {
+            return;
+        };
+        if self.capabilities.is_some_and(|caps| caps.skill) {
+            let inline = self.capabilities.is_some_and(|caps| caps.skill_inline);
+            for command in commands.iter_mut().filter(|entry| entry["type"] == "skill") {
+                command["inline"] = json!(inline);
+            }
+        } else {
             commands.retain(|command| command["type"] != "skill");
         }
     }
@@ -1686,13 +1846,18 @@ impl AcpClient {
             return AppError::Cancelled;
         }
         // The agent's error payload can carry authentication URLs or tokens.
-        let hint = if code == -32000 || code == -32001 {
-            " Check the agent's native sign-in."
-        } else {
-            ""
-        };
+        if matches!(code, -32000 | -32001) {
+            return AppError::ProviderClassified {
+                provider: self.agent.label().into(),
+                message: format!(
+                    "Rejected {method} (ACP error {code}). Check the agent's native sign-in."
+                ),
+                kind: ProviderErrorKind::Authentication,
+                retryable: false,
+            };
+        }
         AppError::Config(format!(
-            "{} rejected {method} (ACP error {code}).{hint}",
+            "{} rejected {method} (ACP error {code}).",
             self.agent.label()
         ))
     }
@@ -2148,6 +2313,24 @@ impl AcpClient {
                     let mut update = params["update"].clone();
                     self.normalize_session_update(&mut update);
                     self.observe_native_work(session, &update);
+                    if session == resume.native_id
+                        && let Some(change) = cursors::change(
+                            &update,
+                            self.capabilities.is_some_and(|caps| caps.air_rewind),
+                        )
+                    {
+                        let request = super::RequestId::new();
+                        super::persist(|| {
+                            kernel.executor.update_idle_external_agent_cursor(
+                                request,
+                                resume,
+                                change.clone(),
+                            )
+                        })
+                        .await
+                        .map_err(super::kernel_error)?;
+                        continue;
+                    }
                     if self.uses_v2()
                         && session == resume.native_id
                         && let Some(message) = MessageUpdate::parse(&update)
@@ -2200,6 +2383,22 @@ impl AcpClient {
                 )
                 .await;
         }
+    }
+
+    pub(super) async fn compact_antigravity(
+        &mut self,
+        native_id: &str,
+        cancel: &CancellationToken,
+    ) -> Result<u64, AppError> {
+        self.release_native(native_id, false, cancel).await?;
+        antigravity::compact(
+            &self.cwd,
+            &self.additional_directories,
+            native_id,
+            self.isolation.is_some(),
+            cancel,
+        )
+        .await
     }
 
     pub(super) async fn close(mut self) {

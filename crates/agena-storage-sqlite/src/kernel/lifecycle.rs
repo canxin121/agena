@@ -702,6 +702,7 @@ async fn fork(
         let tail = if let Some(before) = before {
             if kind != "user"
                 || before.message_id != through
+                || !before.fork
                 || !super::external_agent::fork_points(
                     connection,
                     session,
@@ -728,23 +729,21 @@ async fn fork(
             .fetch_optional(&mut *connection)
             .await
             .map_err(sql_error)?;
-            let previous = previous.ok_or_else(|| {
-                KernelError::Conflict(
-                    "native fork has no retained transcript before its cursor".into(),
-                )
-            })?;
-            EntryId::try_from(previous).map_err(storage)?
+            previous
+                .map(EntryId::try_from)
+                .transpose()
+                .map_err(storage)?
         } else {
             if native.expected_head != through || cut != through {
                 return Err(KernelError::Conflict("native fork source changed".into()));
             }
-            through
+            Some(through)
         };
         let link = ExternalAgentLink {
             native_id: native.new_native_id.clone(),
             cwd: native.expected_native.cwd.clone(),
             incarnation: None,
-            resume_at: Some(ExternalAgentHistoryAnchor { tail: Some(tail) }),
+            resume_at: Some(ExternalAgentHistoryAnchor { tail }),
         };
         super::external_agent::validate_link(&link)?;
         let agent = config.external_agent.ok_or(KernelError::Ownership)?;
@@ -859,8 +858,31 @@ async fn truncate(
     connection: &mut SqliteConnection,
     session: SessionId,
     message: EntryId,
+    external_agent: Option<&ExternalAgentRewind>,
 ) -> Result<Mutation> {
     let metadata = reads::metadata(connection, session).await?;
+    if let Some(native) = external_agent {
+        super::external_agent::require_idle(connection, session).await?;
+        if metadata.membership_generation != native.expected_membership
+            || configuration(connection, session)
+                .await?
+                .native_session_link()
+                .as_ref()
+                != Some(&native.expected_native)
+            || !native.before.rewind
+            || !super::external_agent::fork_points(
+                connection,
+                session,
+                &native.expected_native,
+                Some(message),
+            )
+            .await?
+            .iter()
+            .any(|(cursor, _)| cursor == &native.before)
+        {
+            return Err(KernelError::Conflict("native rewind point changed".into()));
+        }
+    }
     let (sequence, ordinal) = boundary(connection, session, message).await?;
     let row =
         sqlx::query("SELECT origin_session_id,kind,execution_id,generation,body_json FROM agena_entries WHERE id=?")
@@ -909,6 +931,31 @@ async fn truncate(
         ordinal,
     )
     .await?;
+    if let Some(native) = external_agent {
+        let tail = sqlx::query_scalar::<_, i64>(
+            "SELECT m.entry_id FROM agena_session_segments s
+             JOIN agena_segment_entries m ON m.segment_id=s.segment_id
+             WHERE s.session_id=? AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal
+             ORDER BY s.sequence DESC,m.ordinal DESC LIMIT 1",
+        )
+        .bind(session.get())
+        .fetch_optional(&mut *connection)
+        .await
+        .map_err(sql_error)?
+        .map(EntryId::try_from)
+        .transpose()
+        .map_err(storage)?;
+        let link = ExternalAgentLink {
+            resume_at: Some(ExternalAgentHistoryAnchor { tail }),
+            ..native.expected_native.clone()
+        };
+        sqlx::query("UPDATE agena_sessions SET configuration_json=json_set(configuration_json,'$.external_agent_link',json(?)) WHERE id=?")
+            .bind(encode(&link)?)
+            .bind(session.get())
+            .execute(&mut *connection)
+            .await
+            .map_err(sql_error)?;
+    }
     Ok(Mutation::Rewind(Box::new(RewindResult {
         session: reads::metadata(connection, session).await?,
         document,
@@ -1817,7 +1864,11 @@ pub(super) async fn apply(
             super::external_agent::detach(connection, *session, expected).await?
         }
         Command::Withdraw { session, message } => withdraw(connection, *session, *message).await?,
-        Command::Truncate { session, message } => truncate(connection, *session, *message).await?,
+        Command::Truncate {
+            session,
+            message,
+            external_agent,
+        } => truncate(connection, *session, *message, external_agent.as_deref()).await?,
         Command::Clear { session, mode } => clear(connection, *session, *mode).await?,
         Command::DeleteSession { session, guard } => {
             if let Some(guard) = guard {

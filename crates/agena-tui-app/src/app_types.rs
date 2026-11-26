@@ -545,6 +545,8 @@ pub struct App {
     pub(super) slash_command_suggestions: Option<SlashCommandSuggestionState>,
     pub(super) slash_command_suggestion_actions: BTreeMap<String, SlashCommandSuggestionAction>,
     pub(super) dismissed_slash_command_suggestions_for: Option<String>,
+    pub(super) external_agent_command_preview:
+        Option<(i64, Vec<agena_domain::ExternalAgentCommand>)>,
     pub(super) file_mention_suggestions: Option<FileMentionSuggestionState>,
     pub(super) file_index_refresh_in_flight: bool,
     pub(super) file_index_refreshed_at: Option<Instant>,
@@ -1111,6 +1113,9 @@ pub(super) enum Overlay {
     TranscriptSearch(LineInputOverlay),
     TranscriptFoldLoad(crate::app_transcript_fold::FoldLoadDialog),
     SessionRename(LineInputOverlay),
+    NativeAgentEdit(
+        Box<agena_tui_components::EditorDialogState<crate::app_native_agent::NativeAgentEdit>>,
+    ),
     HubProject(crate::app_hub::HubProjectDialog),
     SettingsValueEdit(SettingsValueEditOverlay),
     PermissionRawEdit(crate::app_permission_raw::PermissionRawEditOverlay),

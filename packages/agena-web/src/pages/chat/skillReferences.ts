@@ -1,13 +1,27 @@
 import type { SkillSummary } from '@/lib/skillsApi'
+import type { ExternalAgent, ExternalAgentCommand } from '@/types/chat'
 import type { AttachedFile } from './useChatAttachments'
 
 export type SkillCatalogEntry = {
-  plugin_id: 'agena.skills'
+  plugin_id: 'agena.skills' | `acp:${ExternalAgent}`
   id: string
   skill_id: string
   title: string
   docs: { summary: string }
   revision: string
+  external_agent?: ExternalAgent
+}
+
+export function nativeSkillCatalog(agent: ExternalAgent, commands: readonly ExternalAgentCommand[]): SkillCatalogEntry[] {
+  return commands.filter((command) => command.skill && command.skill_inline).map((command) => ({
+    plugin_id: `acp:${agent}`,
+    id: command.name,
+    skill_id: command.name,
+    title: command.name,
+    docs: { summary: command.description },
+    revision: '',
+    external_agent: agent,
+  }))
 }
 
 export function managedSkillCatalog(skills: SkillSummary[]): SkillCatalogEntry[] {
@@ -68,15 +82,14 @@ export function createSkillReferenceAttachment(skill: SkillCatalogEntry): Attach
         payload: {
           activity_type: 'skill_reference',
           name: skill.id,
-          skill_id: skill.skill_id,
+          ...(skill.external_agent ? { external_agent: skill.external_agent } : { skill_id: skill.skill_id }),
           description: skill.docs.summary.trim(),
           content_hash: contentHash,
           source: pluginId,
         },
         provenance: {
           source: pluginId,
-          content_hash: contentHash,
-          plugin_id: pluginId,
+          ...(!skill.external_agent && { content_hash: contentHash, plugin_id: pluginId }),
         },
       },
     },

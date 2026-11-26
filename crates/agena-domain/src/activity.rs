@@ -132,6 +132,9 @@ pub struct SkillReferenceActivity {
     pub description: String,
     pub content_hash: String,
     pub source: String,
+    /// Agent whose advertised Skill catalog supplies this reference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_agent: Option<crate::ExternalAgent>,
     /// Exact package identity for references served by the skills plugin.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skill_id: Option<String>,
@@ -140,8 +143,23 @@ pub struct SkillReferenceActivity {
 }
 
 impl SkillReferenceActivity {
+    pub fn external(agent: crate::ExternalAgent, name: String, description: String) -> Self {
+        Self {
+            name,
+            description,
+            content_hash: String::new(),
+            source: format!("acp:{}", agent.id()),
+            external_agent: Some(agent),
+            skill_id: None,
+            aliases: Vec::new(),
+        }
+    }
+
     /// Project a selected skill's identity so the model can load its instructions on demand.
     pub fn model_context_text(&self) -> String {
+        if let Some(agent) = self.external_agent {
+            return format!("[{} Skill: {}]", agent.label(), self.name);
+        }
         let mut skill = serde_json::json!({
             "name": self.name,
             "description": self.description,

@@ -98,13 +98,20 @@ impl SessionManager {
         let cancel = self.shutdown.child_token();
         let result = async {
             let initialization = client.initialization(&cancel).await?.clone();
-            let methods: Vec<_> = initialization["authMethods"]
+            let mut methods: Vec<_> = initialization["authMethods"]
                 .as_array()
                 .into_iter()
                 .flatten()
                 .filter_map(|entry| parse_method(entry, terminal))
                 .take(32)
                 .collect();
+            for method in &mut methods {
+                if let ExternalAgentAuthFlow::Terminal { args, env } = &mut method.flow {
+                    args.extend_from_slice(client.agent_arguments());
+                    validate_external_agent_terminal_launch(args, env)
+                        .map_err(|error| AppError::Config(error.into()))?;
+                }
+            }
             let auth = &initialization[if client.uses_v2() {
                 "capabilities"
             } else {

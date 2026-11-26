@@ -26,6 +26,7 @@ mod stdio;
 
 const RESULT_BYTES: usize = 50 * 1024;
 const MCP_NAME_BYTES: usize = 52; // Leave room for Claude's mcp__agena__ prefix.
+const ANTIGRAVITY_TOOL: &str = "tool";
 
 struct Tool {
     target: String,
@@ -123,7 +124,11 @@ impl AcpEndpoint {
 }
 
 impl Bridge {
-    pub(super) async fn start(turn: Arc<ExternalTurn>, kind: Kind) -> Result<Self, AppError> {
+    pub(super) async fn start(
+        turn: Arc<ExternalTurn>,
+        kind: Kind,
+        relay_socket: Option<&std::path::Path>,
+    ) -> Result<Self, AppError> {
         let catalog = super::super::tool_api::catalog(&turn.executor).await;
         let mut tools = BTreeMap::new();
         for tool in catalog.tools {
@@ -184,7 +189,7 @@ impl Bridge {
             }),
             Kind::Http => Self::http(&scope, backend, false).await?,
             Kind::Sse => Self::http(&scope, backend, true).await?,
-            Kind::Stdio { typed } => stdio::start(&scope, backend, typed).await?,
+            Kind::Stdio { typed } => stdio::start(&scope, backend, typed, relay_socket).await?,
         };
         Ok(Self {
             _guard: scope.closing.clone().drop_guard(),
@@ -294,9 +299,42 @@ struct Backend {
     tools: Arc<BTreeMap<String, Tool>>,
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ToolRequest {
+    name: Option<String>,
+    arguments: Option<serde_json::Map<String, Value>>,
+}
+
 #[async_trait::async_trait]
 impl McpServerBackend for Backend {
     async fn list_tools(&self) -> Result<Vec<ToolDescriptor>, McpServerError> {
+        if self.scope.turn.agent == ExternalAgent::Antigravity {
+            // Antigravity drops large eager declarations and can reject schemas
+            // with regex syntax accepted by Agena. Publish a small entry point
+            // and return the exact schemas as data on demand.
+            return Ok(vec![ToolDescriptor {
+                name: ANTIGRAVITY_TOOL.into(),
+                description: Some("Use Agena tools for files, commands, and web access. Omit name to list available tools, pass name to see its input schema, or pass name and arguments to execute. Pass an empty object for a tool with no arguments.".into()),
+                input_schema: Some(json!({
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "Name from the Agena tool catalog."},
+                        "arguments": {"type": "object", "additionalProperties": true}
+                    },
+                    "additionalProperties": false
+                })),
+                title: None,
+                aliases: Vec::new(),
+                before_help: None,
+                after_help: None,
+                output_schema: None,
+                annotations: None,
+                execution: None,
+                icons: Vec::new(),
+                meta: None,
+            }]);
+        }
         Ok(self
             .tools
             .values()
@@ -305,18 +343,53 @@ impl McpServerBackend for Backend {
     }
 
     async fn call_tool(&self, params: CallToolParams) -> Result<CallToolResult, McpServerError> {
-        let target = self
-            .tools
-            .get(&params.name)
-            .ok_or(McpServerError::NotFound(params.name))?;
-        let input = params.arguments.unwrap_or_else(|| json!({}));
-        let arguments =
-            StructuredObject::try_from(input.clone()).map_err(McpServerError::InvalidParams)?;
         let turn = self.scope.turn.clone();
         let guard = self.scope.calls.clone().read_owned().await;
         if self.scope.closing.is_cancelled() {
             return Ok(text_error("The Agena turn has ended."));
         }
+        let input = params.arguments.unwrap_or_else(|| json!({}));
+        let (name, input) =
+            if turn.agent == ExternalAgent::Antigravity && params.name == ANTIGRAVITY_TOOL {
+                let request: ToolRequest = serde_json::from_value(input)
+                    .map_err(|error| McpServerError::InvalidParams(error.to_string()))?;
+                let Some(name) = request.name else {
+                    if request.arguments.is_some() {
+                        return Err(McpServerError::InvalidParams(
+                            "Specify the Agena tool's name.".into(),
+                        ));
+                    }
+                    let tools = self
+                        .tools
+                        .values()
+                        .map(|tool| {
+                            let summary: String = tool
+                                .descriptor
+                                .description
+                                .as_deref()
+                                .and_then(|description| description.lines().next())
+                                .unwrap_or_default()
+                                .chars()
+                                .take(160)
+                                .collect();
+                            json!({"name": tool.descriptor.name, "summary": summary})
+                        })
+                        .collect::<Vec<_>>();
+                    return Ok(text_result(json!({"tools": tools}).to_string()));
+                };
+                (name, request.arguments.map(Value::Object))
+            } else {
+                (params.name, Some(input))
+            };
+        let target = self
+            .tools
+            .get(&name)
+            .ok_or(McpServerError::NotFound(name))?;
+        let Some(input) = input else {
+            return Ok(text_result(serde_json::to_string(&target.descriptor)?));
+        };
+        let arguments =
+            StructuredObject::try_from(input.clone()).map_err(McpServerError::InvalidParams)?;
         let invocation = ToolInvocation::new(target.target.clone(), arguments);
         // The accepted call outlives transport disconnects. The bridge holds
         // the attempt open until this call has committed or been cancelled.

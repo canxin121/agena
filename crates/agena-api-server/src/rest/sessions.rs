@@ -163,7 +163,7 @@ pub async fn cancel_execution_attempt(
 }
 
 pub async fn get_session_prompt_preview(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path(session_id): Path<i64>,
 ) -> Result<impl IntoResponse, ServerError> {
     let queries = state.application().session_query_service()?;

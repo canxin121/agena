@@ -1098,8 +1098,8 @@ impl AttemptHandle {
         .await
     }
 
-    /// The round consumes the prior continuation in the same commit. An
-    /// interrupted attempt cannot leave a resumable native session behind.
+    /// Capture the prior continuation while this attempt opens the peer.
+    /// Binding the active native conversation consumes it before prompting.
     pub async fn begin_external_agent_round(
         &self,
         request: RequestId,
@@ -1276,9 +1276,52 @@ impl ExecutorCommands {
             .await?;
         Ok(())
     }
+
+    pub async fn update_idle_external_agent_cursor(
+        &self,
+        request: RequestId,
+        resume: &ExternalAgentResume,
+        change: ExternalAgentCursorChange,
+    ) -> Result<()> {
+        self.0
+            .command(
+                request,
+                Command::UpdateExternalAgentCursor {
+                    session: resume.session,
+                    round: resume.round,
+                    active: None,
+                    native_id: resume.native_id.clone(),
+                    change,
+                },
+            )
+            .await?;
+        Ok(())
+    }
 }
 
 impl RoundHandle {
+    pub async fn update_external_agent_cursor(
+        &self,
+        request: RequestId,
+        native_id: &str,
+        change: ExternalAgentCursorChange,
+    ) -> Result<()> {
+        self.attempt
+            .inner
+            .command(
+                request,
+                Command::UpdateExternalAgentCursor {
+                    session: self.session_id(),
+                    round: self.id,
+                    active: Some(self.attempt.scope),
+                    native_id: native_id.to_owned(),
+                    change,
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
     /// Bind the connected native peer before it can publish message updates.
     pub async fn bind_external_agent_link(
         &self,

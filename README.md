@@ -12,6 +12,17 @@ API documentation is generated from source via rustdoc:
 cargo doc --workspace --no-deps --open
 ```
 
+Open `tools_docs` in the `agena_bundled_plugins` crate to browse individual
+plugins and tools. The same catalog is available as a [Markdown reference](crates/agena-bundled-plugins/generated/tools-reference.md).
+
+```bash
+cargo doc --locked -p agena-bundled-plugins --no-deps --open
+```
+
+Search Rustdoc for a full tool ID such as `agena.tool_script.run`. For the live
+catalog, open **Settings → Plugins & Tools** in Agena Web or run
+`agena plugin status` followed by `agena plugin inspect <plugin-id>`.
+
 Deployment guides:
 
 - [Installation and upgrades](docs/installation.md)

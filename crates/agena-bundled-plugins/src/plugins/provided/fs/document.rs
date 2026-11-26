@@ -21,24 +21,31 @@ enum Backend {
 #[serde(deny_unknown_fields)]
 #[input(non_empty_if_present("pattern"))]
 pub(super) struct DocumentInput {
+    /// Local PDF or Office document to extract.
     #[arg(trim, non_empty)]
     pub(super) path: String,
     /// Base folder for a relative path. Only global (Bot) sessions use it;
     /// a project session keeps resolving against its project root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) folder: Option<String>,
+    /// Text extraction backend. Auto selects a converter for the file format.
     #[serde(default)]
     backend: Backend,
+    /// Restrict the result to matching extracted lines.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[arg(max_chars = 4096)]
     pattern: Option<String>,
+    /// Treat the pattern as literal text. Set false to use a regular expression.
     #[serde(default = "default_true")]
     fixed_strings: bool,
+    /// Match the search pattern without regard to case.
     #[serde(default)]
     ignore_case: bool,
+    /// Start at this one-based line in the extracted text.
     #[serde(default = "one")]
     #[arg(minimum = 1)]
     start_line: usize,
+    /// Maximum number of extracted or matching lines to return.
     #[serde(default = "hundred")]
     #[arg(minimum = 1, maximum = 500)]
     max_lines: usize,

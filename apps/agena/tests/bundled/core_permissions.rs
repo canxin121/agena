@@ -16,7 +16,7 @@ use anyhow::{Result, ensure};
 use axum::{Router, routing::get};
 use serde_json::{Value, json};
 
-use super::{call, fixture, string, user};
+use super::{call, fixture, user};
 
 async fn user_in(case: &TestCase, workspace: &Path) -> Result<UserSession> {
     tokio::fs::create_dir_all(workspace).await?;
@@ -100,57 +100,6 @@ async fn filesystem_and_notebook_denials_precede_io_and_leave_no_side_effects() 
             for path in ["missing.txt", "other.txt", "missing.pdf", "missing.ipynb"] {
                 ensure!(!case.workspace().join(path).exists());
             }
-            Ok(())
-        })
-        .await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn structural_search_checks_children_and_preview_respects_write_denial() -> TestResult {
-    const SOURCE: &str = "fn main() { let x = 1; }\n";
-    fixture()
-        .expect_plugin("agena.code")
-        .seed_file(
-            "workspace/search/secret.rs",
-            b"fn private_child_marker() {}\n".to_vec(),
-        )
-        .seed_file("workspace/source.rs", SOURCE.as_bytes().to_vec())
-        .run(|case| async move {
-            let user = user(&case).await?;
-            path_rules(
-                &user,
-                &[
-                    (case.workspace().join("search/secret.rs"), "deny", "deny"),
-                    (case.workspace().join("source.rs"), "allow", "deny"),
-                ],
-            )
-            .await?;
-            let search = user
-                .call_tool(
-                    "code.search_ast",
-                    json!({"path":"search","language":"rust","pattern":"fn $NAME() { $$$ }"}),
-                )
-                .await?;
-            failure(&search, ModelFeedbackKind::PermissionDenied)?;
-            ensure!(!search.text().contains("private_child_marker"));
-
-            let mut request = json!({
-                "path":"source.rs","pattern":"let $A = $B;","replacement":"let $A = 2;"
-            });
-            let preview = call(&user, "code.rewrite_ast", request.clone()).await?;
-            let revision = string(preview.data()?, "/before_sha256")?;
-            assert_eq!(
-                tokio::fs::read_to_string(case.workspace().join("source.rs")).await?,
-                SOURCE
-            );
-            request["apply"] = json!(true);
-            request["expected_sha256"] = json!(revision);
-            let denied = user.call_tool("code.rewrite_ast", request).await?;
-            failure(&denied, ModelFeedbackKind::PermissionDenied)?;
-            assert_eq!(
-                tokio::fs::read_to_string(case.workspace().join("source.rs")).await?,
-                SOURCE
-            );
             Ok(())
         })
         .await

@@ -1,14 +1,14 @@
-//! Regenerate `crates/agena-bundled-plugins/generated/tools-reference.md` from the real bundled
-//! plugin manifests:
+//! Print a Markdown reference from the compiled bundled plugin manifests.
 //!
 //! ```bash
-//! cargo run -p agena-bundled-plugins --example generate_tools_reference \
-//!   > crates/agena-bundled-plugins/generated/tools-reference.md
+//! reference=crates/agena-bundled-plugins/generated/tools-reference.md
+//! cargo run --locked -p agena-bundled-plugins --example generate_tools_reference > "$reference.tmp" &&
+//!   mv "$reference.tmp" "$reference"
 //! ```
 //!
-//! The same document is embedded into rustdoc via `include_str!`, so `cargo
-//! doc` renders every bundled tool definition together with its detailed help
-//! text. A CI drift test compares the committed file against this output.
+//! The build script uses the same reference to render the Rustdoc index and
+//! individual plugin and tool pages. Library tests compare the committed file
+//! with this output.
 
 fn main() {
     print!(

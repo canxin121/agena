@@ -88,6 +88,7 @@ struct WindowInput {
 struct ActionInput {
     /// An ID returned by desktop.windows in this conversation.
     window_id: String,
+    /// Input operation selected by its `kind` field.
     action: Action,
 }
 
@@ -95,24 +96,34 @@ struct ActionInput {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum Action {
     Click {
+        /// Horizontal coordinate in the live window, starting at its left edge.
         x: u16,
+        /// Vertical coordinate in the live window, starting at its top edge.
         y: u16,
+        /// Mouse button to click.
         #[serde(default)]
         button: MouseButton,
     },
     Scroll {
+        /// Horizontal coordinate in the live window, starting at its left edge.
         x: u16,
+        /// Vertical coordinate in the live window, starting at its top edge.
         y: u16,
+        /// Direction of the scroll.
         direction: ScrollDirection,
+        /// Number of scroll steps at that location.
         #[schemars(range(min = 1, max = 10))]
         steps: u8,
     },
     Type {
+        /// Text to enter in the target window.
         #[schemars(length(min = 1, max = 256))]
         text: String,
     },
     Key {
+        /// Printable key or supported named key.
         key: String,
+        /// Modifier keys to hold when pressing `key`.
         #[serde(default)]
         #[schemars(length(max = 3))]
         modifiers: Vec<Modifier>,
@@ -175,8 +186,17 @@ impl Plugin for DesktopPlugin {
     fn manifest(&self) -> PluginManifest {
         let mut manifest = PluginManifest::new("agena", "desktop", env!("CARGO_PKG_VERSION"));
         manifest.display_name = Some("Desktop".into());
+        manifest.icon = Some(crate::plugin_metadata::icon(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/assets/plugin-icons/desktop.svg"
+        ))));
+        manifest.authors = vec!["canxin121".into()];
+        manifest.tags = vec![ToolTag::Interactive];
         manifest.summary = Some(
             "Inspect and control allowed application windows on Windows, Linux, and macOS with Cua Driver.".into(),
+        );
+        manifest.help = Some(
+            "Install Cua Driver on the machine running Agena. Put `cua-driver` on the service's PATH or set `AGENA_DESKTOP_DRIVER` to its absolute path. Set `allowed_applications` to exact application names and enable `allow_input` to send mouse or keyboard events. Call `desktop.windows` to obtain a window ID for the current conversation.".into(),
         );
         manifest.translations.insert(
             "zh-CN".into(),
@@ -184,6 +204,9 @@ impl Plugin for DesktopPlugin {
                 summary: Some(
                     "通过 Cua Driver 查看和操作本机 Windows、Linux 和 macOS 上获准访问的应用窗口。"
                         .into(),
+                ),
+                help: Some(
+                    "在运行 Agena 的机器上安装 Cua Driver，并把 `cua-driver` 加到服务的 PATH，或将 `AGENA_DESKTOP_DRIVER` 设为可执行文件的绝对路径。在 `allowed_applications` 填写准确的应用名称。需要发送鼠标或键盘事件时启用 `allow_input`，通过 `desktop.windows` 获取当前会话的窗口 ID。".into(),
                 ),
                 ..Default::default()
             },

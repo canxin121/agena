@@ -459,8 +459,8 @@ them when their inputs change and review the diff before committing.
 
 | Output | Regenerate with |
 | --- | --- |
-| `crates/agena-bundled-plugins/generated/bundled-capability-identities.json` | `cargo run --locked -p agena-bundled-plugins --example generate_capability_identity_snapshot > crates/agena-bundled-plugins/generated/bundled-capability-identities.json` |
-| `crates/agena-bundled-plugins/generated/tools-reference.md` | `cargo run --locked -p agena-bundled-plugins --example generate_tools_reference > crates/agena-bundled-plugins/generated/tools-reference.md` |
+| `crates/agena-bundled-plugins/generated/bundled-capability-identities.json` | `cargo run --locked -p agena-bundled-plugins --example generate_capability_identity_snapshot` |
+| `crates/agena-bundled-plugins/generated/tools-reference.md` | `cargo run --locked -p agena-bundled-plugins --example generate_tools_reference` |
 | `packages/agena-web/src/generated/agenaState.ts` | `cargo run -p agena-web-types > packages/agena-web/src/generated/agenaState.ts` |
 | `packages/agena-web/public/` app icons | `cd packages/agena-web && bun run icons:generate` |
 
@@ -470,8 +470,17 @@ The tool reference can also be printed from a built executable:
 cargo run -p agena --bin agena -- inspect --tools-reference
 ```
 
-Regenerate tool documentation after changing a bundled tool schema or help
-text. Regenerate the Web state mirror after changing session, execution,
+Regenerate the tool reference and capability identity snapshot after changing
+bundled declarations. The library tests compare both files with the compiled
+manifests. Both examples write to stdout. Redirect each to a temporary file
+and replace its tracked copy after the command succeeds.
+
+Document input fields at their Rust declarations. When returning a typed tool
+payload, describe its fields and include a representative example in the
+tool's help. A handler that constructs `ToolInvokeOutput` can specify its
+payload type with `#[tool(output(PayloadType), ...)]`.
+
+Regenerate the Web state mirror after changing session, execution,
 background-activity, or notification state types. The generated files are the
 reviewable contract between the backend and its clients.
 
@@ -615,10 +624,10 @@ Crate documentation is generated from the Rust sources:
 cargo doc --workspace --no-deps --open
 ```
 
-Put durable architecture descriptions in crate-level or module-level rustdoc,
-where they sit next to the code and can be built with `cargo doc`. The
-generated tool reference is embedded into rustdoc from
-`crates/agena-bundled-plugins/generated/tools-reference.md`.
+Put durable architecture descriptions in crate-level or module-level Rustdoc
+alongside the code. Build the plugin and tool pages with
+`cargo doc --locked -p agena-bundled-plugins --no-deps --open` and open
+`agena_bundled_plugins::tools_docs`. The build uses the checked-in [plugin and tool reference](../crates/agena-bundled-plugins/generated/tools-reference.md).
 
 Shared system rules and main/subagent responsibilities are defined in
 `crates/agena-runtime-contracts/src/identity/mod.rs`. Both roles receive the

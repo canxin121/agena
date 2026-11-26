@@ -11,15 +11,11 @@ description = "Provider-independent tool invocation and permission contracts"
 agena-domain = { workspace = true }
 agena-failure = { workspace = true }
 agena-plugin-contracts = { workspace = true }
-ast-grep-config = { workspace = true }
-ast-grep-language = { workspace = true }
-ignore = { workspace = true }
 libc = { workspace = true }
 serde.workspace = true
 serde_json.workspace = true
 schemars.workspace = true
 thiserror.workspace = true
-tree-sitter = { workspace = true }
 
 [lints]
 workspace = true

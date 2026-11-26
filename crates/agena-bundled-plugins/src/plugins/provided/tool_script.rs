@@ -38,7 +38,7 @@ pub(crate) struct ToolScriptPlugin {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, ToolInput)]
 #[serde(deny_unknown_fields)]
 struct RunInput {
-    /// JavaScript function body. Use an explicit return to emit JSON.
+    /// JavaScript function body, up to 64 KiB of UTF-8. Use `return` to emit a JSON value.
     #[arg(non_empty, max_chars = 65536)]
     code: String,
 }
@@ -48,9 +48,16 @@ struct RunInput {
     name = "tool_script",
     version = env!("CARGO_PKG_VERSION"),
     display_name = "Tool Scripting",
+    icon = crate::plugin_metadata::icon(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/plugin-icons/tool_script.svg"))),
+    authors = ["canxin121"],
+    tags(agena_plugin_host::sdk::ToolTag::Execute),
     summary = "Compose session tools in a JavaScript program.",
     help = "Use JavaScript to chain tool calls, loop over results, and summarize the outcome in one model turn.",
-    translations(locale("zh-CN", summary = "用工具脚本串联当前会话的工具调用。"))
+    translations(locale(
+        "zh-CN",
+        summary = "用工具脚本串联当前会话的工具调用。",
+        help = "在一个模型轮次内，用 JavaScript 串联依赖的工具调用、遍历结果并返回所需的数据。"
+    ))
 )]
 impl ToolScriptPlugin {
     #[hook(
@@ -120,8 +127,21 @@ impl ToolScriptPlugin {
     #[tool(
         name = "run",
         tags(execute),
+        output(ProgramReport),
         summary = "Run JavaScript that chains tools through the current session.",
-        help = "Supply a JavaScript function body. `tools.search(query, limit = 5)` returns `{tools, truncated}` with matching names and input schemas. `tools.call(name, args = {})` calls a tool serially with the session's usual permissions and returns `{payload, text, truncated, attachment_count}`. Errors throw with a `code` property. For example, `const f = tools.call('fs.stat', {path: 'README.md'}); return f.payload;`. Host I/O goes through the tool interface. Interactive, streaming and background-launch tools require direct calls. Each program can perform up to 50 calls or searches and return up to 16 KiB of JSON. The result reports completed calls even when the script throws.",
+        help = r#"Supply a JavaScript function body. `tools.search(query, limit = 5)` returns `{tools, truncated}` with matching names and input schemas. `tools.call(name, args = {})` calls a tool serially with the session's usual permissions and returns `{payload, text, truncated, attachment_count}`. Errors throw with a `code` property. Host I/O goes through the tool interface. Interactive, streaming and background-launch tools require direct calls. Each program can perform up to 50 calls or searches and return up to 16 KiB of JSON.
+
+Return a file's size in bytes.
+
+```json
+{"code":"const f = tools.call('fs.stat', {path: 'README.md'}); return {size: f.payload.size};"}
+```
+
+The payload includes the returned value and settled calls. When an unhandled error stops the script, `error` describes the failure and `calls` still records the calls that settled.
+
+```json
+{"result":{"size":4096},"truncated":false,"calls":[{"name":"fs.stat","status":"succeeded"}]}
+```"#,
         translations(locale(
             "zh-CN",
             summary = "运行工具脚本，用 JavaScript 串联当前会话的工具调用。"
@@ -165,21 +185,36 @@ impl ToolScriptPlugin {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 struct ProgramReport {
+    /// The returned JSON value, a preview string when truncated, or null on failure.
     result: Value,
+    /// The return value exceeded its output limit and was replaced with a preview.
     truncated: bool,
+    /// Settled nested tool calls in execution order.
     calls: Vec<CallReceipt>,
+    /// Execution error if the script stopped before returning.
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, JsonSchema)]
 struct CallReceipt {
+    /// Tool name submitted by the script.
     name: String,
-    status: &'static str,
+    /// Outcome of the nested call.
+    status: CallStatus,
+    /// Host error code for a denied or failed call.
     #[serde(skip_serializing_if = "Option::is_none")]
     error_code: Option<String>,
+}
+
+#[derive(Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum CallStatus {
+    Succeeded,
+    Denied,
+    Failed,
 }
 
 async fn run_program(
@@ -223,7 +258,7 @@ async fn handle_operation(
             Ok(output) => {
                 calls.push(CallReceipt {
                     name,
-                    status: "succeeded",
+                    status: CallStatus::Succeeded,
                     error_code: None,
                 });
                 encode_tool_output(output)
@@ -231,8 +266,10 @@ async fn handle_operation(
             Err(error) => {
                 let code = error.failure.code.as_str();
                 let status = match error.kind {
-                    PluginErrorKind::PolicyDenied | PluginErrorKind::UserDeclined => "denied",
-                    _ => "failed",
+                    PluginErrorKind::PolicyDenied | PluginErrorKind::UserDeclined => {
+                        CallStatus::Denied
+                    }
+                    _ => CallStatus::Failed,
                 };
                 calls.push(CallReceipt {
                     name,

@@ -479,10 +479,9 @@ fn recorded_file_facts(part: &Part) -> RecordedFileFacts {
                     .is_some_and(|writes| !writes.is_empty());
             break 'record;
         }
-        if !matches!(
-            name,
-            "fs.write" | "fs.replace" | "code.rewrite_ast" | "fs.apply_patch"
-        ) {
+        // Sessions saved before the AST tool was retired can still contain edits.
+        let ast_rewrite = name == "code.rewrite_ast";
+        if !matches!(name, "fs.write" | "fs.replace" | "fs.apply_patch") && !ast_rewrite {
             break 'record;
         }
         let Ok(tool) = ToolCallContent::try_from(&part.content) else {
@@ -496,7 +495,7 @@ fn recorded_file_facts(part: &Part) -> RecordedFileFacts {
         }
         // Preview is never an edit, even if an older/malformed result lacks
         // a payload. The invocation's apply flag is also required as evidence.
-        if tool.name == "code.rewrite_ast" && tool.input.get("apply") != Some(&Value::Bool(true)) {
+        if ast_rewrite && tool.input.get("apply") != Some(&Value::Bool(true)) {
             break 'record;
         }
         let Some(payload) = tool.output.as_ref().and_then(|o| o.payload.as_ref()) else {
@@ -508,10 +507,7 @@ fn recorded_file_facts(part: &Part) -> RecordedFileFacts {
         {
             break 'record;
         }
-        if tool.name == "code.rewrite_ast"
-            && (tool.input.get("apply") != Some(&Value::Bool(true))
-                || payload.get("applied") != Some(&Value::Bool(true)))
-        {
+        if ast_rewrite && payload.get("applied") != Some(&Value::Bool(true)) {
             break 'record;
         }
         let diff = payload.get("diff").and_then(Value::as_str).map(|value| {
@@ -674,6 +670,38 @@ mod tests {
     use super::*;
     use agena_domain::{ComposerDocument, ComposerNode};
     use agena_storage::kernel::RequestId;
+    use serde_json::json;
+
+    #[test]
+    fn saved_ast_rewrites_contribute_published_file_changes() {
+        let tool = ToolCallContent {
+            name: "code.rewrite_ast".into(),
+            input: json!({"path": "example.rs", "apply": true}),
+            state: ToolResultState::Completed,
+            output: Some(agena_domain::RawOutput {
+                payload: Some(json!({
+                    "path": "example.rs",
+                    "applied": true,
+                    "changed": true,
+                    "diff": "@@ -1 +1 @@\n-old()\n+new()\n",
+                })),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut part = Part {
+            part_id: 1,
+            kind: ToolCallContent::kind().into(),
+            state: "completed".into(),
+            content: tool.as_value(),
+            ..Default::default()
+        };
+        assert_eq!(recorded_file_facts(&part).rows["example.rs"][0].part_id, 1);
+
+        part.content["input"]["apply"] = json!(false);
+        part.content["output"]["payload"]["applied"] = json!(false);
+        assert!(recorded_file_facts(&part).rows.is_empty());
+    }
 
     #[tokio::test]
     async fn shared_file_cache_invalidates_only_the_changed_conversation() {

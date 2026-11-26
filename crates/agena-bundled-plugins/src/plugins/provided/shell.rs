@@ -23,6 +23,7 @@ pub(crate) fn new_plugin() -> ShellPlugin {
 #[input(trim("process_id"), non_empty("process_id"))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ProcessStopInput {
+    /// Agena process ID of the job or terminal to stop.
     process_id: String,
 }
 
@@ -37,8 +38,11 @@ pub(crate) struct ProcessStopInput {
 )]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ProcessResizeInput {
+    /// Agena process ID of a terminal started with shell.open.
     process_id: String,
+    /// New terminal height in character rows.
     rows: u16,
+    /// New terminal width in character columns.
     cols: u16,
 }
 
@@ -46,6 +50,7 @@ pub(crate) struct ProcessResizeInput {
 #[input(trim("process_id"), non_empty("process_id"))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ProcessSignalInput {
+    /// Agena process ID of the job or terminal to signal.
     process_id: String,
     signal: ShellSignal,
 }

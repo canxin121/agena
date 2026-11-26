@@ -36,12 +36,7 @@ const MAX_NOTEBOOK_FILE: usize = 32 * 1024 * 1024;
 const MAX_TRANSACTION: usize = 64 * 1024 * 1024;
 static WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(8);
 
-pub type BundledWorker = fn(
-    &str,
-    Value,
-    &Path,
-    Option<agena_tool::path_filter::PathPredicate>,
-) -> agena_plugin_sdk::Result<ToolInvokeOutput>;
+pub type BundledWorker = fn(&str, Value, &Path) -> agena_plugin_sdk::Result<ToolInvokeOutput>;
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -97,9 +92,6 @@ pub(crate) fn plan(
         ("fs", "replace") => "fs.replace",
         ("fs", "read_many") => "fs.read_many",
         ("fs", "stat") => "fs.stat",
-        ("code", "search_ast") => "code.search_ast",
-        ("code", "syntax_tree") => "code.syntax_tree",
-        ("code", "rewrite_ast") => "code.rewrite_ast",
         ("notebook", "edit_cell") => "notebook.edit_cell",
         _ => return Ok(None),
     };
@@ -172,7 +164,7 @@ pub(crate) fn plan(
             };
             let label = match input.get(field).and_then(Value::as_str) {
                 Some(value) if !value.trim().is_empty() => value.to_owned(),
-                _ if matches!(operation, "glob" | "grep" | "code.search_ast") => {
+                _ if matches!(operation, "glob" | "grep") => {
                     if workspace_root.as_os_str().is_empty() {
                         return Err(ToolError::invalid_input(
                             "global search requires a path or folder",
@@ -189,10 +181,7 @@ pub(crate) fn plan(
             let path = resolve(&label)?;
             input[field] = Value::String(path.to_string_lossy().into_owned());
             reads.push(path.clone());
-            if matches!(operation, "fs.write" | "fs.replace" | "notebook.edit_cell")
-                || (operation == "code.rewrite_ast"
-                    && input.get("apply").and_then(Value::as_bool).unwrap_or(false))
-            {
+            if matches!(operation, "fs.write" | "fs.replace" | "notebook.edit_cell") {
                 writes.push(path.clone());
             }
             labels.push((label, path));
@@ -659,7 +648,7 @@ fn from_response(response: ToolInvokeOutput) -> Result<ToolInvocationExecution, 
 
 /// Called by the executable before normal CLI parsing or runtime initialization.
 /// Return None for ordinary invocations. The bundled handler contains only pure
-/// native filesystem/syntax operations, with no model or plugin bootstrap.
+/// native file operations, with no model or plugin bootstrap.
 pub fn try_run_worker(bundled: BundledWorker) -> Option<i32> {
     if std::env::args_os().nth(1).as_deref() != Some(std::ffi::OsStr::new(WORKER_ARGUMENT)) {
         return None;
@@ -751,13 +740,8 @@ pub fn try_run_worker(bundled: BundledWorker) -> Option<i32> {
             )
             .map(crate::tool::router::tool_execution_to_invoke_output)
         } else {
-            bundled(
-                &request.operation,
-                request.input,
-                &request.workspace_root,
-                Some(predicate),
-            )
-            .map_err(ToolError::from_plugin_error)
+            bundled(&request.operation, request.input, &request.workspace_root)
+                .map_err(ToolError::from_plugin_error)
         };
         filter.finish(result)
     })();

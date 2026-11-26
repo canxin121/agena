@@ -70,32 +70,21 @@ pub fn plugin_method_tool_output(
     method: &ImplItemFn,
     explicit: Option<Type>,
 ) -> PluginToolOutputPlan {
-    let returns_result = plugin_method_result_ok_type(method).is_some();
-    if let Some(explicit) = explicit {
+    let Some((candidate, returns_result)) = plugin_method_return_value_type(method) else {
         return PluginToolOutputPlan {
-            ty: Some(explicit),
-            returns_result,
-        };
-    }
-    let Some((candidate, is_result)) = plugin_method_return_value_type(method) else {
-        return PluginToolOutputPlan {
-            ty: None,
+            ty: explicit,
             returns_result: false,
         };
     };
-    if type_is_unit(&candidate)
-        || type_last_segment_is(&candidate, "ToolInvokeOutput")
-        || type_last_segment_is(&candidate, "ToolStreamEnd")
-    {
-        return PluginToolOutputPlan {
-            ty: None,
-            returns_result: false,
-        };
-    }
-    PluginToolOutputPlan {
-        ty: Some(candidate),
-        returns_result: is_result,
-    }
+    let ty = if type_last_segment_is(&candidate, "ToolInvokeOutput") {
+        None
+    } else {
+        explicit.or_else(|| {
+            (!type_is_unit(&candidate) && !type_last_segment_is(&candidate, "ToolStreamEnd"))
+                .then_some(candidate)
+        })
+    };
+    PluginToolOutputPlan { ty, returns_result }
 }
 
 pub fn plugin_method_return_value_type(method: &ImplItemFn) -> Option<(Type, bool)> {
@@ -104,10 +93,6 @@ pub fn plugin_method_return_value_type(method: &ImplItemFn) -> Option<(Type, boo
         return Some((ok_ty.clone(), true));
     }
     Some((ty.clone(), false))
-}
-
-fn plugin_method_result_ok_type(method: &ImplItemFn) -> Option<&Type> {
-    result_ok_type(plugin_method_return_type(method)?)
 }
 
 pub fn plugin_method_return_type(method: &ImplItemFn) -> Option<&Type> {

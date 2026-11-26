@@ -1,27 +1,23 @@
-//! Markdown reference generator for the bundled tool catalog.
+//! Markdown reference generator for the bundled plugin and tool catalog.
 //!
 //! [`bundled_tools_markdown_reference`] renders a deterministic, human-readable
-//! reference from the real plugin manifests. The output is committed at
-//! `generated/tools-reference.md` (in this crate) and embedded into rustdoc through
-//! `include_str!`, so `cargo doc` shows every tool definition together with its
-//! detailed help text, tags, runtime flags, and JSON Schema contracts.
-//!
-//! Regenerate with `agena inspect --tools-reference` (see the generated file's
-//! header for the exact command); a CI drift test compares the committed file
-//! against this generator.
+//! reference from the compiled plugin manifests. The build script uses its
+//! anchors to produce the index and detail pages under [`crate::tools_docs`].
 
-use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
-use agena_plugin_host::sdk::{PluginKey, PluginManifest, ToolDefinition};
+use agena_domain::{ApplicableSessions, SessionKind};
+use agena_plugin_sdk::{PluginKey, PluginManifest, ToolDefinition, ToolStreamingMode};
 use serde_json::Value;
 
 use crate::capability_manifest::bundled_plugin_manifests;
 
-/// Render the complete Markdown reference for every bundled tool.
+mod plugin;
+
+/// Render the Markdown reference for the bundled plugin and tool catalog.
 ///
-/// Plugins are sorted by id, tools by name, so the output is stable across
-/// runs and only changes when an actual tool definition changes.
+/// Plugins are sorted by ID and tools by name. The reference includes the
+/// settings, commands, and services declared by plugins with zero tools.
 pub fn bundled_tools_markdown_reference() -> String {
     let mut plugins: Vec<(String, PluginManifest, Option<String>)> = bundled_plugin_manifests()
         .into_iter()
@@ -45,36 +41,37 @@ pub fn bundled_tools_markdown_reference() -> String {
 }
 
 fn render_header(out: &mut String, plugin_count: usize, tool_count: usize) {
-    writeln!(out, "# Agena Bundled Tools Reference").unwrap();
+    writeln!(out, "# Agena Bundled Plugins and Tools").unwrap();
     writeln!(out).unwrap();
     writeln!(
         out,
-        "> Generated file — do not edit by hand. Regenerate with:\n>\n> ```bash\n> agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md\n> ```"
+        "> Generated from the bundled plugin manifests. Regenerate with the `generate_tools_reference` Cargo example or `agena inspect --tools-reference`."
     )
     .unwrap();
     writeln!(out).unwrap();
     writeln!(
         out,
-        "This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **{plugin_count} plugins and {tool_count} tool definitions**."
+        "The compiled catalog contains **{plugin_count} plugins and {tool_count} execution tools**. Open a plugin to browse its declarations and tools. Each tool lists its canonical ID, applicable session types, and declared input and output contracts."
     )
     .unwrap();
     writeln!(out).unwrap();
-    writeln!(out, "- Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, the streaming runtime flag, an input parameter table, and the full input / output JSON Schema.").unwrap();
-    writeln!(out, "- This catalog contains plugin execution tools only. The runtime-owned Tool API protocol (`plugins_list`, `tools_list`, `tools_help`, `tools_call`) has its own registry and is excluded from plugin and tool counts.").unwrap();
-    writeln!(out, "- Execution-tool names (`plugin.tool`, full key `agena.<plugin>.<tool>`) appear only in `tools_help.tool` / `tools_call.tool`; they never become Provider function names.").unwrap();
+    writeln!(out, "For a running instance, use `agena plugin status` and `agena plugin inspect <plugin-id>`. Within a session, `plugins_list` and `tools_list` discover its live catalog. Pass the tool ID to `tools_help` before using `tools_call`. Output schemas describe the business payload. Some tools also return text, metadata, or attachments through the tool protocol.").unwrap();
     writeln!(out).unwrap();
 }
 
 fn render_toc(out: &mut String, plugins: &[(String, PluginManifest, Option<String>)]) {
-    writeln!(out, "## Table of Contents").unwrap();
+    writeln!(out, "## Plugin index").unwrap();
     writeln!(out).unwrap();
+    writeln!(out, "| Plugin | Name | Tools | Commands | Summary |").unwrap();
+    writeln!(out, "| --- | --- | ---: | ---: | --- |").unwrap();
     for (id, manifest, _) in plugins {
-        let summary = nonempty(manifest.summary.as_deref()).unwrap_or("");
+        let name = cell_text(nonempty(manifest.display_name.as_deref()).unwrap_or(""));
+        let summary = cell_text(nonempty(manifest.summary.as_deref()).unwrap_or(""));
         writeln!(
             out,
-            "- [`{id}`](#{}) — {summary} ({} tools)",
-            heading_anchor(id),
-            manifest.tools.len()
+            "| [`{id}`](#plugin-{id}) | {name} | {} | {} | {summary} |",
+            manifest.tools.len(),
+            manifest.commands.len()
         )
         .unwrap();
     }
@@ -82,14 +79,22 @@ fn render_toc(out: &mut String, plugins: &[(String, PluginManifest, Option<Strin
 }
 
 fn render_plugin(out: &mut String, id: &str, manifest: &PluginManifest, conditional: Option<&str>) {
+    writeln!(out, "<a id=\"plugin-{id}\"></a>").unwrap();
+    writeln!(out).unwrap();
     writeln!(out, "## {id}").unwrap();
     writeln!(out).unwrap();
 
+    if let Some(name) = nonempty(manifest.display_name.as_deref()) {
+        writeln!(out, "**{name}**\n").unwrap();
+    }
     let mut meta = format!(
         "**Version** `{}` · **Tools** {}",
         manifest.version,
         manifest.tools.len()
     );
+    if !manifest.authors.is_empty() {
+        write!(meta, " · **Authors** {}", manifest.authors.join(", ")).unwrap();
+    }
     if !manifest.tags.is_empty() {
         let tags = manifest
             .tags
@@ -116,6 +121,23 @@ fn render_plugin(out: &mut String, id: &str, manifest: &PluginManifest, conditio
 
     let mut tools = manifest.tools.iter().collect::<Vec<_>>();
     tools.sort_by(|left, right| left.name.cmp(&right.name));
+    if !tools.is_empty() {
+        writeln!(out, "### Tool index\n").unwrap();
+        writeln!(out, "| Tool | Sessions | Summary |").unwrap();
+        writeln!(out, "| --- | --- | --- |").unwrap();
+        for tool in &tools {
+            let name = &tool.name;
+            let summary = cell_text(nonempty(tool.summary_text()).unwrap_or(""));
+            let sessions = session_kinds(tool.applies_to);
+            writeln!(
+                out,
+                "| [`{name}`](#tool-{id}.{name}) | {sessions} | {summary} |"
+            )
+            .unwrap();
+        }
+        writeln!(out).unwrap();
+    }
+    plugin::render_declarations(out, id, manifest);
     for tool in tools {
         render_tool(out, id, tool);
     }
@@ -123,14 +145,15 @@ fn render_plugin(out: &mut String, id: &str, manifest: &PluginManifest, conditio
 
 fn render_tool(out: &mut String, plugin_id: &str, tool: &ToolDefinition) {
     let canonical = format!("{plugin_id}.{}", tool.name);
+    writeln!(out, "<a id=\"tool-{canonical}\"></a>").unwrap();
+    writeln!(out).unwrap();
     writeln!(out, "### {}", tool.name).unwrap();
     writeln!(out).unwrap();
 
-    let mut intro = vec![format!("`{canonical}`")];
+    writeln!(out, "**Tool ID** `{canonical}`").unwrap();
     if let Some(summary) = nonempty(tool.summary_text()) {
-        intro.push(format!("**Summary**: {summary}"));
+        writeln!(out, "\n{summary}").unwrap();
     }
-    writeln!(out, "{}", intro.join(" · ")).unwrap();
 
     let tags = tool.effective_tags();
     if !tags.is_empty() {
@@ -140,68 +163,39 @@ fn render_tool(out: &mut String, plugin_id: &str, tool: &ToolDefinition) {
             .collect::<Vec<_>>()
             .join(" ");
         writeln!(out).unwrap();
-        writeln!(out, "**Tags**: {rendered}").unwrap();
+        writeln!(out, "**Tags** {rendered}").unwrap();
     }
 
     writeln!(out).unwrap();
-    let streaming = serde_json::to_string(&tool.runtime.streaming)
-        .unwrap_or_else(|_| "\"buffered\"".to_string())
-        .trim_matches('"')
-        .to_string();
-    writeln!(out, "**Runtime**: streaming `{streaming}`").unwrap();
+    let streaming = match tool.runtime.streaming {
+        ToolStreamingMode::Buffered => "buffered",
+        ToolStreamingMode::Streaming => "streaming",
+    };
+    let sessions = session_kinds(tool.applies_to);
+    writeln!(
+        out,
+        "**Output delivery** `{streaming}` · **Sessions** {sessions}"
+    )
+    .unwrap();
 
-    if let Some(before) = nonempty(tool.before_help_text()) {
-        writeln!(out).unwrap();
-        writeln!(out, "**Before help**:").unwrap();
-        writeln!(out, "{}", blockquote(before)).unwrap();
-    }
-    if let Some(help) = nonempty(tool.help_text()) {
-        writeln!(out).unwrap();
-        writeln!(out, "**Help**:").unwrap();
-        writeln!(out, "{}", blockquote(help)).unwrap();
-    }
-    if let Some(after) = nonempty(tool.after_help_text()) {
-        writeln!(out).unwrap();
-        writeln!(out, "**After help**:").unwrap();
-        writeln!(out, "{}", blockquote(after)).unwrap();
-    }
-
-    let input_schema = tool.input_schema();
-    let rows = schema_parameter_rows(&input_schema);
-    if !rows.is_empty() {
-        writeln!(out).unwrap();
-        writeln!(out, "**Input parameters**:").unwrap();
-        writeln!(
-            out,
-            "| Parameter | Type | Required | Default | Description |"
-        )
-        .unwrap();
-        writeln!(out, "| --- | --- | --- | --- | --- |").unwrap();
-        for (name, ty, required, default, desc) in rows {
-            writeln!(
-                out,
-                "| `{name}` | `{ty}` | {} | {} | {} |",
-                if required { "✓" } else { "—" },
-                default,
-                cell_text(&desc)
-            )
-            .unwrap();
+    for (heading, text) in [
+        ("Before calling", tool.before_help_text()),
+        ("Usage", tool.help_text()),
+        ("After calling", tool.after_help_text()),
+    ] {
+        if let Some(text) = nonempty(text) {
+            writeln!(out, "\n#### {heading}\n\n{}", blockquote(text)).unwrap();
         }
     }
 
-    writeln!(out).unwrap();
-    writeln!(out, "**Input schema**:").unwrap();
-    writeln!(out, "```json").unwrap();
-    writeln!(out, "{}", pretty_json(&input_schema)).unwrap();
-    writeln!(out, "```").unwrap();
+    let input_schema = tool.input_schema();
+    render_property_table(out, "Input parameters", &input_schema);
+    render_json_details(out, "Input JSON Schema", &input_schema);
 
     let output_schema = tool.output_schema();
     if !output_schema.is_null() {
-        writeln!(out).unwrap();
-        writeln!(out, "**Output schema**:").unwrap();
-        writeln!(out, "```json").unwrap();
-        writeln!(out, "{}", pretty_json(&output_schema)).unwrap();
-        writeln!(out, "```").unwrap();
+        render_property_table(out, "Output payload fields", &output_schema);
+        render_json_details(out, "Output JSON Schema", &output_schema);
     }
     writeln!(out).unwrap();
 }
@@ -212,47 +206,61 @@ fn plugin_id(manifest: &PluginManifest) -> String {
         .to_string()
 }
 
-/// Match rustdoc's markdown heading id generation for the plugin headings
-/// (`## agena.chatgpt` renders as `id="agenachatgpt"`): keep ASCII
-/// alphanumerics plus `-` / `_`, drop everything else, lowercase.
-fn heading_anchor(id: &str) -> String {
-    id.chars()
-        .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
-        .map(|ch| ch.to_ascii_lowercase())
-        .collect()
+fn session_kinds(sessions: ApplicableSessions) -> &'static str {
+    if sessions.is_all() {
+        "Project, Bot"
+    } else if sessions.contains(SessionKind::Project) {
+        "Project"
+    } else if sessions.contains(SessionKind::Bot) {
+        "Bot"
+    } else {
+        "—"
+    }
 }
 
-fn schema_parameter_rows(schema: &Value) -> Vec<(String, String, bool, String, String)> {
+fn render_property_table(out: &mut String, heading: &str, schema: &Value) {
     let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
-        return Vec::new();
+        return;
     };
-    let required = schema
-        .get("required")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<BTreeSet<_>>()
-        })
-        .unwrap_or_default();
-    let mut rows = Vec::new();
-    for (name, property) in properties {
-        let ty = schema_type(property);
-        let is_required = required.contains(name.as_str());
-        let default = property
-            .get("default")
-            .map(|value| format!("`{}`", compact_json(value)))
-            .unwrap_or_else(|| "—".to_string());
-        let desc = property
-            .get("description")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        rows.push((name.clone(), ty, is_required, default, desc));
+    if properties.is_empty() {
+        return;
     }
-    rows.sort_by(|left, right| left.0.cmp(&right.0));
-    rows
+
+    let mut fields = properties.iter().collect::<Vec<_>>();
+    fields.sort_by_key(|(name, schema)| {
+        let order = schema.get("x-agena-order").and_then(Value::as_str);
+        (order.is_none(), order, name.as_str())
+    });
+    let required = schema["required"].as_array();
+    writeln!(out, "\n#### {heading}\n").unwrap();
+    writeln!(out, "| Field | Type | Required | Default | Description |").unwrap();
+    writeln!(out, "| --- | --- | --- | --- | --- |").unwrap();
+    for (name, property) in fields {
+        let reference = property["$ref"]
+            .as_str()
+            .and_then(|reference| reference.strip_prefix('#'))
+            .and_then(|pointer| schema.pointer(pointer));
+        let description = nonempty(property["description"].as_str())
+            .or_else(|| {
+                reference.and_then(|definition| nonempty(definition["description"].as_str()))
+            })
+            .unwrap_or("");
+        let required = required.is_some_and(|fields| {
+            fields
+                .iter()
+                .any(|field| field.as_str() == Some(name.as_str()))
+        });
+        writeln!(
+            out,
+            "| {} | {} | {} | {} | {} |",
+            code_cell(name),
+            code_cell(&schema_type(property)),
+            yes_or_no(required),
+            default_cell(property.get("default")),
+            cell_text(description)
+        )
+        .unwrap();
+    }
 }
 
 fn schema_type(schema: &Value) -> String {
@@ -273,8 +281,9 @@ fn schema_type(schema: &Value) -> String {
                     .next()
                     .unwrap_or(reference)
                     .to_string()
-            } else if let Some(any_of) = schema.get("anyOf").and_then(Value::as_array) {
-                any_of
+            } else if let Some(variants) = schema["anyOf"].as_array().or(schema["oneOf"].as_array())
+            {
+                variants
                     .iter()
                     .map(schema_type)
                     .collect::<Vec<_>>()
@@ -290,39 +299,27 @@ fn schema_type(schema: &Value) -> String {
     }
 }
 
-fn compact_json(value: &Value) -> String {
-    match value {
-        Value::String(text) => text.clone(),
-        other => match serde_json::to_string(other) {
-            Ok(text) => text,
-            Err(error) => {
-                tracing::error!(
-                    diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                        "serialize compact documentation JSON",
-                        &error,
-                    ),
-                    "documentation JSON could not be rendered"
-                );
-                "<JSON serialization failed>".to_owned()
-            }
-        },
-    }
+fn default_cell(value: Option<&Value>) -> String {
+    value.map_or_else(|| "—".into(), |value| code_cell(&value.to_string()))
 }
 
-fn pretty_json(value: &Value) -> String {
-    match serde_json::to_string_pretty(value) {
-        Ok(text) => text,
-        Err(error) => {
-            tracing::error!(
-                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                    "serialize pretty documentation JSON",
-                    &error,
-                ),
-                "documentation JSON could not be rendered"
-            );
-            "<JSON serialization failed>".to_owned()
-        }
-    }
+fn render_json_details(out: &mut String, label: &str, value: &Value) {
+    let json = serde_json::to_string_pretty(value).expect("JSON value must serialize");
+    writeln!(
+        out,
+        "\n<details>\n<summary>{label}</summary>\n\n```json\n{json}\n```\n\n</details>"
+    )
+    .unwrap();
+}
+
+fn code_cell(text: &str) -> String {
+    let backticks = text.split(|ch| ch != '`').map(str::len).max().unwrap_or(0);
+    let fence = "`".repeat(backticks + 1);
+    cell_text(&format!("{fence}{text}{fence}"))
+}
+
+fn yes_or_no(value: bool) -> &'static str {
+    if value { "Yes" } else { "No" }
 }
 
 fn cell_text(text: &str) -> String {
@@ -331,11 +328,40 @@ fn cell_text(text: &str) -> String {
 
 fn blockquote(text: &str) -> String {
     text.lines()
-        .map(|line| format!("> {line}"))
+        .map(|line| {
+            let line = line.trim_end();
+            if line.is_empty() {
+                ">".into()
+            } else {
+                format!("> {line}")
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
 
 fn nonempty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|text| !text.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::bundled_capability_identity_snapshot_json;
+
+    #[test]
+    fn generated_plugin_references_match_the_compiled_manifests() {
+        assert!(
+            bundled_tools_markdown_reference()
+                .lines()
+                .eq(include_str!("../generated/tools-reference.md").lines()),
+            "tools-reference.md is out of date. Run the generate_tools_reference example."
+        );
+        assert!(
+            bundled_capability_identity_snapshot_json()
+                .lines()
+                .eq(include_str!("../generated/bundled-capability-identities.json").lines()),
+            "bundled-capability-identities.json is out of date. Run the generate_capability_identity_snapshot example."
+        );
+    }
 }

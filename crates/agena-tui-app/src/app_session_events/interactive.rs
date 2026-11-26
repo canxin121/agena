@@ -397,10 +397,8 @@ impl App {
                     .get("name")
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or_default();
-                if matches!(
-                    name,
-                    "fs.write" | "fs.replace" | "fs.apply_patch" | "code.rewrite_ast"
-                ) || name.starts_with("shell.")
+                if matches!(name, "fs.write" | "fs.replace" | "fs.apply_patch")
+                    || name.starts_with("shell.")
                 {
                     self.mark_session_files_changed(session_id);
                 }

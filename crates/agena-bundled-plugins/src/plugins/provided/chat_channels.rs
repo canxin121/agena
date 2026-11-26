@@ -10,8 +10,8 @@ use std::{
 
 use agena_assistant::{ChannelWebhookRequest, ChannelWebhookResponse};
 use agena_plugin_sdk::{
-    InitContext, InitOutcome, Plugin, PluginError, PluginManifest, PluginServiceInvokeInput,
-    Result, TransportKind,
+    InitContext, InitOutcome, Plugin, PluginError, PluginManifest, PluginManifestTranslation,
+    PluginServiceInvokeInput, Result, ToolTag, TransportKind,
     host_api::HostClient,
     integration::{
         AdapterBatch, AdapterDescription, AdapterKind, AdapterPollRequest, ChannelDelivery,
@@ -200,8 +200,42 @@ impl Plugin for ChatChannel {
     fn manifest(&self) -> PluginManifest {
         let mut manifest =
             PluginManifest::new("agena", self.platform.name(), env!("CARGO_PKG_VERSION"));
+        let (icon, summary_zh_cn) = match self.platform {
+            ChatPlatform::Slack => (
+                include_str!("../../../assets/plugin-icons/slack.svg"),
+                "接收 Slack 签名消息事件，并通过 Slack Bot API 回复。",
+            ),
+            ChatPlatform::Feishu => (
+                include_str!("../../../assets/plugin-icons/feishu.svg"),
+                "接收飞书或 Lark 签名消息事件，并通过机器人 API 回复。",
+            ),
+            ChatPlatform::Discord => (
+                include_str!("../../../assets/plugin-icons/discord.svg"),
+                "通过 Discord Bot API 轮询已配置频道，并回复收到的消息。",
+            ),
+            ChatPlatform::WhatsApp => (
+                include_str!("../../../assets/plugin-icons/whatsapp.svg"),
+                "接收 WhatsApp Cloud 签名文字消息，并通过 Meta Graph API 回复。",
+            ),
+        };
         manifest.display_name = Some(self.platform.title().into());
+        manifest.icon = Some(crate::plugin_metadata::icon(icon));
+        manifest.authors = vec!["canxin121".into()];
+        manifest.tags = vec![ToolTag::Network, ToolTag::Interactive];
         manifest.summary = Some(self.platform.summary().into());
+        manifest.help = Some(
+            "Configure connections in `accounts`. Enter the server environment variable names for credentials. Bind an Agena Bot session in Trusted Integrations and select the connection's tenant, bot account, and room in the channel policy.".into(),
+        );
+        manifest.translations.insert(
+            "zh-CN".into(),
+            PluginManifestTranslation {
+                summary: Some(summary_zh_cn.into()),
+                help: Some(
+                    "在 `accounts` 中配置连接，凭据字段填写服务器环境变量名。在受信集成中绑定 Agena Bot 会话，并在渠道策略中指定连接的租户、机器人账号和房间。".into(),
+                ),
+                ..Default::default()
+            },
+        );
         manifest.transports = vec![TransportKind::Static];
         manifest.settings = Some(self.platform.settings_contract());
         let mut export = integration_export(true);

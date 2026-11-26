@@ -12,7 +12,7 @@ use super::ChatPlatform;
 #[derive(Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields, bound(deserialize = "T: Deserialize<'de>"))]
 struct Accounts<T> {
-    /// Platform credentials and stable identities for each connection.
+    /// Platform identities and environment-variable references for each connection.
     #[serde(default)]
     #[schemars(length(max = 16))]
     accounts: Vec<T>,
@@ -31,8 +31,11 @@ impl<T> Default for Accounts<T> {
 pub(super) struct Slack {
     /// Name used in the webhook URL.
     pub name: String,
+    /// Slack workspace ID, used as the channel tenant.
     pub team_id: String,
+    /// Slack application ID expected on incoming events.
     pub app_id: String,
+    /// Slack bot user ID, used as the channel account.
     pub bot_user_id: String,
     /// Server environment variable holding the bot token.
     pub token_env: String,
@@ -45,29 +48,40 @@ pub(super) struct Slack {
 pub(super) struct Feishu {
     /// Name used in the webhook URL.
     pub name: String,
+    /// Tenant key of the Feishu or Lark workspace.
     pub tenant_key: String,
+    /// Application ID of the Feishu or Lark bot.
     pub app_id: String,
+    /// Bot's Open ID, used as the channel account.
     pub bot_open_id: String,
     /// Select Lark's international API when enabled.
     #[serde(default)]
     pub lark: bool,
+    /// Server environment variable holding the app secret.
     pub app_secret_env: String,
+    /// Server environment variable holding the event encryption key.
     pub encrypt_key_env: String,
+    /// Server environment variable holding the event verification token.
     pub verification_token_env: String,
 }
 
 #[derive(Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct DiscordRoom {
+    /// Discord channel or thread ID.
     pub id: String,
+    /// Channel policy kind for this room (`direct`, `group`, or `broadcast`).
     pub kind: ConversationKind,
 }
 
 #[derive(Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Discord {
+    /// Unique connection name in this plugin's settings.
     pub name: String,
+    /// Discord bot user ID, used as the channel account.
     pub bot_user_id: String,
+    /// Server environment variable holding the Discord bot token.
     pub token_env: String,
     /// Channel or thread IDs visible to the bot. Set the kind for each.
     #[schemars(length(min = 1, max = 16))]
@@ -79,10 +93,15 @@ pub(super) struct Discord {
 pub(super) struct WhatsApp {
     /// Name used in the webhook URL.
     pub name: String,
+    /// WhatsApp Business Account ID, used as the channel tenant.
     pub business_account_id: String,
+    /// Meta Phone Number ID, used as the channel account.
     pub phone_number_id: String,
+    /// Server environment variable holding the Graph API access token.
     pub token_env: String,
+    /// Server environment variable holding the Meta app secret.
     pub app_secret_env: String,
+    /// Server environment variable holding the webhook verification token.
     pub verification_token_env: String,
 }
 

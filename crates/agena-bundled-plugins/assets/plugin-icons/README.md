@@ -15,10 +15,12 @@ Plugin authorship metadata refers to the plugin implementation, independently of
 | agena.bot | RiRobot2Line |
 | agena.chatgpt | RiOpenaiLine |
 | agena.claude | RiClaudeLine |
-| agena.code | RiCodeSSlashLine |
 | agena.commands | RiCommandLine |
 | agena.companion | RiSparkling2Line |
 | agena.cron | RiCalendarScheduleLine |
+| agena.desktop | RiComputerLine |
+| agena.discord | RiDiscordLine |
+| agena.feishu | RiChat3Line |
 | agena.fs | RiFolder3Line |
 | agena.gemini | RiGeminiLine |
 | agena.inline_ui | RiLayoutMasonryLine |
@@ -35,5 +37,8 @@ Plugin authorship metadata refers to the plugin implementation, independently of
 | agena.settings | RiSettings3Line |
 | agena.shell | RiTerminalBoxLine |
 | agena.skills | RiGraduationCapLine |
+| agena.slack | RiSlackLine |
 | agena.telegram | RiTelegramLine |
+| agena.tool_script | RiJavascriptLine |
 | agena.web | RiGlobalLine |
+| agena.whatsapp | RiWhatsappLine |

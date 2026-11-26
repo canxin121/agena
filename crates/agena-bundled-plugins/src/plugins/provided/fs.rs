@@ -36,12 +36,15 @@ pub(crate) struct FsPlugin {
 )]
 #[serde(deny_unknown_fields)]
 struct WriteFileInput {
+    /// File to create or replace.
     path: String,
     /// Base folder for a relative path. Only global (Bot) sessions use it;
     /// a project session keeps resolving against its project root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     folder: Option<String>,
+    /// Complete UTF-8 contents to write.
     content: String,
+    /// Create any missing parent directories.
     #[serde(default)]
     create_parents: bool,
     /// Required when replacing an existing file. Use the hash returned by
@@ -62,17 +65,23 @@ struct WriteFileInput {
 )]
 #[serde(deny_unknown_fields)]
 struct ReplaceFileInput {
+    /// Existing UTF-8 file to edit.
     path: String,
     /// Base folder for a relative path. Only global (Bot) sessions use it;
     /// a project session keeps resolving against its project root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     folder: Option<String>,
+    /// Exact text to match, including whitespace and line breaks.
     old: String,
+    /// Replacement text. An empty value deletes the matched text.
     new: String,
+    /// Number of matches expected in the current file. A mismatch stops the edit.
     #[serde(default = "default_expected_occurrences")]
     expected_occurrences: u32,
+    /// Replace every match. Otherwise replace the first match after checking the count.
     #[serde(default)]
     replace_all: bool,
+    /// Optional SHA-256 of the current file from fs.stat or an earlier result.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     expected_sha256: Option<String>,
 }
@@ -92,11 +101,13 @@ const fn default_expected_occurrences() -> u32 {
 )]
 #[serde(deny_unknown_fields)]
 struct ReadManyInput {
+    /// Files to read in order, using the same base folder.
     paths: Vec<String>,
     /// Base folder for a relative path. Only global (Bot) sessions use it;
     /// a project session keeps resolving against its project root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     folder: Option<String>,
+    /// Combined byte budget for the file contents returned by this call.
     #[serde(default = "default_read_many_budget")]
     max_total_bytes: u32,
 }
@@ -109,11 +120,13 @@ const fn default_read_many_budget() -> u32 {
 #[input(trim("path"), non_empty("path"))]
 #[serde(deny_unknown_fields)]
 struct StatInput {
+    /// File or directory whose metadata to inspect.
     path: String,
     /// Base folder for a relative path. Only global (Bot) sessions use it;
     /// a project session keeps resolving against its project root.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     folder: Option<String>,
+    /// Include a SHA-256 for regular files within the 64 MiB hash limit.
     #[serde(default = "default_true")]
     hash: bool,
 }

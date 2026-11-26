@@ -4,6 +4,7 @@ use agena_macros::ToolInput;
 #[input(trim("title"), non_empty("title"))]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SessionRenameToolInput {
+    /// New title for the current session.
     pub title: String,
 }
 

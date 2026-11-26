@@ -213,7 +213,10 @@ def main() -> None:
         blocked = discovery / 'blocked.rs'
         blocked.write_text('fn secret_marker() {}\n')
         child_permission = {'path': {'rules': {str(discovery): 'readonly', str(blocked): 'deny'}}}
-        for tool, inputs in [('fs.glob', {'path': str(discovery), 'pattern': '**/*'}), ('fs.grep', {'path': str(discovery), 'pattern': 'secret_marker'}), ('code.search_ast', {'path': str(discovery), 'language': 'rust', 'pattern': 'fn $NAME() { $$$ }'})]:
+        for tool, inputs in [
+            ('fs.glob', {'path': str(discovery), 'pattern': '**/*'}),
+            ('fs.grep', {'path': str(discovery), 'pattern': 'secret_marker'}),
+        ]:
             name = tool.replace('.', '_') + '_child_denied'
             sid = session(name, child_permission, tool, inputs)
             complete(sid, name, 'denied')

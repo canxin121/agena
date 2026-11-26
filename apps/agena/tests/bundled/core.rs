@@ -26,7 +26,6 @@ mod core_tool_script;
 pub(super) const CASES: &[(&str, fn() -> TestResult)] = &[
     ("agena.fs", fs_edits_files_with_revision_checks),
     ("agena.shell", shell_runs_commands_and_owns_background_jobs),
-    ("agena.code", code_previews_and_applies_structural_edits),
     (
         "agena.tool_script",
         core_tool_script::composes_session_tools_and_preserves_permissions,
@@ -330,66 +329,6 @@ async fn shell_runs_commands_and_owns_background_jobs() -> TestResult {
                 .find(|job| job["process_id"] == process_id)
                 .context("stopped job disappeared from its owner's process history")?;
             ensure!(own_job["status"] != "running");
-            Ok(())
-        })
-        .await
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn code_previews_and_applies_structural_edits() -> TestResult {
-    const BEFORE: &str = "export function greet() { return legacy(\"ast-marker\"); }\n";
-    const AFTER: &str = "export function greet() { return modern(\"ast-marker\"); }\n";
-    fixture()
-        .expect_plugin("agena.code")
-        .seed_file("workspace/example.js", BEFORE.as_bytes().to_vec())
-        .run(|case| async move {
-            let user = user(&case).await?;
-            let search = call(
-                &user,
-                "code.search_ast",
-                json!({"path":"example.js","pattern":"legacy($VALUE)"}),
-            )
-            .await?;
-            assert_eq!(search.data()?["matches"].as_array().context("missing AST matches")?.len(), 1);
-            search.assert_text_contains("ast-marker")?;
-            let tree = call(&user, "code.syntax_tree", json!({"path":"example.js","max_depth":3})).await?;
-            assert_eq!(tree.data()?["root_kind"], "program");
-            assert_eq!(tree.data()?["has_error"], false);
-
-            let preview = call(
-                &user,
-                "code.rewrite_ast",
-                json!({"path":"example.js","pattern":"legacy($VALUE)","replacement":"modern($VALUE)"}),
-            )
-            .await?;
-            assert_eq!(preview.data()?["applied"], false);
-            assert_eq!(preview.data()?["replacements"], 1);
-            preview.assert_text_contains("modern")?;
-            let revision = string(preview.data()?, "/before_sha256")?;
-            assert_eq!(tokio::fs::read_to_string(case.workspace().join("example.js")).await?, BEFORE);
-
-            let applied = call(
-                &user,
-                "code.rewrite_ast",
-                json!({
-                    "path":"example.js","pattern":"legacy($VALUE)","replacement":"modern($VALUE)",
-                    "apply":true,"expected_sha256":revision
-                }),
-            )
-            .await?;
-            assert_eq!(applied.data()?["applied"], true);
-            assert_eq!(applied.data()?["changed"], true);
-            assert_eq!(tokio::fs::read_to_string(case.workspace().join("example.js")).await?, AFTER);
-            user.call_tool(
-                "code.rewrite_ast",
-                json!({
-                    "path":"example.js","pattern":"modern($VALUE)","replacement":"corrupted($VALUE)",
-                    "apply":true,"expected_sha256":revision
-                }),
-            )
-            .await?
-            .assert_failed()?;
-            assert_eq!(tokio::fs::read_to_string(case.workspace().join("example.js")).await?, AFTER);
             Ok(())
         })
         .await

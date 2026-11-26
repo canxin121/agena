@@ -1,6 +1,7 @@
 //! Thin tool adapter. Agent identity, delivery, supervision and recovery belong to the runtime.
 use agena_plugin_host::sdk::host_api::{
-    AgentMessageRequest, AgentSpawnRequest, AgentTargetRequest, AgentWaitRequest, HostClient,
+    AgentHandle, AgentMessageReceipt, AgentMessageRequest, AgentSpawnRequest, AgentTargetRequest,
+    AgentWaitRequest, AgentWaitResponse, HostClient,
 };
 use agena_plugin_host::sdk::{InitContext, InitOutcome, PluginError, Result, ToolInvokeOutput};
 use std::sync::{Arc, OnceLock};
@@ -104,6 +105,7 @@ impl AgentPlugin {
     }
     #[tool(
         tags(agent),
+        output(AgentHandle),
         summary = "Delegate a bounded task using an exact profile name from the available subagent catalog. Choose a read-only profile for planning research or a Git worktree for independent changes. Include scope, constraints, context, and the expected result. The child handle returns at launch and the result is delivered automatically.",
         translations(
             locale(
@@ -152,6 +154,7 @@ impl AgentPlugin {
     }
     #[tool(
         tags(agent),
+        output(AgentMessageReceipt),
         summary = "Queue a message to a visible agent. Does not start idle recipients or pause the sender. Use agent.wait when you need a reply.",
         translations(
             locale("zh-CN", summary = "向可见 agent 发送消息；不启动空闲会话。"),
@@ -191,6 +194,7 @@ impl AgentPlugin {
     }
     #[tool(
         tags(agent),
+        output(AgentWaitResponse),
         summary = "Wait on your own mailbox for messages, new user input or timeout. Returns only a wake reason; messages enter context automatically. Do not poll.",
         translations(
             locale(
@@ -230,6 +234,7 @@ impl AgentPlugin {
     }
     #[tool(
         tags(agent),
+        output(AgentHandle),
         summary = "Give a direct child more work. Queues guidance while running; starts another execution in the same session when idle.",
         translations(
             locale(
@@ -278,6 +283,7 @@ impl AgentPlugin {
     }
     #[tool(
         tags(agent),
+        output(AgentMessageReceipt),
         summary = "Stop a direct child execution. Preserves the agent session for agent.followup.",
         translations(
             locale(

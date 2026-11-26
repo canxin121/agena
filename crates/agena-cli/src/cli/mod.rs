@@ -544,8 +544,7 @@ pub struct InspectArgs {
     /// Emit the reviewable identity-only snapshot used by the CI drift check.
     #[arg(long, requires = "json")]
     pub identity_snapshot: bool,
-    /// Emit the generated Markdown tool reference committed at
-    /// `crates/agena-bundled-plugins/generated/tools-reference.md` and embedded into `cargo doc`.
+    /// Print the Markdown reference for the bundled plugins and tools.
     #[arg(long)]
     pub tools_reference: bool,
 }

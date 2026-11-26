@@ -189,11 +189,6 @@
           "kind": "static"
         }
       },
-      "agena.code": {
-        "package": {
-          "kind": "static"
-        }
-      },
       "agena.fs": {
         "package": {
           "kind": "static"

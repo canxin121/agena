@@ -1,9 +1,8 @@
 //! Bundled Agena plugin implementations and their registration factories.
 //!
-//! The crate also publishes a generated Markdown reference of every bundled
-//! tool — see [`tools_docs`] — so `cargo doc` renders all tool definitions
-//! together with their detailed help text, tags, runtime flags, and JSON
-//! Schema contracts.
+//! Browse [`tools_docs`] for the bundled plugin and tool reference. The index
+//! links to the settings, commands, service declarations, and tool pages.
+//! Search Rustdoc by a complete tool ID such as `agena.tool_script.run`.
 
 #![recursion_limit = "256"]
 
@@ -27,13 +26,11 @@ pub mod worker;
 pub(crate) static BLOCKING_PLUGIN_WORKERS: tokio::sync::Semaphore =
     tokio::sync::Semaphore::const_new(32);
 
-/// Generated Markdown reference for every bundled tool: definitions, detailed
-/// help text, tags, runtime flags, and JSON Schema contracts.
-///
-/// The committed copy lives at `generated/tools-reference.md` (in this crate) and is
-/// regenerated with `agena inspect --tools-reference`; a CI drift test keeps
-/// it in sync with the real plugin manifests.
-#[doc = include_str!("../generated/tools-reference.md")]
+#[cfg(doc)]
+include!(concat!(env!("OUT_DIR"), "/tools_docs.rs"));
+
+#[cfg(not(doc))]
+/// Bundled plugin and tool reference rendered by Rustdoc.
 pub mod tools_docs {}
 
 pub use capability_manifest::{
@@ -41,7 +38,7 @@ pub use capability_manifest::{
     bundled_capability_manifest,
 };
 pub use docs_reference::bundled_tools_markdown_reference;
-pub use sandbox_worker::{execute_sandbox_tool, execute_sandbox_tool_with_read_filter};
+pub use sandbox_worker::execute_sandbox_tool;
 
 pub use agena_runtime_config as config;
 pub use agena_runtime_config::{LSP_PLUGIN_ID, LspConfig, MCP_PLUGIN_ID};

@@ -52,7 +52,7 @@ pub const CLI_CATALOG: &[CliToolSpec] = &[
         &["ast-grep"],
         "structural_code",
         "preferred",
-        "Use code.search_ast or ast-grep run for AST patterns; use LSP for symbol relationships. --json is machine-readable. Review rewrites before updating; do not use ambiguous sg aliases."
+        "Use ast-grep run for AST patterns and --json for machine-readable matches. Use LSP for symbol relationships. Review rewrites before updating and invoke ast-grep by its full command name."
     ),
     cli!(
         "git",

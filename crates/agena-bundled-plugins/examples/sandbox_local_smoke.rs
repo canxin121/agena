@@ -25,7 +25,7 @@ fn main() -> CheckResult<()> {
         std::process::exit(code);
     }
     if let Some(code) = agena_runtime_tools::sandbox_worker::try_run_worker(
-        agena_bundled_plugins::execute_sandbox_tool_with_read_filter,
+        agena_bundled_plugins::execute_sandbox_tool,
     ) {
         std::process::exit(code);
     }

@@ -101,7 +101,6 @@ stdio 与 HTTP 回调都通过 `host/session.op` 转发，请求体使用 `{"req
 | 插件 | 文件、网络或其他副作用 | 权限入口与本轮处理 |
 | --- | --- | --- |
 | `agena.fs` | 文件读取、目录搜索、文档转换、批量读取、写入和补丁 | read/glob/grep/read_media/apply_patch 由执行器检查；为 stat、document、document_stream、read_many、write、replace 补齐插件内授权。写入的读取、版本检查、创建目录和落盘均在批准后。glob/grep 在下降目录和访问具体匹配项时继续检查子路径规则。 |
-| `agena.code` | AST 搜索、语法树、结构化替换 | 搜索与预览要求 Read；应用替换另要求 Write。目录搜索在下降目录和读取匹配语言的文件前逐项授权；拒绝后不进入解析和编辑。 |
 | `agena.notebook` | 读取和重写 ipynb | 补齐 Read 和 Write，批准后才打开笔记本。版本校验和格式校验继续保留。 |
 | `agena.settings` | 读取全局/工作区配置、合并验证、修改文件及请求重载 | 文件读取检查对应路径；合并验证检查两层 Read；实际编辑检查选中层 Write。dry_run 不申请不发生的写入。读取已加载的 effective 配置属于宿主配置能力。 |
 | `agena.skills` | 发现、读取和管理技能包及资源 | 使用当前调用工作区的技能目录，按具体文件和目录检查读写权限。安装还会检查下载和重定向的目标。 |

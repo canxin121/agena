@@ -345,7 +345,7 @@ export function applyResourceEvent(event: SseEvent) {
         const name = String(content.name ?? '')
         if (
           ['completed', 'failed', 'cancelled'].includes(String(part.state)) &&
-          (['fs.write', 'fs.replace', 'fs.apply_patch', 'code.rewrite_ast'].includes(name) || name.startsWith('shell.'))
+          (['fs.write', 'fs.replace', 'fs.apply_patch'].includes(name) || name.startsWith('shell.'))
         )
           keys.push(`session:${sid}:files`)
       }

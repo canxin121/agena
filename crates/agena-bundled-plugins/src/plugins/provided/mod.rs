@@ -2,7 +2,6 @@ pub mod agent;
 pub mod bot;
 pub(crate) mod chat_channels;
 mod cloud_media;
-pub mod code;
 pub mod commands;
 pub mod companion;
 pub mod cron;

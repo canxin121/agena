@@ -32,15 +32,19 @@ use agena_domain::TimeRange;
 #[serde(deny_unknown_fields)]
 /// Input of a shell command execution.
 pub struct ShellCommandInput {
+    /// Command text for the selected shell.
     pub command: String,
+    /// Short label shown with the command in the transcript.
     #[serde(default)]
     pub description: String,
+    /// Command timeout in milliseconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
     /// Model output budget, including JSON escaping. Default/max 16384 bytes;
     /// minimum 1024. Capture and process lifetime are independent of this budget.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_bytes: Option<u32>,
+    /// Working directory. Relative paths use the session's effective base folder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[arg(trim, non_empty_if_present)]
     pub workdir: Option<String>,
@@ -204,8 +208,10 @@ pub struct ShellOpenInput {
     /// Maximum initial output wait, in milliseconds. This is not a timeout.
     #[serde(default = "default_terminal_yield_ms")]
     pub yield_time_ms: u64,
+    /// Initial terminal height in character rows.
     #[serde(default = "default_terminal_rows")]
     pub rows: u16,
+    /// Initial terminal width in character columns.
     #[serde(default = "default_terminal_cols")]
     pub cols: u16,
     /// Return the current rendered screen in addition to incremental output.
@@ -228,19 +234,25 @@ pub struct ShellOpenInput {
 )]
 #[serde(deny_unknown_fields)]
 pub struct ShellReadInput {
+    /// Agena process ID from the shell tool that started the process.
     pub process_id: String,
+    /// Replay output from the previous result's last_seq. Omit for unread output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub since_seq: Option<u64>,
     /// Resume within the next event using the previous next_event_offset.
     /// A nonzero value requires since_seq; omit both for automatic consumption.
     #[serde(default)]
     pub event_offset: u32,
+    /// Byte budget for the returned output preview.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_bytes: Option<u32>,
+    /// Maximum time in milliseconds to wait for new output.
     #[serde(default = "default_terminal_write_wait_ms")]
     pub wait_ms: u64,
+    /// Maximum number of output events in this read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
+    /// Include the rendered screen of a terminal started with shell.open.
     #[serde(default)]
     pub include_screen: bool,
 }
@@ -271,6 +283,7 @@ pub fn default_terminal_write_wait_ms() -> u64 {
 )]
 #[serde(deny_unknown_fields)]
 pub struct ShellWriteInput {
+    /// Agena process ID of the terminal returned by shell.open.
     pub process_id: String,
     /// Nonempty exact UTF-8 text/control characters. Use shell.read to read. Use
     /// \r for Enter, \u0003 for Ctrl-C, \u0004 for Ctrl-D; at most 65536 bytes.
@@ -279,12 +292,16 @@ pub struct ShellWriteInput {
     /// unread output; explicit cursors permit replay without changing it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub since_seq: Option<u64>,
+    /// Resume a partial output event at the previous result's next_event_offset.
     #[serde(default)]
     pub event_offset: u32,
+    /// Byte budget for the output preview after writing input.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_bytes: Option<u32>,
+    /// Maximum time in milliseconds to wait for output after writing input.
     #[serde(default = "default_terminal_write_wait_ms")]
     pub wait_ms: u64,
+    /// Include the currently rendered terminal screen.
     #[serde(default)]
     pub include_screen: bool,
     /// Optional fallback read paths, relative to the Agena workspace. Checked

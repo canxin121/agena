@@ -21,6 +21,17 @@
 //! }
 //! ```
 //!
+//! ## Tool input and output contracts
+//!
+//! Describe the operation with `summary` and use `help` for examples and
+//! usage details. Derive [`ToolInput`] and [`JsonSchema`] on a named input
+//! type. Rust field doc comments become parameter descriptions in its schema.
+//!
+//! A tool that returns a typed value publishes its output schema from
+//! [`JsonSchema`]. For a handler returning [`ToolInvokeOutput`], add
+//! `#[tool(output(PayloadType), …)]` to publish the schema of its `payload`.
+//! The handler controls the result text, metadata, and attachments.
+//!
 //! ## Key items
 //!
 //! - [`Plugin`], [`PluginSettings`], [`InitContext`], [`InitOutcome`] — plugin

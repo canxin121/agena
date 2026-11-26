@@ -330,7 +330,10 @@ pub fn build_plugin_tool_plan(
     let stream = build_plugin_tool_stream_handler(method_infos, &shape)?;
     let mut input_model = shape.input_model;
     let output = plugin_method_tool_output(method, input_model.spec.output_ty.clone());
-    input_model.spec.output_ty = output.ty.clone();
+    // A custom ToolInvokeOutput can declare the schema of its payload.
+    if input_model.spec.output_ty.is_none() {
+        input_model.spec.output_ty = output.ty.clone();
+    }
     let tool = input_model
         .spec
         .tool

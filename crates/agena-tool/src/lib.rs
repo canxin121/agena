@@ -14,7 +14,7 @@
 //!   [`ToolPermissionCheck`], and [`ToolExecutionSummary`].
 //! - **Shell** — [`shell`] provides [`ShellRequest`] / [`ShellOutput`] and
 //!   [`ShellError`]; [`shell_analysis`] analyzes command shapes.
-//! - **Search** — [`code_search`] and [`tool_search`] locate code and tools.
+//! - **Search** — [`tool_search`] matches tools against a query.
 //! - **Value types** — [`ReadMode`],
 //!   [`ToolAvailability`], patch operations, and cron summaries.
 
@@ -583,52 +583,6 @@ fn tool_result_fragment(
         return Some(status.to_owned());
     }
     match key {
-        "code.search_ast" => {
-            let matches = object.get("matches").and_then(array_len_or_u64);
-            let scanned_files = object.get("scanned_files").and_then(value_as_u64);
-            if matches.is_none() && scanned_files.is_none() {
-                return None;
-            }
-            let matches = matches.unwrap_or_default();
-            return Some(match scanned_files {
-                Some(scanned_files) => format!(
-                    "{} · {}",
-                    format_count(matches as usize, "matches"),
-                    format_count(scanned_files as usize, "files scanned")
-                ),
-                None => format_count(matches as usize, "matches"),
-            });
-        }
-        "code.rewrite_ast" => {
-            if let Some(count) = object.get("replacements").and_then(value_as_u64) {
-                let status =
-                    if object.get("applied").and_then(serde_json::Value::as_bool) == Some(true) {
-                        "applied"
-                    } else {
-                        "preview"
-                    };
-                return Some(format!("{} replacements · {status}", count));
-            }
-        }
-        "code.syntax_tree" => {
-            let language = object
-                .get("language")
-                .and_then(serde_json::Value::as_str)
-                .map(normalize_tool_title);
-            let root = object
-                .get("root_kind")
-                .and_then(serde_json::Value::as_str)
-                .map(normalize_tool_title);
-            let parse_error =
-                object.get("has_error").and_then(serde_json::Value::as_bool) == Some(true);
-            let mut parts = language.into_iter().chain(root).collect::<Vec<_>>();
-            if parse_error {
-                parts.push("parse errors".to_owned());
-            }
-            if !parts.is_empty() {
-                return Some(parts.join(" · "));
-            }
-        }
         "report.findings" => {
             if let Some(fragment) = findings_result_fragment(object) {
                 return Some(fragment);
@@ -1285,13 +1239,6 @@ fn provider_find_value<'a>(
         None
     }
     visit(value, keys, 0)
-}
-
-fn array_len_or_u64(value: &serde_json::Value) -> Option<u64> {
-    value
-        .as_array()
-        .map(|values| values.len() as u64)
-        .or_else(|| value_as_u64(value))
 }
 
 fn findings_result_fragment(object: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
@@ -2245,9 +2192,6 @@ fn tool_action_label(tool_name: &str) -> String {
         "fs.grep" | "grep" => "Search files".to_owned(),
         "fs.replace" => "Replace text".to_owned(),
         "fs.stat" => "Inspect file".to_owned(),
-        "code.search_ast" => "Search AST".to_owned(),
-        "code.syntax_tree" => "Inspect syntax tree".to_owned(),
-        "code.rewrite_ast" => "Rewrite AST".to_owned(),
         "fs.document" => "Read document".to_owned(),
         "shell" => "Run command".to_owned(),
         "shell.exec" => "Execute command".to_owned(),
@@ -2450,13 +2394,7 @@ pub fn invocation_title_subject(tool_name: &str, input: &serde_json::Value) -> S
     if is_provider_tool_identity(key.as_str()) {
         return provider_invocation_title_subject(key.as_str(), input);
     }
-    let preferred: &[&str] = if key.ends_with("code.search_ast") {
-        &["pattern", "path", "language"]
-    } else if key.ends_with("code.rewrite_ast") {
-        &["path", "pattern", "replacement", "apply"]
-    } else if key.ends_with("code.syntax_tree") {
-        &["path", "language"]
-    } else if key.ends_with("report.findings") {
+    let preferred: &[&str] = if key.ends_with("report.findings") {
         &["summary"]
     } else if ["shell.exec", "shell.spawn", "shell.watch", "shell.open"]
         .iter()
@@ -2997,7 +2935,6 @@ pub fn invocation_call_summary(input: &serde_json::Value) -> String {
 }
 
 pub mod cli_catalog;
-pub mod code_search;
 pub mod file_io;
 pub mod path_filter;
 pub mod provider_tools;

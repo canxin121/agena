@@ -39,7 +39,7 @@ fn decode<T: DeserializeOwned>(value: serde_json::Value) -> Result<T> {
     .map_err(PluginError::internal)
 }
 
-/// Available on concrete clients, Arc<dyn HostClient>, and &dyn HostClient.
+/// Available on concrete clients, `Arc<dyn HostClient>`, and `&dyn HostClient`.
 #[async_trait]
 pub trait HostClientExt: HostClient {
     async fn query_as<T: DeserializeOwned + Send>(

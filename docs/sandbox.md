@@ -537,7 +537,6 @@ Agena 不会为不支持的规则改用代理，也不会降级为不受沙盒�
 | `fs.read`、`fs.glob`、`fs.grep`、`fs.read_many`           | 独立 worker；目录遍历和文件读取同时受获准根、细粒度路径规则与 OS 文件系统策略约束                                    |
 | `fs.stat`                                                 | 普通文件在独立 worker 中查询；符号链接通过宿主已授权目标的元数据 broker 保留 `lstat` 语义，不读取链接目标内容        |
 | `fs.write`、`fs.replace`、`fs.apply_patch`                | worker 在私有暂存区运行；宿主只向固定、已授权的目标发布验证后的结果                                                  |
-| `code.search_ast`、`code.syntax_tree`、`code.rewrite_ast` | 语法解析在 worker 内；实际改写使用暂存和宿主发布流程                                                                 |
 | Notebook `edit_cell`                                      | 在文件 worker 内读取与编辑 notebook，保留修订校验；宿主向固定目标发布已验证结果                                      |
 | `fs.read_media`                                           | 本地读取、文件格式识别、图片解码和像素限制在离线 worker 内；宿主验证传输大小、哈希和元数据后绑定当前模型 route       |
 | LSP 子进程                                                | 根据实际项目根与会话权限构造只读项目策略，使用私有 HOME/cache；不同完整策略不会共用同一个服务进程                    |

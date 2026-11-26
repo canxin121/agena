@@ -5,6 +5,10 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
+
+#[path = "build/rustdoc.rs"]
+mod rustdoc;
+
 fn files(root: &Path, output: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(root) else {
         return;
@@ -23,6 +27,8 @@ fn files(root: &Path, output: &mut Vec<PathBuf>) {
 fn main() {
     let manifest =
         PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("manifest directory"));
+    let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("build output directory"));
+    rustdoc::write_pages(&manifest, &out);
     let crates = manifest.parent().expect("crates directory");
     let mut hash = Sha256::new();
     let mut scopes = Vec::new();

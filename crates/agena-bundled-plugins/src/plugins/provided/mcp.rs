@@ -509,6 +509,7 @@ impl McpPlugin {
         tags(query, mcp, discovery, read_only),
         name = "tools.search",
         summary = "Search the current MCP tool index without expanding all schemas.",
+        help = "Matches server identifiers, tool names, and descriptions in the current session. Each item in `results` includes the server and tool name to pass to `mcp.tools.call`, plus the advertised schemas and annotations. `fingerprint` identifies the returned set of results.",
         translations(
             locale("zh-CN", summary = "搜索当前 MCP 工具索引，无需展开所有工具结构。"),
             locale("zh-TW", summary = "搜尋目前的 MCP 工具索引，不必展開所有工具結構。"),
@@ -990,7 +991,9 @@ fn mcp_annotation_risk(annotations: Option<&Value>) -> Value {
 #[input(trim("server"), non_empty("server"))]
 #[serde(deny_unknown_fields)]
 struct McpServerInput {
+    /// MCP server identifier in the current session's connection catalog.
     server: String,
+    /// Opaque next cursor returned by the same server and list operation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cursor: Option<String>,
 }
@@ -999,8 +1002,10 @@ struct McpServerInput {
 #[input(trim("query"), minimum("limit", 1), maximum("limit", 100))]
 #[serde(deny_unknown_fields)]
 struct McpToolSearchInput {
+    /// Case-insensitive text matched against server IDs, tool names, and descriptions. An empty query lists the first results.
     #[serde(default)]
     query: String,
+    /// Maximum number of results to return.
     #[serde(default = "default_mcp_search_limit")]
     limit: u32,
 }
@@ -1030,8 +1035,11 @@ fn mcp_tool_index_fingerprint(results: &[serde_json::Value]) -> String {
 #[input(trim("server", "name"), non_empty("server", "name"))]
 #[serde(deny_unknown_fields)]
 struct CallToolInput {
+    /// Server identifier returned by mcp.tools.search.
     server: String,
+    /// Exact tool name returned by the selected MCP server.
     name: String,
+    /// Input object matching the remote tool's advertised schema.
     #[serde(default)]
     arguments: Option<Value>,
 }
@@ -1040,7 +1048,9 @@ struct CallToolInput {
 #[input(trim("server", "uri"), non_empty("server", "uri"))]
 #[serde(deny_unknown_fields)]
 pub(super) struct ReadResourceInput {
+    /// MCP server that published the resource.
     server: String,
+    /// Exact resource URI, or an expanded resource template URI.
     uri: String,
 }
 
@@ -1048,8 +1058,11 @@ pub(super) struct ReadResourceInput {
 #[input(trim("server", "name"), non_empty("server", "name"))]
 #[serde(deny_unknown_fields)]
 pub(super) struct GetPromptInput {
+    /// MCP server that published the prompt.
     server: String,
+    /// Exact template name returned by mcp.prompts.list.
     name: String,
+    /// String arguments accepted by the named prompt template.
     #[serde(default)]
     arguments: Option<BTreeMap<String, String>>,
 }

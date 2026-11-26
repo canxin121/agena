@@ -1002,13 +1002,16 @@ pub struct AgentSpawnRequest {
     /// The completion includes recorded exit results or a blocked check.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub verification_commands: Vec<String>,
+    /// Optional model and execution preferences for the child.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selection: Option<AgentModelSelection>,
+    /// Time budget for each child execution in milliseconds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_ms: Option<u64>,
     /// Per-execution token budget, retained for followup executions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u64>,
+    /// Per-execution cost budget in millionths of a US dollar.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_cost_microusd: Option<u64>,
 }
@@ -1025,15 +1028,19 @@ pub struct AgentModelSelection {
     pub parallel_tool_calls: Option<bool>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AgentHandle {
+    /// Numeric session ID of the child agent.
     pub agent_id: i64,
+    /// Name assigned to the child by its parent.
     pub name: String,
     /// Effective role selected for this child.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    /// Checkout information for a child created in a separate Git worktree.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<agena_domain::AgentWorktree>,
+    /// Current lifecycle status of the child.
     pub status: agena_domain::AgentStatus,
 }
 
@@ -1043,6 +1050,7 @@ pub struct AgentHandle {
 pub struct AgentMessageRequest {
     /// An agent_id, a visible agent name, or `parent`.
     pub target: String,
+    /// Message or additional task instructions for the recipient.
     pub message: String,
 }
 
@@ -1050,6 +1058,7 @@ pub struct AgentMessageRequest {
 #[input(trim("target"), non_empty("target"))]
 #[serde(deny_unknown_fields)]
 pub struct AgentTargetRequest {
+    /// Numeric agent ID or visible name of the direct child.
     pub target: String,
 }
 
@@ -1064,15 +1073,17 @@ pub struct AgentWaitRequest {
     pub timeout_ms: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AgentMessageReceipt {
+    /// Numeric session ID of the recipient or child.
     pub agent_id: i64,
-    /// Acceptance into the durable mailbox, not proof the recipient has read it.
+    /// Whether the host accepted the operation. For a message, this confirms queuing.
     pub accepted: bool,
+    /// State reported by the host for this operation.
     pub state: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentWakeReason {
     Message,
@@ -1080,9 +1091,9 @@ pub enum AgentWakeReason {
     Timeout,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct AgentWaitResponse {
-    /// Message content is delivered once at the next model boundary.
+    /// Event that resumed the wait. Messages reach the next model request.
     pub reason: AgentWakeReason,
 }
 

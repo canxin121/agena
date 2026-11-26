@@ -69,6 +69,9 @@ pub struct SessionCostSummary {
     pub unpriced_requests: u64,
     pub billable_units: Vec<UsageBillableUnitTotal>,
     pub by_model: Vec<ModelCostBreakdown>,
+    /// Cumulative native-session price, in the Agent's own reported unit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_agent_cost: Option<crate::ExternalAgentCost>,
     /// Prompt tokens that could come from a cache: fresh input plus write/read.
     pub cache_input_tokens: u64,
     /// Share of `cache_input_tokens` served from cache (0.0–1.0).
@@ -95,12 +98,15 @@ impl SessionCostSummary {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.requests == 0
+        self.requests == 0 && self.external_agent_cost.is_none()
     }
 
     pub fn one_line(&self) -> String {
-        if self.is_empty() {
-            return "no usage recorded yet".to_string();
+        if self.requests == 0 {
+            return match &self.external_agent_cost {
+                Some(cost) => format!("{} {} reported by Agent", cost.amount, cost.currency),
+                None => "no usage recorded yet".into(),
+            };
         }
         let cache_tokens = self
             .cache_write_tokens

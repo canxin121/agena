@@ -39,6 +39,37 @@ impl App {
     }
 
     pub(crate) fn open_command_palette(&mut self) {
+        let (items, actions) = self.command_palette_items();
+        let presentation = agena_tui::command_palette::new_presentation(
+            ui_text::t(&self.i18n, "overlay-commands-title"),
+            ui_text::t(&self.i18n, "overlay-commands-prompt"),
+            ui_text::t(&self.i18n, "overlay-picker-footer"),
+            ui_text::t(&self.i18n, "overlay-picker-empty"),
+            items,
+        );
+        self.current_route = Route::CommandPalette(CommandPaletteOverlay {
+            presentation,
+            actions,
+        });
+    }
+
+    pub(crate) fn refresh_command_palette(&mut self) {
+        if !matches!(self.current_route, Route::CommandPalette(_)) {
+            return;
+        }
+        let (items, actions) = self.command_palette_items();
+        if let Route::CommandPalette(dialog) = &mut self.current_route {
+            dialog.presentation.replace_items(items);
+            dialog.actions = actions;
+        }
+    }
+
+    fn command_palette_items(
+        &self,
+    ) -> (
+        Vec<CommandPaletteItem>,
+        BTreeMap<String, CommandPaletteCommand>,
+    ) {
         let mut actions = BTreeMap::new();
         let mut items = Vec::new();
         for command in self.client_commands() {
@@ -72,17 +103,105 @@ impl App {
             ));
             actions.insert(key, CommandPaletteCommand::Plugin(Box::new(entry)));
         }
-        let presentation = agena_tui::command_palette::new_presentation(
-            ui_text::t(&self.i18n, "overlay-commands-title"),
-            ui_text::t(&self.i18n, "overlay-commands-prompt"),
-            ui_text::t(&self.i18n, "overlay-picker-footer"),
-            ui_text::t(&self.i18n, "overlay-picker-empty"),
-            items,
-        );
-        self.current_route = Route::CommandPalette(CommandPaletteOverlay {
-            presentation,
-            actions,
-        });
+        if let Some((session_id, agent, commands)) = self.external_agent_commands() {
+            let key = "agena:external-agent-activity".to_owned();
+            let label = ui_text::t(&self.i18n, "external-agent-activity-title");
+            let detail = agent.label();
+            items.push(CommandPaletteItem::new(
+                key.clone(),
+                label.clone(),
+                detail,
+                format!("{label} {detail} acp"),
+            ));
+            actions.insert(
+                key,
+                CommandPaletteCommand::ExternalAgentActivity { session_id },
+            );
+            let key = "agena:external-agent-work".to_owned();
+            let label = ui_text::t(&self.i18n, "external-agent-work-cancel");
+            items.push(CommandPaletteItem::new(
+                key.clone(),
+                label.clone(),
+                detail,
+                format!("{label} {detail} acp"),
+            ));
+            actions.insert(key, CommandPaletteCommand::ExternalAgentWork { session_id });
+            for command in commands {
+                let name = command.qualified_name();
+                let key = format!("external:{name}");
+                let label = format!("/{name}");
+                let detail =
+                    crate::app_command_helpers::external_command_detail(&self.i18n, agent, command);
+                items.push(CommandPaletteItem::new(
+                    key.clone(),
+                    label.clone(),
+                    detail.clone(),
+                    format!("{label} {detail}"),
+                ));
+                actions.insert(
+                    key,
+                    CommandPaletteCommand::External {
+                        session_id,
+                        command: command.clone(),
+                    },
+                );
+            }
+        }
+        if self.composer.text().is_empty()
+            && self.composer_items.is_empty()
+            && let Some((session_id, suggestions)) = self.external_agent_suggestions()
+        {
+            let label = ui_text::t(&self.i18n, "external-agent-use-suggestion");
+            for (index, suggestion) in suggestions.iter().enumerate() {
+                let key = format!("agena:external-agent-suggestion:{index}");
+                let text = suggestion.display_text();
+                let preview = text.split_whitespace().collect::<Vec<_>>().join(" ");
+                items.push(CommandPaletteItem::new(
+                    key.clone(),
+                    label.clone(),
+                    preview,
+                    format!("{label} {text}"),
+                ));
+                actions.insert(
+                    key,
+                    CommandPaletteCommand::ExternalAgentSuggestion {
+                        session_id,
+                        suggestion: suggestion.clone(),
+                    },
+                );
+            }
+        }
+        (items, actions)
+    }
+
+    pub(crate) fn external_agent_suggestions(
+        &self,
+    ) -> Option<(i64, &[agena_domain::ExternalAgentSuggestion])> {
+        let (session_id, _, _) = self.external_agent_commands()?;
+        let execution = self.transcript.execution.as_ref()?;
+        Some((
+            session_id,
+            &execution.execution.external_agent_details.suggestions,
+        ))
+    }
+
+    pub(crate) fn external_agent_commands(
+        &self,
+    ) -> Option<(
+        i64,
+        agena_domain::ExternalAgent,
+        &[agena_domain::ExternalAgentCommand],
+    )> {
+        let execution = self.transcript.execution.as_ref()?;
+        let session_id = self.current_or_selected_session_id()?;
+        if execution.session.id != session_id {
+            return None;
+        }
+        Some((
+            session_id,
+            execution.session.external_agent?,
+            &execution.execution.external_agent_commands,
+        ))
     }
 
     /// The built-in commands this client runs, in catalog order.

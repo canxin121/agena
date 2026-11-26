@@ -1293,14 +1293,24 @@ impl AgenaClient {
         auto_title: bool,
         profile: Option<String>,
     ) -> Result<SessionResource, ClientError> {
-        let body = serde_json::json!({
-            "workspace_id": workspace_id,
-            "title": title.into(),
-            "parent_id": parent_id,
-            "auto_title": auto_title,
-            "profile": profile,
-        });
-        self.post_json("/api/v1/sessions", body).await
+        self.create_session_configured(agena_api::commands::CreateSessionParams {
+            workspace_id,
+            title: title.into(),
+            parent_id,
+            auto_title,
+            profile,
+            prompts: None,
+            external_agent: None,
+        })
+        .await
+    }
+
+    pub async fn create_session_configured(
+        &self,
+        params: agena_api::commands::CreateSessionParams,
+    ) -> Result<SessionResource, ClientError> {
+        self.post_json("/api/v1/sessions", serde_json::to_value(params)?)
+            .await
     }
 
     /// Select a named agent profile; None clears the saved selection and restores
@@ -1340,6 +1350,98 @@ impl AgenaClient {
         self.put_json(
             &format!("/api/v1/sessions/{session_id}"),
             serde_json::json!({ "prompts": prompts }),
+        )
+        .await
+    }
+
+    pub async fn external_agent_options(
+        &self,
+        session_id: i64,
+        change: Option<agena_domain::ExternalAgentOptionChange>,
+    ) -> Result<agena_domain::ExternalAgentOptions, ClientError> {
+        self.post_json(
+            &format!("/api/v1/sessions/{session_id}/agent-options"),
+            serde_json::to_value(agena_api::commands::ExternalAgentOptionsParams { change })?,
+        )
+        .await
+    }
+
+    pub async fn external_agent_auth(
+        &self,
+        session_id: i64,
+        action: agena_domain::ExternalAgentAuthAction,
+    ) -> Result<agena_domain::ExternalAgentAuth, ClientError> {
+        self.post_json(
+            &format!("/api/v1/sessions/{session_id}/agent-auth"),
+            serde_json::to_value(action)?,
+        )
+        .await
+    }
+
+    pub async fn external_agent_live_auth(
+        &self,
+        session_id: i64,
+    ) -> Result<Option<agena_domain::ExternalAgentAuthStatus>, ClientError> {
+        self.get_json(&format!("/api/v1/sessions/{session_id}/agent-auth"))
+            .await
+    }
+
+    pub async fn external_agent_providers(
+        &self,
+        session_id: i64,
+    ) -> Result<agena_domain::ExternalAgentProviders, ClientError> {
+        self.get_json(&format!("/api/v1/sessions/{session_id}/agent-providers"))
+            .await
+    }
+
+    pub async fn external_agent_workspace(
+        &self,
+        workspace_id: i64,
+        action: agena_domain::ExternalAgentWorkspaceAction,
+    ) -> Result<agena_domain::ExternalAgentWorkspaceResult, ClientError> {
+        self.post_json(
+            &format!("/api/v1/workspaces/{workspace_id}/agent-sessions"),
+            serde_json::to_value(action)?,
+        )
+        .await
+    }
+
+    pub async fn steer_external_agent(
+        &self,
+        session_id: i64,
+        text: &str,
+    ) -> Result<(), ClientError> {
+        self.post_json::<serde_json::Value>(
+            &format!("/api/v1/sessions/{session_id}/agent-steer"),
+            serde_json::json!({"text": text}),
+        )
+        .await?;
+        Ok(())
+    }
+
+    pub async fn external_agent_work(
+        &self,
+        session_id: i64,
+        cancel_id: Option<uuid::Uuid>,
+    ) -> Result<Vec<agena_domain::ExternalAgentWorkItem>, ClientError> {
+        let path = format!("/api/v1/sessions/{session_id}/agent-work");
+        match cancel_id {
+            Some(cancel_id) => {
+                self.post_json(&path, serde_json::json!({"cancel_id": cancel_id}))
+                    .await
+            }
+            None => self.get_json(&path).await,
+        }
+    }
+
+    pub async fn external_agent_session(
+        &self,
+        session_id: i64,
+        action: agena_domain::ExternalAgentSessionAction,
+    ) -> Result<agena_domain::ExternalAgentSessionResult, ClientError> {
+        self.post_json(
+            &format!("/api/v1/sessions/{session_id}/agent-session"),
+            serde_json::to_value(action)?,
         )
         .await
     }

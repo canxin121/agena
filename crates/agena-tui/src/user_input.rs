@@ -29,6 +29,7 @@ pub struct UserInputQuestionPresentation {
     pub options: Vec<UserInputOptionPresentation>,
     pub multiple: bool,
     pub allow_custom: bool,
+    pub optional: bool,
 }
 
 impl UserInputQuestionPresentation {
@@ -777,7 +778,7 @@ impl UserInputPresentation {
             return UserInputEffect::KeepOpen;
         }
         let answered = self.question_is_answered(self.state.selected_question());
-        if answered {
+        if answered || question.optional {
             self.advance_answered_question()
         } else {
             UserInputEffect::KeepOpen

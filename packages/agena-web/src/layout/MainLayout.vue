@@ -8,6 +8,7 @@ import Skeleton from '@/components/ui/Skeleton.vue'
 import AppDesktopSidebar from '@/layout/AppDesktopSidebar.vue'
 import AppHeader from '@/layout/AppHeader.vue'
 import ChatSidebar from '@/layout/ChatSidebar.vue'
+import AcpSidebar from '@/layout/AcpSidebar.vue'
 import BotSidebar from '@/layout/BotSidebar.vue'
 import BottomNav from '@/layout/BottomNav.vue'
 import WorkspaceEditorGroupPane from '@/layout/WorkspaceEditorGroupPane.vue'
@@ -66,7 +67,7 @@ const usesChatShellSidebar = computed(() => {
   const shellSidebar = String(route.meta?.shellSidebar || '')
     .trim()
     .toLowerCase()
-  if (shellSidebar === 'chat') return true
+  if (shellSidebar === 'chat' || shellSidebar === 'acp') return true
   if (shellSidebar === 'none') return false
   return String(route.path || '')
     .toLowerCase()
@@ -741,6 +742,7 @@ watch(
             tabindex="-1"
           >
             <BotSidebar v-if="route.path === '/bot'" />
+            <AcpSidebar v-else-if="route.path === '/acp'" />
             <ChatSidebar v-else mobile-variant />
           </div>
 

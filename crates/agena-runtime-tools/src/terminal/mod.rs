@@ -67,6 +67,14 @@ pub struct TerminalRead {
     pub screen: TerminalScreen,
 }
 
+/// Project bounded, read-only terminal bytes without enabling terminal side effects.
+pub fn display_terminal_contents(bytes: &[u8], rows: u16, cols: u16) -> String {
+    let mut parser = vt100::Parser::new(rows.clamp(1, 96), cols.clamp(1, 240), 0);
+    let filtered = osc_guard::OscGuard::default().filter(bytes);
+    parser.process(&filtered);
+    parser.screen().contents()
+}
+
 pub struct TerminalRegistry {
     sessions: Mutex<HashMap<String, Arc<State>>>,
     listener: Option<Arc<dyn MonitorListener>>,

@@ -39,6 +39,11 @@ const MAX_HOSTED_IMAGE_COUNT: usize = 8;
 const MAX_HOSTED_IMAGE_DECODED_BYTES: usize = 20 * 1024 * 1024;
 const MAX_HOSTED_IMAGE_ENCODED_BYTES: usize = MAX_HOSTED_IMAGE_DECODED_BYTES * 4 / 3 + 16 * 1024;
 static RUN_BUDGET: OnceLock<ReadBudget> = OnceLock::new();
+
+pub(crate) fn run_read_budget() -> &'static ReadBudget {
+    RUN_BUDGET.get_or_init(ReadBudget::default)
+}
+
 type CompletionEventStream = std::pin::Pin<
     Box<
         dyn futures_util::Stream<
@@ -252,9 +257,7 @@ impl SessionProcessor {
         workspace_root: Option<PathBuf>,
     ) -> Result<KernelRoundRun> {
         let session = request.prompt.facts().metadata.id;
-        let lease = RUN_BUDGET
-            .get_or_init(ReadBudget::default)
-            .reserve_view(session, 32 * 1024 * 1024)?;
+        let lease = run_read_budget().reserve_view(session, 32 * 1024 * 1024)?;
         let processor = self.clone();
         let KernelRoundRequest {
             round,
@@ -750,8 +753,7 @@ impl KernelRoundRun {
                 None
             } else {
                 Some(
-                    RUN_BUDGET
-                        .get_or_init(ReadBudget::default)
+                    run_read_budget()
                         .reserve_view(self.round.session_id(), inline_bytes.saturating_mul(2))
                         .map_err(|e| {
                             protocol(format!("provider image allocation budget exhausted: {e}"))

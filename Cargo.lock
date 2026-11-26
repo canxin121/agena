@@ -707,6 +707,8 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
  "tracing",
 ]
 
@@ -1223,9 +1225,11 @@ dependencies = [
  "agena-async",
  "agena-domain",
  "agena-failure",
+ "agena-mcp-server",
  "agena-permission",
  "agena-plugin-host",
  "agena-plugin-sdk",
+ "agena-process",
  "agena-prompt-layers",
  "agena-provider",
  "agena-runtime-config",
@@ -1243,6 +1247,7 @@ dependencies = [
  "agena-tool-api",
  "arc-swap",
  "async-trait",
+ "axum",
  "base64 0.22.1",
  "caseless",
  "chrono",
@@ -1253,6 +1258,7 @@ dependencies = [
  "portable-atomic",
  "regex",
  "reqwest 0.13.4",
+ "rmcp",
  "sea-orm",
  "serde",
  "serde_json",
@@ -1261,6 +1267,7 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
+ "url",
  "uuid",
 ]
 

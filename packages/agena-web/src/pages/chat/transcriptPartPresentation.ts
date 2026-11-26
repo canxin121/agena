@@ -87,6 +87,7 @@ export type InteractionQuestionPresentation = {
   question: string
   multiple: boolean
   allowCustom: boolean
+  optional: boolean
   options: InteractionOptionPresentation[]
 }
 
@@ -570,6 +571,7 @@ function interactionQuestion(value: JsonValue, index: number): InteractionQuesti
     question: label,
     multiple: booleanValue(question, ['multiple']),
     allowCustom: booleanValue(question, ['allow_custom']),
+    optional: booleanValue(question, ['optional']),
     options: jsonArray(question.options)
       .map((raw): InteractionOptionPresentation | null => {
         const option = jsonRecord(raw)

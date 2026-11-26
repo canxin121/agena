@@ -87,6 +87,9 @@ impl SessionManager {
         let config = state.config.clone();
         let sandbox_enabled = state.config.sandbox_enabled;
         Ok(Arc::new(move |configuration| {
+            if configuration.external_agent.is_some() {
+                return Err("Open external agent conversations from ACP history.".into());
+            }
             let root = configuration
                 .effective_workspace_root
                 .as_deref()

@@ -18,6 +18,23 @@ pub struct SessionConfiguration {
     pub message_queue_paused: bool,
     pub parent_session_id: Option<SessionId>,
     pub relation_kind: SessionRelationKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_agent: Option<agena_domain::ExternalAgent>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub external_agent_selection: agena_domain::ExternalAgentSelection,
+    /// Local continuation for a successfully settled external agent attempt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_agent_resume: Option<ExternalAgentResume>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_agent_link: Option<ExternalAgentLink>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub external_agent_directories: Vec<PathBuf>,
+    #[serde(skip_serializing_if = "ExternalAgentState::is_empty")]
+    pub external_agent_state: ExternalAgentState,
+    /// Presence tokens for questions hosted by a live external agent connection.
+    /// The request and its answer never enter the stored configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_agent_inputs: Option<ExternalAgentInputPresence>,
     /// Present only on a conversation beside an existing run (side / btw).
     pub conversation: Option<SessionConversation>,
     /// Session-scoped prompt layer: inline fragments for this session only.
@@ -49,6 +66,303 @@ pub struct SessionConfiguration {
     pub capability_denied_tool_names: BTreeSet<String>,
     pub effective_workspace_root: Option<PathBuf>,
     pub agent: Option<SessionAgentConfiguration>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalAgentResume {
+    pub session: SessionId,
+    pub cwd: PathBuf,
+    pub round: RoundId,
+    pub native_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incarnation: Option<RoundId>,
+    pub input: [u8; 32],
+    pub message: EntryId,
+}
+
+pub const MAX_EXTERNAL_AGENT_INPUTS: usize = 8;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExternalAgentInputPresence {
+    pub epoch: agena_domain::KernelEpoch,
+    pub ids: Vec<RequestId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExternalAgentInputScope {
+    pub agent: agena_domain::ExternalAgent,
+    pub idle_resume: Option<ExternalAgentResume>,
+}
+
+impl SessionConfiguration {
+    /// Older sessions stored only their successful-turn continuation.
+    pub fn native_session_link(&self) -> Option<ExternalAgentLink> {
+        self.external_agent_link.clone().or_else(|| {
+            self.external_agent_resume
+                .as_ref()
+                .map(|resume| ExternalAgentLink {
+                    native_id: resume.native_id.clone(),
+                    cwd: resume.cwd.clone(),
+                    incarnation: resume.incarnation,
+                    resume_at: None,
+                })
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalAgentLink {
+    pub native_id: String,
+    pub cwd: PathBuf,
+    /// The local round that first attached this incarnation of the conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub incarnation: Option<RoundId>,
+    /// The first turn of an imported or native-forked conversation must
+    /// extend exactly the history we associated with the Agent's session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_at: Option<ExternalAgentHistoryAnchor>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalAgentHistoryAnchor {
+    pub tail: Option<EntryId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalAgentHistoryTurn {
+    pub user: agena_domain::ComposerDocument,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<ExternalAgentNativeCursor>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blobs: Vec<ExternalAgentHistoryBlob>,
+    pub prelude: Vec<ExternalAgentHistoryPart>,
+    pub response: Vec<ExternalAgentHistoryPart>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalAgentNativeCursor {
+    pub message_id: String,
+    pub cursor_id: String,
+}
+
+/// ACP cursor paired with an exact local user entry and native session binding.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalAgentForkCursor {
+    pub native_id: String,
+    pub incarnation: Option<RoundId>,
+    pub message_id: EntryId,
+    pub native_message_id: String,
+    pub cursor_id: String,
+}
+
+impl ExternalAgentHistoryTurn {
+    pub fn blobs(&self) -> impl Iterator<Item = &ExternalAgentHistoryBlob> {
+        self.blobs
+            .iter()
+            .chain(
+                self.prelude
+                    .iter()
+                    .chain(&self.response)
+                    .flat_map(|part| match part {
+                        ExternalAgentHistoryPart::Text { .. } => &[][..],
+                        ExternalAgentHistoryPart::Tool { blobs, .. } => blobs.as_slice(),
+                    }),
+            )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum ExternalAgentHistoryPart {
+    Text {
+        text: String,
+        reasoning: bool,
+    },
+    Tool {
+        start: ToolStart,
+        result: ToolResult,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        blobs: Vec<ExternalAgentHistoryBlob>,
+    },
+}
+
+pub const MAX_EXTERNAL_AGENT_HISTORY_MEDIA_BYTES: usize = 8 * 1024 * 1024;
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalAgentHistoryBlob {
+    pub descriptor: BlobDescriptor,
+    // The verified digest in the descriptor identifies this in-process
+    // payload for idempotency. Media bytes never enter the command JSON.
+    #[serde(skip)]
+    pub bytes: Arc<[u8]>,
+}
+
+impl std::fmt::Debug for ExternalAgentHistoryBlob {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_tuple("ExternalAgentHistoryBlob")
+            .field(&self.descriptor)
+            .finish()
+    }
+}
+
+#[derive(Clone)]
+pub struct ExternalAgentImport {
+    pub workspace_id: i64,
+    pub agent: agena_domain::ExternalAgent,
+    pub title: String,
+    pub link: ExternalAgentLink,
+    pub turns: Vec<ExternalAgentHistoryTurn>,
+    pub state: ExternalAgentState,
+    pub replace_view: Option<SessionId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalAgentFork {
+    pub expected_membership: MembershipGeneration,
+    pub expected_head: EntryId,
+    pub expected_agent: agena_domain::ExternalAgent,
+    pub expected_native: ExternalAgentLink,
+    pub before: Option<ExternalAgentForkCursor>,
+    pub new_native_id: String,
+    pub title: Option<String>,
+}
+
+/// User-facing state published by the native session.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ExternalAgentState {
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub plans: BTreeMap<String, ExternalAgentPlan>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<agena_domain::ExternalAgentOption>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<agena_domain::ExternalAgentCommand>,
+    #[serde(skip_serializing_if = "agena_domain::ExternalAgentSessionMetadata::is_empty")]
+    pub metadata: agena_domain::ExternalAgentSessionMetadata,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<ExternalAgentContextUsage>,
+    #[serde(skip_serializing_if = "agena_domain::ExternalAgentDetails::is_empty")]
+    pub details: agena_domain::ExternalAgentDetails,
+    /// Bounded parser input, carried only across updates on a live ACP connection.
+    #[serde(skip)]
+    pub native_terminal_bytes: BTreeMap<(String, String), Vec<u8>>,
+}
+
+impl ExternalAgentState {
+    /// The active protocol can carry more history than the bounded session
+    /// configuration. Keep identities and actionable data ahead of old output.
+    pub fn bounded_snapshot(&self, max_bytes: usize) -> Self {
+        let mut snapshot = Self {
+            native_terminal_bytes: BTreeMap::new(),
+            ..self.clone()
+        };
+        let fits =
+            |state: &Self| serde_json::to_vec(state).is_ok_and(|bytes| bytes.len() <= max_bytes);
+        if fits(&snapshot) {
+            return snapshot;
+        }
+        for terminal in &mut snapshot.details.terminals {
+            let start = terminal
+                .output
+                .ceil_char_boundary(terminal.output.len().saturating_sub(2048));
+            terminal.output.drain(..start);
+        }
+        for compaction in &mut snapshot.details.compactions {
+            compaction
+                .summary
+                .truncate(compaction.summary.floor_char_boundary(1024));
+        }
+        for child in snapshot.details.subagents.values_mut() {
+            child
+                .messages
+                .drain(..child.messages.len().saturating_sub(2));
+            for message in &mut child.messages {
+                message.text.truncate(message.text.floor_char_boundary(512));
+            }
+        }
+        while !fits(&snapshot) && !snapshot.is_empty() {
+            if !snapshot.details.compactions.is_empty() {
+                snapshot.details.compactions.remove(0);
+            } else if let Some(index) = snapshot
+                .details
+                .terminals
+                .iter()
+                .position(|item| item.exited)
+            {
+                snapshot.details.terminals.remove(index);
+            } else if !snapshot.details.messages.is_empty() {
+                snapshot.details.messages.remove(0);
+            } else if !snapshot.details.notices.is_empty() {
+                snapshot.details.notices.remove(0);
+            } else if !snapshot.details.terminals.is_empty() {
+                snapshot.details.terminals.remove(0);
+            } else if snapshot.details.subagents.pop_first().is_some()
+                || snapshot.plans.pop_first().is_some()
+            {
+                continue;
+            } else if !snapshot.details.suggestions.is_empty() {
+                snapshot.details.suggestions.pop();
+            } else if !snapshot.commands.is_empty() {
+                snapshot.commands.truncate(snapshot.commands.len() / 2);
+            } else if !snapshot.options.is_empty() {
+                snapshot.options.truncate(snapshot.options.len() / 2);
+            } else {
+                return Self::default();
+            }
+        }
+        snapshot
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.plans.is_empty()
+            && self.options.is_empty()
+            && self.commands.is_empty()
+            && self.metadata.is_empty()
+            && self.context.is_none()
+            && self.details.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ExternalAgentPlan {
+    Items {
+        entries: Vec<ExternalAgentPlanEntry>,
+    },
+    Markdown {
+        content: String,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExternalAgentPlanEntry {
+    pub content: String,
+    pub status: ExternalAgentPlanStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExternalAgentPlanStatus {
+    Pending,
+    InProgress,
+    Completed,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExternalAgentContextUsage {
+    pub used_tokens: u64,
+    pub window_tokens: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -120,6 +434,12 @@ pub struct SessionConfigurationChange {
     pub message_queue_paused: Option<bool>,
     pub parent_session_id: Option<SessionId>,
     pub relation_kind: Option<SessionRelationKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_agent: Option<agena_domain::ExternalAgent>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_agent_selection: Option<ExternalAgentSelectionChange>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_agent_directories: Option<Vec<PathBuf>>,
     pub conversation: Option<Option<SessionConversation>>,
     pub prompts: Option<agena_prompt_layers::PromptLayer>,
     /// Outer absence keeps the selection; inner absence clears it.
@@ -143,6 +463,13 @@ pub struct SessionConfigurationChange {
     pub capability_denied_tool_names: Option<BTreeSet<String>>,
     pub effective_workspace_root: Option<Option<PathBuf>>,
     pub agent: Option<Option<SessionAgentConfiguration>>,
+}
+
+/// Commit exactly the options that were inspected with the native agent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExternalAgentSelectionChange {
+    pub expected: agena_domain::ExternalAgentSelection,
+    pub selection: agena_domain::ExternalAgentSelection,
 }
 
 fn deserialize_permission_profile_change<'de, D>(
@@ -306,6 +633,9 @@ pub struct SummaryQuery {
     /// Exclude Bot-owned conversations even when they have a working directory.
     #[serde(default)]
     pub exclude_bot_owned: bool,
+    /// Hide old persisted ACP views from the Agena conversation catalog.
+    #[serde(default)]
+    pub exclude_external_agents: bool,
     /// Restrict to conversations owned by this Bot (UUID text).
     #[serde(default)]
     pub owner_bot_id: Option<String>,
@@ -477,6 +807,49 @@ impl SessionCommands {
                 .await?,
         )
     }
+    pub async fn import_external_agent(
+        &self,
+        request: RequestId,
+        import: ExternalAgentImport,
+    ) -> Result<CommitReceipt<SessionMetadata>> {
+        let ExternalAgentImport {
+            workspace_id,
+            agent,
+            title,
+            link,
+            turns,
+            state,
+            replace_view,
+        } = import;
+        session_receipt(
+            self.0
+                .command(
+                    request,
+                    Command::ImportExternalAgent {
+                        workspace_id,
+                        agent,
+                        title,
+                        link,
+                        turns,
+                        state,
+                        replace_view,
+                    },
+                )
+                .await?,
+        )
+    }
+    pub async fn detach_external_agent(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        expected: ExternalAgentLink,
+    ) -> Result<CommitReceipt<SessionMetadata>> {
+        session_receipt(
+            self.0
+                .command(request, Command::DetachExternalAgent { session, expected })
+                .await?,
+        )
+    }
     pub async fn configure(
         &self,
         request: RequestId,
@@ -567,6 +940,7 @@ impl SessionCommands {
                         rewind: false,
                         conversation_mode: None,
                         management: None,
+                        external_agent: None,
                     },
                 )
                 .await?,
@@ -590,6 +964,30 @@ impl SessionCommands {
                         rewind: false,
                         conversation_mode: None,
                         management: Some(guard),
+                        external_agent: None,
+                    },
+                )
+                .await?,
+        )
+    }
+    pub async fn fork_external_agent(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        through: EntryId,
+        fork: ExternalAgentFork,
+    ) -> Result<CommitReceipt<SessionMetadata>> {
+        session_receipt(
+            self.0
+                .command(
+                    request,
+                    Command::Fork {
+                        session,
+                        through,
+                        rewind: false,
+                        conversation_mode: None,
+                        management: None,
+                        external_agent: Some(fork),
                     },
                 )
                 .await?,
@@ -633,6 +1031,7 @@ impl SessionCommands {
                         rewind: false,
                         conversation_mode: Some(mode),
                         management: None,
+                        external_agent: None,
                     },
                 )
                 .await?,
@@ -656,6 +1055,7 @@ impl SessionCommands {
                     rewind: true,
                     conversation_mode: None,
                     management: None,
+                    external_agent: None,
                 },
             )
             .await?;
@@ -774,6 +1174,18 @@ fn session_receipt(r: CommitReceipt<Mutation>) -> Result<CommitReceipt<SessionMe
     }
 }
 impl KernelReader {
+    pub async fn external_agent_fork_points(
+        &self,
+        session: SessionId,
+        link: &ExternalAgentLink,
+        message: Option<EntryId>,
+    ) -> Result<Vec<(ExternalAgentForkCursor, String)>> {
+        self.0
+            .backend
+            .external_agent_fork_points(session, link, message)
+            .await
+    }
+
     /// Target must be live; ancestors retain their policy after soft deletion.
     pub async fn management_ancestry(
         &self,

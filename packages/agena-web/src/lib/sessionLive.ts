@@ -1,6 +1,7 @@
 import { withInterfaceLocale } from '@/i18n/interfaceLocale'
 import { isDocumentVisible } from './backgroundReads'
 import { connectSse, type SseClient, type SseEvent } from './sse'
+import { isAcpSessionId } from './acpSession'
 
 /** A mounted conversation owns its live tail. The project-list stream excludes
  * workspace-free Bot conversations and cannot stand in for this subscription. */
@@ -30,7 +31,7 @@ export function connectSessionLive(
     }
     const query = new URLSearchParams({ scope_kind: 'session', session_id: sessionId })
     stream = connectSse({
-      endpoint: withInterfaceLocale(`/api/v1/changes/stream?${query}`),
+      endpoint: withInterfaceLocale(`/api/v1/${isAcpSessionId(sessionId) ? 'acp/' : ''}changes/stream?${query}`),
       debugLabel: `sse:session:${sessionId}`,
       // Install the tail before checking snapshots, on the first connection as
       // well as reconnection. This closes the subscribe/read race.

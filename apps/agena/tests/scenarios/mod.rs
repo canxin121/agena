@@ -19,6 +19,24 @@ mod clock;
 mod control;
 mod conversation;
 mod coverage;
+#[cfg(unix)]
+mod external_agent;
+#[cfg(unix)]
+mod external_agent_auth_work;
+#[cfg(unix)]
+mod external_agent_cancellation;
+#[cfg(unix)]
+mod external_agent_controls;
+#[cfg(unix)]
+mod external_agent_inputs;
+#[cfg(unix)]
+mod external_agent_lifecycle;
+#[cfg(unix)]
+mod external_agent_mcp;
+#[cfg(unix)]
+mod external_agent_providers;
+#[cfg(unix)]
+mod external_agent_transport;
 mod fault_lifecycle;
 mod git;
 mod integrations;

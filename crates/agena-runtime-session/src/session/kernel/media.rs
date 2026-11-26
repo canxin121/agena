@@ -31,7 +31,7 @@ pub(crate) struct MediaBinding {
 }
 /// One hydrated model input. `lease` is absent exactly when the attachment
 /// degraded to an unavailable notice and no bytes were admitted.
-pub(super) struct HydratedMedia {
+pub(in crate::session) struct HydratedMedia {
     pub attachment: CompletionInputAttachment,
     pub lease: Option<ReadLease>,
     pub modeled: usize,
@@ -84,7 +84,7 @@ fn resource_attachment(resource: &ResourceActivity) -> AttachmentItem {
         page_count: resource.page_count,
     }
 }
-pub(super) async fn hydrate(
+pub(in crate::session) async fn hydrate(
     reader: &KernelReader,
     session: SessionId,
     entry: EntryId,
@@ -101,7 +101,7 @@ pub(super) async fn hydrate(
     };
     hydrate_uri(reader, session, entry, uri, sha256, model, budget, fallback).await
 }
-pub(super) async fn hydrate_attachment(
+pub(in crate::session) async fn hydrate_attachment(
     reader: &KernelReader,
     session: SessionId,
     entry: EntryId,

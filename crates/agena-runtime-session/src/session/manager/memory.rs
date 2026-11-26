@@ -1025,6 +1025,14 @@ impl SessionManager {
             EntryPayload::User { document, .. } => {
                 Some((EvidenceKind::User, document_text(document, max)))
             }
+            EntryPayload::Text { content_id }
+                if entry.content_kind == Some(ContentKind::Structured) =>
+            {
+                Some((
+                    EvidenceKind::Assistant,
+                    self.assistant_text(session, *content_id, max).await?,
+                ))
+            }
             EntryPayload::Text { content_id } => {
                 let range = self
                     .kernel()

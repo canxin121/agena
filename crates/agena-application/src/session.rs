@@ -124,7 +124,7 @@ pub async fn session_user_run_request(
     options: RunOptions,
     document: ComposerDocument,
 ) -> Result<SessionUserRunRequest, ApplicationError> {
-    validate_input_document(&document)?;
+    validate_session_input(&document, state.service().is_acp_scope())?;
     // Every locally authenticated surface reaches the application through the
     // instance token, so an input built here is instance-operator input. Chat
     // adapters never use this path; they supply their own verified author.
@@ -144,6 +144,13 @@ pub async fn session_user_run_request(
 }
 
 pub fn validate_input_document(document: &ComposerDocument) -> Result<(), ApplicationError> {
+    validate_session_input(document, false)
+}
+
+pub(crate) fn validate_session_input(
+    document: &ComposerDocument,
+    acp: bool,
+) -> Result<(), ApplicationError> {
     use agena_domain::{ActivityPayload, ComposerNode, ResourceReference};
 
     if document.is_empty() {
@@ -160,17 +167,22 @@ pub fn validate_input_document(document: &ComposerDocument) -> Result<(), Applic
         match &activity.payload {
             ActivityPayload::Resource(resource) => {
                 resources = resources.saturating_add(1);
-                if resource.delivery == agena_domain::ResourceDelivery::ModelInput
-                    && (resource.kind == agena_domain::ResourceKind::Directory
-                        || !(matches!(
-                            &resource.reference,
-                            ResourceReference::WorkspacePath { .. }
-                        ) || matches!(&resource.reference, ResourceReference::Artifact { uri, .. }
-                                if uri.starts_with("agena:media:v1:"))))
-                {
-                    return Err(ApplicationError::bad_request(
-                        "send-to-model resources must be explicit workspace files or session-owned immutable attachments; directories, URLs and foreign provider IDs remain references",
-                    ));
+                if resource.delivery == agena_domain::ResourceDelivery::ModelInput {
+                    let supported = match &resource.reference {
+                        ResourceReference::WorkspacePath { .. } => true,
+                        ResourceReference::Artifact { uri, .. } => {
+                            uri.starts_with("agena:media:v1:")
+                        }
+                        ResourceReference::Url { url } => {
+                            acp && url.starts_with(agena_domain::ACP_INLINE_ATTACHMENT_PREFIX)
+                        }
+                        _ => false,
+                    };
+                    if resource.kind == agena_domain::ResourceKind::Directory || !supported {
+                        return Err(ApplicationError::bad_request(
+                            "send-to-model resources must be explicit workspace files or session-owned immutable attachments; directories, URLs and foreign provider IDs remain references",
+                        ));
+                    }
                 }
 
                 match &resource.reference {

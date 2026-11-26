@@ -17,6 +17,8 @@ pub struct AppState {
     next_operator_call_id: Arc<AtomicI64>,
     #[cfg(feature = "http")]
     revisions: Arc<Mutex<Option<Arc<crate::revisions::ResourceRevisions>>>>,
+    #[cfg(feature = "http")]
+    acp: Arc<std::sync::OnceLock<AppState>>,
 }
 
 impl AppState {
@@ -28,6 +30,8 @@ impl AppState {
             next_operator_call_id: Arc::new(AtomicI64::new(1)),
             #[cfg(feature = "http")]
             revisions: Arc::new(Mutex::new(None)),
+            #[cfg(feature = "http")]
+            acp: Default::default(),
         }
     }
 
@@ -51,6 +55,29 @@ impl AppState {
 
     pub fn application(&self) -> &Application {
         &self.application
+    }
+
+    #[cfg(feature = "http")]
+    pub(crate) fn acp_state(&self) -> Result<Self, ServerError> {
+        if self.service().is_acp_scope() {
+            return Ok(self.clone());
+        }
+        let application = self.application.acp_application()?;
+        Ok(self
+            .acp
+            .get_or_init(|| Self::from_application(application.clone()))
+            .clone())
+    }
+
+    #[cfg(feature = "http")]
+    pub(crate) fn session_state(&self, id: i64) -> Result<Self, ServerError> {
+        if agena_domain::is_acp_session_id(id) {
+            return self.acp_state();
+        }
+        if self.service().is_acp_scope() {
+            return Err(ServerError::not_found("The ACP view was not found."));
+        }
+        Ok(self.clone())
     }
 
     pub fn next_operator_call_id(&self) -> i64 {
@@ -87,5 +114,31 @@ impl std::ops::Deref for AppState {
 
     fn deref(&self) -> &Self::Target {
         &self.application
+    }
+}
+
+/// Resolve a live ACP view on session-specific routes. Existing thin clients
+/// can keep using their typed session commands with these process-local IDs.
+#[cfg(feature = "http")]
+pub struct SessionScope(pub AppState);
+
+#[cfg(feature = "http")]
+impl axum::extract::FromRequestParts<AppState> for SessionScope {
+    type Rejection = ServerError;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let axum::extract::Path(params) = axum::extract::Path::<
+            std::collections::HashMap<String, String>,
+        >::from_request_parts(parts, state)
+        .await
+        .map_err(|error| ServerError::bad_request_error(&error))?;
+        let id = params.get("session_id").or_else(|| params.get("root_id"));
+        let id = id
+            .and_then(|id| id.parse().ok())
+            .ok_or_else(|| ServerError::bad_request("The session ID is invalid."))?;
+        state.session_state(id).map(Self)
     }
 }

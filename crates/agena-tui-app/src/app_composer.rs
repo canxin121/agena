@@ -350,6 +350,12 @@ impl App {
             self.sync_composer_suggestions();
             return;
         }
+        if key.code == KeyCode::Enter
+            && key.modifiers == KeyModifiers::ALT
+            && self.steer_external_agent_from_composer()
+        {
+            return;
+        }
         // Configurable bindings define the composer map. The defaults preserve
         // the user's stated preference:
         // Enter / Ctrl+Enter = server admission, Shift+Enter / Ctrl+J = newline.
@@ -818,6 +824,16 @@ impl App {
         let Some(mut state) = self.slash_command_suggestions.take() else {
             return false;
         };
+        if resolve_tui_key(KeyContext::Suggestion, key) == Some(KeyAction::Accept)
+            && self.external_agent_commands().is_some()
+            && agena_domain::external_agent_command_input(self.composer.text()).is_some()
+            && !state
+                .selected_item()
+                .is_some_and(|row| row.key.starts_with("external:"))
+        {
+            self.slash_command_suggestion_actions.clear();
+            return false;
+        }
 
         match agena_tui::slash_commands::handle_key(&mut state, key) {
             agena_tui::slash_commands::SlashCommandSuggestionEffect::KeepOpen => {
@@ -865,15 +881,21 @@ impl App {
             return;
         };
 
-        self.apply_slash_command_completion(&action);
-        if submit && action.can_submit_without_arguments {
+        let submit = submit && action.can_submit_without_arguments;
+        let needs_space = !submit || !key.starts_with("external:");
+        self.apply_slash_command_completion(&action, needs_space);
+        if submit {
             self.submit_composer();
         } else {
             self.sync_composer_suggestions();
         }
     }
 
-    pub(crate) fn apply_slash_command_completion(&mut self, action: &SlashCommandSuggestionAction) {
+    fn apply_slash_command_completion(
+        &mut self,
+        action: &SlashCommandSuggestionAction,
+        needs_space: bool,
+    ) {
         let Some(context) = self.slash_command_suggestion_context() else {
             return;
         };
@@ -892,7 +914,7 @@ impl App {
             .chars()
             .next()
             .is_some_and(char::is_whitespace);
-        if !after_cursor_is_space {
+        if needs_space && !after_cursor_is_space {
             self.composer.insert_char(' ');
         }
         self.after_composer_text_mutated();
@@ -1012,6 +1034,33 @@ impl App {
                 label: format!("/{slash_name}"),
                 detail: plugin_command_detail(&entry),
             });
+        }
+        if let Some((_, agent, commands)) = self.external_agent_commands() {
+            for command in commands {
+                let slash_name = command.qualified_name();
+                let detail =
+                    crate::app_command_helpers::external_command_detail(&self.i18n, agent, command);
+                if !format!("{slash_name} {detail}")
+                    .to_ascii_lowercase()
+                    .contains(&query)
+                {
+                    continue;
+                }
+                let key = format!("external:{slash_name}");
+                items.push(SlashCommandSuggestionItem {
+                    key: key.clone(),
+                    label: format!("/{slash_name}"),
+                    detail,
+                });
+                actions.insert(
+                    key,
+                    SlashCommandSuggestionAction {
+                        slash_name,
+                        can_submit_without_arguments: !command.skill
+                            && command.argument_hint.is_none(),
+                    },
+                );
+            }
         }
         (items, actions)
     }

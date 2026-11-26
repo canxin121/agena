@@ -52,6 +52,7 @@ impl SessionManager {
         state: Arc<ExecutionState>,
     ) -> Result<Arc<RunControl>, AppError> {
         let compact = compact || execution.purpose == ExecutionPurpose::Compaction;
+        let external_agent = self.external_agent(execution.session_id).await?;
         let mut active = self.active.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(run) = active.get(&execution.id)
             && run.generation >= execution.generation
@@ -98,6 +99,7 @@ impl SessionManager {
                     options,
                     compact,
                     state,
+                    external_agent,
                 ))
                 .catch_unwind()
                 .await
@@ -129,8 +131,10 @@ impl SessionManager {
             manager
                 .retire_supervised_run(&run, _permit, recover_queued)
                 .await;
-            manager.schedule_title(run.session);
-            if matches!(result, Ok(DriveExit::Settled)) {
+            if external_agent.is_none() {
+                manager.schedule_title(run.session);
+            }
+            if external_agent.is_none() && matches!(result, Ok(DriveExit::Settled)) {
                 manager.schedule_memory(run.session, Some(run.execution));
             }
         });
@@ -175,21 +179,13 @@ impl SessionManager {
         }
         .boxed()
     }
+    /// Preserve the host-verified identity on the entry, not in the user's text.
     pub(super) async fn submit(
         &self,
         request: crate::SessionUserRunRequest,
     ) -> Result<crate::SessionExecutionCommandOutcome, AppError> {
-        self.submit_with_identity(request, None, None).await
-    }
-
-    /// Submit with the host-verified identity of the input, so it is recorded
-    /// on the entry rather than embedded in the user's own text.
-    pub(super) async fn submit_with_identity(
-        &self,
-        request: crate::SessionUserRunRequest,
-        author: Option<agena_domain::MessageAuthor>,
-        origin: Option<agena_domain::MessageOrigin>,
-    ) -> Result<crate::SessionExecutionCommandOutcome, AppError> {
+        let author = request.author;
+        let origin = request.origin;
         let permit = self.reserve_execution()?;
         let manager = self.clone();
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -207,19 +203,38 @@ impl SessionManager {
                     .execution_context_for_submission(session, &state, author.as_ref())
                     .await?;
                 let mut options = request.run.options;
-                manager.prepare_options_for_selection(&context.selection, &mut options, &state)?;
+                let external = manager.external_agent(session).await?;
+                if let Some(agent) = external {
+                    super::external_agent::require_direct_user(author.as_ref(), origin.as_ref())?;
+                    options = SessionRunOptions::for_external_agent(agent);
+                } else {
+                    manager.prepare_options_for_selection(
+                        &context.selection,
+                        &mut options,
+                        &state,
+                    )?;
+                }
                 let send_id = request
                     .idempotency_key
                     .as_deref()
                     .map(|key| request_key(&format!("send:{}", session.get()), key))
                     .unwrap_or_default();
-                let document = manager
-                    .submit_hook(session, request.document, &state)
-                    .await?;
+                let document = if external.is_some() {
+                    super::external_agent::validate_document(&request.document)?;
+                    request.document
+                } else {
+                    manager
+                        .submit_hook(session, request.document, &state)
+                        .await?
+                };
+                let media_target = external.map_or(
+                    super::media::MediaTarget::Provider(options.model.clone()),
+                    super::media::MediaTarget::ExternalAgent,
+                );
                 let (document, blobs) = manager
                     .prepare_user_media_with_state(
                         session,
-                        &options.model,
+                        media_target,
                         document,
                         send_id,
                         state,
@@ -245,7 +260,9 @@ impl SessionManager {
                 manager
                     .supervise(receipt.value, options, false, permit)
                     .await?;
-                manager.schedule_title(session);
+                if external.is_none() {
+                    manager.schedule_title(session);
+                }
                 Ok(result)
             }
             .await;
@@ -358,6 +375,11 @@ impl SessionManager {
                 let dispatch = manager.session_dispatch(session);
                 let _submission = dispatch.submission.lock().await;
                 manager.require_writable_bot_history(session.get()).await?;
+                if compact && manager.external_agent(session).await?.is_some() {
+                    return Err(AppError::Config(
+                        "External agent sessions manage their own compaction.".into(),
+                    ));
+                }
                 if !compact {
                     manager.wait_terminal_agent_settlement(session).await?;
                 }
@@ -417,6 +439,7 @@ impl SessionManager {
         mut options: SessionRunOptions,
         compact: bool,
         state: Arc<ExecutionState>,
+        external_agent: Option<agena_domain::ExternalAgent>,
     ) -> Result<DriveExit, AppError> {
         let claim = RequestId::new();
         let attempt = match persist(|| {
@@ -474,6 +497,11 @@ impl SessionManager {
         let mut independent_agent = None;
         let mut timed_out = false;
         let result=async {
+            if let Some(agent) = external_agent {
+                self.run_external_agent(agent, &attempt, &execution, control.clone(), state.clone()).await?;
+                completed = true;
+                return Ok(());
+            }
             if compact {self.perform_compaction(&attempt,&control,&options,&state,None,false).await?;return Ok(());}
             if control.budget.is_none() {
                 independent_agent = self.begin_independent_agent_run(&control, execution.generation).await?;
@@ -814,8 +842,8 @@ impl SessionManager {
         executor: ToolExecutor,
         control: Arc<RunControl>,
         state: Arc<ExecutionState>,
-        model: ModelRef,
-    ) -> Result<(), AppError> {
+        media_target: super::media::MediaTarget,
+    ) -> Result<ToolResult, AppError> {
         let key = (control.session.get(), tool.id().get());
         let permit_slot: ToolPermitSlot = Arc::new(tokio::sync::Mutex::new(None));
         self.tools.lock().unwrap_or_else(|p| p.into_inner()).insert(
@@ -835,7 +863,7 @@ impl SessionManager {
         let authority_control = control.clone();
         let authority_state = state.clone();
         let executor = executor.with_media_input_binder(super::media::tool_media_input_binder(
-            model.clone(),
+            media_target.clone(),
             state.providers.clone(),
         ));
         let executor = executor.with_path_effect_authorizer(Arc::new(move |access, path| {
@@ -885,7 +913,7 @@ impl SessionManager {
                 .prepare_tool_result(
                     &tool,
                     control.session,
-                    &model,
+                    &media_target,
                     &state.providers,
                     &executor,
                     &applied_invocation,
@@ -929,11 +957,11 @@ impl SessionManager {
             .unwrap_or_else(|p| p.into_inner())
             .remove(&key);
         match committed {
-            Ok(_) => Ok(()),
+            Ok(_) => Ok(result),
             Err(KernelError::StaleAttempt | KernelError::Conflict(_))
                 if control.cancel.is_cancelled() =>
             {
-                Ok(())
+                Ok(result)
             }
             Err(error) => Err(kernel_error(error)),
         }
@@ -955,9 +983,7 @@ impl SessionManager {
             .map_err(|error| ToolError::invalid_input(error.to_string()))?
             .workspace_id;
         let rules = self
-            .kernel_runtime
-            .permissions
-            .resolve_snapshot(Some(session), workspace)
+            .permission_rule_rows(None, Some(session), workspace)
             .await
             .map_err(|error| ToolError::invalid_input(error.to_string()))?;
         executor.clone().with_sandbox_persisted_rules(rules)
@@ -1021,9 +1047,7 @@ impl SessionManager {
             let action_key = permission_key(&check.action)
                 .map_err(|e| ToolError::invalid_input(e.to_string()))?;
             let rules = self
-                .kernel_runtime
-                .permissions
-                .resolve(&action_key, Some(control.session.get()), workspace)
+                .permission_rule_rows(Some(&action_key), Some(control.session.get()), workspace)
                 .await
                 .map_err(|e| ToolError::invalid_input(e.to_string()))?;
             let rules = rules
@@ -1289,15 +1313,14 @@ impl SessionManager {
             .watch(session, None)
             .map_err(kernel_error)?;
         loop {
-            let view = self
-                .kernel()
-                .reader
-                .interaction(session, interaction)
-                .await
-                .map_err(kernel_error)?;
+            let view = read_with_busy_retry(session, "wait_interaction", || {
+                self.kernel().reader.interaction(session, interaction)
+            })
+            .await?;
             if let Some(decision) = view.decision.clone() {
                 return Ok(decision);
             }
+            drop(view);
             let cancellation = async {
                 match cancel {
                     Some(cancel) => cancel.cancelled().await,
@@ -1342,6 +1365,10 @@ impl SessionManager {
         options: &mut SessionRunOptions,
         state: &ExecutionState,
     ) -> Result<(), AppError> {
+        if let Some(agent) = self.external_agent(session).await? {
+            *options = SessionRunOptions::for_external_agent(agent);
+            return Ok(());
+        }
         let context = self.execution_context_with_state(session, state).await?;
         self.prepare_options_for_selection(&context.selection, options, state)
     }
@@ -1400,6 +1427,9 @@ impl SessionManager {
             self.kernel().reader.configuration(session)
         })
         .await?;
+        if let Some(agent) = configuration.external_agent {
+            return Ok(SessionRunOptions::for_external_agent(agent));
+        }
         let profile = self.conversation_profile(&configuration, &state).await?;
         let selection =
             state
@@ -1414,6 +1444,9 @@ impl SessionManager {
     /// queue promotion) resolve options exactly as the interactive transports
     /// do, instead of inventing a model or falling back to a global default.
     pub async fn session_run_options(&self, id: i64) -> Result<SessionRunOptions, AppError> {
+        if let Some(agent) = self.external_agent(session_id(id)?).await? {
+            return Ok(SessionRunOptions::for_external_agent(agent));
+        }
         let session = self.get_session(id).await?;
         let state = self.state_for_session(session_id(id)?).await?;
         self.options_for_selection_with_state(&session.execution.selection, &state)

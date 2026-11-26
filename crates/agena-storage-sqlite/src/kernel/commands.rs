@@ -17,6 +17,8 @@ pub(super) async fn apply(
         | Command::PresentInteraction { .. }
         | Command::CreateConfigured { .. }
         | Command::CreateGlobal { .. }
+        | Command::ImportExternalAgent { .. }
+        | Command::DetachExternalAgent { .. }
         | Command::EnsureLocalBotSession { .. }
         | Command::DetachGlobal { .. }
         | Command::Configure { .. }
@@ -59,6 +61,7 @@ pub(super) async fn apply(
             let original_config = config.clone();
             if let Some(update) = &change.automatic_title {
                 if change.title.is_some()
+                    || change.sync_external_agent_title
                     || change.favorite.is_some()
                     || change.pinned.is_some()
                     || change.auto_title.is_some()
@@ -121,6 +124,12 @@ pub(super) async fn apply(
                 // Even assigning the same name is an explicit user decision
                 // and must fence a generation already in flight.
                 config.title_state.source = SessionTitleSource::Manual;
+                if change.sync_external_agent_title {
+                    if config.external_agent.is_none() {
+                        return Err(KernelError::Ownership);
+                    }
+                    config.external_agent_state.metadata.title = Some(title.clone());
+                }
             }
             if let Some(value) = change.favorite {
                 metadata.favorite = value;
@@ -150,6 +159,7 @@ pub(super) async fn apply(
                 config.profile = selected;
             }
             if metadata != original || config != original_config {
+                super::external_agent::bound_configuration_state(&mut config)?;
                 let configuration = encode(&config)?;
                 if configuration.len() > 65536 {
                     return Err(invalid("session configuration exceeds 64 KiB"));
@@ -436,7 +446,10 @@ pub(super) async fn apply(
             ))
         }
         Command::BeginRound { scope, inputs } => begin_round(connection, *scope, inputs).await,
-        Command::BeginCurrentRound { scope } => {
+        Command::BeginCurrentRound {
+            scope,
+            take_external_agent_resume,
+        } => {
             let execution = check_scope(connection, *scope, true).await?;
             let window = super::input_window::select(
                 connection,
@@ -446,8 +459,112 @@ pub(super) async fn apply(
                 false,
             )
             .await?;
-            begin_round(connection, *scope, &window.entries).await
+            let round = begin_round(connection, *scope, &window.entries).await?;
+            if !take_external_agent_resume {
+                return Ok(round);
+            }
+            let Mutation::Round(round) = round else {
+                unreachable!("begin-round result")
+            };
+            let mut config = lifecycle::configuration(connection, scope.session).await?;
+            if config.external_agent.is_none() {
+                return Err(invalid(
+                    "external agent round requires an external agent session",
+                ));
+            }
+            let link = config.native_session_link();
+            let previous = config.external_agent_resume.take();
+            if previous.is_some() || link.as_ref().is_some_and(|value| value.resume_at.is_some()) {
+                config.external_agent_link = link.clone().map(|mut value| {
+                    value.resume_at = None;
+                    value
+                });
+                sqlx::query("UPDATE agena_sessions SET configuration_json=? WHERE id=?")
+                    .bind(encode(&config)?)
+                    .bind(scope.session.get())
+                    .execute(&mut *connection)
+                    .await
+                    .map_err(sql_error)?;
+            }
+            Ok(Mutation::ExternalAgentRound {
+                round,
+                previous: previous.filter(|resume| resume.session == scope.session),
+                link,
+                selection: config.external_agent_selection,
+                state: Box::new(config.external_agent_state),
+            })
         }
+        Command::RecordExternalAgentState {
+            scope,
+            round,
+            state,
+        } => {
+            check_scope(connection, *scope, true).await?;
+            check_round(connection, *scope, *round).await?;
+            let snapshot = external_agent_state_snapshot(connection, scope.session, state).await?;
+            let updated = sqlx::query(
+                "UPDATE agena_sessions SET configuration_json=CASE
+                    WHEN ? THEN json_remove(configuration_json,'$.external_agent_state')
+                    ELSE json_set(configuration_json,'$.external_agent_state',json(?))
+                 END WHERE id=? AND json_extract(configuration_json,'$.external_agent') IS NOT NULL
+                    AND json_extract(configuration_json,'$.external_agent_resume') IS NULL",
+            )
+            .bind(snapshot.is_empty())
+            .bind(encode(&snapshot)?)
+            .bind(scope.session.get())
+            .execute(&mut *connection)
+            .await
+            .map_err(sql_error)?;
+            if updated.rows_affected() == 0 {
+                return Err(KernelError::Ownership);
+            }
+            sync_external_agent_title(connection, scope.session, state).await?;
+            Ok(Mutation::Round(*round))
+        }
+        Command::BindExternalAgentLink { scope, round, link } => {
+            bind_external_agent_link(connection, *scope, *round, link).await
+        }
+        Command::RefreshIdleExternalAgentState {
+            session,
+            round,
+            native_id,
+            state,
+        } => {
+            // An idle connection must never modify a conversation that was
+            // reopened, cleared, detached, or deleted after the turn finished.
+            let snapshot = external_agent_state_snapshot(connection, *session, state).await?;
+            let updated = sqlx::query(
+                "UPDATE agena_sessions SET configuration_json=CASE
+                    WHEN ? THEN json_remove(configuration_json,'$.external_agent_state')
+                    ELSE json_set(configuration_json,'$.external_agent_state',json(?))
+                 END WHERE id=? AND json_extract(configuration_json,'$.external_agent_resume.native_id')=?
+                    AND json_extract(configuration_json,'$.external_agent_resume.round')=?
+                    AND deleted_at_ms IS NULL
+                    AND NOT EXISTS (
+                        SELECT 1 FROM agena_session_statistics
+                        WHERE session_id=agena_sessions.id AND running_executions>0
+                    )",
+            )
+            .bind(snapshot.is_empty())
+            .bind(encode(&snapshot)?)
+            .bind(session.get())
+            .bind(native_id)
+            .bind(round.get())
+            .execute(&mut *connection)
+            .await
+            .map_err(sql_error)?;
+            if updated.rows_affected() == 0 {
+                return Err(KernelError::Ownership);
+            }
+            sync_external_agent_title(connection, *session, state).await?;
+            Ok(Mutation::Round(*round))
+        }
+        Command::SetExternalAgentInput {
+            session,
+            epoch,
+            input,
+            scope,
+        } => set_external_agent_input(connection, *session, *epoch, *input, scope.as_ref()).await,
         Command::BeginCompactionRound { scope, max_entries } => {
             let execution = check_scope(connection, *scope, true).await?;
             if !(2..=10000).contains(max_entries) {
@@ -707,7 +824,11 @@ pub(super) async fn apply(
         Command::PrepareStop { scope, conditions } => {
             super::stop::prepare(connection, *scope, conditions).await
         }
-        Command::Finish { scope, phase } => {
+        Command::Finish {
+            scope,
+            phase,
+            external_agent_resume,
+        } => {
             let view = check_scope(connection, *scope, false).await?;
             if *phase == ExecutionPhase::Succeeded && !view.phase.is_terminal() {
                 let pending: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agena_deliveries INDEXED BY idx_agena_delivery_execution WHERE target_execution_id=? AND state='pending')")
@@ -715,6 +836,11 @@ pub(super) async fn apply(
                 if pending {
                     return Err(KernelError::PendingDelivery(view.id));
                 }
+            }
+            if let Some(resume) = external_agent_resume
+                && view.phase == ExecutionPhase::Running
+            {
+                save_external_agent_resume(connection, *scope, &view, *phase, resume).await?;
             }
             finish(connection, view, *phase)
                 .await
@@ -745,15 +871,7 @@ pub(super) async fn apply(
             } else {
                 check_round(connection, *scope, *round).await?;
             }
-            let active: i64 = sqlx::query_scalar(
-                "SELECT count(*) FROM agena_content_streams WHERE capture_state='open'",
-            )
-            .fetch_one(&mut *connection)
-            .await
-            .map_err(sql_error)?;
-            if active >= content::MAX_LIVE_SOURCES {
-                return Err(KernelError::Busy);
-            }
+            content::require_live_source_slot(connection).await?;
             let id = agena_domain::ContentId::new();
             let epoch = agena_domain::ContentEpoch::new();
             let entry: i64 = if let Some(tool) = tool {
@@ -788,6 +906,11 @@ pub(super) async fn apply(
             tool,
             kind,
         } => content::events::open(connection, *scope, *round, *tool, *kind).await,
+        Command::WriteAssistantDocument {
+            target,
+            update,
+            blobs,
+        } => content::events::write_assistant_document(connection, target, update, blobs).await,
         Command::SealContent {
             scope,
             content,
@@ -883,7 +1006,7 @@ pub(super) async fn check_scope(
     Ok(view)
 }
 
-async fn check_round(
+pub(super) async fn check_round(
     connection: &mut SqliteConnection,
     scope: Scope,
     round: RoundId,
@@ -913,6 +1036,244 @@ pub(super) async fn check_tool(
     .map_err(storage)
 }
 
+async fn sync_external_agent_title(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+    state: &agena_storage::kernel::ExternalAgentState,
+) -> Result<()> {
+    if let Some(title) = state.metadata.title.as_ref()
+        && !title.trim().is_empty()
+        && title.len() <= 4096
+        && !title.chars().any(char::is_control)
+    {
+        sqlx::query("UPDATE agena_sessions
+            SET title=?,metadata_version=metadata_version+1,
+                configuration_json=json_set(configuration_json,'$.title_state.source','automatic')
+            WHERE id=? AND title!=?
+                AND json_extract(configuration_json,'$.title_state.source') IN ('default','automatic')")
+            .bind(title).bind(session.get()).bind(title)
+            .execute(connection).await.map_err(sql_error)?;
+    }
+    Ok(())
+}
+
+async fn bind_external_agent_link(
+    connection: &mut SqliteConnection,
+    scope: Scope,
+    round: RoundId,
+    link: &ExternalAgentLink,
+) -> Result<Mutation> {
+    check_scope(connection, scope, true).await?;
+    check_round(connection, scope, round).await?;
+    super::external_agent::validate_link(link)?;
+    let metadata = reads::metadata(connection, scope.session).await?;
+    let workspace = metadata.workspace_id.ok_or(KernelError::Ownership)?;
+    let mut configuration = lifecycle::configuration(connection, scope.session).await?;
+    let agent = configuration.external_agent.ok_or(KernelError::Ownership)?;
+    if configuration.external_agent_resume.is_some()
+        || link.resume_at.is_some()
+        || link.incarnation.is_none()
+    {
+        return Err(KernelError::Ownership);
+    }
+    let current = configuration.external_agent_link.as_ref();
+    if current == Some(link) {
+        return Ok(Mutation::Round(round));
+    }
+    let resumes_import = current.is_some_and(|current| {
+        current.resume_at.is_some()
+            && current.cwd == link.cwd
+            && current.native_id == link.native_id
+            && current.incarnation == link.incarnation
+    });
+    if !resumes_import
+        && (link.incarnation != Some(round)
+            || current.is_some_and(|current| current.incarnation == Some(round)))
+    {
+        return Err(KernelError::Ownership);
+    }
+    if super::external_agent::existing_link(connection, workspace, agent, link)
+        .await?
+        .is_some_and(|owner| owner != scope.session)
+    {
+        return Err(KernelError::Conflict(
+            "this native conversation is already linked".into(),
+        ));
+    }
+    let state = std::mem::take(&mut configuration.external_agent_state);
+    configuration.external_agent_link = Some(link.clone());
+    let base_bytes = encode(&configuration)?.len();
+    configuration.external_agent_state =
+        state.bounded_snapshot(super::external_agent::state_budget(base_bytes));
+    sqlx::query("UPDATE agena_sessions SET configuration_json=? WHERE id=?")
+        .bind(encode(&configuration)?)
+        .bind(scope.session.get())
+        .execute(connection)
+        .await
+        .map_err(sql_error)?;
+    Ok(Mutation::Round(round))
+}
+
+async fn set_external_agent_input(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+    epoch: agena_domain::KernelEpoch,
+    input: RequestId,
+    scope: Option<&ExternalAgentInputScope>,
+) -> Result<Mutation> {
+    let metadata = reads::metadata(connection, session).await?;
+    let mut configuration = lifecycle::configuration(connection, session).await?;
+    let mut presence = configuration
+        .external_agent_inputs
+        .take()
+        .filter(|presence| presence.epoch == epoch)
+        .unwrap_or_else(|| ExternalAgentInputPresence {
+            epoch,
+            ids: Vec::new(),
+        });
+    if let Some(scope) = scope {
+        if configuration.external_agent != Some(scope.agent) {
+            return Err(KernelError::Ownership);
+        }
+        if let Some(resume) = &scope.idle_resume {
+            if configuration.external_agent_resume.as_ref() != Some(resume) {
+                return Err(KernelError::Ownership);
+            }
+            let running: bool = sqlx::query_scalar(
+                "SELECT running_executions>0 FROM agena_session_statistics WHERE session_id=?",
+            )
+            .bind(session.get())
+            .fetch_one(&mut *connection)
+            .await
+            .map_err(sql_error)?;
+            if running {
+                return Err(KernelError::Ownership);
+            }
+        }
+        if !presence.ids.contains(&input) {
+            if presence.ids.len() >= MAX_EXTERNAL_AGENT_INPUTS {
+                return Err(KernelError::Conflict(
+                    "too many external agent input requests".into(),
+                ));
+            }
+            presence.ids.push(input);
+        }
+    } else {
+        presence.ids.retain(|id| *id != input);
+    }
+    configuration.external_agent_inputs = (!presence.ids.is_empty()).then_some(presence);
+    super::external_agent::bound_configuration_state(&mut configuration)?;
+    sqlx::query("UPDATE agena_sessions SET configuration_json=? WHERE id=?")
+        .bind(encode(&configuration)?)
+        .bind(session.get())
+        .execute(connection)
+        .await
+        .map_err(sql_error)?;
+    Ok(Mutation::Session(Box::new(metadata)))
+}
+
+async fn external_agent_state_snapshot(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+    state: &agena_storage::kernel::ExternalAgentState,
+) -> Result<agena_storage::kernel::ExternalAgentState> {
+    let config_bytes: i64 = sqlx::query_scalar(
+        "SELECT length(CAST(json_remove(configuration_json,'$.external_agent_state') AS BLOB))
+         FROM agena_sessions WHERE id=? AND deleted_at_ms IS NULL",
+    )
+    .bind(session.get())
+    .fetch_optional(connection)
+    .await
+    .map_err(sql_error)?
+    .ok_or(KernelError::Ownership)?;
+    Ok(state.bounded_snapshot(super::external_agent::state_budget(config_bytes as usize)))
+}
+
+async fn save_external_agent_resume(
+    connection: &mut SqliteConnection,
+    scope: Scope,
+    view: &ExecutionView,
+    phase: ExecutionPhase,
+    resume: &ExternalAgentResume,
+) -> Result<()> {
+    if phase != ExecutionPhase::Succeeded
+        || resume.session != scope.session
+        || resume.message != view.message_id
+        || !resume.cwd.is_absolute()
+        || resume.native_id.is_empty()
+        || resume.native_id.len() > 4096
+    {
+        return Err(invalid("invalid external agent continuation"));
+    }
+    let valid: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+            SELECT 1 FROM agena_rounds r
+            JOIN agena_sessions s ON s.id=?
+            WHERE r.id=? AND r.execution_id=? AND r.generation=? AND r.phase='succeeded'
+              AND json_extract(s.configuration_json,'$.external_agent') IS NOT NULL
+        )",
+    )
+    .bind(scope.session.get())
+    .bind(resume.round.get())
+    .bind(scope.execution.to_string())
+    .bind(scope.generation.get())
+    .fetch_one(&mut *connection)
+    .await
+    .map_err(sql_error)?;
+    if !valid {
+        return Err(KernelError::Ownership);
+    }
+    let link = ExternalAgentLink {
+        native_id: resume.native_id.clone(),
+        cwd: resume.cwd.clone(),
+        incarnation: resume.incarnation,
+        resume_at: None,
+    };
+    super::external_agent::validate_link(&link)?;
+    let metadata = reads::metadata(connection, scope.session).await?;
+    let configuration = lifecycle::configuration(connection, scope.session).await?;
+    if resume.incarnation.is_some() && configuration.external_agent_link.as_ref() != Some(&link) {
+        return Err(KernelError::Ownership);
+    }
+    let workspace = metadata.workspace_id.ok_or(KernelError::Ownership)?;
+    let agent = configuration.external_agent.ok_or(KernelError::Ownership)?;
+    if super::external_agent::existing_link(connection, workspace, agent, &link)
+        .await?
+        .is_some_and(|owner| owner != scope.session)
+    {
+        return Err(KernelError::Conflict(
+            "this native conversation is already linked".into(),
+        ));
+    }
+    let base: String = sqlx::query_scalar(
+        "SELECT json_set(json_remove(configuration_json,'$.external_agent_state'),
+                '$.external_agent_resume',json(?),'$.external_agent_link',json(?))
+         FROM agena_sessions WHERE id=?",
+    )
+    .bind(encode(resume)?)
+    .bind(encode(&link)?)
+    .bind(scope.session.get())
+    .fetch_one(&mut *connection)
+    .await
+    .map_err(sql_error)?;
+    let snapshot = configuration
+        .external_agent_state
+        .bounded_snapshot(super::external_agent::state_budget(base.len()));
+    sqlx::query(
+        "UPDATE agena_sessions SET configuration_json=CASE WHEN ? THEN ?
+            ELSE json_set(?,'$.external_agent_state',json(?)) END WHERE id=?",
+    )
+    .bind(snapshot.is_empty())
+    .bind(&base)
+    .bind(&base)
+    .bind(encode(&snapshot)?)
+    .bind(scope.session.get())
+    .execute(connection)
+    .await
+    .map_err(sql_error)?;
+    Ok(())
+}
+
 pub(super) async fn finish(
     connection: &mut SqliteConnection,
     mut view: ExecutionView,
@@ -936,6 +1297,15 @@ pub(super) async fn finish(
         .bind(view.id.to_string()).bind(view.generation.get()).bind(view.message_id.get()).execute(&mut *connection).await.map_err(sql_error)?;
     if phase != ExecutionPhase::Succeeded {
         settle_children(connection, &view, now).await?;
+        if view.phase == ExecutionPhase::Running {
+            sqlx::query("UPDATE agena_sessions SET configuration_json=json_remove(configuration_json,'$.external_agent_state')
+                WHERE id=? AND json_type(configuration_json,'$.external_agent_state') IS NOT NULL
+                    AND json_extract(configuration_json,'$.external_agent_resume') IS NULL")
+                .bind(view.session_id.get())
+                .execute(&mut *connection)
+                .await
+                .map_err(sql_error)?;
+        }
     }
     sqlx::query("UPDATE agena_attempts SET phase=?,finished_at_ms=MAX(?,COALESCE(started_at_ms,?)) WHERE execution_id=? AND generation=?")
         .bind(enum_text(&phase)?).bind(now).bind(now).bind(view.id.to_string()).bind(view.generation.get())
@@ -1302,6 +1672,7 @@ pub(super) async fn recover(database: &sea_orm::DatabaseConnection) -> Result<()
         "UPDATE agena_background_activities SET phase='interrupted',outcome_json='{\"outcome\":\"interrupted\",\"diagnostic\":\"service restarted; external activity outcome is unknown\"}',finished_at_ms=MAX(?,created_at_ms) WHERE phase='running'",
         "UPDATE agena_session_statistics SET running_executions=0,last_message_at_ms=MAX(?,COALESCE(last_message_at_ms,?)) WHERE session_id IN (SELECT session_id FROM agena_attempts WHERE phase='running')",
         "UPDATE agena_sessions SET updated_at_ms=MAX(?,updated_at_ms+1) WHERE id IN (SELECT session_id FROM agena_attempts WHERE phase='running')",
+        "UPDATE agena_sessions SET configuration_json=json_remove(configuration_json,'$.external_agent_state') WHERE id IN (SELECT session_id FROM agena_attempts WHERE phase='running') AND json_type(configuration_json,'$.external_agent_state') IS NOT NULL AND json_extract(configuration_json,'$.external_agent_resume') IS NULL",
         "UPDATE agena_interactions SET decision_json='{\"kind\":\"cancel\"}',decided_at_ms=? WHERE decision_json IS NULL AND tool_id IN (SELECT id FROM agena_tool_calls WHERE phase IN ('preparing','running'))",
         "UPDATE agena_entries SET revision=revision+1 WHERE tool_id IN (SELECT id FROM agena_tool_calls WHERE phase IN ('preparing','running'))",
         "UPDATE agena_tool_calls SET phase='interrupted',result_json='null',finished_at_ms=? WHERE phase IN ('preparing','running')",

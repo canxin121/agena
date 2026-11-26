@@ -10,11 +10,13 @@ import {
   RiFolder6Line,
   RiGitMergeLine,
   RiGlobalLine,
+  RiPlugLine,
   RiSettings3Line,
   RiTerminalBoxLine,
 } from '@remixicon/vue'
 
 import ChatSidebar from '@/layout/ChatSidebar.vue'
+import AcpSidebar from '@/layout/AcpSidebar.vue'
 import BotSidebar from '@/layout/BotSidebar.vue'
 import { PRIMARY_MAIN_TABS, mainTabFromPath, type MainTabId, type PrimaryMainTabId } from '@/app/navigation/mainTabs'
 import { useWorkspaceSidebarHost, WORKSPACE_SIDEBAR_PANEL_HOST_ID } from '@/layout/workspaceSidebarHost'
@@ -73,6 +75,7 @@ const activeTab = computed<MainTabId>(() => {
 const NAV_ICONS: Record<PrimaryMainTabId, Component> = {
   bot: RiRobot2Line,
   chat: RiChat4Line,
+  acp: RiPlugLine,
   files: RiFolder6Line,
   preview: RiGlobalLine,
   terminal: RiTerminalBoxLine,
@@ -204,6 +207,11 @@ async function activateRailItem(tabId: MainTabId) {
     return
   }
 
+  if (tabId === 'acp') {
+    ui.setSidebarOpen(true, { preserveWidth: true })
+    await workspaceNavigation.openMainTab('acp')
+    return
+  }
   await workspaceNavigation.openMainTab(tabId, { path: routeForTab(tabId) })
 }
 </script>
@@ -297,13 +305,14 @@ async function activateRailItem(tabId: MainTabId) {
         <ChatSidebar class="h-full" />
       </div>
       <BotSidebar v-else-if="activeTab === 'bot'" class="min-h-0 flex-1" />
+      <AcpSidebar v-else-if="activeTab === 'acp'" class="min-h-0 flex-1" />
 
       <!-- Keep teleport target stable to avoid non-chat sidebar blanking on route switches. -->
       <div
         :id="WORKSPACE_SIDEBAR_PANEL_HOST_ID"
         :ref="registerSidebarHost"
         class="h-full min-h-0 flex-1 overflow-hidden"
-        :class="activeTab === 'chat' || activeTab === 'bot' ? 'hidden' : ''"
+        :class="['chat', 'bot', 'acp'].includes(activeTab) ? 'hidden' : ''"
       />
     </div>
   </div>

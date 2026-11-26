@@ -711,7 +711,9 @@ impl App {
         );
         match result {
             Ok(execution) => {
-                self.record_prompt_history_from_draft(&draft);
+                if !agena_domain::is_acp_session_id(session_id) {
+                    self.record_prompt_history_from_draft(&draft);
+                }
                 self.session_composer.pending_restore_draft = None;
                 let slot = DraftSlot::Session(session_id);
                 if self.draft_store.get(slot) == Some(&draft) {

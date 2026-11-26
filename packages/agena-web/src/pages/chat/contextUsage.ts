@@ -5,6 +5,7 @@ type Usage = {
   projected_tokens?: number | null
   input_limit_tokens?: number | null
   limit_tokens?: number | null
+  limit_basis?: string | null
 }
 
 function finiteTokens(value: number | null | undefined): number | null {
@@ -14,7 +15,9 @@ function finiteTokens(value: number | null | undefined): number | null {
 /** The server owns request admission; its current usage and input budget also own the chip. */
 export function sessionContextUsage(usage: Usage) {
   const tokens = finiteTokens(usage.current_tokens) ?? finiteTokens(usage.projected_tokens)
-  const limit = finiteTokens(usage.input_limit_tokens)
+  const limit =
+    finiteTokens(usage.input_limit_tokens) ??
+    (usage.limit_basis === 'context_window' ? finiteTokens(usage.limit_tokens) : null)
   const percentUsed =
     tokens !== null && limit !== null && limit > 0
       ? Math.max(0, Math.min(100, Math.round((tokens / limit) * 100)))

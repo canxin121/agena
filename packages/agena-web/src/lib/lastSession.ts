@@ -17,6 +17,7 @@
  */
 import { readonly, ref } from 'vue'
 
+import { isAcpSessionId } from './acpSession'
 import { getLocalJson, setLocalJson } from './persist'
 import { localStorageKeys } from './persistence/storageKeys'
 
@@ -29,7 +30,7 @@ function normalizeSessionId(value: unknown): string {
   const id = String(raw ?? '').trim()
   if (!/^\d+$/.test(id)) return ''
   const numeric = Number(id)
-  return Number.isSafeInteger(numeric) && numeric > 0 ? id : ''
+  return Number.isSafeInteger(numeric) && numeric > 0 && !isAcpSessionId(numeric) ? id : ''
 }
 
 export function normalizeLastSessionId(value: unknown): string {

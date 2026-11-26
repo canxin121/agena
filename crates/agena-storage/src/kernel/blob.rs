@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use super::*;
-use crate::backend::kernel::{BlobLease, BlobPin};
+use crate::backend::kernel::{AssistantDocumentTarget, BlobLease, BlobPin};
 
 pub const BLOB_CHUNK_BYTES: usize = 128 * 1024;
 
@@ -317,6 +317,75 @@ impl SessionCommands {
                 )
                 .await?,
         )
+    }
+}
+
+impl RoundHandle {
+    /// Save an assistant document and make any new assets available at the
+    /// same committed content head.
+    pub async fn write_assistant_document(
+        &self,
+        request: RequestId,
+        update: AssistantDocumentUpdate,
+        blobs: &[PreparedBlob],
+    ) -> Result<CommitReceipt<ContentStreamView>> {
+        write_assistant_document(
+            &self.attempt.inner,
+            request,
+            AssistantDocumentTarget::Round {
+                scope: self.attempt.scope,
+                round: self.id,
+            },
+            update,
+            blobs,
+        )
+        .await
+    }
+}
+
+impl ExecutorCommands {
+    pub async fn write_parked_assistant_document(
+        &self,
+        request: RequestId,
+        resume: &ExternalAgentResume,
+        update: AssistantDocumentUpdate,
+        blobs: &[PreparedBlob],
+    ) -> Result<CommitReceipt<ContentStreamView>> {
+        write_assistant_document(
+            &self.0,
+            request,
+            AssistantDocumentTarget::Parked(Box::new(resume.clone())),
+            update,
+            blobs,
+        )
+        .await
+    }
+}
+
+async fn write_assistant_document(
+    inner: &Arc<KernelInner>,
+    request: RequestId,
+    target: AssistantDocumentTarget,
+    update: AssistantDocumentUpdate,
+    blobs: &[PreparedBlob],
+) -> Result<CommitReceipt<ContentStreamView>> {
+    let blobs = bindings(inner, target.session(), blobs)?;
+    let receipt = inner
+        .command(
+            request,
+            Command::WriteAssistantDocument {
+                target,
+                update,
+                blobs,
+            },
+        )
+        .await?;
+    match receipt.value {
+        Mutation::Content(value) => Ok(CommitReceipt {
+            position: receipt.position,
+            value,
+        }),
+        _ => Err(unexpected()),
     }
 }
 

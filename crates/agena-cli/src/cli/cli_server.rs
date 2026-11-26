@@ -56,6 +56,92 @@ pub(super) struct ServerSessionClient {
     workspace_root: std::path::PathBuf,
 }
 
+async fn run_external_agent_auth(
+    client: &AgenaClient,
+    args: &super::SessionAgentAuthArgs,
+) -> Result<agena_domain::ExternalAgentAuth, AppError> {
+    use agena_domain::{
+        ExternalAgentAuthAction as Action, ExternalAgentAuthFlow,
+        validate_external_agent_terminal_launch,
+    };
+    use std::io::IsTerminal;
+
+    let call = |action| async move {
+        client
+            .external_agent_auth(args.session_id, action)
+            .await
+            .map_err(|error| client_error("external agent authentication failed", error))
+    };
+    if args.logout {
+        return call(Action::Logout).await;
+    }
+    if args.terminal
+        && !client.base_url().host().is_some_and(|host| match host {
+            url::Host::Domain(host) => host == "localhost",
+            url::Host::Ipv4(host) => host.is_loopback(),
+            url::Host::Ipv6(host) => host.is_loopback(),
+        })
+    {
+        return Err(AppError::Config(
+            "Use --terminal under the Agena server's system account and connect to its loopback address."
+                .into(),
+        ));
+    }
+    let inspection = call(Action::Inspect {
+        terminal: args.terminal,
+    })
+    .await?;
+    let Some(id) = &args.login else {
+        return Ok(inspection);
+    };
+    let method = inspection
+        .methods
+        .iter()
+        .find(|method| &method.id == id)
+        .ok_or_else(|| {
+            AppError::Config(
+                "Choose a method listed by sessions agent-auth. Use --terminal on the server host to list terminal methods."
+                    .into(),
+            )
+        })?;
+    let ExternalAgentAuthFlow::Terminal { args: extra, env } = &method.flow else {
+        return call(Action::Login {
+            method_id: id.clone(),
+        })
+        .await;
+    };
+    if !args.terminal || !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        return Err(AppError::Config(
+            "Use --terminal in an interactive terminal on the Agena server host.".into(),
+        ));
+    }
+    if !inspection.cwd.is_absolute() {
+        return Err(AppError::Config(
+            "Terminal login requires an absolute workspace path.".into(),
+        ));
+    }
+    validate_external_agent_terminal_launch(extra, env)
+        .map_err(|error| AppError::Config(error.into()))?;
+
+    let (program, base_args) = inspection.agent.command();
+    let status = tokio::process::Command::new(program)
+        .args(base_args)
+        .args(extra)
+        .envs(env)
+        .current_dir(&inspection.cwd)
+        .kill_on_drop(true)
+        .status()
+        .await
+        .map_err(|error| AppError::Config(format!("Could not start {program}: {error}")))?;
+    if !status.success() {
+        return Err(AppError::Config(format!(
+            "{program} sign-in ended with {status}."
+        )));
+    }
+    // The follow-up initializes a new ACP connection and reads the native store.
+    call(Action::Inspect { terminal: true }).await
+}
+
 #[derive(serde::Deserialize)]
 struct ServerMemoryOverview {
     workspace_root: String,
@@ -1467,6 +1553,7 @@ impl AgenaCli {
     ) -> Result<(), AppError> {
         let workspace = match command.command.as_ref() {
             Some(SessionsSubcommand::Create(args)) => args.workspace.as_deref(),
+            Some(SessionsSubcommand::AgentSessions(args)) => args.workspace.as_deref(),
             _ => None,
         };
         let server = ServerSessionClient::connect(self, workspace).await?;
@@ -1502,13 +1589,15 @@ impl AgenaCli {
             SessionsSubcommand::Create(args) => {
                 let session = server
                     .client
-                    .create_session_with_profile(
-                        server.workspace_id,
-                        args.title,
-                        args.parent,
-                        false,
-                        args.profile,
-                    )
+                    .create_session_configured(agena_api::commands::CreateSessionParams {
+                        workspace_id: server.workspace_id,
+                        title: args.title,
+                        parent_id: args.parent,
+                        auto_title: false,
+                        profile: args.profile,
+                        prompts: None,
+                        external_agent: args.external_agent,
+                    })
                     .await
                     .map_err(|error| {
                         client_error("failed to create session through server", error)
@@ -1536,6 +1625,175 @@ impl AgenaCli {
                         client_error("failed to read updated session from server", error)
                     })?;
                 render_serialized(args.format, &state)
+            }
+            SessionsSubcommand::AgentOptions(args) => {
+                use agena_domain::{ExternalAgentOptionChange, ExternalAgentOptionKind};
+                let generic = args
+                    .option
+                    .map(|argument| {
+                        let Some((key, value)) = argument.split_once('=') else {
+                            return Err(AppError::Config(
+                                "Use --option KEY=VALUE with an advertised option key.".into(),
+                            ));
+                        };
+                        let kind = ExternalAgentOptionKind::try_from(key.to_owned())
+                            .map_err(|error| AppError::Config(error.into()))?;
+                        Ok((kind, value.to_owned()))
+                    })
+                    .transpose()?;
+                let change = args
+                    .model
+                    .map(|value| (ExternalAgentOptionKind::Model, value))
+                    .or_else(|| {
+                        args.thinking
+                            .map(|value| (ExternalAgentOptionKind::ThoughtLevel, value))
+                    })
+                    .or(generic)
+                    .map(|(kind, value)| ExternalAgentOptionChange {
+                        kind,
+                        value: (!value.is_empty()).then_some(value),
+                    });
+                let options = server
+                    .client
+                    .external_agent_options(args.session_id, change)
+                    .await
+                    .map_err(|error| {
+                        client_error("failed to configure external agent options", error)
+                    })?;
+                render_serialized(args.format, &options)
+            }
+            SessionsSubcommand::AgentAuth(args) => {
+                if args.live {
+                    let status = server
+                        .client
+                        .external_agent_live_auth(args.session_id)
+                        .await
+                        .map_err(|error| {
+                            client_error("could not read external agent connection status", error)
+                        })?;
+                    render_serialized(args.format, &status)
+                } else {
+                    let mut auth = run_external_agent_auth(&server.client, &args).await?;
+                    for method in &mut auth.methods {
+                        if let agena_domain::ExternalAgentAuthFlow::Terminal { env, .. } =
+                            &mut method.flow
+                        {
+                            env.clear();
+                        }
+                    }
+                    render_serialized(args.format, &auth)
+                }
+            }
+            SessionsSubcommand::AgentProviders(args) => {
+                let providers = server
+                    .client
+                    .external_agent_providers(args.session_id)
+                    .await
+                    .map_err(|error| {
+                        client_error("could not read external agent provider routing", error)
+                    })?;
+                render_serialized(args.format, &providers)
+            }
+            SessionsSubcommand::AgentSteer(args) => {
+                server
+                    .client
+                    .steer_external_agent(args.session_id, &args.text)
+                    .await
+                    .map_err(|error| client_error("failed to steer the external agent", error))?;
+                render_serialized(args.format, &serde_json::json!({"accepted": true}))
+            }
+            SessionsSubcommand::AgentWork(args) => {
+                let cancel_id = args
+                    .cancel
+                    .map(|id| {
+                        id.parse().map_err(|_| {
+                            AppError::Config("Choose a cancel_id from sessions agent-work.".into())
+                        })
+                    })
+                    .transpose()?;
+                let items = server
+                    .client
+                    .external_agent_work(args.session_id, cancel_id)
+                    .await
+                    .map_err(|error| client_error("failed to manage external agent work", error))?;
+                render_serialized(args.format, &items)
+            }
+            SessionsSubcommand::AgentSessions(args) => {
+                use super::AgentSessionsAction as Action;
+                use agena_domain::ExternalAgentWorkspaceAction as Request;
+                let action = match args.action {
+                    Action::List {
+                        agent,
+                        cursor,
+                        archived: Some(archived),
+                    } => Request::IndexList {
+                        agent,
+                        cursor,
+                        archived: archived.into(),
+                    },
+                    Action::List {
+                        agent,
+                        cursor,
+                        archived: None,
+                    } => Request::List { agent, cursor },
+                    Action::Open { agent, native_id } => Request::Open { agent, native_id },
+                    Action::Import { agent, native_id } => Request::Import { agent, native_id },
+                    Action::BatchGet { agent, native_ids } => {
+                        Request::BatchGet { agent, native_ids }
+                    }
+                    Action::Archive { agent, native_id } => Request::SetArchived {
+                        agent,
+                        native_id,
+                        archived: true,
+                    },
+                    Action::Unarchive { agent, native_id } => Request::SetArchived {
+                        agent,
+                        native_id,
+                        archived: false,
+                    },
+                    Action::Watch {
+                        agent,
+                        wait_seconds,
+                    } => Request::Watch {
+                        agent,
+                        wait_seconds,
+                    },
+                };
+                let result = server
+                    .client
+                    .external_agent_workspace(server.workspace_id, action)
+                    .await
+                    .map_err(|error| {
+                        client_error("failed to manage native conversations", error)
+                    })?;
+                render_serialized(args.format, &result)
+            }
+            SessionsSubcommand::AgentSession(args) => {
+                use agena_domain::ExternalAgentSessionAction;
+                let action = match args.action {
+                    super::AgentSessionAction::Status => ExternalAgentSessionAction::Status,
+                    super::AgentSessionAction::Rename { title } => {
+                        ExternalAgentSessionAction::SetTitle { title }
+                    }
+                    super::AgentSessionAction::SetDirectories { directories } => {
+                        ExternalAgentSessionAction::SetDirectories { directories }
+                    }
+                    super::AgentSessionAction::Close => ExternalAgentSessionAction::Close,
+                    super::AgentSessionAction::Delete => ExternalAgentSessionAction::Delete,
+                    super::AgentSessionAction::Fork {
+                        title,
+                        before_message_id,
+                    } => ExternalAgentSessionAction::Fork {
+                        title,
+                        before_message_id,
+                    },
+                };
+                let result = server
+                    .client
+                    .external_agent_session(args.session_id, action)
+                    .await
+                    .map_err(|error| client_error("failed to manage native conversation", error))?;
+                render_serialized(args.format, &result)
             }
             SessionsSubcommand::Import(args) => {
                 let source: Box<dyn tokio::io::AsyncRead + Unpin + Send> = match args.path {

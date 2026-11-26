@@ -172,16 +172,24 @@ impl SessionManager {
                     if !replies.insert(entry.message_id) {
                         continue;
                     }
-                    let range = self
-                        .kernel()
-                        .reader
-                        .text_range(session, *content_id, None, remaining.min(2048))
-                        .await
-                        .map_err(kernel_error)?;
-                    (
-                        "assistant",
-                        String::from_utf8_lossy(&range.bytes).into_owned(),
-                    )
+                    if entry.content_kind == Some(agena_domain::ContentKind::Structured) {
+                        (
+                            "assistant",
+                            self.assistant_text(session, *content_id, remaining.min(2048))
+                                .await?,
+                        )
+                    } else {
+                        let range = self
+                            .kernel()
+                            .reader
+                            .text_range(session, *content_id, None, remaining.min(2048))
+                            .await
+                            .map_err(kernel_error)?;
+                        (
+                            "assistant",
+                            String::from_utf8_lossy(&range.bytes).into_owned(),
+                        )
+                    }
                 }
                 // A cleared context has no text to title a session with.
                 EntryPayload::ContextCleared { .. } => continue,

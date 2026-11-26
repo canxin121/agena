@@ -219,7 +219,9 @@ pub(crate) use agena_runtime_tools::{
 pub(crate) use agena_runtime_tools::{
     agena_home_dir, generated_image_artifact_path, project_state_dir,
 };
-pub use application_services::{RuntimeApplicationRepositories, RuntimeApplicationServices};
+pub use application_services::{
+    RuntimeAcpSessionServices, RuntimeApplicationRepositories, RuntimeApplicationServices,
+};
 pub(crate) use application_services::{
     RuntimeApplicationServiceCompositionInputs, compose_runtime_application_services,
 };

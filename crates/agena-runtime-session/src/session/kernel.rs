@@ -7,5 +7,6 @@ mod processor;
 mod replay;
 
 pub use input::{KernelPrompt, KernelPromptHydrator};
+pub(crate) use processor::run_read_budget;
 pub use processor::{KernelRoundOutcome, KernelRoundRequest, KernelRoundRun, KernelToolApiCall};
 pub use replay::{KernelProviderState, reference_replay_text};

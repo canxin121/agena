@@ -4,7 +4,7 @@
 
 use std::time::{Duration, Instant};
 
-use crate::{App, AppMessage, UiResult, app_plan_document::plan_progress};
+use crate::{App, AppMessage, PlanViewerData, UiResult, app_plan_document::plan_viewer_data};
 
 #[derive(Debug, Default)]
 pub(crate) struct SessionPlanState {
@@ -97,7 +97,7 @@ impl App {
                     Some(session_id),
                 )
                 .await
-                .map(|response| plan_progress(response.payload.as_ref()))
+                .map(plan_viewer_data)
                 .map_err(crate::UiFailure::internal);
             let _ = tx
                 .send(AppMessage::SessionPlanLoaded {
@@ -113,7 +113,7 @@ impl App {
         &mut self,
         session_id: i64,
         request_id: u64,
-        result: UiResult<Option<String>>,
+        result: UiResult<PlanViewerData>,
     ) {
         if self.transcript.session_id != Some(session_id)
             || self.session_plan.session_id != Some(session_id)
@@ -121,15 +121,33 @@ impl App {
         {
             return;
         }
-        let updated = result.is_ok();
+        let (progress, data) = match result {
+            Ok(data) => (Ok(data.summary.clone()), Some(data)),
+            Err(error) => (Err(error), None),
+        };
         let refresh_again = self
             .session_plan
-            .complete_read(session_id, request_id, result);
-        if updated
+            .complete_read(session_id, request_id, progress);
+        if let Some(data) = data
             && let crate::Route::PlanViewer(state) = &mut self.current_route
             && state.session_id == session_id
+            && !state.external_activity
         {
-            state.summary = self.session_plan.progress.clone();
+            state.summary = data.summary;
+            if self
+                .transcript
+                .execution
+                .as_ref()
+                .is_some_and(|execution| execution.session.external_agent.is_some())
+                && request_id > state.request_id
+                && state.toggle_request_id == 0
+            {
+                state.request_id = request_id;
+                state.loading = false;
+                state.markdown = Some(data.markdown);
+                state.autorun = data.autorun;
+                state.error = None;
+            }
         }
         if refresh_again {
             self.request_plan_display_refresh(session_id);

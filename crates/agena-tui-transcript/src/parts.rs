@@ -294,7 +294,13 @@ fn finalize_run_entry(
             .find_map(|(index, part)| {
                 let is_text_segment = matches!(
                     part.content,
-                    TranscriptPartContent::Activity(TranscriptActivityContent::TextSegment(_))
+                    TranscriptPartContent::Activity(
+                        TranscriptActivityContent::TextSegment(_)
+                            | TranscriptActivityContent::AssistantDocument {
+                                reasoning: false,
+                                ..
+                            }
+                    )
                 );
                 let tool_call_follows = entry.parts[index + 1..].iter().any(|later| {
                     matches!(
@@ -306,15 +312,24 @@ fn finalize_run_entry(
             })
         {
             let part = &mut entry.parts[index];
-            let segment = match &part.content {
+            match &mut part.content {
                 TranscriptPartContent::Activity(TranscriptActivityContent::TextSegment(
                     segment,
-                )) => segment.text.clone(),
+                )) => {
+                    part.content = TranscriptPartContent::Activity(
+                        TranscriptActivityContent::Answer(Box::new(TextSegmentActivity {
+                            text: segment.text.clone(),
+                        })),
+                    );
+                }
+                TranscriptPartContent::Activity(TranscriptActivityContent::AssistantDocument {
+                    answer,
+                    ..
+                }) => {
+                    *answer = true;
+                }
                 _ => unreachable!("promotion target filtered to TextSegment"),
-            };
-            part.content = TranscriptPartContent::Activity(TranscriptActivityContent::Answer(
-                Box::new(TextSegmentActivity { text: segment }),
-            ));
+            }
         }
         // Empty active/completed envelopes may show run status. Failure
         // details are always real server Parts, including in paged histories.
@@ -493,6 +508,17 @@ fn entry_part(part: &PartResource) -> TranscriptEntryPart<'static> {
 }
 
 fn part_content(part: &PartResource) -> TranscriptPartContent<'static> {
+    if part.content["external_agent_document"] == true
+        && let Some(presentation) = &part.presentation
+    {
+        return TranscriptPartContent::Activity(TranscriptActivityContent::AssistantDocument {
+            document: Box::new(agena_domain::ContentDocument {
+                blocks: presentation.blocks.clone(),
+            }),
+            reasoning: part.kind == "think",
+            answer: false,
+        });
+    }
     if part.kind == "text"
         && part.role == "assistant"
         && let Some(refs) = &part.inline_ui
@@ -832,6 +858,7 @@ pub(crate) fn user_input_request_resource(
                     .collect(),
                 multiple: question.multiple,
                 allow_custom: question.allow_custom,
+                optional: question.optional,
             })
             .collect(),
         created_at: request.created_at,

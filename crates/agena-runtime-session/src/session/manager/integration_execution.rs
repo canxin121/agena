@@ -33,6 +33,11 @@ impl SessionManager {
             .configuration(session)
             .await
             .map_err(kernel_error)?;
+        if configuration.external_agent.is_some() {
+            return Err(AppError::Config(
+                "External agent sessions require interactive user input.".into(),
+            ));
+        }
         if configuration.relation_kind.is_subagent()
             || configuration.agent.is_some()
             || configuration.conversation.is_some()

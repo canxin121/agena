@@ -7,6 +7,7 @@ import IconButton from '@/components/ui/IconButton.vue'
 import { useVisibleResource } from '@/pages/chat/useVisibleResource'
 import type { MessageEntry } from '@/types/chat'
 import { readBrowserState } from '@/features/browser/api'
+import { isAcpSessionId } from '@/lib/acpSession'
 import { useBrowserCopy } from '@/features/browser/copy'
 import BrowserTabChip from '@/features/browser/BrowserTabChip.vue'
 import SessionChildrenSection from './SessionChildrenSection.vue'
@@ -104,5 +105,5 @@ watch(tabsOpen, (open) => {
       @open="openPage"
     />
   </SessionChip>
-  <SessionSchedules v-model:open="schedulesOpen" :session-id="sessionId" />
+  <SessionSchedules v-if="!isAcpSessionId(sessionId)" v-model:open="schedulesOpen" :session-id="sessionId" />
 </template>

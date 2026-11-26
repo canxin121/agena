@@ -4,6 +4,7 @@ import { computed, ref, watch } from 'vue'
 import { isMainTabId, mainTabPath, normalizeMainTabPath, type MainTabId } from '@/app/navigation/mainTabs'
 import { getLocalJson, getLocalString, setLocalJson, setLocalString } from '@/lib/persist'
 import { localStorageKeys } from '@/lib/persistence/storageKeys'
+import { isAcpSessionId } from '@/lib/acpSession'
 
 export type MainTab = MainTabId
 export type WorkspaceDockPanel = 'chat' | 'git' | 'files' | 'terminal' | 'preview'
@@ -365,9 +366,10 @@ export const useUiStore = defineStore('ui', () => {
     const mainTabRaw = String(source.mainTab || '').trim()
     if (!isMainTabId(mainTabRaw)) return null
     const mainTab: MainTab = mainTabRaw
-    const title = String(source.title || '').trim()
+    const title = mainTab === 'acp' ? '' : String(source.title || '').trim()
     const routePath = normalizeMainTabPath(mainTab, String(source.routePath || ''))
     const routeQuery = normalizeRouteQueryRecord(source.routeQuery)
+    if (mainTab === 'acp' || isAcpSessionId(routeQuery.sessionId)) delete routeQuery.sessionId
     // A chat workspace is a persisted view of a real session. Chat tabs without
     // a session id are invalid persisted workspace state and are discarded.
     if (mainTab === 'chat' && !readMatchQueryValue(routeQuery, 'sessionId')) return null
@@ -654,7 +656,14 @@ export const useUiStore = defineStore('ui', () => {
         workspaceWindowDragId.value = ''
       }
       retainGlobalSelectionsForWindows(list.map((item) => item.id))
-      setLocalJson(STORAGE_WORKSPACE_WINDOWS, list)
+      setLocalJson(
+        STORAGE_WORKSPACE_WINDOWS,
+        list.map((tab) =>
+          tab.mainTab === 'acp'
+            ? { ...tab, title: undefined, routeQuery: {}, routeHash: '' }
+            : tab,
+        ),
+      )
     },
     { deep: true },
   )
@@ -1768,6 +1777,11 @@ export const useUiStore = defineStore('ui', () => {
       setWorkspaceWindowRoutePath(routeWindowId, routePath)
       setWorkspaceWindowRouteQuery(routeWindowId, normalizedQuery)
       setWorkspaceWindowRouteHash(routeWindowId, routeHash)
+      return
+    }
+
+    if (tab === 'acp') {
+      openWorkspaceWindow(tab, { activate: true, path: routePath, query: normalizedQuery, hash: routeHash })
       return
     }
 

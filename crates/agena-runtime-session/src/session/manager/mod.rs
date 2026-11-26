@@ -32,6 +32,7 @@ mod commands;
 mod deliveries;
 mod discovery_cursor;
 mod execution;
+mod external_agent;
 mod host;
 mod integration_execution;
 mod managed;
@@ -148,6 +149,9 @@ struct SessionDispatch {
     submission: tokio::sync::Mutex<()>,
     execution: tokio::sync::Mutex<()>,
     tail: StdMutex<std::sync::Weak<RunControl>>,
+    external_steering: external_agent::steering::Slot,
+    external_work: external_agent::cancellation::Slot,
+    external_auth: external_agent::auth::StatusSlot,
     title: StdMutex<titles::TitleWork>,
     memory: StdMutex<memory::MemoryWork>,
     memory_changed: Notify,
@@ -170,6 +174,8 @@ impl RunControl {
 #[derive(Clone)]
 pub struct SessionManager {
     kernel_runtime: Arc<agena_storage_sqlite::SqliteKernel>,
+    acp_scope: Arc<tokio::sync::OnceCell<Arc<Self>>>,
+    acp_workspace_source: Option<Arc<agena_storage_sqlite::SqliteKernel>>,
     state: Arc<ArcSwap<ExecutionState>>,
     global_state: Arc<ArcSwap<ExecutionState>>,
     configuration_lock: Arc<parking_lot::Mutex<()>>,
@@ -183,6 +189,8 @@ pub struct SessionManager {
     attempt_controls: AttemptControlOwners,
     /// Locks exist only while queued/running executions retain them.
     sessions: Arc<StdMutex<HashMap<SessionId, std::sync::Weak<SessionDispatch>>>>,
+    external_idle_peers: external_agent::idle::IdlePeers,
+    external_agent_inputs: external_agent::input_requests::Inputs,
     tools: Arc<StdMutex<ActiveToolMap>>,
     operator_calls: Arc<StdMutex<OperatorInvocationMap>>,
     bot_operations: Arc<tokio::sync::Mutex<()>>,
@@ -221,6 +229,8 @@ impl SessionManager {
         });
         Self {
             kernel_runtime: kernel,
+            acp_scope: Default::default(),
+            acp_workspace_source: None,
             state: Arc::new(ArcSwap::from(initial.clone())),
             global_state: Arc::new(ArcSwap::from(initial)),
             configuration_lock: Default::default(),
@@ -232,6 +242,8 @@ impl SessionManager {
             control_tasks: tokio_util::task::TaskTracker::new(),
             attempt_controls: Default::default(),
             sessions: Default::default(),
+            external_idle_peers: Default::default(),
+            external_agent_inputs: Default::default(),
             tools: Default::default(),
             operator_calls: Default::default(),
             host_sequences: Default::default(),
@@ -362,6 +374,67 @@ impl SessionManager {
     pub fn session_kernel(&self) -> KernelPorts {
         self.kernel().clone()
     }
+
+    pub async fn enable_acp_scope(&self) -> Result<(), AppError> {
+        self.acp_scope
+            .get_or_try_init(|| async {
+                let kernel = agena_storage_sqlite::open_acp_kernel()
+                    .await
+                    .map_err(kernel_error)?;
+                let state = self.state.load_full();
+                let mut scope = Self::new(
+                    Arc::new(kernel),
+                    state.providers.clone(),
+                    state.governor.clone(),
+                    state.processor.clone(),
+                    state.executor.clone(),
+                    state.config.clone(),
+                );
+                scope.state = self.state.clone();
+                scope.global_state = self.global_state.clone();
+                scope.configuration_lock = self.configuration_lock.clone();
+                scope.acp_workspace_source = Some(self.kernel_runtime.clone());
+                scope.shutdown = self.shutdown.child_token();
+                Ok::<_, AppError>(Arc::new(scope))
+            })
+            .await?;
+        Ok(())
+    }
+
+    pub fn acp_scope(&self) -> Option<Arc<Self>> {
+        self.acp_scope.get().cloned()
+    }
+
+    pub fn acp_permission_rules(&self) -> Arc<dyn agena_storage::PermissionRuleRepository> {
+        self.kernel_runtime.permissions.clone()
+    }
+
+    pub(super) fn is_acp_scope(&self) -> bool {
+        self.acp_workspace_source.is_some()
+    }
+
+    async fn permission_rule_rows(
+        &self,
+        key: Option<&str>,
+        session: Option<i64>,
+        workspace: Option<i64>,
+    ) -> Result<
+        Vec<agena_storage::PersistedPermissionRule>,
+        agena_storage::PermissionRuleRepositoryError,
+    > {
+        let mut rules = match (&self.acp_workspace_source, key) {
+            (Some(source), Some(key)) => source.permissions.resolve(key, None, workspace).await?,
+            (Some(source), None) => source.permissions.resolve_snapshot(None, workspace).await?,
+            (None, _) => Vec::new(),
+        };
+        let local = &self.kernel_runtime.permissions;
+        let local_rules = match key {
+            Some(key) => local.resolve(key, session, workspace).await?,
+            None => local.resolve_snapshot(session, workspace).await?,
+        };
+        rules.extend(local_rules);
+        Ok(rules)
+    }
     pub fn tool_executor(&self) -> ToolExecutor {
         self.state.load().executor.clone()
     }
@@ -461,10 +534,23 @@ impl SessionManager {
     pub fn request_shutdown(&self) {
         self.shutdown.cancel();
         self.control_tasks.close();
+        if let Some(acp) = self.acp_scope.get() {
+            acp.request_shutdown();
+        }
     }
 
     pub async fn shutdown(&self) -> Result<(), AppError> {
         self.request_shutdown();
+        if let Some(acp) = self.acp_scope.get() {
+            let (main, external) = tokio::join!(self.drain_shutdown(), acp.drain_shutdown());
+            main?;
+            external?;
+            return acp.session_kernel().shutdown().await.map_err(kernel_error);
+        }
+        self.drain_shutdown().await
+    }
+
+    async fn drain_shutdown(&self) -> Result<(), AppError> {
         let active = self
             .active
             .lock()

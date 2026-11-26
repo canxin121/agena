@@ -313,8 +313,9 @@ impl ApplicationService {
     ) -> ApplicationResult<WorkspaceFileUploadResource> {
         let session = self.ensure_session_model(session_id).await?;
         let scope = session.workspace_id;
-        let upload_dir =
-            agena_storage_layout::StorageLayout::current().session_uploads_dir(session_id);
+        let upload_dir = (!self.is_acp_scope()).then(|| {
+            agena_storage_layout::StorageLayout::current().session_uploads_dir(session_id)
+        });
         WORKSPACE_TRANSFERS
             .run(move || store_uploaded_file(scope, Some(session_id), upload_dir, request, bytes))
             .await
@@ -989,7 +990,7 @@ fn upload_workspace_file_in(
     store_uploaded_file(
         Some(workspace_id),
         None,
-        layout.uploads_dir(&root),
+        Some(layout.uploads_dir(&root)),
         request,
         bytes,
     )
@@ -998,7 +999,7 @@ fn upload_workspace_file_in(
 fn store_uploaded_file(
     workspace_id: Option<i64>,
     session_id: Option<i64>,
-    upload_dir: PathBuf,
+    upload_dir: Option<PathBuf>,
     request: WorkspaceFileUploadRequest,
     bytes: Option<Vec<u8>>,
 ) -> ApplicationResult<WorkspaceFileUploadResource> {
@@ -1035,6 +1036,31 @@ fn store_uploaded_file(
             format!("uploaded file is {} bytes", decoded.len()),
         ));
     }
+    use sha2::Digest as _;
+    let digest = sha2::Sha256::digest(&decoded)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let Some(upload_dir) = upload_dir else {
+        if decoded.len() > agena_runtime_tools::media_input::MAX_MEDIA_BYTES {
+            return Err(ApplicationError::bad_request(
+                "ACP attachments are limited to 20 MiB.",
+            ));
+        }
+        return Ok(WorkspaceFileUploadResource {
+            sha256: Some(digest),
+            workspace_id,
+            session_id,
+            path: format!(
+                "{}{}",
+                agena_domain::ACP_INLINE_ATTACHMENT_PREFIX,
+                BASE64_STANDARD.encode(&decoded)
+            ),
+            name: filename,
+            mime: non_empty(request.mime.as_deref()).map(ToOwned::to_owned),
+            size_bytes: decoded.len() as u64,
+        });
+    };
 
     agena_storage_layout::secure_directory(&upload_dir).map_err(|error| {
         ApplicationError::bad_request_with_diagnostic(
@@ -1051,11 +1077,6 @@ fn store_uploaded_file(
             "attachment staging directory changed during validation",
         ));
     }
-    use sha2::Digest as _;
-    let digest = sha2::Sha256::digest(&decoded)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
     let stored_name = if session_id.is_some() {
         // Leave room for the owner token and digest within common 255-byte
         // filesystem component limits, retaining a useful file extension.

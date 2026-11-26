@@ -5,6 +5,7 @@ import { readActiveBackendBaseUrl } from './backend'
 import { readServerAuthTokenVersion } from './serverAuthToken'
 import { createRevalidator } from './revalidation'
 import type { SseEvent } from './sse'
+import { isAcpSessionId } from './acpSession'
 
 // All visible consumers share one small revision heartbeat. Actual bodies are
 // fetched only after a token changes; SSE wakes this check promptly.
@@ -351,8 +352,11 @@ export function applyResourceEvent(event: SseEvent) {
       }
     }
     if (!part || part.message_boundary === true) {
-      keys.push('sessions', 'workspaces', `session:${sid}:state`)
-      keys.push(...[...listeners.keys()].filter((key) => key.startsWith('workspace:')))
+      keys.push(`session:${sid}:state`)
+      if (!isAcpSessionId(sid)) {
+        keys.push('sessions', 'workspaces')
+        keys.push(...[...listeners.keys()].filter((key) => key.startsWith('workspace:')))
+      }
     }
     if (props.kind === 'part_removed' || props.kind === 'session_deleted') keys.push(`session:${sid}:files`)
   } else if (event.type === 'runtime_signal') {
@@ -363,6 +367,7 @@ export function applyResourceEvent(event: SseEvent) {
     }
     if (props.kind === 'schedule_changed' && sid) keys.push(`session:${sid}:schedules`)
     if (props.kind === 'plugin' && payload.kind === 'plan.changed' && sid) keys.push(`session:${sid}:plan`)
+    if (props.kind === 'external_agent_state_changed' && sid) keys.push(`session:${sid}:state`, `session:${sid}:plan`)
   }
   invalidateResources(keys)
 }

@@ -107,7 +107,7 @@ pub async fn list_sessions(
 }
 
 pub async fn get_session(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path(session_id): Path<i64>,
 ) -> Result<impl IntoResponse, ServerError> {
     json_http_found(state.service().get_session(session_id), || {
@@ -117,7 +117,7 @@ pub async fn get_session(
 }
 
 pub async fn get_session_state(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path(session_id): Path<i64>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, ServerError> {
@@ -137,7 +137,7 @@ pub async fn get_session_state(
 }
 
 pub async fn get_execution_attempt(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path((session_id, execution_id, attempt_generation)): Path<(i64, uuid::Uuid, i64)>,
 ) -> Result<impl IntoResponse, ServerError> {
     // Settlement changes after the durable terminal commit, so a session
@@ -151,7 +151,7 @@ pub async fn get_execution_attempt(
 }
 
 pub async fn cancel_execution_attempt(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path((session_id, execution_id, attempt_generation)): Path<(i64, uuid::Uuid, i64)>,
 ) -> Result<impl IntoResponse, ServerError> {
     Ok(Json(
@@ -175,7 +175,7 @@ pub async fn get_session_prompt_preview(
 }
 
 pub async fn get_session_cost(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path(session_id): Path<i64>,
 ) -> Result<impl IntoResponse, ServerError> {
     if state.service().get_session(session_id).await?.is_none() {
@@ -191,7 +191,7 @@ pub async fn get_session_cost(
 }
 
 pub async fn replace_session_selection(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path(session_id): Path<i64>,
     headers: HeaderMap,
     Json(request): Json<SessionRunRequestBody>,
@@ -204,8 +204,115 @@ pub async fn replace_session_selection(
     ))
 }
 
-pub async fn replace_session_permission(
+pub async fn external_agent_options(
+    crate::state::SessionScope(state): crate::state::SessionScope,
+    Path(session_id): Path<i64>,
+    Json(request): Json<agena_api::commands::ExternalAgentOptionsParams>,
+) -> Result<impl IntoResponse, ServerError> {
+    Ok(Json(
+        state
+            .service()
+            .external_agent_options(session_id, request)
+            .await?,
+    ))
+}
+
+pub async fn external_agent_workspace(
     State(state): State<AppState>,
+    Path(workspace_id): Path<i64>,
+    Json(request): Json<agena_domain::ExternalAgentWorkspaceAction>,
+) -> Result<impl IntoResponse, ServerError> {
+    Ok(Json(
+        state
+            .acp_application()?
+            .service()
+            .external_agent_workspace(workspace_id, request)
+            .await?,
+    ))
+}
+
+pub async fn external_agent_session(
+    crate::state::SessionScope(state): crate::state::SessionScope,
+    Path(session_id): Path<i64>,
+    Json(request): Json<agena_domain::ExternalAgentSessionAction>,
+) -> Result<impl IntoResponse, ServerError> {
+    Ok(Json(
+        state
+            .service()
+            .external_agent_session(session_id, request)
+            .await?,
+    ))
+}
+
+pub async fn external_agent_auth(
+    crate::state::SessionScope(state): crate::state::SessionScope,
+    Path(session_id): Path<i64>,
+    Json(action): Json<agena_domain::ExternalAgentAuthAction>,
+) -> Result<impl IntoResponse, ServerError> {
+    Ok(Json(
+        state
+            .service()
+            .external_agent_auth(session_id, action)
+            .await?,
+    ))
+}
+
+pub async fn external_agent_live_auth(
+    crate::state::SessionScope(state): crate::state::SessionScope,
+    Path(session_id): Path<i64>,
+) -> Result<impl IntoResponse, ServerError> {
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(state.service().external_agent_live_auth(session_id).await?),
+    ))
+}
+
+pub async fn external_agent_providers(
+    crate::state::SessionScope(state): crate::state::SessionScope,
+    Path(session_id): Path<i64>,
+) -> Result<impl IntoResponse, ServerError> {
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(state.service().external_agent_providers(session_id).await?),
+    ))
+}
+
+pub async fn list_external_agent_work(
+    crate::state::SessionScope(state): crate::state::SessionScope,
+    Path(session_id): Path<i64>,
+) -> Result<impl IntoResponse, ServerError> {
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(
+            state
+                .service()
+                .external_agent_work(session_id, None)
+                .await?,
+        ),
+    ))
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CancelExternalAgentWorkRequest {
+    cancel_id: uuid::Uuid,
+}
+
+pub async fn cancel_external_agent_work(
+    crate::state::SessionScope(state): crate::state::SessionScope,
+    Path(session_id): Path<i64>,
+    Json(request): Json<CancelExternalAgentWorkRequest>,
+) -> Result<impl IntoResponse, ServerError> {
+    Ok(Json(
+        state
+            .service()
+            .external_agent_work(session_id, Some(request.cancel_id))
+            .await?,
+    ))
+}
+
+pub async fn replace_session_permission(
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path(session_id): Path<i64>,
     headers: HeaderMap,
     Json(request): Json<SessionPermissionUpdateRequest>,
@@ -231,11 +338,16 @@ pub async fn create_session(
     State(state): State<AppState>,
     Json(request): Json<SessionCreateRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
-    json_http(state.service().create_session(request)).await
+    let application = if request.session.external_agent.is_some() {
+        state.acp_application()?
+    } else {
+        state.application()
+    };
+    json_http(application.service().create_session(request)).await
 }
 
 pub async fn replace_session(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path(session_id): Path<i64>,
     headers: HeaderMap,
     Json(request): Json<SessionUpdateRequest>,
@@ -245,7 +357,7 @@ pub async fn replace_session(
 }
 
 pub async fn delete_session(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path(session_id): Path<i64>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, ServerError> {
@@ -254,7 +366,7 @@ pub async fn delete_session(
 }
 
 pub async fn list_session_parts(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path(session_id): Path<i64>,
     AxumQuery(query): AxumQuery<SessionPartListQuery>,
 ) -> Result<impl IntoResponse, ServerError> {
@@ -298,7 +410,7 @@ pub async fn list_session_parts(
 /// projection contains only the human-facing presentation; this endpoint is
 /// the explicit disclosure boundary for the other four sections.
 pub async fn get_session_tool_detail(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path((session_id, part_id, section_name)): Path<(i64, i64, String)>,
     AxumQuery(query): AxumQuery<ToolDetailSectionQuery>,
     headers: HeaderMap,
@@ -343,7 +455,7 @@ pub async fn get_session_tool_detail(
 }
 
 pub async fn get_session_plan(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path(session_id): Path<i64>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, ServerError> {
@@ -353,24 +465,12 @@ pub async fn get_session_plan(
     if let Some(response) = read.not_modified(&headers) {
         return Ok(response);
     }
-    // Validate the scope even if this session has not created a plan.
-    if state.service().get_session(session_id).await?.is_none() {
-        return Err(ServerError::not_found("The session was not found."));
-    }
-    let result = state
-        .application()
-        .invoke_plugin_tool(
-            "agena.plan",
-            "get",
-            serde_json::json!({"view": "full"}),
-            Some(session_id),
-        )
-        .await?;
+    let result = state.application().session_plan(session_id).await?;
     read.json(result).await
 }
 
 pub async fn stream_session_changes(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path(session_id): Path<i64>,
     AxumQuery(query): AxumQuery<SessionChangeStreamQuery>,
 ) -> Result<impl IntoResponse, ServerError> {
@@ -461,7 +561,7 @@ pub async fn stream_session_changes(
 }
 
 pub async fn submit_message(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path(session_id): Path<i64>,
     headers: HeaderMap,
     Json(request): Json<SessionRunRequest>,
@@ -474,8 +574,23 @@ pub async fn submit_message(
     ))
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SteerExternalAgentRequest {
+    text: String,
+}
+
+pub async fn steer_external_agent(
+    crate::state::SessionScope(state): crate::state::SessionScope,
+    Path(session_id): Path<i64>,
+    Json(request): Json<SteerExternalAgentRequest>,
+) -> Result<impl IntoResponse, ServerError> {
+    state.steer_external_agent(session_id, request.text).await?;
+    Ok(Json(serde_json::json!({"accepted": true})))
+}
+
 pub async fn continue_run(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path(session_id): Path<i64>,
     headers: HeaderMap,
     Json(request): Json<SessionRunRequestBody>,
@@ -487,7 +602,7 @@ pub async fn continue_run(
 }
 
 pub async fn compact_session(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path(session_id): Path<i64>,
     headers: HeaderMap,
     Json(request): Json<SessionRunRequestBody>,
@@ -503,7 +618,7 @@ pub async fn compact_session(
 /// `mode = "context_only"` keeps the transcript readable and restarts only the
 /// model's prompt window; the default `history` clears the transcript too.
 pub async fn clear_session(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path(session_id): Path<i64>,
     headers: HeaderMap,
     Json(request): Json<SessionClearRequestBody>,
@@ -518,7 +633,7 @@ pub async fn clear_session(
 }
 
 pub async fn fork_session(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path(session_id): Path<i64>,
     headers: HeaderMap,
     Json(request): Json<SessionForkRequestBody>,
@@ -537,7 +652,7 @@ pub async fn fork_session(
 }
 
 pub async fn cancel_run(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path(session_id): Path<i64>,
     Json(request): Json<CancelRunRequestBody>,
 ) -> Result<impl IntoResponse, ServerError> {
@@ -554,7 +669,7 @@ pub struct CancelRunRequestBody {
 }
 
 pub async fn reply_permission(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path(session_id): Path<i64>,
     headers: HeaderMap,
     Json(request): Json<SessionReplyRequestBody<PermissionReply>>,
@@ -573,7 +688,7 @@ pub async fn reply_permission(
 }
 
 pub async fn reply_user_input(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path(session_id): Path<i64>,
     headers: HeaderMap,
     Json(request): Json<SessionReplyRequestBody<UserInputReply>>,
@@ -587,7 +702,7 @@ pub async fn reply_user_input(
 }
 
 pub async fn mark_interactive_request_presented(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path((session_id, request_id)): Path<(i64, String)>,
 ) -> Result<impl IntoResponse, ServerError> {
     Ok(Json(
@@ -598,7 +713,7 @@ pub async fn mark_interactive_request_presented(
 }
 
 pub async fn rewind_session(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path(session_id): Path<i64>,
     headers: HeaderMap,
     Json(request): Json<SessionRewindRequestBody>,
@@ -621,7 +736,7 @@ pub async fn rewind_session(
 }
 
 pub async fn list_session_tree(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path(root_id): Path<i64>,
 ) -> Result<impl IntoResponse, ServerError> {
     Ok(Json(state.application().session_tree(root_id).await?))
@@ -741,7 +856,7 @@ pub struct MessageQueuePauseRequest {
 }
 
 pub async fn set_message_queue_paused(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path(session_id): Path<i64>,
     Json(request): Json<MessageQueuePauseRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
@@ -754,7 +869,7 @@ pub async fn set_message_queue_paused(
 }
 
 pub async fn clear_message_queue(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path(session_id): Path<i64>,
     Json(request): Json<TakeQueuedMessageRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
@@ -774,7 +889,7 @@ pub struct EditQueuedMessageRequest {
 }
 
 pub async fn queued_message_for_edit(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path((session_id, execution_id)): Path<(i64, uuid::Uuid)>,
 ) -> Result<impl IntoResponse, ServerError> {
     Ok(Json(
@@ -786,7 +901,7 @@ pub async fn queued_message_for_edit(
 }
 
 pub async fn edit_queued_message(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path((session_id, execution_id)): Path<(i64, uuid::Uuid)>,
     Json(request): Json<EditQueuedMessageRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
@@ -805,7 +920,7 @@ pub async fn edit_queued_message(
 }
 
 pub async fn delete_queued_message(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path((session_id, execution_id)): Path<(i64, uuid::Uuid)>,
     Json(request): Json<TakeQueuedMessageRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
@@ -822,7 +937,7 @@ pub async fn delete_queued_message(
 }
 
 pub async fn take_queued_message(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path((session_id, execution_id)): Path<(i64, uuid::Uuid)>,
     Json(request): Json<TakeQueuedMessageRequest>,
 ) -> Result<impl IntoResponse, ServerError> {

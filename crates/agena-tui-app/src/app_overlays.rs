@@ -326,13 +326,29 @@ impl App {
         key: KeyEvent,
         dialog: &mut CommandPaletteOverlay,
     ) -> bool {
-        let action = match resolve_tui_key(KeyContext::Picker, key) {
-            Some(KeyAction::Accept) => agena_tui::command_palette::CommandPaletteAction::Accept,
-            _ => agena_tui::command_palette::CommandPaletteAction::Input(key),
+        let accept = resolve_tui_key(KeyContext::Picker, key) == Some(KeyAction::Accept);
+        let action = if accept {
+            agena_tui::command_palette::CommandPaletteAction::Accept
+        } else {
+            agena_tui::command_palette::CommandPaletteAction::Input(key)
         };
         match agena_tui::command_palette::reduce(&mut dialog.presentation, action) {
             agena_tui::command_palette::CommandPaletteEffect::Close => true,
-            agena_tui::command_palette::CommandPaletteEffect::KeepOpen => false,
+            agena_tui::command_palette::CommandPaletteEffect::KeepOpen => {
+                if !accept || self.external_agent_commands().is_none() {
+                    return false;
+                }
+                // A known native command can start the conversation before
+                // the agent has advertised its catalog.
+                let input = format!("/{}", dialog.presentation.input.text());
+                if agena_domain::external_agent_command_input(&input).is_none() {
+                    return false;
+                }
+                self.composer.set_text(input);
+                self.focus = Focus::Composer;
+                self.submit_composer();
+                true
+            }
             agena_tui::command_palette::CommandPaletteEffect::Activate { key } => {
                 let Some(action) = dialog.actions.get(key.as_str()).cloned() else {
                     return false;
@@ -353,6 +369,52 @@ impl App {
                             self.execute_plugin_slash_command(*entry, "");
                         } else if let Some(command_name) = plugin_command_slash_name(&entry) {
                             self.prepare_composer_command(command_name.as_str());
+                        }
+                    }
+                    CommandPaletteCommand::ExternalAgentActivity { session_id } => {
+                        self.open_external_agent_activity(session_id);
+                    }
+                    CommandPaletteCommand::ExternalAgentWork { session_id } => {
+                        self.request_external_agent_work(session_id, None);
+                    }
+                    CommandPaletteCommand::ExternalAgentSuggestion {
+                        session_id,
+                        suggestion,
+                    } => {
+                        if self.composer.text().is_empty()
+                            && self.composer_items.is_empty()
+                            && self.external_agent_suggestions().is_some_and(
+                                |(current, choices)| {
+                                    current == session_id && choices.contains(&suggestion)
+                                },
+                            )
+                        {
+                            self.reset_prompt_history_recall();
+                            self.restore_composer_draft(crate::ComposerDraft {
+                                document: suggestion.composer_document(),
+                            });
+                            self.focus = Focus::Composer;
+                            self.after_composer_text_mutated();
+                        }
+                    }
+                    CommandPaletteCommand::External {
+                        session_id,
+                        command,
+                    } => {
+                        if self
+                            .external_agent_commands()
+                            .is_some_and(|(current, _, commands)| {
+                                current == session_id && commands.contains(&command)
+                            })
+                        {
+                            let name = command.qualified_name();
+                            if command.skill || command.argument_hint.is_some() {
+                                self.prepare_composer_command(&name);
+                            } else {
+                                self.composer.set_text(format!("/{name}"));
+                                self.focus = Focus::Composer;
+                                self.submit_composer();
+                            }
                         }
                     }
                 }

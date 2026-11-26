@@ -1,5 +1,6 @@
 import { captureResourceObservation, invalidateResourcePrefix, invalidateResources } from '../../lib/resourceSync'
 import { sessionStateIsBusy, sessionStateNeedsAttention, type Session } from '../../types/chat'
+import { isAcpSessionId } from '@/lib/acpSession'
 
 // Routing hints from bodies we already received, not a second session cache.
 // They let writes with an empty response reconcile one workspace without a
@@ -35,7 +36,7 @@ export function subscribeSessionDeletions(callback: (ids: ReadonlySet<string>) =
 }
 
 export function rememberSessionRoute(session: Session, scope: number) {
-  if (scope !== sessionRoutingScope() || deleted.has(session.id)) return
+  if (isAcpSessionId(session.id) || scope !== sessionRoutingScope() || deleted.has(session.id)) return
   const workspaceId = Number(session.workspace_id)
   if (!Number.isSafeInteger(workspaceId) || workspaceId <= 0) return
   const version = Number(session.version) || 0
@@ -63,6 +64,10 @@ export function reconcileSessionMutation(
   patch?: { title?: string; favorite?: boolean; pinned?: boolean; prompts?: unknown },
 ) {
   if (scope !== sessionRoutingScope()) return
+  if (isAcpSessionId(sessionId)) {
+    invalidateResources([`session:${sessionId}:state`, `session:${sessionId}:parts`])
+    return
+  }
   const route = routes.get(sessionId)
   const keys = new Set<string>([`session:${sessionId}:state`])
   const membershipChanged = change !== 'metadata' || patch?.favorite !== undefined || patch?.pinned !== undefined

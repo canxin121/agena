@@ -15,6 +15,16 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex},
 };
+
+pub(crate) fn is_acp_resource(key: &str) -> bool {
+    let mut fields = key.split(':');
+    matches!(fields.next(), Some("session" | "part"))
+        && fields
+            .next()
+            .and_then(|id| id.parse().ok())
+            .is_some_and(agena_domain::is_acp_session_id)
+}
+
 struct Clock {
     position: Option<WatchCursor>,
     workspace_catalog_revision: u64,
@@ -400,12 +410,13 @@ impl ResourceRevisions {
                 } else {
                     keys.push(format!("session:{id}:state"));
                 }
-                if signal.kind == "plugin"
-                    && signal
-                        .payload
-                        .get("kind")
-                        .and_then(serde_json::Value::as_str)
-                        == Some("plan.changed")
+                if signal.kind == "external_agent_state_changed"
+                    || (signal.kind == "plugin"
+                        && signal
+                            .payload
+                            .get("kind")
+                            .and_then(serde_json::Value::as_str)
+                            == Some("plan.changed"))
                 {
                     keys.push(format!("session:{id}:plan"));
                 }

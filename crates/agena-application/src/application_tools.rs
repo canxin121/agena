@@ -497,6 +497,9 @@ impl Application {
         &self,
         part: &agena_api::part::PartResource,
     ) -> Option<agena_domain::PartDocument> {
+        if part.content["external_agent_document"] == true {
+            return part.presentation.clone();
+        }
         let key = (
             part.part_id,
             part.revision,

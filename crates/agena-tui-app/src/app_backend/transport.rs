@@ -825,6 +825,14 @@ impl TuiBackend {
         mime: Option<&str>,
     ) -> Result<agena_api::resource::WorkspaceFileUploadResource> {
         let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+        if let Some(session) = session_id.filter(|id| agena_domain::is_acp_session_id(*id)) {
+            return self
+                .inner
+                .client
+                .upload_session_file(session, filename, encoded.as_str(), mime)
+                .await
+                .context("failed to prepare an ACP attachment");
+        }
         let workspace_id = match session_id {
             Some(session) => match self.get_session(session).await?.workspace_id {
                 Some(workspace_id) => workspace_id,
@@ -2943,12 +2951,13 @@ impl TuiBackend {
                             }
                             continue;
                         }
-                        let incremental = if signal.kind == "plugin"
-                            && signal
-                                .payload
-                                .get("kind")
-                                .and_then(serde_json::Value::as_str)
-                                == Some("plan.changed")
+                        let incremental = if signal.kind == "external_agent_state_changed"
+                            || (signal.kind == "plugin"
+                                && signal
+                                    .payload
+                                    .get("kind")
+                                    .and_then(serde_json::Value::as_str)
+                                    == Some("plan.changed"))
                         {
                             Some(LiveEvent {
                                 plan_changed: true,

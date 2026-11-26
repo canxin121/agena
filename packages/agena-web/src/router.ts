@@ -2,6 +2,8 @@ import { createRouter, createWebHistory, type RouteLocationNormalizedLoaded, typ
 import { sessionStorageKeys } from '@/lib/persistence/storageKeys'
 import { botIdQuery, isBotId } from '@/lib/bots'
 import { hasEmbeddedWorkspacePaneQuery } from '@/app/windowScope'
+import { readSessionIdFromQuery } from '@/app/navigation/sessionQuery'
+import { isAcpSessionId } from '@/lib/acpSession'
 
 const CHUNK_RECOVERY_KEY = sessionStorageKeys.app.chunkRecoveryReloaded
 
@@ -42,6 +44,11 @@ const routes: RouteRecordRaw[] = [
     path: '/chat',
     component: () => import('./pages/ChatPage.vue'),
     meta: { shellSidebar: 'chat', mobilePanel: 'sessions' },
+  },
+  {
+    path: '/acp',
+    component: () => import('./pages/ChatPage.vue'),
+    meta: { shellSidebar: 'acp', mobilePanel: 'acp' },
   },
   {
     path: '/terminal',
@@ -90,6 +97,11 @@ export const router = createRouter({
 })
 
 router.beforeEach((to, from) => {
+  const sessionId = readSessionIdFromQuery(to.query)
+  if (sessionId && (to.path === '/chat' || to.path === '/acp') && (to.path === '/acp') !== isAcpSessionId(sessionId)) {
+    const { sessionId: _sessionId, ...query } = to.query
+    return { path: to.path, query, hash: to.hash, replace: true }
+  }
   if (to.path === '/assistant' && from.path === '/bot' && isBotId(botIdQuery(from.query))) {
     return { path: '/bot', query: { ...from.query, editPersona: '1' } }
   }

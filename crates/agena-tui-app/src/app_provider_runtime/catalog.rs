@@ -63,6 +63,10 @@ impl App {
     }
 
     pub(crate) fn open_session_model_chooser(&mut self) {
+        if let Some((session_id, agent, _)) = self.external_agent_commands() {
+            self.request_external_agent_options(session_id, agent, None);
+            return;
+        }
         self.open_model_chooser(SessionModelChooserPurpose::RuntimeOverride);
     }
 

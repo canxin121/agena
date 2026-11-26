@@ -1,3 +1,4 @@
+import { isAcpSessionId } from '@/lib/acpSession'
 import { normalizeMessageIdentity } from '@/lib/messageIdentity'
 import { defineStore } from 'pinia'
 import { useUiStore } from './ui'
@@ -211,7 +212,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
   sessionRunConfigBySession.value = loadSessionRunConfigMap(localStorageKeys.chat.sessionRunConfig)
   const runConfigPersister = createSessionRunConfigPersister(
     localStorageKeys.chat.sessionRunConfig,
-    () => sessionRunConfigBySession.value,
+    () => Object.fromEntries(Object.entries(sessionRunConfigBySession.value).filter(([id]) => !isAcpSessionId(id))),
   )
 
   // ─── timers / inflight guards ─────────────────────────────────────────────
@@ -419,7 +420,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const nextById = sessionsById.value
     for (const s of list) {
       const sid = typeof s?.id === 'string' ? s.id.trim() : ''
-      if (sid && !deletedSessions.has(sid) && !(Number(nextById[sid]?.version || 0) > Number(s.version || 0)))
+      if (sid && !isAcpSessionId(sid) && !deletedSessions.has(sid) && !(Number(nextById[sid]?.version || 0) > Number(s.version || 0)))
         nextById[sid] = sessionMetadataSnapshot(s)
     }
     sessionsById.value = nextById
@@ -437,7 +438,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     if (!executionSnapshot) updated = sessionMetadataSnapshot(updated)
     const merged = { ...(sessionsById.value[sid] || {}), ...updated, id: sid } as Session
     sessionsById.value[sid] = merged
-    if (recent === 'none') return
+    if (isAcpSessionId(sid) || recent === 'none') return
     const hasInCurrent = sessions.value.some((s) => s.id === sid)
     if (hasInCurrent) {
       sessions.value = sessions.value.map((s) => (s.id === sid ? { ...s, ...merged } : s))
@@ -2040,6 +2041,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
   ) {
     const sid = String(sessionId || '').trim()
     if (!sid) throw new Error(i18n.global.t('chat.errors.sessionRequiredForAttachments'))
+    if (isAcpSessionId(sid)) return await chatApi.uploadSessionFile(Number(sid), input)
     let session = getSessionById(sid)
     if (!session) {
       session = await chatApi.getSession(sid)
@@ -2245,7 +2247,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
       const questions = Array.isArray(pending.request.questions) ? pending.request.questions : []
       questions.forEach((_, index) => {
         // The user-input reply contract is indexed by question ordinal.
-        answersMap[String(index)] = Array.isArray(answers[index]) ? answers[index] : []
+        if (answers[index]?.length) answersMap[String(index)] = answers[index]
       })
       return chatApi.replyQuestion(owner, requestId, answersMap)
     })
@@ -2665,7 +2667,8 @@ function scopedChat(store: ChatStore, pane: WorkspacePaneContext): ChatStore {
   const beginSelection = createLatestRequestGuard(() => pane.windowId.value, pane)
   const ui = useUiStore()
   function selectedSessionId(): string | null {
-    return readSessionIdFromQuery(pane.route.value.query) || null
+    const id = readSessionIdFromQuery(pane.route.value.query)
+    return (pane.route.value.path === '/acp') === isAcpSessionId(id) ? id || null : null
   }
 
   async function selectSession(id: string | null) {
@@ -2676,8 +2679,9 @@ function scopedChat(store: ChatStore, pane: WorkspacePaneContext): ChatStore {
     // is pending. Object identity alone cannot establish navigation ownership.
     const initialPath = pane.route.value.path
     const initialSession = readSessionIdFromQuery(pane.route.value.query) || ''
+    const destination = isAcpSessionId(sid) || (!sid && initialPath === '/acp') ? '/acp' : '/chat'
     const matches = (path: string, session: string) =>
-      (path === initialPath && session === initialSession) || (path === '/chat' && session === sid)
+      (path === initialPath && session === initialSession) || (path === destination && session === sid)
     const isCurrent = () => {
       if (!ownsSelection() || !matches(pane.route.value.path, readSessionIdFromQuery(pane.route.value.query) || ''))
         return false
@@ -2700,7 +2704,7 @@ function scopedChat(store: ChatStore, pane: WorkspacePaneContext): ChatStore {
 
     await pane.navigate(
       {
-        path: '/chat',
+        path: destination,
         query,
         hash: pane.route.value.hash,
       },

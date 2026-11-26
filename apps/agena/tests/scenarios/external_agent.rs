@@ -1,0 +1,993 @@
+use std::{collections::BTreeMap, os::unix::fs::PermissionsExt, path::PathBuf, time::Duration};
+
+use agena_api::{
+    Scope,
+    commands::CreateSessionParams,
+    live::ToolDetailSection,
+    resource::{SessionUsageLimitBasis, UserInputReplyKind},
+};
+use agena_client::SubscriptionEvent;
+use agena_domain::{
+    ActivityId, ComposerDocument, ExternalAgent, ExternalAgentOptionChange, ExternalAgentOptionKind,
+};
+use agena_testkit::{Reply, RequestMatch, TestAgenaBuilder, TestResult, UserSession};
+use anyhow::{Context, Result, ensure};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use serde_json::{Value, json};
+
+use super::fixture;
+
+fn peers() -> Result<(tempfile::TempDir, TestAgenaBuilder)> {
+    let bin = tempfile::tempdir()?;
+    for executable in ["agy", "claude-agent-acp"] {
+        let path = bin.path().join(executable);
+        std::fs::write(&path, include_str!("plugins/fake_acp.py"))?;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))?;
+    }
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let path = std::env::join_paths(
+        std::iter::once(bin.path().to_owned()).chain(std::env::split_paths(&path)),
+    )?;
+    let builder = fixture()
+        // Exercise runtime permissions on hosts that cannot start an MXC worker.
+        .configure_global(|config| config["sandbox"] = json!(false))
+        .env("PATH", path)
+        .env(
+            "AGENA_TEST_NEVER_FORWARD",
+            "test fixture private environment",
+        )
+        .env("CLAUDE_CODE_EXECUTABLE", "use bundled Claude Code instead")
+        .expect_plugin("agena.fs")
+        .seed_file(
+            "workspace/acp-input.txt",
+            b"acp callback content\n".to_vec(),
+        )
+        .seed_file(
+            "workspace/acp-image.png",
+            STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGNgYPgPAAEDAQAIicLsAAAAAElFTkSuQmCC")?,
+        );
+    Ok((bin, builder))
+}
+
+fn composer() -> Result<ComposerDocument> {
+    Ok(serde_json::from_value(json!([
+        {"type": "text", "text": "check composer"},
+        {"type": "activity", "activity": {"id": ActivityId::new(), "payload": {
+            "activity_type": "resource", "delivery": "model_input", "kind": "image",
+            "name": "acp-image.png", "reference": {"reference_type": "workspace_path", "path": "acp-image.png"},
+        }}},
+        {"type": "activity", "activity": {"id": ActivityId::new(), "payload": {
+            "activity_type": "resource", "kind": "file", "name": "acp-input.txt",
+            "reference": {"reference_type": "workspace_path", "path": "acp-input.txt"},
+        }}},
+        {"type": "activity", "activity": {"id": ActivityId::new(), "payload": {
+            "activity_type": "command_reference", "name": "inspect", "skill_id": "example@1/inspect",
+            "source": "agena.skills", "content_hash": "1234",
+        }}},
+    ]))?)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turn_request_limit_preserves_native_continuation() -> TestResult {
+    let (_bin, builder) = peers()?;
+    builder
+        .run(|case| async move {
+            let ordinary = case.user().new_session().await?;
+            let workspace_id = ordinary
+                .snapshot()
+                .await?
+                .session
+                .workspace_id
+                .context("workspace ID")?;
+            let created = ordinary
+                .client()
+                .create_session_configured(CreateSessionParams {
+                    external_agent: Some(ExternalAgent::Antigravity),
+                    workspace_id,
+                    title: "ACP request limit".into(),
+                    parent_id: None,
+                    auto_title: false,
+                    profile: None,
+                    prompts: None,
+                })
+                .await?;
+            let user = case.user().attach_session(created.id).await?;
+            let limited = user
+                .send("reach native request limit")
+                .await?
+                .wait_settled()
+                .await?;
+            limited.assert_succeeded()?;
+            limited.assert_text_contains("Partial native answer")?;
+            ensure!(limited.parts.iter().any(|part| {
+                part.kind == "notice" && part.content["kind"] == "external_agent_turn_limit"
+            }));
+            let continued = user
+                .send("continue after native request limit")
+                .await?
+                .wait_settled()
+                .await?;
+            continued.assert_succeeded()?;
+            continued.assert_text_contains("Continued native answer")?;
+            Ok(())
+        })
+        .await
+}
+
+async fn read_policy(user: &UserSession, path: PathBuf, mode: &str) -> Result<()> {
+    user.client()
+        .set_session_permission(
+            user.id(),
+            serde_json::from_value(json!({
+                "tools": {"default": "allow"},
+                "path": {"rules": { (path.to_string_lossy()): mode }}
+            }))?,
+        )
+        .await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn projects_acp_rich_content_and_session_activity() -> TestResult {
+    let (_bin, builder) = peers()?;
+    let wav = b"RIFF\x26\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x40\x1f\x00\x00\x80\x3e\x00\x00\x02\x00\x10\x00data\x02\x00\x00\x00\x00\x00";
+    builder
+        .seed_file("workspace/acp-audio.wav", wav.to_vec())
+        .run(|case| async move {
+            let ordinary = case.user().new_session().await?;
+            let id = ordinary
+                .client()
+                .create_session_configured(CreateSessionParams {
+                    external_agent: Some(ExternalAgent::ClaudeCode),
+                    workspace_id: ordinary
+                        .snapshot()
+                        .await?
+                        .session
+                        .workspace_id
+                        .context("workspace")?,
+                    title: "ACP activity".into(),
+                    parent_id: None,
+                    auto_title: false,
+                    profile: None,
+                    prompts: None,
+                })
+                .await?
+                .id;
+            let user = case.user().attach_session(id).await?;
+            user.client()
+                .set_session_permission(
+                    id,
+                    serde_json::from_value(json!({"tools":{"default":"allow"},"path":{"rules":{
+                        (case.workspace().join("acp-input.txt").to_string_lossy()):"readonly",
+                        (case.workspace().join("acp-audio.wav").to_string_lossy()):"readonly"
+                    }}}))?,
+                )
+                .await?;
+            let activity = |kind, path| {
+                json!({"type":"activity","activity":{"id":ActivityId::new(),"payload":{
+                    "activity_type":"resource","delivery":"model_input","kind":kind,"name":path,
+                    "reference":{"reference_type":"workspace_path","path":path},
+                }}})
+            };
+            let document = serde_json::from_value(json!([
+                {"type":"text","text":"check rich projection"},
+                activity("file","acp-input.txt"),activity("audio","acp-audio.wav"),
+            ]))?;
+            let run = user
+                .send_document(document, Default::default())
+                .await?
+                .wait_settled()
+                .await?;
+            run.assert_succeeded()?;
+            run.assert_assistant_text("rich projection accepted")?;
+            let details = user.snapshot().await?.execution.external_agent_details;
+            let cost = details.cost.context("native cost")?;
+            ensure!(cost.amount.as_f64() == Some(1.25) && cost.currency == "credits");
+            let billed = user.client().session_cost_summary(id).await?;
+            ensure!(billed.external_agent_cost == Some(cost) && billed.recorded_cost_usd == 0.0);
+            ensure!(
+                details
+                    .notices
+                    .iter()
+                    .any(|notice| notice.title == "Native notice")
+            );
+            let compact = details
+                .compactions
+                .iter()
+                .find(|item| item.id == "compact")
+                .context("compaction")?;
+            ensure!(compact.status == "completed" && compact.summary == "Captured summary.");
+            let child = details
+                .subagents
+                .get("native-child")
+                .context("native subagent")?;
+            ensure!(child.state.as_deref() == Some("idle") && child.messages.len() == 2);
+            ensure!(
+                child.messages[0].text == "Inspect the fixture"
+                    && child.messages[1].text == "Subagent response"
+            );
+
+            let part = run
+                .parts
+                .iter()
+                .find(|part| {
+                    part.kind == "tool_call" && part.content["name"] == "Claude Code · Native edit"
+                })
+                .context("native edit")?;
+            let input = user
+                .client()
+                .session_tool_detail(id, part.part_id, ToolDetailSection::Input)
+                .await?;
+            ensure!(
+                input.value["raw_input"]["scope"] == "test",
+                "{:?}",
+                input.value
+            );
+            ensure!(input.value["locations"][0]["line"] == 7);
+            let output = user
+                .client()
+                .session_tool_detail(id, part.part_id, ToolDetailSection::Output)
+                .await?;
+            ensure!(output.value["payload"]["external_agent"]["output"]["modified"] == true);
+            ensure!(output.value["attachments"][0]["mime"] == "image/png");
+            let human = user
+                .client()
+                .session_tool_detail(id, part.part_id, ToolDetailSection::Presentation)
+                .await?;
+            let blocks = human.value["blocks"].as_array().context("tool blocks")?;
+            ensure!(blocks.iter().any(|block| {
+                block["type"] == "diff"
+                    && block["diff"]
+                        .as_str()
+                        .is_some_and(|diff| diff.contains("-before") && diff.contains("+after"))
+            }));
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn external_agent_forms_stream_and_withdraw_independently_of_the_turn() -> TestResult {
+    let (_bin, builder) = peers()?;
+    builder
+        .run(|case| async move {
+            let ordinary = case.user().new_session().await?;
+            let created = ordinary
+                .client()
+                .create_session_configured(CreateSessionParams {
+                    external_agent: Some(ExternalAgent::ClaudeCode),
+                    workspace_id: ordinary
+                        .snapshot()
+                        .await?
+                        .session
+                        .workspace_id
+                        .context("workspace")?,
+                    title: "ACP interactions".into(),
+                    parent_id: None,
+                    auto_title: false,
+                    profile: None,
+                    prompts: None,
+                })
+                .await?;
+            let user = case.user().attach_session(created.id).await?;
+
+            let pending = user.send("check elicitation").await?;
+            let request = pending.wait_user_input().await?;
+            let form = request
+                .request
+                .request
+                .as_user_input()
+                .context("ACP form")?;
+            ensure!(form.body_markdown == "Choose execution settings.");
+            ensure!(form.questions.len() == 7 && form.questions[6].optional);
+            ensure!(form.questions[1].multiple && !form.questions[1].optional);
+            ensure!(form.questions[0].options[0].label == "Europe");
+            pending
+                .wait_text_contains("streamed while the form was open")
+                .await?;
+            let mut answers = BTreeMap::from([
+                ("0".into(), vec!["Europe".into()]),
+                ("1".into(), vec!["Logs".into(), "Statistics".into()]),
+                ("2".into(), vec!["9".into()]),
+                ("3".into(), vec!["0.25".into()]),
+                ("4".into(), vec!["False".into()]),
+                ("5".into(), vec!["staging".into()]),
+            ]);
+            ensure!(
+                request.answer(answers.clone()).await.is_err(),
+                "accepted an out-of-range integer"
+            );
+            ensure!(pending.wait_user_input().await?.id() == request.id());
+            answers.insert("2".into(), vec!["4".into()]);
+            request.answer(answers).await?;
+            let run = pending.wait_settled().await?;
+            run.assert_succeeded()?;
+            run.assert_text_contains("received typed answers")?;
+
+            let pending = user.send("dismiss elicitation").await?;
+            pending
+                .wait_user_input()
+                .await?
+                .reply_user_input(UserInputReplyKind::Cancel, BTreeMap::new(), None)
+                .await?;
+            let run = pending.wait_settled().await?;
+            run.assert_succeeded()?;
+            run.assert_assistant_text("form declined")?;
+
+            let pending = user.send("withdraw elicitation").await?;
+            let withdrawn = pending.wait_user_input().await?;
+            tokio::fs::write(case.workspace().join(".acp-withdraw-form"), "").await?;
+            pending
+                .wait_text_contains("form withdrawn and permission still waiting")
+                .await?;
+            user.wait_state("only the independent permission stays pending", |state| {
+                let requests = state.session.state.pending_interactive_requests();
+                requests.len() == 1 && requests[0].request.request_id() != withdrawn.id()
+            })
+            .await?;
+            ensure!(
+                withdrawn.answer(BTreeMap::new()).await.is_err(),
+                "accepted a reply to a withdrawn request"
+            );
+            pending
+                .wait_user_input()
+                .await?
+                .answer(BTreeMap::from([("0".into(), vec!["Deny".into()])]))
+                .await?;
+            let run = pending.wait_settled().await?;
+            run.assert_succeeded()?;
+            run.assert_text_contains("independent permission resolved")?;
+
+            let pending = user.send("withdraw permission").await?;
+            pending.wait_user_input().await?;
+            tokio::fs::write(case.workspace().join(".acp-withdraw-permission"), "").await?;
+            let run = pending.wait_settled().await?;
+            run.assert_succeeded()?;
+            run.assert_assistant_text("permission withdrawn")?;
+
+            let pending = user.send("cancel form turn").await?;
+            user.wait_state("both interactions are pending", |state| {
+                state.session.state.pending_interactive_requests().len() == 2
+            })
+            .await?;
+            pending.cancel().await?;
+            pending.wait_settled().await?.assert_cancelled()?;
+            ensure!(case.workspace().join(".acp-cancelled-pending").is_file());
+            ensure!(
+                user.snapshot()
+                    .await?
+                    .session
+                    .state
+                    .pending_interactive_requests()
+                    .is_empty()
+            );
+            ensure!(case.model().requests().is_empty());
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn external_agent_plans_and_context_follow_the_native_conversation() -> TestResult {
+    let (_bin, builder) = peers()?;
+    builder
+        .expect_plugin("agena.plan")
+        .run(|case| async move {
+            let ordinary = case.user().new_session().await?;
+            let id = ordinary
+                .client()
+                .create_session_configured(CreateSessionParams {
+                    external_agent: Some(ExternalAgent::ClaudeCode),
+                    workspace_id: ordinary
+                        .snapshot()
+                        .await?
+                        .session
+                        .workspace_id
+                        .context("workspace")?,
+                    title: "ACP plans and context".into(),
+                    parent_id: None,
+                    auto_title: false,
+                    profile: None,
+                    prompts: None,
+                })
+                .await?
+                .id;
+            let user = case.user().attach_session(id).await?;
+            let initial = user.snapshot().await?.usage;
+            ensure!(
+                initial.model_context_window_tokens.is_none() && initial.limit_tokens.is_none()
+            );
+            user.client().session_plan(id, false).await?;
+
+            let pending = user.send("show project plan").await?;
+            pending
+                .wait_text_contains("plan visible before prompt completion")
+                .await?;
+            let usage = user.snapshot().await?.usage;
+            ensure!(usage.current_tokens == 1200 && usage.limit_tokens == Some(4000));
+            ensure!(usage.limit_basis == Some(SessionUsageLimitBasis::ContextWindow));
+            ensure!(usage.input_limit_tokens.is_none());
+            let plan = user.client().session_plan(id, false).await?;
+            ensure!(
+                plan.output_text.contains("Legacy step")
+                    && plan.output_text.contains("An older approach.")
+            );
+            ensure!(plan.output_text.contains("- [x] Inspect workspace"));
+            ensure!(
+                plan.payload.as_ref().context("plan payload")?["current_step"]["title"]
+                    == "Refresh notes"
+            );
+
+            let mut changes = user
+                .client()
+                .stream_changes(Scope::Session { session_id: id })
+                .await?;
+            tokio::fs::write(case.workspace().join(".acp-plan-advance"), "").await?;
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    let event = changes.recv().await.context("session changes ended")??;
+                    if let SubscriptionEvent::RuntimeSignal(signal) = event
+                        && signal.kind == "external_agent_state_changed"
+                        && signal.session_id == Some(id)
+                    {
+                        return Ok::<(), anyhow::Error>(());
+                    }
+                }
+            })
+            .await
+            .context("live ACP state notification")??;
+            drop(changes);
+            tokio::fs::write(case.workspace().join(".acp-plan-finish"), "").await?;
+            let run = pending.wait_settled().await?;
+            run.assert_succeeded()?;
+            run.assert_text_contains("project plan revised")?;
+            let expected = user.client().session_plan(id, false).await?;
+            ensure!(expected.output_text.contains("A revised approach."));
+            ensure!(expected.output_text.contains("- [x] Review result"));
+            for removed in ["Legacy step", "Refresh notes", "An older approach."] {
+                ensure!(!expected.output_text.contains(removed));
+            }
+            ensure!(
+                expected.payload.as_ref().context("plan payload")?["plan"]["phase"] == "completed"
+            );
+            let usage = user.snapshot().await?.usage;
+            ensure!(usage.current_tokens == 400 && usage.model_context_window_tokens == Some(2000));
+            let cost = user.client().session_cost_summary(id).await?;
+            ensure!(cost.total_tokens == 0 && cost.recorded_cost_usd == 0.0);
+
+            let user = case.user().attach_session(id).await?;
+            ensure!(
+                user.client().session_plan(id, false).await?.output_text == expected.output_text
+            );
+            ensure!(user.snapshot().await?.usage.current_tokens == 400);
+            let loaded = user.send("check load").await?.wait_settled().await?;
+            loaded.assert_succeeded()?;
+            loaded.assert_assistant_text("loaded")?;
+            let restored = user.client().session_plan(id, false).await?;
+            ensure!(
+                restored
+                    .output_text
+                    .contains("The plan restored by Claude.")
+            );
+            ensure!(restored.output_text.contains("- [x] Review result"));
+            let usage = user.snapshot().await?.usage;
+            ensure!(usage.current_tokens == 550 && usage.limit_tokens == Some(2400));
+
+            user.client().clear_session(id, true).await?;
+            let cleared = user.client().session_plan(id, false).await?;
+            ensure!(!cleared.output_text.contains("The plan restored by Claude."));
+            ensure!(user.snapshot().await?.usage.limit_tokens.is_none());
+
+            let pending = user.send("cancel plan progress").await?;
+            pending
+                .wait_text_contains("waiting with a native plan")
+                .await?;
+            ensure!(
+                user.client()
+                    .session_plan(id, false)
+                    .await?
+                    .output_text
+                    .contains("Stale if aborted")
+            );
+            pending.cancel().await?;
+            pending.wait_settled().await?.assert_cancelled()?;
+            ensure!(
+                !user
+                    .client()
+                    .session_plan(id, false)
+                    .await?
+                    .output_text
+                    .contains("Stale if aborted")
+            );
+            ensure!(user.snapshot().await?.usage.limit_tokens.is_none());
+            ensure!(case.model().requests().is_empty());
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn external_agent_commands_follow_their_native_conversation() -> TestResult {
+    let (_bin, builder) = peers()?;
+    builder
+        .seed_file("workspace/.acp-catalog", Vec::new())
+        .run(|case| async move {
+            let ordinary = case.user().new_session().await?;
+            let workspace_id = ordinary
+                .snapshot()
+                .await?
+                .session
+                .workspace_id
+                .context("workspace id")?;
+            let create = |agent: ExternalAgent| {
+                ordinary
+                    .client()
+                    .create_session_configured(CreateSessionParams {
+                        external_agent: Some(agent),
+                        workspace_id,
+                        title: agent.label().into(),
+                        parent_id: None,
+                        auto_title: false,
+                        profile: None,
+                        prompts: None,
+                    })
+            };
+            let claude_id = create(ExternalAgent::ClaudeCode).await?.id;
+            let antigravity_id = create(ExternalAgent::Antigravity).await?.id;
+            let claude = case.user().attach_session(claude_id).await?;
+            let antigravity = case.user().attach_session(antigravity_id).await?;
+            ensure!(
+                claude
+                    .snapshot()
+                    .await?
+                    .execution
+                    .external_agent_commands
+                    .is_empty()
+            );
+
+            let pending = claude.send("/agent:compact").await?;
+            pending
+                .wait_text_contains("native compact received")
+                .await?;
+            let commands = claude.snapshot().await?.execution.external_agent_commands;
+            ensure!(
+                commands
+                    .iter()
+                    .map(|command| (command.name.as_str(), command.argument_hint.as_deref()))
+                    .eq([("compact", None), ("mcp:repo:review", Some("<scope>"))]),
+                "unexpected live catalog: {commands:?}"
+            );
+            ensure!(commands[0].description == "Compact the native context");
+            ensure!(
+                antigravity
+                    .snapshot()
+                    .await?
+                    .execution
+                    .external_agent_commands
+                    .is_empty()
+            );
+            ensure!(
+                ordinary
+                    .snapshot()
+                    .await?
+                    .execution
+                    .external_agent_commands
+                    .is_empty()
+            );
+            tokio::fs::write(case.workspace().join(".acp-catalog-visible"), "").await?;
+            let run = pending.wait_settled().await?;
+            run.assert_succeeded()?;
+            let parts = claude.parts().await?;
+            let input = parts
+                .iter()
+                .find(|part| part.role == "user" && part.kind == "text")
+                .context("saved user input")?;
+            let mut text = Vec::new();
+            claude
+                .client()
+                .write_part_text(claude_id, input, &mut text)
+                .await?;
+            ensure!(text == b"/agent:compact");
+
+            let run = antigravity
+                .send("/agent:status")
+                .await?
+                .wait_settled()
+                .await?;
+            run.assert_succeeded()?;
+            run.assert_assistant_text("native status received")?;
+            let other_commands = antigravity
+                .snapshot()
+                .await?
+                .execution
+                .external_agent_commands;
+            ensure!(other_commands.len() == 1 && other_commands[0].name == "status");
+            ensure!(claude.snapshot().await?.execution.external_agent_commands == commands);
+
+            let claude = case.user().attach_session(claude_id).await?;
+            ensure!(claude.snapshot().await?.execution.external_agent_commands == commands);
+            let run = claude
+                .send(r#"/agent:mcp:repo:review  "scope"  all"#)
+                .await?
+                .wait_settled()
+                .await?;
+            run.assert_succeeded()?;
+            run.assert_assistant_text("native review received exact arguments")?;
+            let replacement = claude.snapshot().await?.execution.external_agent_commands;
+            ensure!(replacement.len() == 1 && replacement[0].name == "review");
+
+            let run = claude.send("//agent:compact").await?.wait_settled().await?;
+            run.assert_succeeded()?;
+            run.assert_assistant_text("escaped command received as text")?;
+            ensure!(
+                claude
+                    .snapshot()
+                    .await?
+                    .execution
+                    .external_agent_commands
+                    .is_empty()
+            );
+            let antigravity = case.user().attach_session(antigravity_id).await?;
+            ensure!(
+                antigravity
+                    .snapshot()
+                    .await?
+                    .execution
+                    .external_agent_commands
+                    == other_commands
+            );
+            antigravity
+                .client()
+                .clear_session(antigravity_id, true)
+                .await?;
+            ensure!(
+                antigravity
+                    .snapshot()
+                    .await?
+                    .execution
+                    .external_agent_commands
+                    .is_empty()
+            );
+            ensure!(case.model().requests().is_empty());
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn external_agent_options_validate_model_and_thinking_before_the_first_prompt() -> TestResult
+{
+    let (_bin, builder) = peers()?;
+    builder
+        .run(|case| async move {
+            let ordinary = case.user().new_session().await?;
+            let workspace_id = ordinary
+                .snapshot()
+                .await?
+                .session
+                .workspace_id
+                .context("workspace id")?;
+            ensure!(
+                ordinary
+                    .client()
+                    .external_agent_options(ordinary.id(), None)
+                    .await
+                    .is_err()
+            );
+            let created = ordinary
+                .client()
+                .create_session_configured(CreateSessionParams {
+                    external_agent: Some(ExternalAgent::Antigravity),
+                    workspace_id,
+                    title: "Agent options".into(),
+                    parent_id: None,
+                    auto_title: false,
+                    profile: None,
+                    prompts: None,
+                })
+                .await?;
+            let sid = created.id.to_string();
+            let user = case.user().attach_session(created.id).await?;
+            let change = |kind, value: &str| {
+                Some(ExternalAgentOptionChange {
+                    kind,
+                    value: Some(value.into()),
+                })
+            };
+            let model = ExternalAgentOptionKind::Model;
+            let thought = ExternalAgentOptionKind::ThoughtLevel;
+
+            let options = user
+                .client()
+                .external_agent_options(created.id, None)
+                .await?;
+            ensure!(options.selection.is_empty() && options.options.len() == 3);
+            ensure!(options.options[0].kind == model && options.options[0].choices.len() == 2);
+            ensure!(
+                options.options[1]
+                    .choices
+                    .iter()
+                    .all(|choice| choice.value != "high")
+            );
+            ensure!(
+                user.client()
+                    .external_agent_options(created.id, change(thought.clone(), "high"))
+                    .await
+                    .is_err()
+            );
+
+            let cli = case
+                .run_cli(["sessions", "agent-options", &sid, "--model", "deep"])
+                .await?;
+            let after: agena_domain::ExternalAgentOptions =
+                serde_json::from_str(&cli.require_success()?.stdout)?;
+            ensure!(after.selection.get(&model).map(String::as_str) == Some("deep"));
+            ensure!(
+                after.options[1]
+                    .choices
+                    .iter()
+                    .any(|choice| choice.value == "high")
+            );
+            let options = user
+                .client()
+                .external_agent_options(created.id, change(thought.clone(), "high"))
+                .await?;
+            ensure!(options.selection.get(&thought).map(String::as_str) == Some("high"));
+            ensure!(user.parts().await?.is_empty());
+            for entry in std::fs::read_dir(case.workspace())? {
+                ensure!(
+                    !entry?
+                        .file_name()
+                        .to_string_lossy()
+                        .starts_with(".acp-probe-")
+                );
+            }
+
+            let user = case.user().attach_session(created.id).await?;
+            let run = user.send("check options").await?.wait_settled().await?;
+            run.assert_succeeded()?;
+            run.assert_assistant_text("model deep, thinking high")?;
+            let options = user
+                .client()
+                .external_agent_options(created.id, change(model.clone(), "fast"))
+                .await?;
+            ensure!(options.selection.get(&model).map(String::as_str) == Some("fast"));
+            ensure!(!options.selection.contains_key(&thought));
+            let run = user.send("check options").await?.wait_settled().await?;
+            run.assert_succeeded()?;
+            run.assert_assistant_text("model fast, thinking low")?;
+            ensure!(case.model().requests().is_empty());
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn antigravity_runs_mcp_tools_with_project_policy_and_fences_cancelled_history() -> TestResult
+{
+    let (_bin, builder) = peers()?;
+    builder
+        .run(|case| async move {
+            let ordinary = case.user().new_session().await?;
+            let resource = ordinary.snapshot().await?.session;
+            ensure!(resource.external_agent.is_none());
+            case.model()
+                .expect(RequestMatch::user_text("ordinary model route"))
+                .reply(Reply::text("ordinary model route reply"));
+            let ordinary_run = ordinary
+                .send("ordinary model route")
+                .await?
+                .wait_settled()
+                .await?;
+            ordinary_run.assert_succeeded()?;
+            ordinary_run.assert_assistant_text("ordinary model route reply")?;
+            let created = ordinary
+                .client()
+                .create_session_configured(CreateSessionParams {
+                    external_agent: Some(ExternalAgent::Antigravity),
+                    workspace_id: resource.workspace_id.context("workspace id")?,
+                    title: "Antigravity ACP".into(),
+                    parent_id: None,
+                    auto_title: true,
+                    profile: None,
+                    prompts: None,
+                })
+                .await?;
+            ensure!(created.external_agent == Some(ExternalAgent::Antigravity));
+            let user = case.user().attach_session(created.id).await?;
+            let path = case.workspace().join("acp-input.txt");
+            read_policy(&user, path.clone(), "readonly").await?;
+            let run = user.send("read fixture").await?.wait_settled().await?;
+            run.assert_succeeded()?;
+            run.assert_text_contains("MCP returned the file contents")?;
+            ensure!(
+                run.parts
+                    .iter()
+                    .any(|part| part.kind == "tool_call" && part.state == "completed")
+            );
+
+            let user = case.user().attach_session(created.id).await?;
+            let follow_up = user.send("check resume").await?.wait_settled().await?;
+            follow_up.assert_succeeded()?;
+            follow_up.assert_assistant_text("resumed")?;
+
+            read_policy(&user, path, "deny").await?;
+            let blocked = user.send("deny fixture").await?.wait_settled().await?;
+            blocked.assert_succeeded()?;
+            blocked.assert_assistant_text("MCP blocked by Agena policy")?;
+
+            let running = user.send("cancel this").await?;
+            running
+                .wait_text_contains("waiting for cancellation")
+                .await?;
+            running.cancel().await?;
+            let cancelled = running.wait_settled().await?;
+            cancelled.assert_cancelled()?;
+            ensure!(cancelled.parts.iter().any(|part| part.kind == "tool_call"
+                && part.content["name"] == "Antigravity · Wait natively"
+                && part.state == "failed"));
+            ensure!(
+                case.workspace().join(".acp-cancelled").is_file(),
+                "ACP did not receive cancellation"
+            );
+            let url = tokio::fs::read_to_string(case.workspace().join(".acp-cancel-url")).await?;
+            let endpoint = url
+                .strip_prefix("http://")
+                .and_then(|url| url.strip_suffix("/mcp"))
+                .context("fixture MCP endpoint")?;
+            let closed = tokio::time::timeout(
+                Duration::from_secs(1),
+                tokio::net::TcpStream::connect(endpoint),
+            )
+            .await;
+            ensure!(
+                !matches!(closed, Ok(Ok(_))),
+                "MCP listener outlived its turn"
+            );
+
+            let user = case.user().attach_session(created.id).await?;
+            let recovered = user
+                .send("check fresh context")
+                .await?
+                .wait_settled()
+                .await?;
+            recovered.assert_succeeded()?;
+            recovered.assert_text_contains("fresh context")?;
+            ensure!(recovered.parts.iter().any(|part| part.kind == "notice"
+                && part.content["kind"] == "external_agent_context_reset"));
+
+            let next = user.send("check resume").await?.wait_settled().await?;
+            next.assert_succeeded()?;
+            next.assert_assistant_text("resumed")?;
+            user.client().clear_session(user.id(), true).await?;
+            let cleared = user.send("check clear").await?.wait_settled().await?;
+            cleared.assert_succeeded()?;
+            cleared.assert_assistant_text("cleared")?;
+            ensure!(
+                case.model().requests().len() == 1,
+                "external session used an Agena model provider"
+            );
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn claude_code_loads_sessions_and_projects_native_tools_and_composer_input() -> TestResult {
+    let (_bin, builder) = peers()?;
+    builder
+        .run(|case| async move {
+            let workspace = case
+                .workspace()
+                .to_str()
+                .context("non-UTF-8 fixture location")?;
+            let created = case
+                .run_cli([
+                    "sessions",
+                    "create",
+                    "--workspace",
+                    workspace,
+                    "--external-agent",
+                    "claude-code",
+                ])
+                .await?;
+            let state: Value = serde_json::from_str(&created.require_success()?.stdout)?;
+            ensure!(
+                state["session"]["external_agent"] == "claude-code",
+                "{state}"
+            );
+            let id = state["session"]["id"]
+                .as_i64()
+                .context("created session id")?;
+            let user = case.user().attach_session(id).await?;
+            let options = user.client().external_agent_options(id, None).await?;
+            ensure!(options.options.len() == 3 && options.selection.is_empty());
+            ensure!(case.workspace().join(".acp-options-inspected").exists());
+            let pending = user.send("check permission").await?;
+            let request = pending.wait_user_input().await?;
+            pending
+                .wait_text_contains("claude-agent-acp started")
+                .await?;
+            let native_tool = |part: &&agena_api::part::PartResource| {
+                part.kind == "tool_call"
+                    && part.content["name"] == "Claude Code · Read fixture natively"
+            };
+            ensure!(
+                user.parts()
+                    .await?
+                    .iter()
+                    .filter(native_tool)
+                    .any(|part| part.state == "running")
+            );
+            request
+                .answer(BTreeMap::from([("0".into(), vec!["Allow".into()])]))
+                .await?;
+            let run = pending.wait_settled().await?;
+            run.assert_succeeded()?;
+            run.assert_text_contains("native permission accepted")?;
+            let mut native = run.parts.iter().filter(native_tool);
+            let part = native.next().context("native tool in the transcript")?;
+            ensure!(native.next().is_none() && part.state == "completed");
+            let output = user
+                .client()
+                .session_tool_detail(user.id(), part.part_id, ToolDetailSection::Output)
+                .await?;
+            ensure!(
+                output.value["payload"]["text"] == "native stdout",
+                "{}",
+                output.value
+            );
+
+            let loaded = user.send("check load").await?.wait_settled().await?;
+            loaded.assert_succeeded()?;
+            loaded.assert_assistant_text("loaded")?;
+            ensure!(!loaded.parts.iter().any(|part| part.kind == "notice"));
+            read_policy(&user, case.workspace().join("acp-input.txt"), "readonly").await?;
+            let mcp = user.send("read fixture").await?.wait_settled().await?;
+            mcp.assert_succeeded()?;
+            mcp.assert_assistant_text("MCP returned the file contents")?;
+            ensure!(
+                mcp.parts
+                    .iter()
+                    .filter(|part| part.kind == "tool_call")
+                    .count()
+                    == 1
+            );
+
+            read_policy(&user, case.workspace().join("acp-image.png"), "readonly").await?;
+            let rich = user
+                .send_document(composer()?, Default::default())
+                .await?
+                .wait_settled()
+                .await?;
+            rich.assert_succeeded()?;
+            rich.assert_assistant_text("image and references received")?;
+
+            let image = user.send("check tool image").await?.wait_settled().await?;
+            image.assert_succeeded()?;
+            image.assert_assistant_text("MCP returned the image")?;
+            read_policy(&user, case.workspace().join("acp-image.png"), "deny").await?;
+            let denied = user.send("deny tool image").await?.wait_settled().await?;
+            denied.assert_succeeded()?;
+            denied.assert_assistant_text("MCP blocked the image")?;
+            read_policy(&user, case.workspace().join("acp-image.png"), "readonly").await?;
+
+            tokio::fs::write(case.workspace().join(".acp-no-image"), "").await?;
+            let unsupported = user
+                .send_document(composer()?, Default::default())
+                .await?
+                .wait_settled()
+                .await?;
+            unsupported.assert_failed()?;
+            ensure!(user.parts().await?.iter().any(|part| {
+                part.kind == "error"
+                    && part.message_id == Some(unsupported.status.message_id)
+                    && part.content["message"].as_str().is_some_and(|message| {
+                        message.contains("does not support image input over ACP")
+                    })
+            }));
+            ensure!(case.model().requests().is_empty());
+            Ok(())
+        })
+        .await
+}

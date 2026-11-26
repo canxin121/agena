@@ -13,6 +13,7 @@ const question: InteractionQuestionPresentation = {
   question: 'Which option?',
   multiple: false,
   allowCustom: true,
+  optional: false,
   options: [
     { label: 'Custom', description: 'A literal named choice' },
     { label: 'Type your own answer', description: 'Another literal choice' },
@@ -49,6 +50,7 @@ describe('current interaction contracts', () => {
                 question: 'Proceed?',
                 options: [{ label: 'Feedback', description: '', custom: true }],
                 allow_custom: true,
+                optional: true,
               },
             ],
           },
@@ -59,6 +61,7 @@ describe('current interaction contracts', () => {
     expect(view.kind).toBe('review')
     expect(view.requestId).toBe('same-request')
     expect(view.questions[0]?.options[0]?.custom).toBe(true)
+    expect(view.questions[0]?.optional).toBe(true)
     expect(pendingInteractionPresentationFromAttention(attention, new Set(['same-request']))).toBeNull()
     expect(pendingInteractionPresentationFromAttention(attention, new Set())?.interaction).toEqual(view)
     expect(

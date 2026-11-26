@@ -289,6 +289,23 @@ pub(crate) fn part_headline(part: &TranscriptEntryPart, i18n: &I18n) -> Transcri
                     .or_else(|| first_content_line(&reasoning.raw_text()))
                     .unwrap_or_default(),
             ),
+            Activity::AssistantDocument {
+                document,
+                reasoning,
+                answer,
+            } => (
+                ui_text::localized_activity_title(
+                    i18n,
+                    if *reasoning {
+                        "Thinking"
+                    } else if *answer {
+                        "Answer"
+                    } else {
+                        "Text"
+                    },
+                ),
+                first_content_line(&document.plain_text()).unwrap_or_default(),
+            ),
             Activity::Attachment(attachment) => (
                 ui_text::t(i18n, "message-input-activity-attachment"),
                 attachment

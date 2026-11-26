@@ -69,6 +69,7 @@ pub fn render_plan_viewer(
         loading,
         error,
         i18n,
+        false,
         |text, _| markdown_lines(text),
     );
 }
@@ -86,11 +87,16 @@ pub fn render_plan_viewer_with_document(
     loading: bool,
     error: Option<&str>,
     i18n: &I18n,
+    external_activity: bool,
     render_document: impl Fn(&str, u16) -> Vec<Line<'static>>,
 ) {
     let title = format!(
         "{}{}",
-        i18n.text("plan-viewer-title"),
+        i18n.text(if external_activity {
+            "external-agent-activity-title"
+        } else {
+            "plan-viewer-title"
+        }),
         summary
             .filter(|s| !s.trim().is_empty())
             .map(|s| format!(" · {s}"))
@@ -129,14 +135,25 @@ pub fn render_plan_viewer_with_document(
             agena_tui_components::pointer::key(KeyCode::Char('a')),
         ));
     }
-    agena_tui_components::pointer::render_buttons(frame, Rect { height: 1, ..inner }, &buttons);
+    if !external_activity {
+        agena_tui_components::pointer::render_buttons(frame, Rect { height: 1, ..inner }, &buttons);
+    }
+    let header = u16::from(!external_activity);
     let body = Rect {
-        y: inner.y.saturating_add(1),
-        height: inner.height.saturating_sub(2),
+        y: inner.y.saturating_add(header),
+        height: inner.height.saturating_sub(header + 1),
         ..inner
     };
     let footer = Rect::new(inner.x, inner.bottom().saturating_sub(1), inner.width, 1);
-    agena_tui_components::render_shortcut_footer(frame, footer, &i18n.text("plan-viewer-footer"));
+    agena_tui_components::render_shortcut_footer(
+        frame,
+        footer,
+        &i18n.text(if external_activity {
+            "external-agent-activity-footer"
+        } else {
+            "plan-viewer-footer"
+        }),
+    );
     if body.is_empty() {
         return;
     }

@@ -19,6 +19,14 @@ pub async fn dispatch_query(
     state: &super::Application,
     query: Query,
 ) -> Result<QueryResult, ApplicationError> {
+    let state = if query
+        .session_id()
+        .is_some_and(agena_domain::is_acp_session_id)
+    {
+        state.acp_application()?
+    } else {
+        state
+    };
     match query {
         Query::Server(query) => Ok(QueryResult::Data(state.dispatch_server_query(query).await?)),
         Query::Business(query) => Ok(QueryResult::Data(

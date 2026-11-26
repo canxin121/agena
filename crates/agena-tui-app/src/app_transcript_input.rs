@@ -27,6 +27,14 @@ impl App {
         if self.handle_active_interaction_action(key) {
             return;
         }
+        if action.is_none()
+            && self.keybindings.match_action(&key) == Some(ComposerAction::OpenPendingUserInput)
+            && self.transcript.pending_acp_user_inputs().next().is_some()
+        {
+            self.clear_transcript_pending_command();
+            self.open_user_input_overlay();
+            return;
+        }
         if self.handle_pending_transcript_key(key, action, width, height) {
             return;
         }
@@ -612,5 +620,6 @@ use crate::{
     App, KeyEvent, TranscriptMoveDirection, TranscriptTextPosition, TranscriptViewportRow,
     TranscriptVisualSelectionMode,
 };
+use agena_tui::input::ComposerAction;
 use agena_tui::keymap::{KeyAction, KeyContext, resolve as resolve_tui_key};
 use crossterm::event::{KeyCode, KeyModifiers};

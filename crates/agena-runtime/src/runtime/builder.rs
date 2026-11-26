@@ -215,6 +215,9 @@ impl AgenaRuntime {
         // stream. There is no persisted event bus: the drain emits observer
         // notifications only, never persisted, never replayed.
         let runtime = Arc::new(runtime);
+        if let Some(manager) = runtime.session_manager() {
+            manager.enable_acp_scope().await?;
+        }
         // Finish fallible publication preflight before starting maintenance
         // futures, which intentionally retain runtime handles until shutdown.
         let audit_workspace = runtime.inner.workspace_root.clone();
@@ -1997,6 +2000,18 @@ impl AgenaRuntime {
         let plugin_commands = session_manager
             .as_ref()
             .map(|manager| manager.clone() as Arc<dyn agena_runtime::SessionPluginCommandService>);
+        let acp_sessions = session_manager
+            .as_ref()
+            .and_then(|manager| manager.acp_scope())
+            .map(|manager| agena_runtime::RuntimeAcpSessionServices {
+                kernel: manager.session_kernel(),
+                queries: manager.clone(),
+                control: manager.clone(),
+                commands: manager.clone(),
+                tools: manager.clone(),
+                plugin_commands: manager.clone(),
+                permission_rules: manager.acp_permission_rules(),
+            });
         agena_runtime::compose_runtime_application_services(
             agena_runtime::RuntimeApplicationServiceCompositionInputs {
                 workspace_root: self.workspace_root().to_path_buf(),
@@ -2054,6 +2069,7 @@ impl AgenaRuntime {
                 execution_commands,
                 tool_execution,
                 plugin_commands,
+                acp_sessions,
             },
         )
     }

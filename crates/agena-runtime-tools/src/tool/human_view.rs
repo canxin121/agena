@@ -872,7 +872,7 @@ impl BuiltinHumanRenderer {
         })
     }
 
-    fn attachment_artifact(attachment: &agena_domain::AttachmentItem) -> ArtifactRef {
+    pub fn attachment_artifact(attachment: &agena_domain::AttachmentItem) -> ArtifactRef {
         let uri = match &attachment.source {
             AttachmentSource::Url { url } | AttachmentSource::DataUrl { url } => url.clone(),
             AttachmentSource::Base64 { data } | AttachmentSource::ProviderData { data, .. } => {
@@ -5024,6 +5024,159 @@ impl BuiltinHumanRenderer {
         blocks
     }
 
+    pub fn external_agent_blocks(raw: &RawOutput) -> Option<Vec<ViewBlock>> {
+        let result = raw
+            .payload
+            .as_ref()?
+            .get("external_agent")
+            .filter(|value| value.is_object())?;
+        let mut blocks = Vec::new();
+        let text = raw.text_content();
+        if !text.is_empty() {
+            blocks.push(ViewBlock::Text {
+                id: Some("acp-result".into()),
+                text: text.to_owned(),
+            });
+        }
+        let locations = result["locations"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|location| {
+                Some(vec![
+                    Value::String(location["path"].as_str()?.to_owned()),
+                    location["line"].clone(),
+                ])
+            })
+            .collect::<Vec<_>>();
+        if !locations.is_empty() {
+            blocks.push(ViewBlock::Table {
+                id: Some("acp-locations".into()),
+                columns: vec!["Path".into(), "Line".into()],
+                rows: locations,
+            });
+        }
+        for (index, item) in result["content"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .enumerate()
+        {
+            let id = format!("acp-content-{index}");
+            match item["type"].as_str() {
+                Some("diff") if item["changes"].is_array() => {
+                    let rows = item["changes"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|change| {
+                            Some(vec![
+                                Value::String(change["operation"].as_str()?.to_owned()),
+                                Value::String(change["path"].as_str()?.to_owned()),
+                                change["old_path"].clone(),
+                            ])
+                        })
+                        .collect::<Vec<_>>();
+                    if !rows.is_empty() {
+                        blocks.push(ViewBlock::Table {
+                            id: Some(id.clone()),
+                            columns: vec!["Operation".into(), "Path".into(), "From".into()],
+                            rows,
+                        });
+                    }
+                    if let Some(diff) = item["patch"]
+                        .as_str()
+                        .filter(|diff| !diff.trim().is_empty())
+                    {
+                        blocks.push(ViewBlock::Diff {
+                            id: Some(format!("{id}-patch")),
+                            diff: diff.to_owned(),
+                            language: Some("diff".into()),
+                        });
+                    }
+                    if item["truncated"] == true {
+                        blocks.push(ViewBlock::Text {
+                            id: Some(format!("{id}-truncated")),
+                            text: "Diff preview truncated.".into(),
+                        });
+                    }
+                }
+                Some("diff") => {
+                    let Some(path) = item["path"].as_str() else {
+                        continue;
+                    };
+                    let path = path.replace(['\n', '\r', '\t'], " ");
+                    let preview = crate::file_diff_preview(
+                        &path,
+                        item["old_text"].as_str(),
+                        item["new_text"].as_str(),
+                    );
+                    if preview.diff.is_empty() {
+                        blocks.push(ViewBlock::Text {
+                            id: Some(id.clone()),
+                            text: format!("{path}: no text changes"),
+                        });
+                    } else {
+                        blocks.push(ViewBlock::Diff {
+                            id: Some(id.clone()),
+                            diff: preview.diff,
+                            language: Some("diff".into()),
+                        });
+                    }
+                    if preview.diff_truncated || item["truncated"] == true {
+                        blocks.push(ViewBlock::Text {
+                            id: Some(format!("{id}-truncated")),
+                            text: "Diff preview truncated.".into(),
+                        });
+                    }
+                }
+                Some("terminal") => {
+                    if let Some(terminal) = item["terminal_id"].as_str() {
+                        blocks.push(ViewBlock::Text {
+                            id: Some(id.clone()),
+                            text: format!("Terminal {terminal}"),
+                        });
+                        if let Some(output) =
+                            item["output"].as_str().filter(|text| !text.is_empty())
+                        {
+                            blocks.push(ViewBlock::Log {
+                                id: Some(format!("{id}-output")),
+                                stream: agena_domain::CommandOutputStream::Stdout,
+                                text: output.to_owned(),
+                            });
+                        }
+                    }
+                }
+                Some("session") => {
+                    if let Some(session) = item["session_id"].as_str() {
+                        blocks.push(ViewBlock::Text {
+                            id: Some(id),
+                            text: format!("Subagent {session}"),
+                        });
+                    }
+                }
+                Some("resource") => {
+                    if let Some(text) = item["text"].as_str() {
+                        blocks.push(ViewBlock::Text {
+                            id: Some(id),
+                            text: text.to_owned(),
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+        if blocks.is_empty() && !result["output"].is_null() {
+            blocks.push(ViewBlock::Json {
+                id: Some("acp-raw-result".into()),
+                value: result["output"].clone(),
+            });
+        }
+        Self::raw_media_blocks(&mut blocks, raw);
+        Self::raw_attachment_blocks(&mut blocks, raw);
+        Some(blocks)
+    }
+
     fn structured_blocks(
         tool_name: &str,
         raw: &RawOutput,
@@ -5841,6 +5994,9 @@ impl ToolHumanRenderer for BuiltinHumanRenderer {
                 id: Some("inline-ui-prepared".into()),
                 text: "Prepared rich content for a reference in the answer. No content is displayed by this tool call.".into(),
             }]);
+        }
+        if let Some(blocks) = Self::external_agent_blocks(raw) {
+            return Ok(blocks);
         }
         let output = match ToolOutput::from_json_payload(raw.payload.as_ref()) {
             Ok(output) => output,

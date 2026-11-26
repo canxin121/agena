@@ -6,6 +6,24 @@
 use agena_tui_transcript::render_markdown_document;
 use ratatui::text::{Line, Span};
 
+pub(crate) fn plan_viewer_data(
+    response: agena_plugin_sdk::inspection::PluginToolInvokeResponse,
+) -> crate::PlanViewerData {
+    crate::PlanViewerData {
+        markdown: if response.metadata.contains_key("external_agent") {
+            response.output_text.trim().to_owned()
+        } else {
+            plan_document(&response.output_text)
+        },
+        summary: plan_progress(response.payload.as_ref()),
+        autorun: response
+            .payload
+            .as_ref()
+            .and_then(|payload| payload.pointer("/plan/autorun"))
+            .and_then(serde_json::Value::as_bool),
+    }
+}
+
 /// Project the canonical plan payload into the same progress label as WebUI.
 pub(crate) fn plan_progress(payload: Option<&serde_json::Value>) -> Option<String> {
     let plan = payload?

@@ -101,6 +101,9 @@ pub struct UserInputQuestion {
     #[serde(default, skip_serializing_if = "is_false")]
     /// Compatibility for older requests. New questions use an option with `custom: true`.
     pub allow_custom: bool,
+    /// Whether the user may omit this question from a submitted reply.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub optional: bool,
 }
 
 impl UserInputQuestion {
@@ -123,10 +126,7 @@ pub struct UserInputRequest {
     pub session_id: Option<i64>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub title: String,
-    /// Optional Markdown body for the request. Only the plan-approval review
-    /// (`kind == Review`) populates it with the full plan document so the
-    /// review dialog can show what is being approved; other ask_user requests
-    /// leave it empty and the dialog shows only the questions.
+    /// Optional Markdown body shown above the questions.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub body_markdown: String,
     pub kind: crate::UserInputKind,

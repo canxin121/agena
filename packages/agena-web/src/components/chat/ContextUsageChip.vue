@@ -42,6 +42,7 @@ const props = defineProps<{
   usage: ContextUsageView
   open: boolean
   busy?: boolean
+  contextOnly?: boolean
 }>()
 const emit = defineEmits<{ (event: 'update:open', value: boolean): void }>()
 
@@ -150,6 +151,7 @@ const costLabel = computed(() => {
 })
 
 async function load() {
+  if (props.contextOnly) return
   const sid = String(props.sessionId || '').trim()
   if (!sid) return
   const request = ++generation
@@ -250,7 +252,11 @@ watch(
         </dl>
       </div>
 
-      <section class="space-y-2 border-t border-border/50 pt-2.5" :aria-label="$st('Last completed request')">
+      <section
+        v-if="!contextOnly"
+        class="space-y-2 border-t border-border/50 pt-2.5"
+        :aria-label="$st('Last completed request')"
+      >
         <h3 class="font-medium">{{ $st('Last completed request') }}</h3>
         <dl v-if="usage.lastPerformance" class="context-performance-grid grid grid-cols-2 gap-x-4 gap-y-2">
           <div
@@ -273,7 +279,11 @@ watch(
         <p v-else class="text-muted-foreground">{{ $st('Performance appears after a completed model request.') }}</p>
       </section>
 
-      <section class="space-y-2 border-t border-border/50 pt-2.5" :aria-label="$st('Conversation totals')">
+      <section
+        v-if="!contextOnly"
+        class="space-y-2 border-t border-border/50 pt-2.5"
+        :aria-label="$st('Conversation totals')"
+      >
         <h3 class="font-medium">{{ $st('Conversation totals') }}</h3>
         <p v-if="error" role="alert" class="break-words text-destructive">{{ error }}</p>
         <p v-else-if="loading && !summary" class="text-muted-foreground">{{ $st('Loading…') }}</p>

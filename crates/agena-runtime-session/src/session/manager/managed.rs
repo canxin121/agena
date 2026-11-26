@@ -394,12 +394,9 @@ impl SessionManager {
             .await?;
         // An empty key must stay absent so a caller that cannot supply a
         // stable delivery identity is not silently deduplicated.
-        let request = crate::SessionUserRunRequest::new(id, options, document);
-        let request = if delivery_key.trim().is_empty() {
-            request
-        } else {
-            request.with_idempotency_key(delivery_key)
-        };
-        self.submit_with_identity(request, author, origin).await
+        let request = crate::SessionUserRunRequest::new(id, options, document)
+            .with_identity(author, origin)
+            .with_idempotency_key(delivery_key);
+        self.submit(request).await
     }
 }

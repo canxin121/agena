@@ -2,21 +2,33 @@ use super::*;
 use agena_domain::ContentId;
 
 impl SessionManager {
-    async fn assistant_text(
+    pub(super) async fn assistant_text(
         &self,
         session: SessionId,
         content: ContentId,
         max: usize,
     ) -> Result<String, AppError> {
-        let range = persist(|| self.kernel().reader.text_range(session, content, None, 1))
-            .await
-            .map_err(kernel_error)?;
+        let reader = &self.kernel().reader;
+        let head = match persist(|| reader.text_range(session, content, None, 1)).await {
+            Ok(range) => range.stream.clone(),
+            Err(KernelError::Invalid(_)) => (*persist(|| reader.watch_content(session, content))
+                .await
+                .map_err(kernel_error)?
+                .head()
+                .map_err(kernel_error)?)
+            .clone(),
+            Err(error) => return Err(kernel_error(error)),
+        };
         persist(|| async {
-            let mut remaining = max.saturating_mul(3).saturating_add(4096);
+            let mut remaining = if head.kind == agena_domain::ContentKind::Structured {
+                agena_domain::MAX_DOCUMENT_BYTES.saturating_mul(3)
+            } else {
+                max.saturating_mul(3).saturating_add(4096)
+            };
             super::super::kernel::input::read_text(
                 &self.kernel().reader,
                 session,
-                &range.stream,
+                &head,
                 &mut remaining,
                 Some(max),
             )

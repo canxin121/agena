@@ -866,6 +866,18 @@ pub(crate) async fn read_text(
     remaining: &mut usize,
     preview: Option<usize>,
 ) -> Result<String> {
+    if head.kind == ContentKind::Structured {
+        let view = reader.event_snapshot_at(session, head).await?;
+        let mut text = view
+            .document
+            .as_deref()
+            .map_or_else(String::new, |document| document.plain_text());
+        charge(remaining, modeled_read_bytes(&*view)?)?;
+        if let Some(limit) = preview {
+            text.truncate(text.floor_char_boundary(limit));
+        }
+        return Ok(text);
+    }
     let start = if preview.is_some() {
         head.retained_start
     } else {
@@ -917,7 +929,7 @@ pub(crate) async fn read_text(
     Ok(text)
 }
 
-async fn tool_content(
+pub(crate) async fn tool_content(
     reader: &KernelReader,
     session: SessionId,
     head: &ContentStreamView,

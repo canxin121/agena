@@ -109,7 +109,19 @@ const isPermission = computed(() => Boolean(permission.value))
 const isPendingPermission = computed(() => permission.value?.pending === true)
 const isReview = computed(() => (interaction.value?.kind || '').trim().toLowerCase() === 'review')
 const isBrowserTakeover = computed(() => interaction.value?.kind === browserTakeoverKind)
+const isExternalAuthorization = computed(() => interaction.value?.kind === 'external_agent_url')
 const questions = computed(() => interaction.value?.questions || [])
+const authorizationUrl = computed(() => {
+  if (!isExternalAuthorization.value) return undefined
+  try {
+    const url = new URL(questions.value[0]?.question || '')
+    const loopback = url.hostname === 'localhost' || url.hostname === '[::1]' || /^127(?:\.\d{1,3}){3}$/.test(url.hostname)
+    if (url.username || url.password || (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback))) return undefined
+    return url.href
+  } catch {
+    return undefined
+  }
+})
 const hasBody = computed(() => Boolean(interaction.value?.bodyMarkdown?.trim()))
 const isPendingInteraction = computed(() => Boolean(permission.value?.pending || interaction.value?.pending))
 const permissionStatusLabel = computed(() => {
@@ -144,13 +156,14 @@ const isReviewDecision = computed(() => {
     isReview.value &&
     questions.value.length === 1 &&
     question &&
+    !question.optional &&
     !question.multiple &&
     question.options.length &&
     !question.options.some((option) => option.custom),
   )
 })
 
-const isQuestionFlow = computed(() => Boolean(interaction.value?.pending && !isReviewDecision.value))
+const isQuestionFlow = computed(() => Boolean(interaction.value?.pending && !isReviewDecision.value && !isExternalAuthorization.value))
 const isSummaryPage = computed(() => isQuestionFlow.value && questionPage.value === questions.value.length)
 const visibleQuestions = computed(() =>
   questions.value
@@ -426,8 +439,11 @@ function answerFor(index: number): string[] {
   return custom ? [...options, custom] : options
 }
 
-function questionAnswered(index: number) {
-  return answerFor(index).length > 0 && (!isCustomSelected(index) || Boolean((customDrafts.value[index] || '').trim()))
+function questionReady(index: number) {
+  return (
+    questions.value[index]?.optional ||
+    (answerFor(index).length > 0 && (!isCustomSelected(index) || Boolean((customDrafts.value[index] || '').trim())))
+  )
 }
 
 const answerState = computed(() => questions.value.map((_, index) => answerFor(index)))
@@ -436,7 +452,7 @@ const canSubmit = computed(
     Boolean(props.sessionId && requestId.value) &&
     !busy.value &&
     questions.value.length > 0 &&
-    questions.value.every((_, index) => questionAnswered(index)),
+    questions.value.every((_, index) => questionReady(index)),
 )
 
 function retainReplyFocus(): string | null {
@@ -479,12 +495,12 @@ async function replyPermission(reply: 'once' | 'always' | 'reject') {
 }
 
 async function submitAnswers() {
-  if (isBrowserTakeover.value || !props.sessionId || !requestId.value || busy.value || !interaction.value?.pending)
+  if (isBrowserTakeover.value || isExternalAuthorization.value || !props.sessionId || !requestId.value || busy.value || !interaction.value?.pending)
     return
   const answers = answerState.value
-  if (!answers.length || !questions.value.every((_, index) => questionAnswered(index))) {
+  if (!answers.length || !questions.value.every((_, index) => questionReady(index))) {
     toasts.push('error', t('chat.attention.toasts.pleaseAnswerAllQuestions'))
-    goToQuestionPage(questions.value.findIndex((_, index) => !questionAnswered(index)))
+    goToQuestionPage(questions.value.findIndex((_, index) => !questionReady(index)))
     return
   }
   const focusKey = retainReplyFocus()
@@ -518,6 +534,22 @@ async function rejectAnswers() {
   } finally {
     pendingDraft.busy = false
     restoreReplyFocus(focusKey, replied)
+  }
+}
+
+async function openExternalAuthorization() {
+  if (!props.sessionId || !requestId.value || busy.value || !interaction.value?.pending || !authorizationUrl.value) return
+  const choice = questions.value[0]?.options[0]?.label
+  if (!choice) return
+  const pendingDraft = draft.value
+  pendingDraft.busy = true
+  try {
+    window.open(authorizationUrl.value, '_blank', 'noopener,noreferrer')
+    await chat.replyQuestion(props.sessionId, requestId.value, [[choice]])
+  } catch (error) {
+    toasts.push('error', error instanceof Error ? error.message : String(error))
+  } finally {
+    pendingDraft.busy = false
   }
 }
 
@@ -557,7 +589,7 @@ async function confirmCurrentOption(target: Element | null) {
 
 async function confirmQuestion(index = questionPage.value) {
   if (!isQuestionFlow.value || busy.value || !questions.value[index]) return
-  if (!questionAnswered(index)) {
+  if (!questionReady(index)) {
     toasts.push('error', t('chat.attention.toasts.pleaseAnswerAllQuestions'))
     if (isCustomSelected(index)) openCustomEditor(index)
     return
@@ -893,6 +925,21 @@ onBeforeUnmount(() => {
       </div>
     </template>
 
+    <template v-else-if="interaction?.pending && isExternalAuthorization">
+      <div class="interaction-width space-y-2" :aria-busy="busy">
+        <p v-if="interaction.title" class="text-sm font-semibold">{{ displayText(interaction.title) }}</p>
+        <p v-if="interaction.bodyMarkdown" class="whitespace-pre-wrap break-words text-sm">{{ interaction.bodyMarkdown }}</p>
+        <p class="break-all text-sm">{{ questions[0]?.question }}</p>
+        <div class="flex flex-wrap gap-2">
+          <Button size="sm" :disabled="busy || !authorizationUrl" @click="openExternalAuthorization">
+            {{ questions[0]?.options[0]?.label || browserText('open') }}
+          </Button>
+          <Button size="sm" variant="outline" :disabled="busy" @click="rejectAnswers">
+            {{ t('chat.attention.ui.dismissRequest') }}
+          </Button>
+        </div>
+      </div>
+    </template>
     <template v-else-if="interaction?.pending && isBrowserTakeover && openBrowser">
       <div class="interaction-width space-y-2">
         <p class="text-sm font-semibold">{{ browserText('requested') }}</p>
@@ -938,7 +985,8 @@ onBeforeUnmount(() => {
         </span>
       </div>
       <div v-if="interaction.bodyMarkdown && (!isQuestionFlow || questionPage === 0)" class="mb-2 min-w-0">
-        <MarkdownRenderer :content="interaction.bodyMarkdown" mode="markdown" :stream="false" />
+        <p v-if="isExternalAuthorization" class="whitespace-pre-wrap break-words text-sm">{{ interaction.bodyMarkdown }}</p>
+        <MarkdownRenderer v-else :content="interaction.bodyMarkdown" mode="markdown" :stream="false" />
       </div>
 
       <div v-if="!interaction.pending" class="interaction-results interaction-width" data-interaction-result>
@@ -1108,9 +1156,10 @@ onBeforeUnmount(() => {
               </div>
               <div class="text-[13px] font-medium leading-snug">{{ displayText(question.question) }}</div>
             </div>
-            <span class="shrink-0 text-[10px] text-muted-foreground">{{
-              question.multiple ? t('chat.attention.ui.multiple') : t('chat.attention.ui.single')
-            }}</span>
+            <div class="shrink-0 text-right text-[10px] text-muted-foreground">
+              <div>{{ question.multiple ? t('chat.attention.ui.multiple') : t('chat.attention.ui.single') }}</div>
+              <div v-if="question.optional">{{ t('chat.attention.ui.optional') }}</div>
+            </div>
           </div>
           <template v-for="option in questionOptions[questionIndex] || []" :key="option.label">
             <label

@@ -22,7 +22,38 @@ use crate::dto::{
 use crate::service::sessions::session_resource_from_kernel_summary;
 use crate::{Application, ApplicationError};
 
+mod external_agent_plan;
+
 impl Application {
+    pub async fn session_plan(
+        &self,
+        session_id: i64,
+    ) -> Result<agena_plugin_host::PluginToolInvokeResponse, ApplicationError> {
+        let id = crate::kernel_session_id(session_id)?;
+        let config = self
+            .session_kernel()?
+            .reader
+            .configuration(id)
+            .await
+            .map_err(crate::kernel_error)?;
+        if let Some(agent) = config.external_agent
+            && !config.external_agent_state.plans.is_empty()
+        {
+            return Ok(external_agent_plan::response(
+                agent,
+                &config.external_agent_state.plans,
+            ));
+        }
+        drop(config);
+        self.invoke_plugin_tool(
+            "agena.plan",
+            "get",
+            serde_json::json!({"view": "full"}),
+            Some(session_id),
+        )
+        .await
+    }
+
     pub async fn ensure_bot_session(&self) -> Result<agena_api::bot::BotSession, ApplicationError> {
         let profile = self
             .session_execution_services()?
@@ -519,6 +550,31 @@ impl Application {
         session_command_resource(outcome, self.session_execution_resource(outcome.session_id)).await
     }
 
+    pub async fn steer_external_agent(
+        &self,
+        session_id: i64,
+        text: String,
+    ) -> Result<(), ApplicationError> {
+        if self
+            .session_execution_shell(session_id)
+            .await?
+            .session
+            .external_agent
+            .is_none()
+        {
+            return Err(ApplicationError::bad_request(
+                "Select an external agent session.",
+            ));
+        }
+        let document = ComposerDocument(vec![agena_domain::ComposerNode::Text { text }]);
+        crate::session::validate_input_document(&document)?;
+        self.session_execution_services()?
+            .commands
+            .steer_input(session_id, document)
+            .await
+            .map_err(|error| ApplicationError::from_failure(error.failure))
+    }
+
     /// Continue an existing session with the given run options.
     pub async fn continue_session(
         &self,
@@ -660,7 +716,7 @@ impl Application {
         request: agena_runtime::session::SessionQueuedMessageEditRequest,
     ) -> Result<SessionExecutionResource, ApplicationError> {
         let session_id = request.session_id;
-        crate::session::validate_input_document(&request.document)?;
+        crate::session::validate_session_input(&request.document, self.service().is_acp_scope())?;
         self.session_execution_services()?
             .commands
             .edit_queued_message(request)
@@ -874,6 +930,7 @@ impl Application {
             .create_session(SessionCreateRequest {
                 workspace_id: workspace.id,
                 session: SessionHierarchyRequest {
+                    external_agent: None,
                     title,
                     parent_id,
                     auto_title: false,

@@ -34,6 +34,8 @@ pub struct SessionResource {
     pub root_id: i64,
     pub workspace_id: Option<i64>,
     pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_agent: Option<agena_domain::ExternalAgent>,
     /// Bot this conversation belongs to, when any. Clients use it to place the
     /// conversation under the Bot instead of a project.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -84,6 +86,7 @@ impl Default for SessionResource {
             root_id: 0,
             workspace_id: None,
             title: String::new(),
+            external_agent: None,
             owner_bot_id: None,
             owner_surface: None,
             favorite: false,
@@ -588,6 +591,17 @@ pub struct SessionExecutionContextResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversation: Option<agena_domain::SessionConversation>,
     pub agent_id: String,
+    /// Settings published by the active or most recently completed native conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_agent_options: Option<agena_domain::ExternalAgentOptions>,
+    /// The native slash commands last advertised by this external agent session.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub external_agent_commands: Vec<agena_domain::ExternalAgentCommand>,
+    #[serde(
+        default,
+        skip_serializing_if = "agena_domain::ExternalAgentDetails::is_empty"
+    )]
+    pub external_agent_details: agena_domain::ExternalAgentDetails,
     #[serde(default, skip_serializing_if = "PermissionConfigResource::is_empty")]
     pub selected_permission: PermissionConfigResource,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1406,6 +1420,8 @@ pub struct UserInputQuestion {
     pub multiple: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub allow_custom: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub optional: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

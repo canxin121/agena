@@ -101,6 +101,9 @@ mod user_input;
 mod user_input_events;
 
 pub mod activity_view;
+mod external_agent;
+mod external_agent_details;
+mod external_agent_lifecycle;
 pub mod mcp_connections;
 pub mod session_kernel;
 pub use access::{AccessKind, AccessSelector, PathKind};
@@ -149,6 +152,29 @@ pub use execution_events::{ExecutionFinishedEvent, ExecutionStartedEvent};
 pub use execution_lifecycle::{ExecutionLifecycle, ExecutionTransitionError};
 pub use execution_selection::ExecutionSelection;
 pub use execution_status::{ExecutionStatus, ExecutionStatusTransitionError};
+pub use external_agent::{
+    ACP_INLINE_ATTACHMENT_PREFIX, ACP_SESSION_ID_START, EXTERNAL_AGENT_COMMAND_PREFIX,
+    EXTERNAL_AGENT_URL_INPUT_KIND, EXTERNAL_AGENT_URL_OPEN_OPTION, ExternalAgent,
+    ExternalAgentAuth, ExternalAgentAuthAccount, ExternalAgentAuthAction, ExternalAgentAuthFlow,
+    ExternalAgentAuthMethod, ExternalAgentAuthStatus, ExternalAgentCommand, ExternalAgentOption,
+    ExternalAgentOptionChange, ExternalAgentOptionKind, ExternalAgentOptionType,
+    ExternalAgentOptionValue, ExternalAgentOptions, ExternalAgentProvider,
+    ExternalAgentProviderTarget, ExternalAgentProviders, ExternalAgentSelection,
+    external_agent_authorization_url, external_agent_command_input, is_acp_session_id,
+    validate_external_agent_terminal_launch,
+};
+pub use external_agent_details::{
+    ExternalAgentCompaction, ExternalAgentCost, ExternalAgentDetails, ExternalAgentMessage,
+    ExternalAgentNotice, ExternalAgentSubagent, ExternalAgentSuggestion,
+    ExternalAgentSuggestionBlock, ExternalAgentTerminal, ExternalAgentWorkItem,
+    ExternalAgentWorkKind,
+};
+pub use external_agent_lifecycle::{
+    ExternalAgentArchiveFilter, ExternalAgentForkPoint, ExternalAgentIndexCapabilities,
+    ExternalAgentIndexedSession, ExternalAgentSessionAction, ExternalAgentSessionCapabilities,
+    ExternalAgentSessionInfo, ExternalAgentSessionMetadata, ExternalAgentSessionResult,
+    ExternalAgentWorkspaceAction, ExternalAgentWorkspaceResult,
+};
 pub use finish_reason::{FinishReason, RunAbortReason};
 pub use ids::{
     ActivityId, AssistantReplyId, BlobId, CommandId, ContentEpoch, ContentId, ExecutionId,

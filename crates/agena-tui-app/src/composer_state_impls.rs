@@ -157,6 +157,9 @@ impl PersistentDraftStore {
         let mut new_session = None;
 
         for (slot, draft) in &store.drafts {
+            if matches!(slot, DraftSlot::Session(id) if agena_domain::is_acp_session_id(*id)) {
+                continue;
+            }
             let Some(persistent) = draft.persistent_snapshot() else {
                 continue;
             };

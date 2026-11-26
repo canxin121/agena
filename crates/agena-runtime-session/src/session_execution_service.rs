@@ -88,6 +88,46 @@ pub trait SessionExecutionCommandService: Send + Sync {
         use_default: bool,
     ) -> Result<agena_storage::kernel::SessionConfiguration, SessionExecutionCommandError>;
 
+    async fn external_agent_options(
+        &self,
+        session_id: i64,
+        change: Option<agena_domain::ExternalAgentOptionChange>,
+    ) -> Result<agena_domain::ExternalAgentOptions, SessionExecutionCommandError>;
+
+    async fn external_agent_workspace(
+        &self,
+        workspace_id: i64,
+        action: agena_domain::ExternalAgentWorkspaceAction,
+    ) -> Result<agena_domain::ExternalAgentWorkspaceResult, SessionExecutionCommandError>;
+
+    async fn external_agent_session(
+        &self,
+        session_id: i64,
+        action: agena_domain::ExternalAgentSessionAction,
+    ) -> Result<agena_domain::ExternalAgentSessionResult, SessionExecutionCommandError>;
+
+    async fn external_agent_auth(
+        &self,
+        session_id: i64,
+        action: agena_domain::ExternalAgentAuthAction,
+    ) -> Result<agena_domain::ExternalAgentAuth, SessionExecutionCommandError>;
+
+    async fn external_agent_live_auth(
+        &self,
+        session_id: i64,
+    ) -> Result<Option<agena_domain::ExternalAgentAuthStatus>, SessionExecutionCommandError>;
+
+    async fn external_agent_providers(
+        &self,
+        session_id: i64,
+    ) -> Result<agena_domain::ExternalAgentProviders, SessionExecutionCommandError>;
+
+    async fn external_agent_work(
+        &self,
+        session_id: i64,
+        cancel_id: Option<uuid::Uuid>,
+    ) -> Result<Vec<agena_domain::ExternalAgentWorkItem>, SessionExecutionCommandError>;
+
     async fn ensure_bot_session(&self) -> Result<i64, SessionExecutionCommandError>;
     async fn list_bots(
         &self,

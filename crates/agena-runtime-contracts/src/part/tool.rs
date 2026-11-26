@@ -740,9 +740,7 @@ pub struct AskUserToolInput {
     pub title: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub kind: String,
-    /// Optional Markdown body shown in the review dialog. Only the plan
-    /// approval review (`kind == "review"`) sets it to the full plan document;
-    /// other ask_user requests leave it empty.
+    /// Optional Markdown body shown above the questions.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub body_markdown: String,
     /// Automatically continue without an answer after this many milliseconds.

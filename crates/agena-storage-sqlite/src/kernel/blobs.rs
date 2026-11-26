@@ -9,7 +9,7 @@ use agena_storage::backend::kernel::{BlobGc, BlobLease, BlobPin, BlobRecord};
 
 use super::*;
 
-const CHUNK_BYTES: usize = 128 * 1024;
+pub(super) const CHUNK_BYTES: usize = 128 * 1024;
 const MAX_PINS: i64 = 128;
 const ORPHAN_GRACE: Duration = Duration::from_secs(30);
 
@@ -147,6 +147,16 @@ pub(super) fn command_bytes(command: &Command) -> Result<Vec<u8>> {
             tool,
             result,
             blobs.iter().map(|b| b.id).collect::<Vec<_>>(),
+        )),
+        Command::WriteAssistantDocument {
+            target,
+            update,
+            blobs,
+        } => serde_json::to_vec(&(
+            "write_assistant_document",
+            target,
+            update,
+            blobs.iter().map(|blob| blob.id).collect::<Vec<_>>(),
         )),
         _ => serde_json::to_vec(command),
     }

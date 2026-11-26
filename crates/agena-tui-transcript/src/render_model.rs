@@ -338,6 +338,11 @@ pub enum TranscriptActivityContent<'a> {
     /// carry the answer.
     Answer(Box<TextSegmentActivity>),
     Reasoning(ReasoningPartResource),
+    AssistantDocument {
+        document: Box<agena_domain::ContentDocument>,
+        reasoning: bool,
+        answer: bool,
+    },
     Attachment(AttachmentPartResource),
     SkillReference(SkillReferencePartResource),
     Error(ErrorPartResource),

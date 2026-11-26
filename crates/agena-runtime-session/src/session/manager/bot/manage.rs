@@ -253,7 +253,7 @@ impl SessionManager {
                         title:"Delete conversation".into(), kind:"".into(), body_markdown:String::new(),auto_resolution_ms:Some(600_000),
                         questions:vec![agena_domain::UserInputQuestion {
                             header:"Delete".into(), question:format!("Soft-delete exactly this conversation? Workspace: {} (ID {}); title: {:?}; session ID: {} ({}). This removes the conversation from the active list. Project files and folders are untouched.",workspace.display(), workspace_id,title,target,link(target)),
-                            options:vec![agena_domain::UserInputOption {label:"Keep conversation".into(),description:"Leave this conversation available.".into(),custom:false},agena_domain::UserInputOption {label:"Delete conversation".into(),description:format!("Soft-delete session {target} only."),custom:false}],multiple:false,allow_custom:false,
+                            options:vec![agena_domain::UserInputOption {label:"Keep conversation".into(),description:"Leave this conversation available.".into(),custom:false},agena_domain::UserInputOption {label:"Delete conversation".into(),description:format!("Soft-delete session {target} only."),custom:false}],multiple:false,allow_custom:false,optional:false,
                         }],
                     }).await?;
                     if approval.cancelled

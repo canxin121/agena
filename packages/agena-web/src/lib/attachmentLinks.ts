@@ -1,3 +1,4 @@
+import { sessionApiPath } from './acpSession'
 import { buildWorkspaceRawFileUrl } from './workspaceLinks'
 import { browserResourceUrl } from './resourceUrls'
 
@@ -22,7 +23,7 @@ export function attachmentPreviewUrl(input: AttachmentLinkInput): string {
   if (managed || path) {
     const reference = managed ? url : path
     if (hasSession) {
-      return `/api/v1/sessions/${encodeURIComponent(session)}/media?${new URLSearchParams({ path: reference })}`
+      return `${sessionApiPath(session)}/media?${new URLSearchParams({ path: reference })}`
     }
     if (!managed && input.workspaceRoot?.trim()) return buildWorkspaceRawFileUrl(input.workspaceRoot.trim(), path)
     return ''

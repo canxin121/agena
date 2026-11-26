@@ -16,6 +16,15 @@ impl SessionManager {
         requested: Option<String>,
         use_default: bool,
     ) -> Result<SessionConfiguration, AppError> {
+        if configuration.external_agent.is_some() {
+            if !self.is_acp_scope() {
+                return Err(AppError::Config("Open this agent in ACP sessions.".into()));
+            }
+            let workspace = workspace_id.ok_or_else(|| {
+                AppError::Config("ACP sessions require a project workspace.".into())
+            })?;
+            self.workspace_root_by_id(workspace).await?;
+        }
         let state = if workspace_id.is_some() {
             self.state.load_full()
         } else {
@@ -1066,6 +1075,20 @@ impl SessionManager {
     }
 
     pub async fn steer_input(&self, id: i64, document: ComposerDocument) -> Result<(), AppError> {
+        let session = session_id(id)?;
+        if self.external_agent(session).await?.is_some() {
+            self.require_writable_bot_history(id).await?;
+            if document
+                .0
+                .iter()
+                .any(|node| !matches!(node, agena_domain::ComposerNode::Text { .. }))
+            {
+                return Err(AppError::Config(
+                    "Additional ACP instructions use text.".into(),
+                ));
+            }
+            return self.steer_external_agent(session, document.text()).await;
+        }
         // Steering is a committed input execution queued behind the current
         // owner. It has a stable identity and cannot mutate frozen input.
         let session = self.get_session(id).await?;
@@ -1197,6 +1220,9 @@ impl SessionManager {
             .await?;
         let session = session_id(request.session_id)?;
         let reply = request.reply;
+        if let Some(id) = super::external_agent::input_requests::input_id(&reply.request_id) {
+            return self.reply_external_agent_input(session, id, reply).await;
+        }
         let interaction = InteractionId::try_from(
             reply
                 .request_id
@@ -1214,6 +1240,14 @@ impl SessionManager {
             return Err(AppError::Config("this is not a user input request".into()));
         };
         validate_answers(input, &reply)?;
+        let form_tool = (input.kind.as_str() == super::external_agent::FORM_INPUT_KIND
+            && reply.kind == UserInputReplyKind::Submit)
+            .then_some(view.tool_id);
+        drop(view);
+        if let Some(tool) = form_tool {
+            self.validate_external_agent_form_reply(session, tool, &reply.answers)
+                .await?;
+        }
         let decision = match reply.kind {
             UserInputReplyKind::Submit => {
                 InteractionDecision::Input(serde_json::to_string(&reply)?)
@@ -1232,6 +1266,11 @@ impl SessionManager {
         id: i64,
         request: String,
     ) -> Result<(), AppError> {
+        if let Some(input) = super::external_agent::input_requests::input_id(&request) {
+            return self
+                .present_external_agent_input(session_id(id)?, input)
+                .await;
+        }
         let interaction = InteractionId::try_from(
             request
                 .parse::<i64>()
@@ -1281,6 +1320,74 @@ impl SessionExecutionCommandService for SessionManager {
         )
         .await
         .map_err(command_error)
+    }
+
+    async fn external_agent_options(
+        &self,
+        session_id: i64,
+        change: Option<agena_domain::ExternalAgentOptionChange>,
+    ) -> Result<agena_domain::ExternalAgentOptions, SessionExecutionCommandError> {
+        self.inspect_external_agent_options(session_id, change)
+            .await
+            .map_err(command_error)
+    }
+
+    async fn external_agent_workspace(
+        &self,
+        workspace_id: i64,
+        action: agena_domain::ExternalAgentWorkspaceAction,
+    ) -> Result<agena_domain::ExternalAgentWorkspaceResult, SessionExecutionCommandError> {
+        self.manage_external_agent_workspace(workspace_id, action)
+            .await
+            .map_err(command_error)
+    }
+
+    async fn external_agent_session(
+        &self,
+        session_id: i64,
+        action: agena_domain::ExternalAgentSessionAction,
+    ) -> Result<agena_domain::ExternalAgentSessionResult, SessionExecutionCommandError> {
+        self.manage_external_agent_session(session_id, action)
+            .await
+            .map_err(command_error)
+    }
+
+    async fn external_agent_auth(
+        &self,
+        session_id: i64,
+        action: agena_domain::ExternalAgentAuthAction,
+    ) -> Result<agena_domain::ExternalAgentAuth, SessionExecutionCommandError> {
+        self.handle_external_agent_auth(session_id, action)
+            .await
+            .map_err(command_error)
+    }
+
+    async fn external_agent_live_auth(
+        &self,
+        session_id: i64,
+    ) -> Result<Option<agena_domain::ExternalAgentAuthStatus>, SessionExecutionCommandError> {
+        self.handle_external_agent_live_auth(session_id)
+            .await
+            .map_err(command_error)
+    }
+
+    async fn external_agent_providers(
+        &self,
+        session_id: i64,
+    ) -> Result<agena_domain::ExternalAgentProviders, SessionExecutionCommandError> {
+        self.inspect_external_agent_providers(session_id)
+            .await
+            .map_err(command_error)
+    }
+
+    async fn external_agent_work(
+        &self,
+        session_id: i64,
+        cancel_id: Option<uuid::Uuid>,
+    ) -> Result<Vec<agena_domain::ExternalAgentWorkItem>, SessionExecutionCommandError> {
+        self.handle_external_agent_work(session_id, cancel_id)
+            .await
+            .map_err(command_error)
     }
 
     async fn list_bots(
@@ -1399,10 +1506,18 @@ impl SessionExecutionCommandService for SessionManager {
                 )
             }
         };
+        let media_target = match self.external_agent(session).await.map_err(command_error)? {
+            Some(agent) => {
+                super::external_agent::validate_document(&request.document)
+                    .map_err(command_error)?;
+                super::media::MediaTarget::ExternalAgent(agent)
+            }
+            None => super::media::MediaTarget::Provider(model),
+        };
         let (document, blobs) = self
             .prepare_user_media_with_state(
                 session,
-                &model,
+                media_target,
                 request.document,
                 request.request_id,
                 state,
@@ -1745,15 +1860,19 @@ pub(super) fn validate_answers(
     if reply.kind != UserInputReplyKind::Submit {
         return Ok(());
     }
-    if reply.answers.len() != input.questions.len() {
+    if input.questions.iter().enumerate().any(|(index, question)| {
+        !question.optional && !reply.answers.contains_key(&index.to_string())
+    }) {
         return Err(AppError::Config(
-            "answer every question before submitting".into(),
+            "answer all required questions before submitting".into(),
         ));
     }
     for (key, answers) in &reply.answers {
         let index = key
             .parse::<usize>()
-            .map_err(|_| AppError::Config("answer references an unknown question".into()))?;
+            .ok()
+            .filter(|index| key == &index.to_string())
+            .ok_or_else(|| AppError::Config("answer references an unknown question".into()))?;
         let question = input
             .questions
             .get(index)

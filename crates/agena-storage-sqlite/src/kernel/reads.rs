@@ -15,6 +15,7 @@ pub(super) const ENTRY_COLUMNS: &str = "e.*,
         CASE WHEN e.kind='user' THEN (SELECT current_generation FROM agena_executions WHERE id=e.execution_id)
              ELSE e.generation END) AS execution_phase,
     (SELECT c.capture_state FROM agena_content_streams c WHERE c.id=e.content_id) AS content_state,
+    (SELECT c.kind FROM agena_content_streams c WHERE c.id=e.content_id) AS content_kind,
     (SELECT r.phase FROM agena_rounds r JOIN agena_compaction_rounds cr ON cr.round_id=r.id WHERE r.id=e.round_id) AS compaction_phase,
     EXISTS(SELECT 1 FROM agena_entries checkpoint WHERE checkpoint.round_id=e.round_id AND checkpoint.kind='compaction') AS compaction_committed";
 static HISTORY_ENTRY_SQL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
@@ -37,6 +38,7 @@ pub(super) const SUMMARY_FIELDS: &str = "s.id,s.workspace_id,s.title,s.favorite,
     s.metadata_version,s.membership_generation,s.created_at_ms,s.updated_at_ms,s.parent_session_id,
     COALESCE(s.root_session_id,s.id) AS root_session_id,s.depth,s.relation_kind,s.agent_name,
     s.agent_status,s.owner_bot_id,s.owner_surface,t.child_session_count,t.processing_state,
+    json_extract(s.configuration_json,'$.external_agent') AS external_agent,
     t.entry_count,t.user_message_count,t.queued_executions,t.running_executions,t.last_message_at_ms";
 static SUMMARY_SQL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     format!(
@@ -178,6 +180,12 @@ pub(super) fn summary_row(row: &SqliteRow) -> Result<SessionSummaryView> {
         id: SessionId::try_from(row.try_get::<i64, _>("id").map_err(storage)?).map_err(storage)?,
         workspace_id: row.try_get("workspace_id").map_err(storage)?,
         title: row.try_get("title").map_err(storage)?,
+        external_agent: row
+            .try_get::<Option<&str>, _>("external_agent")
+            .map_err(storage)?
+            .map(str::parse)
+            .transpose()
+            .map_err(storage)?,
         owner_bot_id: row.try_get("owner_bot_id").map_err(storage)?,
         owner_surface: row.try_get("owner_surface").map_err(storage)?,
         favorite: row.try_get("favorite").map_err(storage)?,
@@ -424,6 +432,12 @@ pub(super) fn entry_row(row: &SqliteRow) -> Result<EntryView> {
             .ok()
             .flatten()
             .map(|state| decode(&encode(state)?))
+            .transpose()?,
+        content_kind: row
+            .try_get::<Option<&str>, _>("content_kind")
+            .ok()
+            .flatten()
+            .map(|kind| decode(&encode(kind)?))
             .transpose()?,
         compaction_phase: row
             .try_get::<Option<&str>, _>("compaction_phase")

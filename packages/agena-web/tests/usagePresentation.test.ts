@@ -7,6 +7,7 @@ import * as vue from 'vue'
 import { settingsTextForLocale } from '../src/i18n/settingsTextCatalog'
 import * as usageFormatting from '../src/lib/usageFormatting'
 import * as performanceFormatting from '../src/lib/usagePerformance'
+import { sessionContextUsage } from '../src/pages/chat/contextUsage'
 import type { UsagePerformanceTotals } from '../src/types/usage'
 
 const performance: UsagePerformanceTotals = {
@@ -184,5 +185,17 @@ describe('usage performance presentation', () => {
     expect(html).toContain('Performance appears after a completed model request.')
     expect(html).not.toContain('NaN')
     expect(html).not.toContain('tok/s')
+  })
+
+  it('uses the reported ACP window to show context occupancy', async () => {
+    const usage = sessionContextUsage({ current_tokens: 400, limit_tokens: 2000, limit_basis: 'context_window' })
+    expect(usage.percentUsed).toBe(20)
+    const html = await renderComponent('chat/ContextUsageChip', {
+      props: { sessionId: '1', open: false, contextOnly: true, usage },
+    })
+    expect(html).toContain('20%')
+    expect(html).toContain('Current context')
+    expect(html).not.toContain('Conversation totals')
+    expect(html).not.toContain('Last completed request')
   })
 })

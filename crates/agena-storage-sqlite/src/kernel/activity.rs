@@ -188,14 +188,7 @@ pub(super) async fn open_output(
         return Err(invalid("unsupported activity output kind"));
     }
     let row = check(connection, scope, true).await?;
-    let active: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM agena_content_streams WHERE capture_state='open'")
-            .fetch_one(&mut *connection)
-            .await
-            .map_err(sql_error)?;
-    if active >= content::MAX_LIVE_SOURCES {
-        return Err(KernelError::Busy);
-    }
+    content::require_live_source_slot(connection).await?;
     let entry: i64 = row.try_get("entry_id").map_err(storage)?;
     content::bind_tool_entry(connection, entry).await?;
     let id = ContentId::new();

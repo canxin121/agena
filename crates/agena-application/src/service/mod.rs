@@ -79,6 +79,7 @@ pub struct ApplicationService {
     permission_rule_repository: Arc<dyn PermissionRuleRepository>,
     session_kernel: agena_storage::kernel::SessionKernel,
     session_commands: Option<Arc<dyn agena_runtime::SessionExecutionCommandService>>,
+    acp_scope: bool,
 }
 
 impl ApplicationService {
@@ -127,7 +128,25 @@ impl ApplicationService {
             permission_rule_repository,
             session_kernel,
             session_commands: None,
+            acp_scope: false,
         }
+    }
+
+    pub(crate) fn in_acp_scope(
+        mut self,
+        kernel: agena_storage::kernel::SessionKernel,
+        commands: Arc<dyn agena_runtime::SessionExecutionCommandService>,
+        permission_rules: Arc<dyn PermissionRuleRepository>,
+    ) -> Self {
+        self.acp_scope = true;
+        self.session_kernel = kernel;
+        self.session_commands = Some(commands);
+        self.permission_rule_repository = permission_rules;
+        self
+    }
+
+    pub fn is_acp_scope(&self) -> bool {
+        self.acp_scope
     }
 
     pub fn with_session_commands(

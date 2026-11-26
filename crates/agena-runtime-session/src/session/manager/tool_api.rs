@@ -145,9 +145,10 @@ impl SessionManager {
                         executor,
                         control,
                         state,
-                        model,
+                        super::media::MediaTarget::Provider(model),
                     )
-                    .await;
+                    .await
+                    .map(|_| ());
             }
             Ok(ToolApiAction::Respond(response)) => Ok(response),
             Err(error) => Err(error),

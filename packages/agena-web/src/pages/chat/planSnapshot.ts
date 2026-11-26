@@ -42,5 +42,8 @@ export function readPlanSnapshot(response: Record<string, JsonValue>): PlanSnaps
 
 /** Revision is transport metadata, not part of the human-facing plan document. */
 export function planDocument(response: Record<string, JsonValue>): string {
-  return typeof response.output_text === 'string' ? response.output_text.replace(/^Revision:[^\n]*\n/, '').trim() : ''
+  if (typeof response.output_text !== 'string') return ''
+  return record(response.metadata).external_agent
+    ? response.output_text.trim()
+    : response.output_text.replace(/^Revision:[^\n]*\n/, '').trim()
 }

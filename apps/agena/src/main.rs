@@ -46,6 +46,9 @@ fn main() -> ExitCode {
     if let Some(code) = agena_process::sandbox_file::try_run_worker() {
         std::process::exit(code);
     }
+    if let Some(code) = agena_mcp_server::stdio_relay::try_run_worker() {
+        std::process::exit(code);
+    }
     if let Some(code) = agena_bundled_plugins::worker::try_run_worker() {
         std::process::exit(code);
     }

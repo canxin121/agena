@@ -39,6 +39,24 @@ pub struct SessionRunOptions {
     pub max_output_tokens: Option<u32>,
 }
 
+impl SessionRunOptions {
+    pub fn for_external_agent(agent: agena_domain::ExternalAgent) -> Self {
+        Self {
+            selection_override: Some(Default::default()),
+            model: agent.run_identity(),
+            thinking_mode: None,
+            speed_mode: None,
+            verbosity: None,
+            model_supports_parallel_tool_calls: None,
+            thinking: None,
+            request_override: Default::default(),
+            system: None,
+            temperature: None,
+            max_output_tokens: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 /// Request to execute a session run.
 pub struct SessionExecutionRequest {

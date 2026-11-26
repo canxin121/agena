@@ -3,12 +3,39 @@ use super::super::model::SessionExecutionContext;
 use super::*;
 use crate::session::kernel::media::{MediaBinding, uri};
 use agena_domain::{
-    AccessKind, ActivityPayload, AttachmentSource, PermissionDecision, ResourceDelivery,
-    ResourceReference,
+    ACP_INLINE_ATTACHMENT_PREFIX, AccessKind, ActivityPayload, AttachmentKind, AttachmentSource,
+    ExternalAgent, PermissionDecision, ResourceDelivery, ResourceReference,
 };
 use agena_runtime_tools::media_input;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+
 pub(super) static MEDIA_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 pub(super) static MEDIA_PREPARATIONS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+
+#[derive(Clone)]
+pub(super) enum MediaTarget {
+    Provider(ModelRef),
+    ExternalAgent(ExternalAgent),
+}
+
+impl MediaTarget {
+    pub(super) fn model(&self) -> ModelRef {
+        match self {
+            Self::Provider(model) => model.clone(),
+            Self::ExternalAgent(agent) => agent.run_identity(),
+        }
+    }
+
+    pub(super) fn route(
+        &self,
+        providers: &ProviderRegistry,
+    ) -> Result<String, agena_runtime_provider::ProviderError> {
+        match self {
+            Self::Provider(model) => providers.media_route_binding(model),
+            Self::ExternalAgent(agent) => Ok(format!("acp:{}", agent.id())),
+        }
+    }
+}
 
 fn upload_hash_matches(path: &std::path::Path, expected: &str) -> bool {
     agena_runtime_tools::managed_session_upload_digest(path)
@@ -18,7 +45,7 @@ fn upload_hash_matches(path: &std::path::Path, expected: &str) -> bool {
 /// The run owns the media destination. Tool arguments can choose local input
 /// bytes, but cannot choose a provider, adapter, or authorization scope.
 pub(super) fn tool_media_input_binder(
-    model: ModelRef,
+    target: MediaTarget,
     providers: Arc<ProviderRegistry>,
 ) -> Arc<crate::tool::MediaInputBinder> {
     Arc::new(move |mut attachment| {
@@ -27,13 +54,21 @@ pub(super) fn tool_media_input_binder(
                 "media input must contain an immutable local byte snapshot",
             ));
         };
-        let route = providers
-            .media_route_binding(&model)
+        let route = target
+            .route(&providers)
             .map_err(|error| ToolError::invalid_input_error(&error))?;
         attachment.source = AttachmentSource::ProviderData { route, data };
-        providers
-            .validate_media_inputs(&model, std::slice::from_ref(&attachment))
-            .map_err(|error| ToolError::invalid_input_error(&error))?;
+        match &target {
+            MediaTarget::Provider(model) => providers
+                .validate_media_inputs(model, std::slice::from_ref(&attachment))
+                .map_err(|error| ToolError::invalid_input_error(&error))?,
+            MediaTarget::ExternalAgent(_) if attachment.kind != AttachmentKind::Image => {
+                return Err(ToolError::invalid_input(
+                    "External agents can receive image results through MCP.",
+                ));
+            }
+            MediaTarget::ExternalAgent(_) => {}
+        }
         Ok(attachment)
     })
 }
@@ -42,7 +77,7 @@ impl SessionManager {
     pub(super) async fn prepare_user_media_with_state(
         &self,
         session: SessionId,
-        model: &ModelRef,
+        target: MediaTarget,
         mut document: ComposerDocument,
         request: RequestId,
         state: Arc<ExecutionState>,
@@ -76,7 +111,8 @@ impl SessionManager {
                     .map_err(|e| AppError::Config(e.to_string()))?,
             )
         };
-        let route = state.providers.media_route_binding(model)?;
+        let model = target.model();
+        let route = target.route(&state.providers)?;
         let mut blobs = Vec::new();
         let mut bytes = 0usize;
         for (index, node) in document.0.iter_mut().enumerate() {
@@ -97,6 +133,30 @@ impl SessionManager {
                 ));
             }
             let (prepared, existing_blob) = match &resource.reference {
+                ResourceReference::Url { url } if matches!(target, MediaTarget::ExternalAgent(_))
+                    && url.starts_with(ACP_INLINE_ATTACHMENT_PREFIX) =>
+                {
+                    let data = &url[ACP_INLINE_ATTACHMENT_PREFIX.len()..];
+                    if data.len() > media_input::MAX_MEDIA_BYTES.div_ceil(3) * 4 {
+                        return Err(AppError::Config("ACP attachments are limited to 20 MiB.".into()));
+                    }
+                    let data = data.to_owned();
+                    let name = resource.name.clone();
+                    let expected = activity.provenance.content_hash.clone();
+                    let prepared = MEDIA_WORKERS
+                        .run(move || {
+                            let bytes = STANDARD.decode(data).map_err(|_| "The attachment data is not valid base64.".to_owned())?;
+                            let prepared = media_input::from_bytes(&name, bytes, None)?;
+                            if expected.is_some_and(|hash| !hash.eq_ignore_ascii_case(&prepared.sha256)) {
+                                return Err("The attachment checksum does not match.".into());
+                            }
+                            Ok(prepared)
+                        })
+                        .await
+                        .map_err(|error| AppError::Internal(error.to_string()))?
+                        .map_err(AppError::Config)?;
+                    (prepared, None)
+                }
                 ResourceReference::WorkspacePath { path } => {
                     let requested = std::path::Path::new(path);
                     let target = match &root {
@@ -182,10 +242,12 @@ impl SessionManager {
                     "message media exceeds the 40 MiB input limit".into(),
                 ));
             }
-            let bound = prepared.attachment(Some(&route));
-            state
-                .providers
-                .validate_media_inputs(model, std::slice::from_ref(&bound))?;
+            let mut attachment = prepared.attachment(Some(&route));
+            if matches!(target, MediaTarget::Provider(_)) {
+                state
+                    .providers
+                    .validate_media_inputs(&model, std::slice::from_ref(&attachment))?;
+            }
             let blob_request =
                 request_key(&format!("media:{session:?}:{request}"), &index.to_string());
             let blob = match existing_blob {
@@ -195,7 +257,6 @@ impl SessionManager {
                         .await?
                 }
             };
-            let mut attachment = bound;
             // A staged upload's disk basename contains a UUID; preserve the
             // user's display name in its immutable attachment metadata.
             if !resource.name.trim().is_empty() {
@@ -360,9 +421,11 @@ mod tool_media_tests {
         let (providers, observed) = registry(CapabilitySupport::Supported, Some("first"), false);
         let model = selected();
         let prepared = snapshot();
-        let bound =
-            tool_media_input_binder(model.clone(), providers.clone())(prepared.attachment(None))
-                .unwrap();
+        let bound = tool_media_input_binder(
+            MediaTarget::Provider(model.clone()),
+            providers.clone(),
+        )(prepared.attachment(None))
+        .unwrap();
         let route = providers.media_route_binding(&model).unwrap();
         assert_eq!(bound, prepared.attachment(Some(&route)));
         let recorded = observed.lock().unwrap();
@@ -379,12 +442,16 @@ mod tool_media_tests {
             adapter_id: None,
             ..model.clone()
         };
-        let other_bound =
-            tool_media_input_binder(other, providers)(prepared.attachment(None)).unwrap();
+        let other_bound = tool_media_input_binder(MediaTarget::Provider(other), providers)(
+            prepared.attachment(None),
+        )
+        .unwrap();
         assert_ne!(bound.source, other_bound.source);
         let (changed, _) = registry(CapabilitySupport::Supported, Some("changed"), false);
-        let changed_bound =
-            tool_media_input_binder(model, changed)(prepared.attachment(None)).unwrap();
+        let changed_bound = tool_media_input_binder(MediaTarget::Provider(model), changed)(
+            prepared.attachment(None),
+        )
+        .unwrap();
         assert_ne!(bound.source, changed_bound.source);
         assert_eq!(bound.sha256, changed_bound.sha256);
         assert_eq!(bound.size_bytes, changed_bound.size_bytes);
@@ -420,15 +487,20 @@ mod tool_media_tests {
             ),
         ] {
             let (providers, _) = registry(support, revision, reject_transport);
-            let error = tool_media_input_binder(selected(), providers)(prepared.attachment(None))
-                .unwrap_err();
+            let error = tool_media_input_binder(MediaTarget::Provider(selected()), providers)(
+                prepared.attachment(None),
+            )
+            .unwrap_err();
             assert!(error.to_string().contains(expected), "{error}");
         }
-        let missing = tool_media_input_binder(selected(), Arc::new(ProviderRegistry::new()));
+        let missing = tool_media_input_binder(
+            MediaTarget::Provider(selected()),
+            Arc::new(ProviderRegistry::new()),
+        );
         assert!(missing(prepared.attachment(None)).is_err());
 
         let (providers, observed) = registry(CapabilitySupport::Supported, Some("first"), false);
-        let binder = tool_media_input_binder(selected(), providers);
+        let binder = tool_media_input_binder(MediaTarget::Provider(selected()), providers);
         for source in [
             AttachmentSource::ProviderData {
                 route: "foreign-route".into(),

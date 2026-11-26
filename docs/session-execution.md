@@ -2,6 +2,163 @@
 
 项目工作由 Session Kernel 承载。AI Bot 和用户操作同一份项目会话：创建、发送消息、继续、读取结果、停止执行。内部并行分工使用现有 Subagent，状态、工具输出、权限卡片和消息顺序都属于原生会话。
 
+## 外部 Agent 会话
+
+Agena 的「ACP」页面连接服务器上的 Antigravity 或 Claude Code。外部 Agent 使用自己的登录和模型设置，并保存原生对话历史。Agena 在独立的内存会话中展示实时消息、附件、工具结果和权限交互。Agena 通过 ACP 传递用户输入，在同一次执行中通过本地 MCP 返回 Agena 工具的结果。
+
+1. 在运行 `agena server` 的机器上，用同一个系统账号安装并登录所需的 Agent。Antigravity 需要支持 ACP 的 `agy`，可以用 `agy acp --help` 检查，并在终端执行 `agy acp --login` 完成登录。Agena 用 `agy acp --process-per-session` 连接客户端提供的 HTTP MCP。[Antigravity ACP 文档](https://antigravity.google/docs/ide/extensions/acp)
+2. 使用 Claude Code 时，安装 `claude-agent-acp`（Node.js 22+ 可执行 `npm install -g @agentclientprotocol/claude-agent-acp`），并用官方 `claude auth login` 登录。将适配器加入 Agena Server 的 `PATH`。适配器使用官方 Claude Agent SDK 与 Claude Code。[Claude ACP 适配器](https://github.com/agentclientprotocol/claude-agent-acp)
+3. 在 Agena Web 左侧打开「ACP」，选择项目和 Agent，点击「新建会话」。发送第一条消息时，Agent 开始原生会话。也可以在终端创建并用返回的 `session.id` 打开 TUI。
+
+```sh
+agena sessions create --workspace /path/to/project --external-agent antigravity
+agena sessions create --workspace /path/to/project --external-agent claude-code
+agena tui --session <session-id>
+```
+
+REST 客户端可向 `POST /api/v1/acp/sessions` 传入 `workspace_id`、`title` 和 `external_agent: "antigravity"` 或 `"claude-code"`。使用返回的临时 ID 向 `/api/v1/acp/sessions/{session_id}/messages` 发送消息。普通会话列表和项目会话历史仍由 `/api/v1/sessions` 提供。
+
+在 Web 点输入框下方的外部 Agent 名称，或在 TUI 运行 `/model`，可以查看当前 Agent 提供的模型、思考强度、模式和其他选项。Agena 向 Agent 核对所选值，在当前临时会话中应用。Agent 在会话中主动变更选项时，Web 会同步显示最新值。选用「遵循外部 Agent 设置」时，会话采用该 Agent 的原生设置。
+
+```sh
+agena sessions agent-options <session-id>
+agena sessions agent-options <session-id> --model <advertised-model-id>
+agena sessions agent-options <session-id> --thinking <advertised-value>
+agena sessions agent-options <session-id> --option '<advertised-kind>=<value>'
+```
+
+REST 可向 `POST /api/v1/sessions/{session_id}/agent-options` 提交 `{}` 查看选项，或用 `{"change":{"kind":"model","value":"<advertised-model-id>"}}` 更改选择。思考强度使用 `kind: "thought_level"`，`value: null` 恢复由外部 Agent 决定。
+
+### ACP 供应商路由
+
+Agent 声明支持 ACP 供应商路由时，可用 `agena sessions agent-providers <session-id>` 或 `GET /api/v1/sessions/{session_id}/agent-providers` 查看新连接使用的供应商 ID、协议和地址。返回的地址会去掉用户信息、查询参数和片段。 [ACP Configurable LLM Providers 草案](https://agentclientprotocol.com/rfds/custom-llm-endpoint)
+
+使用 CLI 的原生路由时，启动 Agena Server 可省略 `AGENA_ACP_PROVIDERS_FILE`。如需显式设置路由，将该变量指向服务器管理员维护的 JSON 文件。各 Agent 按文件中对应的列表配置。下例使用 Claude Code 公布的 `main` 供应商，`env` 引用的是 Agena Server 进程环境中的请求头值。
+
+```json
+{
+  "claude-code": [
+    {
+      "action": "set",
+      "providerId": "main",
+      "apiType": "anthropic",
+      "baseUrl": "https://api.anthropic.com",
+      "headers": { "x-api-key": { "env": "AGENA_CLAUDE_PROVIDER_KEY" } }
+    }
+  ]
+}
+```
+
+`set` 替换该供应商的完整路由配置，也可携带 Agent 定义的 `_meta`。要执行 `providers/disable`，使用 `{"action":"disable","providerId":"main"}`，所选供应商必须声明为可停用。Agena 会先通过 `providers/list` 核对能力，再把配置交给新连接上的 Agent。后续新建、恢复、回放或分叉会话时读取文件里的当前配置。
+
+### 登录与原生命令
+
+Web 的「外部 Agent 账号」面板显示 Agent 支持的账号状态、登录和退出选项。CLI 也可查看账号状态、选择 Agent 提供的协议登录方式和退出。
+
+```sh
+agena sessions agent-auth <session-id>
+agena sessions agent-auth <session-id> --live
+agena sessions agent-auth <session-id> --login <method-id>
+agena sessions agent-auth <session-id> --logout
+```
+
+如果 Agent 提供终端登录方式，请在 Agena 服务进程所在的运行环境中用同一系统账号打开终端，并连接服务的回环地址。可用 `--server http://127.0.0.1:<port>` 指定地址。用 `--terminal` 查看可用方式，再用返回的方法 ID 登录。
+
+```sh
+agena sessions agent-auth <session-id> --terminal
+agena sessions agent-auth <session-id> --terminal --login <terminal-method-id>
+```
+
+支持 `auth/status_update` 时，当前连接的账号状态会显示在 Web 账号面板和 TUI 的外部 Agent 活动中。`--live` 和 `GET /api/v1/sessions/{session_id}/agent-auth` 读取这份状态。没有收到报告时返回 `null`，连接关闭后这份状态会被清除。
+
+Web 和 TUI 的 `/` 命令菜单会显示当前会话的外部 Agent 发布的命令、说明和参数提示。外部命令以 `/agent:` 开头。用 `/agent:compact` 可把 `/compact` 交给外部 Agent。直接输入 `/compact` 会调用 Agena 的压缩操作，该操作适用于 Agena 原生会话。选中带参数提示的外部命令会先把命令填入输入框。
+
+命令列表在外部 Agent 发布后出现，通常在第一条消息启动原生会话时。已经知道命令名称时，可以直接提交 `/agent:<命令>`。恢复同一个原生会话时，菜单保留上次收到的列表，收到新的列表后刷新。
+
+支持 ACP v2 结构化技能的 Agent 会在同一个菜单发布技能。选中技能后可以补写任务，例如 `/agent:summarize 请概括这个文件`。Agena 根据当前原生会话发布的列表发送技能引用和任务文字。原生历史会保留技能名称。当前 Claude Code 适配器的普通斜杠技能也可以继续从该菜单调用。 [ACP Agent Skills 草案](https://agentclientprotocol.com/rfds/agent-skills)
+
+### 原生历史与会话管理
+
+在 ACP 侧边栏选定项目和 Agent 后，历史列表从该 Agent 请求。点击某条记录的「打开」时，Agena 按原生会话 ID 回放 Agent 当前提供的消息、思考内容、附件和工具事件，后续消息可以接着原生上下文发送。再次打开空闲会话会重新回放。如果该会话正在运行、有排队消息或等待用户答复，Agena 会接入当前执行。
+
+会话投影、执行状态和聊天附件在 Agena 服务内存中使用。服务重启后，再次打开原生历史会分配新的临时 ID。旧版已经写进 `agena.db` 的 ACP 记录保留原数据，普通会话列表会过滤这些记录。工具在项目里执行的文件修改按项目权限处理。
+
+单次回放最多接受 6,000 条记录、896 KiB 的历史内容与元数据，以及 8 MiB 的附件。回放失败时，原有临时视图可继续使用。
+
+```sh
+agena sessions agent-sessions --workspace /path/to/project list claude-code
+agena sessions agent-sessions --workspace /path/to/project list claude-code --cursor '<next-cursor>'
+agena sessions agent-sessions --workspace /path/to/project open claude-code '<native-id>'
+```
+
+Agent 在 ACP v1 或 v2 声明公开归档能力时，原生历史列表支持筛选、归档和取消归档。Agena 对当前项目里的会话调用 `session/archive` 或 `session/unarchive`。早期的 Claude Code v1 适配器可以通过 AIR 索引提供归档。AIR 还提供批量查询和变更通知，Web 会按通知刷新当前项目的历史。
+
+```sh
+agena sessions agent-sessions --workspace /path/to/project list claude-code --archived all
+agena sessions agent-sessions --workspace /path/to/project batch-get claude-code '<native-id>'
+agena sessions agent-sessions --workspace /path/to/project archive claude-code '<native-id>'
+agena sessions agent-sessions --workspace /path/to/project unarchive claude-code '<native-id>'
+agena sessions agent-sessions --workspace /path/to/project watch claude-code --wait-seconds 10
+```
+
+对应的 REST 操作是 `index_list`、`batch_get`、`set_archived` 和 `watch`。`index_list` 的 `archived` 参数可设为 `unarchived`、`archived` 或 `all`。索引查询和变更都以当前项目目录为范围。
+
+在 ACP 侧边栏点击「原生会话」，可查看关联信息和 Agent 提供的重命名、设置额外目录、关闭、删除或分叉操作。修改操作需要当前会话空闲。额外目录会按项目读取权限检查，下一次打开原生会话时生效。Agent 声明支持追加系统提示词时，Agena 会在打开会话时发送已配置的提示词。提示词何时生效取决于 Agent。
+
+```sh
+agena sessions agent-session <session-id> status
+agena sessions agent-session <session-id> rename 'Project conversation'
+agena sessions agent-session <session-id> set-directories ./shared /path/to/another/project
+agena sessions agent-session <session-id> fork --title 'Agena branch title'
+agena sessions agent-session <session-id> close
+agena sessions agent-session <session-id> delete
+```
+
+`fork` 在 Agent 中创建原生分支，并打开该分支的临时视图。`close` 释放原生会话资源，后续仍可恢复。`delete` 删除 Agent 保存的历史并关闭 Agena 的临时视图。`set-directories` 省略路径时清空目录列表。
+
+Claude Code v2 发布消息分叉位置时，可在 Web「原生会话」中选择一条用户消息，从该消息之前分叉。分支保留该位置之前的 Agena 记录和 Claude Code 上下文，可以接着发送消息。CLI 可从 `status` 返回的 `fork_points` 选取 `message_id`，并传给 `fork --before-message-id <message-id>`。REST 的 `fork` 操作将同一 ID 写在 `before_message_id` 中。
+
+会话列表和打开操作使用 `POST /api/v1/acp/workspaces/{workspace_id}/sessions`。例如 `{"action":"list","agent":"claude-code"}` 或 `{"action":"open","agent":"claude-code","native_id":"<native-id>"}`。会话管理使用 `POST /api/v1/acp/sessions/{session_id}/agent-session`，接受 `{"action":"status"}`、`{"action":"set_title","title":"Project conversation"}` 或 `{"action":"fork"}`。已有的 `import` 命令和兼容 REST 入口也使用临时视图。
+
+### 运行中交互与协议版本
+
+外部 Agent 正在运行时，在 Web 输入文本后点击「插话」，或在 Web、TUI 按 `Alt+Enter`，可把文本交给当前运行。Agena 在 Agent 确认接收后记录这条追加指令。原生接口为 `POST /api/v1/sessions/{session_id}/agent-steer`，请求体为 `{"text":"请同时检查测试"}`。
+
+```sh
+agena sessions agent-steer <session-id> '请同时检查测试'
+```
+
+支持 ACP v2 的 Agent 如果为某个工具调用、终端或子 Agent 发布取消能力，可以在 Web 的「动态」面板或 TUI 命令面板的「取消外部 Agent 任务」中单独发送取消请求。Claude Code v1 发布的可停止异步任务也出现在这里。目标的最终状态由 Agent 后续更新。
+
+```sh
+agena sessions agent-work <session-id>
+agena sessions agent-work <session-id> --cancel <cancel-id>
+```
+
+REST 可用 `GET /api/v1/sessions/{session_id}/agent-work` 查看当前可取消项，用同一路径 `POST` `{"cancel_id":"<cancel-id>"}` 请求取消。列表中的 `cancel_id` 对应该连接的当前能力。目标完成、能力撤回或重连后需重新查询。
+
+ACP 请求超时或调用方撤回正在等待的插话与单项操作时，Agena 用 `$/cancel_request` 通知 Agent 取消对应的请求 ID。停止当前执行时走 `session/cancel`，随后结算 Agena 的本地执行和工具授权。
+
+Agena 连接外部 Agent 时自动协商 ACP 版本。支持 v2 的 Agent 使用 v2，旧版 Agent 会通过新的 v1 握手连接。当前 Claude Code 适配器会选择 **ACP v2 Preview**，Antigravity 会选择 **ACP v1**。在 v2 会话里，Agent 的确认响应表示已接收消息，Agena 继续跟踪运行状态和已报告的后台任务。
+
+Agena 默认优先使用 Streamable HTTP。也可以在服务器环境中用 `AGENA_ACP_MCP_TRANSPORT` 指定 `http`、`acp`、`sse` 或 `stdio`，Agena 根据 Agent 声明的能力选择可用的传输。stdio 是 ACP v1 的基础传输，旧式 SSE 只用于声明支持它的 v1 Agent。v2 Agent 在没有共同 MCP 传输时仍可使用原生会话。MCP 工具使用当前轮次的权限，工具出口随轮次结束撤销。
+
+- 外部 Agent 可以通过名为 `agena` 的 MCP server 调用当前项目会话可用的工具。工具继续经过 Agena 的权限、审批和执行流程。授权后产生的图片附件可以作为 MCP 图片内容返回，例如通过 `fs.read_media` 查看本地截图。外部 Agent 自带的工具使用原生权限设置，经 ACP 发出的权限请求可在 Agena 中作答。
+- 原生 Agent 可以通过 ACP v1 的文件与终端回调委托 Agena 读取文本、写入文件和运行命令。回调使用当前会话下的文件和 Shell 工具，终端句柄绑定到该轮次。
+- 一轮成功后，服务可以保留 ACP 读流以接收标题、命令列表、通知和当前原生会话发来的交互。空闲时的表单、授权链接和原生权限仍使用 Agena 的交互卡。下一轮恢复会话时会撤回旧连接的待答请求。Agena 的 MCP 工具、文件和终端回调需要活跃轮次。
+- 支持表单的 ACP Agent 可以在 Web 和 TUI 中主动提问，例如 Claude Code 的 `AskUserQuestion`。表单支持文本、整数、数字、布尔值、单选和多选。可选字段可以跳过，回答在发给 Agent 前按表单校验。
+- 协议登录如果发来绑定到该次登录的交互请求，也会在对应 Agena 会话中显示。通过 CLI 发起此类登录时，可以在同一会话的 Web 或 TUI 中回答。TUI 使用 `Ctrl+R` 打开待答输入。
+- Agent 请求打开授权页面时，Web 和 TUI 会先展示完整地址。确认后由客户端打开页面，Agent 报告授权完成时会在对话中显示。对于原生工具权限，Agena 会展示 Agent 提供的全部选项，并回传用户选择的选项 ID。
+- 等待表单或权限答复时仍可接收 Agent 的流式更新。Agent 撤回某个请求后，Agena 会关闭对应卡片，当前轮和其他待答请求可以继续。
+- ACP v2 的助手消息和思考内容按原生消息 ID 更新。对于已记录的消息，Agent 可在运行中、空闲时或恢复连接时发送完整快照，在原位置替换文字、链接和附件。此前创建的分叉继续读取分叉时的版本。
+- Agent 发布的清单和 Markdown 计划会显示在 Web 和 TUI 的计划查看器里。计划按 Agent 给出的 ID 更新和移除，既有的 ACP 清单也能显示。新建原生对话或清空上下文时会清除旧的进度。
+- Agent 提供上下文用量时，Agena 显示它报告的已用 Token 和窗口容量。恢复同一个原生会话时可以查看上次的读数。Claude Code v1 的轮次响应和 v2 的前台完成状态会把所报告的单轮 Token 写入会话用量。Web 输入框下方的外部 Agent 活动面板和 TUI 的外部 Agent 活动命令还可以查看 Agent 报告的费用、通知、压缩进度、子 Agent 状态和只读终端输出。
+- 原生工具行可以显示工具报告的文本、文件差异和终端输出，并在工具完成后附上它返回的媒体。外部 Agent 提供后续提示建议时，可以在 Web 活动面板或 TUI 命令菜单里选一条填入空白输入框，再由用户发送。
+- 外部 Agent 声明支持时，可以在提示词里附带图片、音频或嵌入资源。附件经过项目读取权限校验，并以提交时的内容发送。外部 Agent 会收到当前消息选中的项目文件、目录和 Agena 技能引用，可以通过可用工具读取。其他文件可用项目路径引用。
+- 连续对话优先使用 `session/resume`，也可通过 `session/load` 恢复。Agent 到达单轮请求上限时，Agena 会显示提示，并保留当前进度供下一轮继续。清空上下文、执行失败、取消或使用普通 Agena 分叉后，后续消息可能开启新原生会话，并从当前消息开始。
+- 外部 Agent 会话面向用户主动发起的项目对话。计划任务、渠道和集成事件的自动推理仍由 Agena 原生会话处理。
+- Antigravity 的 ACP 可用性与个人账号、套餐、地区、版本及当时的厂商政策有关；请在部署前核对最新官方说明和适用条款。本项目不保证任意账号或套餐均可使用，也不构成厂商合规意见。[Google ACP 用法讨论](https://github.com/google-antigravity/antigravity-cli/issues/1493) · [Google Antigravity 条款](https://antigravity.google/terms) · [Anthropic Claude Code 条款](https://code.claude.com/docs/en/legal-and-compliance)。Claude Code 也使用用户自己的登录与用量，具体使用条件以 Anthropic 当前条款为准。
+
 ## Bot 与项目作用域
 
 Bot 是实例级全局会话，项目关联和默认工作目录都为空；普通项目会话关联真实的已登记项目。全局会话的文件与命令操作必须明确路径基准，权限仍按实例与会话规则审查，不继承当前项目的规则、提示词或记忆。Bot 管理某个项目时只选择目标，不把自己的作用域改成那个项目。

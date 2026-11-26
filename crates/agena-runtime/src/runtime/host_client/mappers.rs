@@ -111,6 +111,7 @@ pub(super) fn ask_user_tool_input(req: AskUserRequest) -> Result<AskUserToolInpu
                     .collect(),
                 multiple: question.multiple,
                 allow_custom: question.allow_custom,
+                optional: false,
             })
             .collect();
         let input = AskUserToolInput {
@@ -146,6 +147,7 @@ pub(super) fn ask_user_tool_input(req: AskUserRequest) -> Result<AskUserToolInpu
             options,
             multiple: false,
             allow_custom: req.allow_free_text,
+            optional: false,
         }],
     };
     AskUserToolInput::parse_input(
@@ -174,6 +176,7 @@ pub(super) fn session_resource_from_session(
         version: session.version,
         relation_kind: session.relation_kind,
         lifecycle_state: session.lifecycle_state,
+        external_agent: session.external_agent,
         state: agena_session_api::resource::SessionState::default(),
         source_cutoff_seq_global: None,
         source_message_id: None,

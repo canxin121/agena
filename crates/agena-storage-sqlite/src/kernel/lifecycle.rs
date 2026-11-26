@@ -162,6 +162,45 @@ async fn configure(
         }
         next.relation_kind = relation;
     }
+    if let Some(agent) = change.external_agent
+        && original.external_agent != Some(agent)
+    {
+        let metadata = reads::metadata(connection, session).await?;
+        let has_history: bool = sqlx::query_scalar(
+            "SELECT entry_count>0 FROM agena_session_statistics WHERE session_id=?",
+        )
+        .bind(session.get())
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(sql_error)?;
+        if metadata.workspace_id.is_none() || has_history || original.external_agent.is_some() {
+            return Err(invalid(
+                "the external agent is fixed when a project session is created",
+            ));
+        }
+        next.external_agent = Some(agent);
+    }
+    if let Some(selection) = &change.external_agent_selection {
+        if next.external_agent.is_none() {
+            return Err(invalid("this session has no external agent"));
+        }
+        if original.external_agent_selection != selection.expected {
+            return Err(KernelError::Conflict(
+                "external agent options changed while they were being checked".into(),
+            ));
+        }
+        next.external_agent_selection = selection.selection.clone();
+    }
+    if let Some(directories) = &change.external_agent_directories {
+        if next.external_agent.is_none()
+            || directories.len() > 16
+            || directories.iter().any(|path| !path.is_absolute())
+        {
+            return Err(invalid("invalid external agent workspace directories"));
+        }
+        super::external_agent::require_idle(connection, session).await?;
+        next.external_agent_directories.clone_from(directories);
+    }
     if let Some(value) = &change.conversation {
         next.conversation = value.clone();
     }
@@ -332,6 +371,7 @@ async fn configure(
         ));
     }
     normalize_configuration_permissions(&mut next)?;
+    super::external_agent::bound_configuration_state(&mut next)?;
     let body = encode(&next)?;
     if body.len() > 65536 {
         return Err(invalid("session configuration exceeds 64 KiB"));
@@ -572,6 +612,7 @@ async fn fork(
     rewind: bool,
     conversation_mode: Option<agena_domain::ConversationMode>,
     management: Option<&ForkGuard>,
+    external_agent: Option<&ExternalAgentFork>,
 ) -> Result<Mutation> {
     if rewind && conversation_mode.is_some() {
         return Err(invalid("rewind cannot create a conversation branch"));
@@ -621,10 +662,11 @@ async fn fork(
         }
     }
     boundary(connection, session, through).await?;
+    let before = external_agent.and_then(|native| native.before.as_ref());
     // A message boundary is the first actual assistant entry, while its
     // immutable facts may span many segments. Freeze the complete visible
     // response at this transaction's cut, including tool and interaction facts.
-    let cut = if !rewind && kind != "user" {
+    let cut = if !rewind && before.is_none() && kind != "user" {
         sqlx::query_scalar::<_,i64>("SELECT e.id FROM agena_entries e JOIN agena_segment_entries m ON m.entry_id=e.id JOIN agena_session_segments s ON s.segment_id=m.segment_id WHERE s.session_id=? AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal AND e.execution_id=? AND e.generation=? AND e.kind!='user' ORDER BY s.sequence DESC,m.ordinal DESC LIMIT 1")
             .bind(session.get()).bind(row.try_get::<&str,_>("execution_id").map_err(storage)?).bind(row.try_get::<i64,_>("generation").map_err(storage)?)
             .fetch_optional(&mut *connection).await.map_err(sql_error)?.map(EntryId::try_from).transpose().map_err(storage)?.unwrap_or(through)
@@ -632,9 +674,95 @@ async fn fork(
         through
     };
     let (sequence, ordinal) = boundary(connection, session, cut).await?;
-    let end = ordinal + i64::from(!rewind);
-    let old_config = configuration(connection, session).await?;
-    let mut config = old_config;
+    let end = ordinal + i64::from(!rewind && before.is_none());
+    let mut config = configuration(connection, session).await?;
+    let mut native_link = None;
+    if let Some(native) = external_agent {
+        super::external_agent::require_idle(connection, session).await?;
+        let latest: Option<i64> = sqlx::query_scalar(
+            "SELECT m.entry_id FROM agena_session_segments s
+             JOIN agena_segment_entries m ON m.segment_id=s.segment_id
+             WHERE s.session_id=? AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal
+             ORDER BY s.sequence DESC,m.ordinal DESC LIMIT 1",
+        )
+        .bind(session.get())
+        .fetch_optional(&mut *connection)
+        .await
+        .map_err(sql_error)?;
+        if rewind
+            || management.is_some()
+            || conversation_mode.is_some()
+            || metadata.membership_generation != native.expected_membership
+            || latest != Some(native.expected_head.get())
+            || config.external_agent != Some(native.expected_agent)
+            || config.native_session_link().as_ref() != Some(&native.expected_native)
+        {
+            return Err(KernelError::Conflict("native fork source changed".into()));
+        }
+        let tail = if let Some(before) = before {
+            if kind != "user"
+                || before.message_id != through
+                || !super::external_agent::fork_points(
+                    connection,
+                    session,
+                    &native.expected_native,
+                    Some(through),
+                )
+                .await?
+                .first()
+                .is_some_and(|(current, _)| current == before)
+            {
+                return Err(KernelError::Conflict("native fork point changed".into()));
+            }
+            let previous: Option<i64> = sqlx::query_scalar(
+                "SELECT m.entry_id FROM agena_session_segments s
+                 JOIN agena_segment_entries m ON m.segment_id=s.segment_id
+                 WHERE s.session_id=?1 AND s.sequence<=?2
+                   AND m.ordinal>=s.first_ordinal
+                   AND m.ordinal < CASE WHEN s.sequence=?2 THEN ?3 ELSE s.end_ordinal END
+                 ORDER BY s.sequence DESC,m.ordinal DESC LIMIT 1",
+            )
+            .bind(session.get())
+            .bind(sequence)
+            .bind(ordinal)
+            .fetch_optional(&mut *connection)
+            .await
+            .map_err(sql_error)?;
+            let previous = previous.ok_or_else(|| {
+                KernelError::Conflict(
+                    "native fork has no retained transcript before its cursor".into(),
+                )
+            })?;
+            EntryId::try_from(previous).map_err(storage)?
+        } else {
+            if native.expected_head != through || cut != through {
+                return Err(KernelError::Conflict("native fork source changed".into()));
+            }
+            through
+        };
+        let link = ExternalAgentLink {
+            native_id: native.new_native_id.clone(),
+            cwd: native.expected_native.cwd.clone(),
+            incarnation: None,
+            resume_at: Some(ExternalAgentHistoryAnchor { tail: Some(tail) }),
+        };
+        super::external_agent::validate_link(&link)?;
+        let agent = config.external_agent.ok_or(KernelError::Ownership)?;
+        let workspace = metadata.workspace_id.ok_or(KernelError::Ownership)?;
+        if super::external_agent::existing_link(connection, workspace, agent, &link)
+            .await?
+            .is_some()
+        {
+            return Err(KernelError::Conflict(
+                "the fork is already linked to a session".into(),
+            ));
+        }
+        native_link = Some(link);
+    }
+    config.external_agent_resume = None;
+    config.external_agent_link = native_link;
+    config.external_agent_state = Default::default();
+    config.external_agent_inputs = None;
     config.parent_session_id = Some(session);
     config.relation_kind = if rewind {
         SessionRelationKind::Rewind
@@ -642,7 +770,10 @@ async fn fork(
         SessionRelationKind::Fork
     };
     config.agent = None;
-    if management.is_some_and(|guard| guard.title.is_some()) {
+    let title = external_agent
+        .and_then(|fork| fork.title.as_ref())
+        .or_else(|| management.and_then(|guard| guard.title.as_ref()));
+    if title.is_some() {
         config.title_state = SessionTitleState::default();
     }
     // Stop/pause belongs to the source queue, never to a new branch.
@@ -665,7 +796,7 @@ async fn fork(
     .await
     .map_err(sql_error)?;
     let now = now_ms();
-    let id:i64=sqlx::query_scalar("INSERT INTO agena_sessions (workspace_id,title,selection_json,parent_session_id,root_session_id,depth,relation_kind,configuration_json,created_at_ms,updated_at_ms) VALUES (?,?,?,?,?,?,?,?,?,?) RETURNING id").bind(metadata.workspace_id).bind(management.and_then(|g| g.title.as_ref()).unwrap_or(&metadata.title)).bind(metadata.selection.as_ref().map(encode).transpose()?).bind(session.get()).bind(row.try_get::<i64,_>("root").map_err(storage)?).bind(row.try_get::<i64,_>("depth").map_err(storage)?+1).bind(config.relation_kind.as_str()).bind(encode(&config)?).bind(now).bind(now).fetch_one(&mut *connection).await.map_err(sql_error)?;
+    let id:i64=sqlx::query_scalar("INSERT INTO agena_sessions (workspace_id,title,selection_json,parent_session_id,root_session_id,depth,relation_kind,configuration_json,created_at_ms,updated_at_ms) VALUES (?,?,?,?,?,?,?,?,?,?) RETURNING id").bind(metadata.workspace_id).bind(title.unwrap_or(&metadata.title)).bind(metadata.selection.as_ref().map(encode).transpose()?).bind(session.get()).bind(row.try_get::<i64,_>("root").map_err(storage)?).bind(row.try_get::<i64,_>("depth").map_err(storage)?+1).bind(config.relation_kind.as_str()).bind(encode(&config)?).bind(now).bind(now).fetch_one(&mut *connection).await.map_err(sql_error)?;
     let target = SessionId::try_from(id).map_err(storage)?;
     sqlx::query("INSERT INTO agena_session_statistics (session_id) VALUES (?)")
         .bind(id)
@@ -808,6 +939,7 @@ async fn truncate_history(
     history_runs::rebuild_response_segment(connection, session, sequence).await?;
     sqlx::query("UPDATE agena_sessions SET membership_generation=?,updated_at_ms=MAX(?,updated_at_ms+1) WHERE id=?").bind(next.get()).bind(now_ms()).bind(session.get()).execute(&mut *connection).await.map_err(sql_error)?;
     reset_prompt_window(connection, session).await?;
+    reset_external_agent(connection, session).await?;
     recount(connection, session).await
 }
 
@@ -825,6 +957,7 @@ async fn clear(
 ) -> Result<Mutation> {
     let metadata = reads::metadata(connection, session).await?;
     settle_active_executions(connection, session).await?;
+    reset_external_agent(connection, session).await?;
     match mode {
         ClearMode::History => {
             let next = metadata.membership_generation.next().map_err(storage)?;
@@ -896,6 +1029,20 @@ async fn settle_active_executions(
             commands::finish(connection, view, ExecutionPhase::Cancelled).await?;
         }
     }
+}
+
+async fn reset_external_agent(connection: &mut SqliteConnection, session: SessionId) -> Result<()> {
+    sqlx::query(
+        "UPDATE agena_sessions SET configuration_json=json_remove(
+            configuration_json,'$.external_agent_resume','$.external_agent_link',
+            '$.external_agent_state','$.external_agent_inputs')
+         WHERE id=? AND json_extract(configuration_json,'$.external_agent') IS NOT NULL",
+    )
+    .bind(session.get())
+    .execute(connection)
+    .await
+    .map_err(sql_error)?;
+    Ok(())
 }
 
 async fn reset_prompt_window(connection: &mut SqliteConnection, session: SessionId) -> Result<()> {
@@ -1501,6 +1648,15 @@ pub(super) async fn apply(
                     message_queue_paused: Some(config.message_queue_paused),
                     parent_session_id: config.parent_session_id,
                     relation_kind: Some(config.relation_kind),
+                    external_agent: config.external_agent,
+                    external_agent_directories: (!config.external_agent_directories.is_empty())
+                        .then(|| config.external_agent_directories.clone()),
+                    external_agent_selection: (!config.external_agent_selection.is_empty()).then(
+                        || ExternalAgentSelectionChange {
+                            expected: Default::default(),
+                            selection: config.external_agent_selection.clone(),
+                        },
+                    ),
                     conversation: Some(config.conversation.clone()),
                     prompts: Some(config.prompts.clone()),
                     profile: Some(config.profile.clone()),
@@ -1623,6 +1779,7 @@ pub(super) async fn apply(
             rewind,
             conversation_mode,
             management,
+            external_agent,
         } => {
             fork(
                 connection,
@@ -1631,8 +1788,33 @@ pub(super) async fn apply(
                 *rewind,
                 *conversation_mode,
                 management.as_ref(),
+                external_agent.as_ref(),
             )
             .await?
+        }
+        Command::ImportExternalAgent {
+            workspace_id,
+            agent,
+            title,
+            link,
+            turns,
+            state,
+            replace_view,
+        } => {
+            super::external_agent::import(
+                connection,
+                *workspace_id,
+                *agent,
+                title,
+                link,
+                turns,
+                state,
+                *replace_view,
+            )
+            .await?
+        }
+        Command::DetachExternalAgent { session, expected } => {
+            super::external_agent::detach(connection, *session, expected).await?
         }
         Command::Withdraw { session, message } => withdraw(connection, *session, *message).await?,
         Command::Truncate { session, message } => truncate(connection, *session, *message).await?,

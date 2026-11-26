@@ -157,9 +157,7 @@ impl SessionManager {
             let action_key = super::super::execution::permission_key(&check.action)
                 .map_err(|error| AppError::Config(error.to_string()))?;
             let rules = self
-                .kernel_runtime
-                .permissions
-                .resolve(&action_key, Some(session), workspace)
+                .permission_rule_rows(Some(&action_key), Some(session), workspace)
                 .await
                 .map_err(|error| AppError::Config(error.to_string()))?;
             let rules = rules

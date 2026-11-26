@@ -410,6 +410,7 @@ impl App {
         self.tick_assistant();
         self.tick_integrations();
         let now = Instant::now();
+        self.poll_external_agent_auth(now);
         // Exit confirmation must revalidate the authoritative execution on
         // every tick, even if a server transition arrives without a keypress.
         // It is cheap; throttling it can leave a stale Stop action visible.

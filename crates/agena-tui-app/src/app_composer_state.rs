@@ -417,8 +417,17 @@ impl App {
                 AttachmentKind::Pdf => agena_domain::ResourceKind::Pdf,
                 AttachmentKind::File => agena_domain::ResourceKind::File,
             },
-            reference: agena_domain::ResourceReference::WorkspacePath {
-                path: uploaded.path.clone(),
+            reference: if uploaded
+                .session_id
+                .is_some_and(agena_domain::is_acp_session_id)
+            {
+                agena_domain::ResourceReference::Url {
+                    url: uploaded.path.clone(),
+                }
+            } else {
+                agena_domain::ResourceReference::WorkspacePath {
+                    path: uploaded.path.clone(),
+                }
             },
             name: uploaded.name,
             media_type: uploaded.mime,

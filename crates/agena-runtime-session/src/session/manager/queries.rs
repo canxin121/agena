@@ -21,15 +21,22 @@ impl SessionManager {
         generation: AttemptGeneration,
     ) -> Result<Option<crate::SessionExecutionAttempt>, AppError> {
         let session = session_id(id)?;
-        let attempt = match self
-            .kernel()
-            .reader
-            .execution_attempt(session, execution, generation)
-            .await
-        {
-            Ok(attempt) => attempt,
-            Err(KernelError::NotFound(_) | KernelError::Ownership) => return Ok(None),
-            Err(error) => return Err(kernel_error(error)),
+        let read_attempt = || {
+            read_with_busy_retry(session, "execution_attempt", || async {
+                match self
+                    .kernel()
+                    .reader
+                    .execution_attempt(session, execution, generation)
+                    .await
+                {
+                    Ok(view) => Ok(Some((*view).clone())),
+                    Err(KernelError::NotFound(_) | KernelError::Ownership) => Ok(None),
+                    Err(error) => Err(error),
+                }
+            })
+        };
+        let Some(attempt) = read_attempt().await? else {
+            return Ok(None);
         };
         let epoch = self.kernel().reader.epoch();
         let live = self
@@ -69,15 +76,8 @@ impl SessionManager {
             // Generation publication and live ownership are separate reads.
             // Revalidate after inspecting owners so even a rapidly admitted
             // and retired retry cannot make an older registration look done.
-            let latest = match self
-                .kernel()
-                .reader
-                .execution_attempt(session, execution, generation)
-                .await
-            {
-                Ok(latest) => latest,
-                Err(KernelError::NotFound(_) | KernelError::Ownership) => return Ok(None),
-                Err(error) => return Err(kernel_error(error)),
+            let Some(latest) = read_attempt().await? else {
+                return Ok(None);
             };
             current_generation = current_generation.max(latest.current_generation);
             if current_generation > generation {
@@ -129,8 +129,11 @@ impl SessionManager {
         &self,
         workspace_id: i64,
     ) -> Result<std::path::PathBuf, AppError> {
-        let path = self
-            .kernel_runtime
+        let source = self
+            .acp_workspace_source
+            .as_ref()
+            .unwrap_or(&self.kernel_runtime);
+        let path = source
             .workspaces
             .path_by_id(workspace_id)
             .await
@@ -138,6 +141,12 @@ impl SessionManager {
             .ok_or_else(|| {
                 AppError::Config("The session's owning workspace was not found.".into())
             })?;
+        if self.is_acp_scope() {
+            self.kernel_runtime
+                .register_acp_workspace(workspace_id, &path)
+                .await
+                .map_err(kernel_error)?;
+        }
         Ok(std::path::PathBuf::from(path))
     }
 
@@ -271,6 +280,7 @@ impl SessionManager {
             version: metadata.metadata_version.get(),
             relation_kind: configuration.relation_kind,
             lifecycle_state: agena_domain::SessionLifecycleState::Ready,
+            external_agent: configuration.external_agent,
             agent_name: agent.map(|t| t.name.clone()),
             created_at: timestamp(summary.created_at_ms),
             updated_at: timestamp(summary.updated_at_ms),
@@ -937,6 +947,31 @@ impl SessionManager {
         ))
     }
     pub async fn session_usage_async(&self, session: &Session) -> Result<SessionUsage, AppError> {
+        if session.external_agent.is_some() {
+            let id = session_id(session.id)?;
+            let context = read_with_busy_retry(id, "external_agent_context", || {
+                self.kernel().reader.configuration(id)
+            })
+            .await?
+            .external_agent_state
+            .context;
+            return Ok(SessionUsage {
+                measured_prompt_tokens: None,
+                current_tokens: context.map_or(0, |usage| usage.used_tokens),
+                projected_tokens: None,
+                input_limit_tokens: None,
+                limit_tokens: context.map(|usage| u64::from(usage.window_tokens)),
+                limit_basis: context.map(|_| agena_domain::SessionUsageLimitBasis::ContextWindow),
+                reserved_tokens: None,
+                model_context_window_tokens: context.map(|usage| usage.window_tokens),
+                model_max_input_tokens: None,
+                model_max_output_tokens: None,
+                last_cache_read_tokens: None,
+                last_cache_input_tokens: None,
+                last_cache_hit_rate: None,
+                last_performance: None,
+            });
+        }
         let state = if session.execution.global {
             self.global_state.load_full()
         } else {
@@ -1046,7 +1081,16 @@ impl SessionManager {
             })
             .await
             .map_err(kernel_error)?;
-        Ok(accumulator.finish())
+        let mut summary = accumulator.finish();
+        summary.external_agent_cost = read_with_busy_retry(id, "external_agent_cost", || {
+            self.kernel().reader.configuration(id)
+        })
+        .await?
+        .external_agent_state
+        .details
+        .cost
+        .clone();
+        Ok(summary)
     }
     pub async fn usage_stats(
         &self,
@@ -1130,6 +1174,17 @@ impl SessionManager {
                     parent_session_id: config.parent_session_id.map(SessionId::get),
                     agent_name: config.agent.as_ref().map(|agent| agent.name.clone()),
                     request,
+                });
+                if result.len() >= 128 {
+                    return Ok(result);
+                }
+            }
+            for request in self.external_input_requests(session, config) {
+                result.push(PendingInteractiveRequestContext {
+                    session_id: id,
+                    parent_session_id: config.parent_session_id.map(SessionId::get),
+                    agent_name: config.agent.as_ref().map(|agent| agent.name.clone()),
+                    request: request.into(),
                 });
                 if result.len() >= 128 {
                     return Ok(result);

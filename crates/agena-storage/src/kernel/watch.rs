@@ -16,6 +16,7 @@ pub enum ChangeKind {
     Interaction,
     Content,
     Activity,
+    ExternalAgentState,
 }
 
 /// Bounded listing facts captured in the same transaction as a command.

@@ -1,15 +1,15 @@
 //! HTTP representation validators for the shared file-edit projection.
-use crate::{error::ServerError, state::AppState};
+use crate::error::ServerError;
 pub use agena_api::extended_sessions::SessionFileChangesParams as FileChangesQuery;
 use agena_api::resource::SessionFileChangesResource;
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, Query},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
 
 pub async fn get_session_file_changes(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path(id): Path<i64>,
     Query(query): Query<FileChangesQuery>,
     headers: HeaderMap,

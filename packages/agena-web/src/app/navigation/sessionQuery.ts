@@ -1,4 +1,5 @@
 import type { LocationQuery, LocationQueryRaw } from 'vue-router'
+import { isAcpSessionId } from '@/lib/acpSession'
 import { isConversationSettingsPath } from './mainTabs'
 
 const SESSION_QUERY_KEY = 'sessionId' as const
@@ -51,7 +52,8 @@ export function readConversationSessionId(route: { path: string; fullPath: strin
   const conversationRoute =
     path === '/' || path === '/chat' || path.startsWith('/chat/') || isConversationSettingsPath(path)
   if (!conversationRoute) return ''
-  return readSessionIdFromQuery(route.query) || readSessionIdFromFullPath(route.fullPath)
+  const sessionId = readSessionIdFromQuery(route.query) || readSessionIdFromFullPath(route.fullPath)
+  return isAcpSessionId(sessionId) ? '' : sessionId
 }
 
 export function patchSessionIdInQuery(query: WriteQueryLike, sessionId: string): LocationQueryRaw {

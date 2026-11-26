@@ -15,6 +15,47 @@ use std::collections::BTreeMap;
 
 use crate::{ToolCallView, TranscriptActivityContent, TranscriptEntryPart, TranscriptPartContent};
 
+/// Project a live session request with no stored operation through the same
+/// interaction renderer as a request owned by a tool.
+pub fn session_user_input_entry(
+    id: agena_domain::ActivityId,
+    request: agena_domain::UserInputRequest,
+) -> crate::TranscriptEntry<'static> {
+    let created_at = request.created_at;
+    let presentation = agena_domain::PartDocument {
+        title: request.title.clone(),
+        summary: String::new(),
+        blocks: Vec::new(),
+    };
+    let mut operation = agena_runtime_contracts::part::OperationPart::pending(
+        0,
+        agena_domain::ToolInvocation::new("external_agent_input", Default::default()),
+        agena_domain::TimeRange {
+            start_ms: created_at.timestamp_millis(),
+            end_ms: None,
+        },
+    );
+    operation.user_input.push_pending(request);
+    let tool = ToolCallView::from_operation(operation, Some(presentation));
+    crate::TranscriptEntry {
+        id: crate::TranscriptEntryId::SessionActivity(id),
+        reply_id: None,
+        role: None,
+        author: None,
+        origin: None,
+        state: agena_api::resource::RunStatus::Pending,
+        created_at,
+        parts: vec![TranscriptEntryPart {
+            id: crate::TranscriptContentId::Activity(id),
+            status: crate::PartExecutionStatusResource::Pending,
+            headline: Default::default(),
+            content: TranscriptPartContent::Activity(TranscriptActivityContent::Operation(
+                Box::new(tool),
+            )),
+        }],
+    }
+}
+
 /// The `request_id` of a pending user-input record on a canonical `tool_call`,
 /// or `None` when the part is not awaiting input. Only pending records are
 /// interactive in the transcript, so the key router and inline renderer share
@@ -56,6 +97,7 @@ pub trait InteractionRequestFacts {
     fn allow_custom(&self, index: usize) -> bool;
     fn custom_option_index(&self, index: usize) -> Option<usize>;
     fn multiple(&self, index: usize) -> bool;
+    fn optional(&self, index: usize) -> bool;
     fn question_header(&self, index: usize) -> &str;
     fn question_text(&self, index: usize) -> &str;
     fn option_label(&self, index: usize, option: usize) -> &str;
@@ -89,6 +131,10 @@ impl InteractionRequestFacts for agena_api::resource::UserInputRequest {
 
     fn multiple(&self, index: usize) -> bool {
         self.questions.get(index).is_some_and(|q| q.multiple)
+    }
+
+    fn optional(&self, index: usize) -> bool {
+        self.questions.get(index).is_some_and(|q| q.optional)
     }
 
     fn question_header(&self, index: usize) -> &str {
@@ -130,6 +176,10 @@ impl InteractionRequestFacts for agena_domain::UserInputRequest {
         self.questions.get(index).is_some_and(|q| q.multiple)
     }
 
+    fn optional(&self, index: usize) -> bool {
+        self.questions.get(index).is_some_and(|q| q.optional)
+    }
+
     fn question_header(&self, index: usize) -> &str {
         &self.questions[index].header
     }
@@ -151,6 +201,7 @@ impl InteractionRequestFacts for agena_domain::UserInputRequest {
 pub fn request_is_review_decision<R: InteractionRequestFacts>(request: &R) -> bool {
     request.request_kind_is_review()
         && request.question_count() == 1
+        && !request.optional(0)
         && !request.multiple(0)
         && request.options_len(0) > 0
         && request

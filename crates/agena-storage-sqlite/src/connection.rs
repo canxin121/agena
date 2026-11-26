@@ -230,7 +230,7 @@ async fn prepare(
         // Named memory URIs must not accidentally give two independent
         // factories competing authority over the same anonymous instance.
         // This factory retains exactly one private connection.
-        options = options.shared_cache(false);
+        options = options.shared_cache(false).pragma("temp_store", "MEMORY");
     }
     Ok((options, owner, memory))
 }

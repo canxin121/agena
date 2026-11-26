@@ -19,7 +19,17 @@ impl App {
             state.loading,
             state.error.as_deref(),
             &self.i18n,
-            crate::app_plan_document::render_plan_document,
+            state.external_activity,
+            |document, width| {
+                if state.external_activity {
+                    document
+                        .lines()
+                        .map(|line| ratatui::text::Line::raw(agena_tui::sanitize_picker_text(line)))
+                        .collect()
+                } else {
+                    crate::app_plan_document::render_plan_document(document, width)
+                }
+            },
         );
     }
 }

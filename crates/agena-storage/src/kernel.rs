@@ -51,8 +51,9 @@ pub use activity::{
 pub use blob::{BlobDescriptor, BlobRange, BlobReader, PreparedBlob};
 mod output;
 pub use events::{
-    DocumentOutput, EventCursor, EventKind, EventPage, EventPayload, EventProjection, EventRecord,
-    EventSnapshot, LogOutput, MixedOutput, TerminalOutput,
+    AssistantDocumentKey, AssistantDocumentUpdate, DocumentOutput, EventCursor, EventKind,
+    EventPage, EventPayload, EventProjection, EventRecord, EventSnapshot, LogOutput, MixedOutput,
+    TerminalOutput,
 };
 pub(crate) mod watch;
 pub use output::{
@@ -184,6 +185,8 @@ pub struct SessionSummaryView {
     pub id: SessionId,
     pub workspace_id: Option<i64>,
     pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_agent: Option<agena_domain::ExternalAgent>,
     /// Bot this conversation belongs to, when any.
     pub owner_bot_id: Option<String>,
     /// Entrance shape of a Bot conversation: `local`, `direct`, `group`, `broadcast`.
@@ -227,6 +230,9 @@ pub struct MetadataChange {
     pub title: Option<String>,
     pub favorite: Option<bool>,
     pub pinned: Option<bool>,
+    /// A protocol acknowledgement also updates the observed Agent title.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub sync_external_agent_title: bool,
     /// Absent leaves the session layer unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompts: Option<agena_prompt_layers::PromptLayer>,
@@ -383,6 +389,8 @@ pub struct EntryView {
     /// a running attempt alone does not.
     #[serde(default)]
     pub content_state: Option<CaptureState>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_kind: Option<agena_domain::ContentKind>,
     /// The summary stream and checkpoint of a maintenance compaction round
     /// must not be presented as ordinary assistant answers.
     #[serde(default)]
@@ -607,6 +615,14 @@ pub struct AttemptHandle {
 pub struct RoundHandle {
     pub(crate) attempt: AttemptHandle,
     pub(crate) id: RoundId,
+}
+
+pub struct ExternalAgentRoundStart {
+    pub round: RoundHandle,
+    pub previous: Option<ExternalAgentResume>,
+    pub link: Option<ExternalAgentLink>,
+    pub selection: agena_domain::ExternalAgentSelection,
+    pub state: ExternalAgentState,
 }
 
 #[derive(Clone)]
@@ -1072,8 +1088,54 @@ impl AttemptHandle {
         &self,
         request: RequestId,
     ) -> Result<CommitReceipt<RoundHandle>> {
-        self.round_command(request, Command::BeginCurrentRound { scope: self.scope })
-            .await
+        self.round_command(
+            request,
+            Command::BeginCurrentRound {
+                scope: self.scope,
+                take_external_agent_resume: false,
+            },
+        )
+        .await
+    }
+
+    /// The round consumes the prior continuation in the same commit. An
+    /// interrupted attempt cannot leave a resumable native session behind.
+    pub async fn begin_external_agent_round(
+        &self,
+        request: RequestId,
+    ) -> Result<CommitReceipt<ExternalAgentRoundStart>> {
+        let receipt = self
+            .inner
+            .command(
+                request,
+                Command::BeginCurrentRound {
+                    scope: self.scope,
+                    take_external_agent_resume: true,
+                },
+            )
+            .await?;
+        match receipt.value {
+            Mutation::ExternalAgentRound {
+                round,
+                previous,
+                link,
+                selection,
+                state,
+            } => Ok(CommitReceipt {
+                position: receipt.position,
+                value: ExternalAgentRoundStart {
+                    round: RoundHandle {
+                        attempt: self.clone(),
+                        id: round,
+                    },
+                    previous,
+                    link,
+                    selection,
+                    state: *state,
+                },
+            }),
+            _ => Err(unexpected()),
+        }
     }
 
     /// Capture a bounded prefix of the current window for incremental
@@ -1140,6 +1202,24 @@ impl AttemptHandle {
         request: RequestId,
         phase: ExecutionPhase,
     ) -> Result<CommitReceipt<ExecutionView>> {
+        self.finish_with_resume(request, phase, None).await
+    }
+
+    pub async fn finish_external_agent(
+        &self,
+        request: RequestId,
+        resume: ExternalAgentResume,
+    ) -> Result<CommitReceipt<ExecutionView>> {
+        self.finish_with_resume(request, ExecutionPhase::Succeeded, Some(resume))
+            .await
+    }
+
+    async fn finish_with_resume(
+        &self,
+        request: RequestId,
+        phase: ExecutionPhase,
+        external_agent_resume: Option<ExternalAgentResume>,
+    ) -> Result<CommitReceipt<ExecutionView>> {
         execution_receipt(
             self.inner
                 .command(
@@ -1147,6 +1227,7 @@ impl AttemptHandle {
                     Command::Finish {
                         scope: self.scope,
                         phase,
+                        external_agent_resume,
                     },
                 )
                 .await?,
@@ -1154,7 +1235,93 @@ impl AttemptHandle {
     }
 }
 
+impl ExecutorCommands {
+    pub async fn set_external_agent_input(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        input: RequestId,
+        scope: Option<ExternalAgentInputScope>,
+    ) -> Result<()> {
+        self.0
+            .command(
+                request,
+                Command::SetExternalAgentInput {
+                    session,
+                    epoch: self.0.epoch,
+                    input,
+                    scope,
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn refresh_idle_external_agent_state(
+        &self,
+        request: RequestId,
+        resume: &ExternalAgentResume,
+        state: ExternalAgentState,
+    ) -> Result<()> {
+        self.0
+            .command(
+                request,
+                Command::RefreshIdleExternalAgentState {
+                    session: resume.session,
+                    round: resume.round,
+                    native_id: resume.native_id.clone(),
+                    state,
+                },
+            )
+            .await?;
+        Ok(())
+    }
+}
+
 impl RoundHandle {
+    /// Bind the connected native peer before it can publish message updates.
+    pub async fn bind_external_agent_link(
+        &self,
+        request: RequestId,
+        link: ExternalAgentLink,
+    ) -> Result<()> {
+        let receipt = self
+            .attempt
+            .inner
+            .command(
+                request,
+                Command::BindExternalAgentLink {
+                    scope: self.attempt.scope,
+                    round: self.id,
+                    link,
+                },
+            )
+            .await?;
+        match receipt.value {
+            Mutation::Round(round) if round == self.id => Ok(()),
+            _ => Err(unexpected()),
+        }
+    }
+
+    pub async fn record_external_agent_state(
+        &self,
+        request: RequestId,
+        state: ExternalAgentState,
+    ) -> Result<()> {
+        self.attempt
+            .inner
+            .command(
+                request,
+                Command::RecordExternalAgentState {
+                    scope: self.attempt.scope,
+                    round: self.id,
+                    state,
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
     pub fn id(&self) -> RoundId {
         self.id
     }
@@ -1313,6 +1480,7 @@ impl ToolHandle {
     pub fn session_id(&self) -> SessionId {
         self.round.session_id()
     }
+
     pub async fn request_interaction(
         &self,
         request: RequestId,

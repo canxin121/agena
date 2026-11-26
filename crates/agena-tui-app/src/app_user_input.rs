@@ -52,10 +52,24 @@ impl App {
     /// Maps an Activity node key to the pending interaction `request_id` it
     /// renders, when the node is a pending user-input interaction part.
     fn interaction_request_id_for_node_key(&self, key: &TranscriptNodeKey) -> Option<String> {
-        let content_id = match key {
-            TranscriptNodeKey::Activity { content_id, .. } => content_id,
-            _ => return None,
+        let TranscriptNodeKey::Activity {
+            entry_id,
+            content_id,
+        } = key
+        else {
+            return None;
         };
+        if let (
+            agena_tui_transcript::TranscriptEntryId::SessionActivity(entry),
+            TranscriptContentId::Activity(content),
+        ) = (entry_id, content_id)
+            && entry == content
+        {
+            return self
+                .transcript
+                .pending_acp_user_inputs()
+                .find_map(|(id, request)| (id == *entry).then(|| request.request_id.clone()));
+        }
         let TranscriptContentId::StoredPart(part_id) = content_id else {
             return None;
         };
@@ -425,7 +439,7 @@ impl App {
             return false;
         };
         let answered = dialog.presentation.question_is_answered(question_index);
-        if !answered {
+        if !answered && !question.optional {
             let label = user_input_question_label(question).to_owned();
             if dialog.presentation.custom_option_selected(question_index)
                 && dialog.presentation.begin_custom_edit_for(question_index)
@@ -489,6 +503,25 @@ impl App {
             AskSubmit => {
                 match Self::build_structured_user_input_reply(&self.i18n, &mut dialog, None) {
                     Ok(reply) => {
+                        if dialog.request.kind.as_str()
+                            == agena_domain::EXTERNAL_AGENT_URL_INPUT_KIND
+                            && reply.answers.get("0").is_some_and(|items| {
+                                items.iter().any(|item| {
+                                    item == agena_domain::EXTERNAL_AGENT_URL_OPEN_OPTION
+                                })
+                            })
+                            && let Some(url) =
+                                dialog.request.questions.first().and_then(|question| {
+                                    agena_domain::external_agent_authorization_url(
+                                        &question.question,
+                                    )
+                                })
+                            && let Err(error) = open_authorization_page(&url)
+                        {
+                            self.flash_warning(format!(
+                                "Could not open the authorization page: {error}"
+                            ));
+                        }
                         let session_id = dialog.session_id;
                         self.user_input_interactions
                             .insert(request_id.to_owned(), dialog);
@@ -744,7 +777,12 @@ impl App {
                 .answer(index)
                 .map(|draft| user_input_answer_values(question, draft))
                 .unwrap_or_default();
-            if values.is_empty() || !dialog.presentation.question_is_answered(index) {
+            if question.optional && values.is_empty() {
+                continue;
+            }
+            if values.is_empty()
+                || (!question.optional && !dialog.presentation.question_is_answered(index))
+            {
                 let label = user_input_question_label(question).to_string();
                 dialog.presentation.focus_question(index);
                 return Err(i18n.text_args(
@@ -762,6 +800,26 @@ impl App {
             reason: None,
         })
     }
+}
+
+fn open_authorization_page(url: &url::Url) -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    let (program, flags) = ("open", &["--"][..]);
+    #[cfg(target_os = "windows")]
+    let (program, flags) = ("rundll32.exe", &["url.dll,FileProtocolHandler"][..]);
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let (program, flags): (&str, &[&str]) = ("xdg-open", &[]);
+    let mut child = tokio::process::Command::new(program)
+        .args(flags)
+        .arg(url.as_str())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+    tokio::spawn(async move {
+        let _ = child.wait().await;
+    });
+    Ok(())
 }
 use crate::{
     App, BTreeMap, ConfirmOverlay, I18n, InputDialogKeyResult, KeyEvent, LineInputOverlay, Overlay,

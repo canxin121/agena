@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { RiRobot2Line, RiApps2Line } from '@remixicon/vue'
+import { RiRobot2Line, RiApps2Line, RiPlugLine } from '@remixicon/vue'
 import { computed, nextTick, ref, type Component } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
@@ -43,6 +43,7 @@ const { t } = useI18n()
 const TAB_ICONS: Record<MainTabId, Component> = {
   bot: RiRobot2Line,
   chat: RiChat4Line,
+  acp: RiPlugLine,
   files: RiFolder6Line,
   preview: RiGlobalLine,
   plugins: RiApps2Line,

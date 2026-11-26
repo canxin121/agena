@@ -1,3 +1,4 @@
+import { sessionApiPath } from '@/lib/acpSession'
 import { i18n } from '@/i18n'
 import { withInterfaceLocale } from '@/i18n/interfaceLocale'
 import type { RequestPerformance } from '@/types/usage'
@@ -28,6 +29,9 @@ import type { JsonObject, JsonValue } from '@/types/json'
 import type { PromptLayer, PromptResolution } from '@/lib/promptLayers'
 import type { PermissionConfig } from '@/lib/permissionConfig'
 import type {
+  ExternalAgentOptions,
+  ExternalAgentCommand,
+  ExternalAgentDetails,
   MessageAuthor,
   MessageOrigin,
   MessageEntry,
@@ -140,6 +144,9 @@ export type AgenaExecutionState = {
     queue_paused?: boolean
     provider_retry?: { attempt: number; max_retries: number; next_at_ms: number; message: string }
     agent_id?: string
+    external_agent_options?: ExternalAgentOptions
+    external_agent_commands?: ExternalAgentCommand[]
+    external_agent_details?: ExternalAgentDetails
     model_provider_id?: string | null
     model_adapter_id?: string | null
     model_id?: string | null
@@ -739,6 +746,7 @@ export async function listSessions(opts?: {
 }
 
 export type CreateSessionInput = {
+  externalAgent?: Session['external_agent']
   workspaceId: number
   title: string
   autoTitle?: boolean
@@ -756,6 +764,7 @@ export function buildCreateSessionRequest(input: CreateSessionInput): JsonObject
 
   const payload: JsonObject = { workspace_id: workspaceId, title, auto_title: input.autoTitle === true }
   if (input.profile !== undefined) payload.profile = input.profile
+  if (input.externalAgent) payload.external_agent = input.externalAgent
   if (typeof input.parentId === 'number' && Number.isSafeInteger(input.parentId) && input.parentId > 0) {
     payload.parent_id = input.parentId
   }
@@ -766,7 +775,7 @@ export function buildCreateSessionRequest(input: CreateSessionInput): JsonObject
 export async function createSession(input: CreateSessionInput): Promise<Session> {
   const payload = buildCreateSessionRequest(input)
   const scope = sessionRoutingScope()
-  const created = await apiJson<JsonValue>('/api/v1/sessions', {
+  const created = await apiJson<JsonValue>(input.externalAgent ? '/api/v1/acp/sessions' : '/api/v1/sessions', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(payload),
@@ -873,7 +882,7 @@ export async function uploadSessionFile(
   if (input.blob) {
     if (!filename || !input.blob.size) throw new Error(i18n.global.t('chat.errors.attachmentNameAndDataRequired'))
     const query = new URLSearchParams({ filename, ...(input.mime ? { mime: input.mime } : {}) })
-    return await apiJson<WorkspaceFileUpload>(`/api/v1/sessions/${sessionId}/attachments?${query}`, {
+    return await apiJson<WorkspaceFileUpload>(`${sessionApiPath(sessionId)}/attachments?${query}`, {
       method: 'POST',
       headers: { 'content-type': 'application/octet-stream' },
       body: input.blob,
@@ -881,7 +890,7 @@ export async function uploadSessionFile(
   }
   const dataBase64 = String(input.dataBase64 || '').trim()
   if (!filename || !dataBase64) throw new Error(i18n.global.t('chat.errors.attachmentNameAndDataRequired'))
-  return await apiJson<WorkspaceFileUpload>(`/api/v1/sessions/${encodeURIComponent(String(sessionId))}/attachments`, {
+  return await apiJson<WorkspaceFileUpload>(`${sessionApiPath(sessionId)}/attachments`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -924,7 +933,7 @@ export async function deleteWorkspace(workspaceId: string): Promise<void> {
 /** DELETE /api/v1/sessions/{id} */
 export async function deleteSession(sessionId: string): Promise<void> {
   const scope = sessionRoutingScope()
-  await apiJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' })
+  await apiJson(`${sessionApiPath(sessionId)}`, { method: 'DELETE' })
   reconcileSessionMutation(sessionId, 'deleted', scope)
 }
 
@@ -935,7 +944,7 @@ export async function deleteSession(sessionId: string): Promise<void> {
  */
 export async function clearSession(sessionId: string, mode: SessionClearMode = 'history'): Promise<void> {
   const scope = sessionRoutingScope()
-  await apiJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/clear`, {
+  await apiJson(`${sessionApiPath(sessionId)}/clear`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ mode }),
@@ -960,7 +969,7 @@ export type SessionUpdatePayload = {
 /** PUT /api/v1/sessions/{id} — atomically update user-editable settings. */
 export async function patchSessionMetadata(sessionId: string, patch: SessionUpdatePayload): Promise<Session> {
   const scope = sessionRoutingScope()
-  const updated = await apiJson<JsonValue>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, {
+  const updated = await apiJson<JsonValue>(`${sessionApiPath(sessionId)}`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(patch),
@@ -982,7 +991,7 @@ export async function setSessionPrompts(sessionId: string, prompts: PromptLayer)
 /** GET /api/v1/sessions/{id}/prompts/preview — resolved fragments and warnings. */
 export async function getSessionPromptPreview(sessionId: string, signal?: AbortSignal): Promise<PromptResolution> {
   return await apiJson<PromptResolution>(
-    `/api/v1/sessions/${encodeURIComponent(sessionId)}/prompts/preview`,
+    `${sessionApiPath(sessionId)}/prompts/preview`,
     signal ? { signal } : undefined,
   )
 }
@@ -995,7 +1004,7 @@ export async function patchSessionTitle(sessionId: string, title: string): Promi
 export async function getSession(sessionId: string, signal?: AbortSignal): Promise<Session> {
   const scope = sessionRoutingScope()
   const session = toSession(
-    await apiJson<JsonValue>(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { signal }),
+    await apiJson<JsonValue>(`${sessionApiPath(sessionId)}`, { signal }),
     scope,
   )
   if (!session) throw new Error(i18n.global.t('chat.errors.sessionMissing'))
@@ -1005,7 +1014,7 @@ export async function getSession(sessionId: string, signal?: AbortSignal): Promi
 /** GET /api/v1/sessions/{id}/state — execution + parts + tagged session state. */
 export async function getSessionExecution(sessionId: string): Promise<AgenaExecutionState> {
   const scope = sessionRoutingScope()
-  const raw = await apiJson<AgenaExecutionState>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/state`)
+  const raw = await apiJson<AgenaExecutionState>(`${sessionApiPath(sessionId)}/state`)
   toSession(raw.session, scope)
   return {
     ...raw,
@@ -1027,7 +1036,7 @@ export async function getSessionParts(
   if (typeof cursor === 'string' && cursor.trim()) params.set('cursor', cursor.trim())
   const suffix = params.toString() ? `?${params.toString()}` : ''
   return await apiJson<AgenaSessionParts>(
-    withInterfaceLocale(`/api/v1/sessions/${encodeURIComponent(sessionId)}/parts${suffix}`),
+    withInterfaceLocale(`${sessionApiPath(sessionId)}/parts${suffix}`),
   )
 }
 
@@ -1045,7 +1054,7 @@ export async function getToolPartDetail(
   const { value, observation } = await conditionalJsonObserved<ToolDetailResource>(
     section === 'presentation' ? `part:${pid}` : `part:${pid}:${section}`,
     withInterfaceLocale(
-      `/api/v1/sessions/${encodeURIComponent(sid)}/parts/${encodeURIComponent(pid)}/tool-sections/${section}`,
+      `${sessionApiPath(sid)}/parts/${encodeURIComponent(pid)}/tool-sections/${section}`,
     ),
     signal ? { signal } : undefined,
     force,
@@ -1080,7 +1089,7 @@ export async function listMessages(
   if (typeof cursor === 'string' && cursor.trim()) params.set('cursor', cursor.trim())
   const { value: parts, observation } = await conditionalJsonObserved<AgenaSessionParts>(
     `session:${sid}:parts`,
-    withInterfaceLocale(`/api/v1/sessions/${encodeURIComponent(sid)}/runs?${params.toString()}`),
+    withInterfaceLocale(`${sessionApiPath(sid)}/runs?${params.toString()}`),
     { signal: AbortSignal.timeout(30_000) },
     force,
   )
@@ -1105,7 +1114,7 @@ export async function getLoadedParts(sessionId: string, ids: string[]): Promise<
   for (let start = 0; start < ids.length; start += 256) {
     const query = new URLSearchParams({ ids: ids.slice(start, start + 256).join(',') })
     const page = await apiJson<AgenaSessionParts>(
-      withInterfaceLocale(`/api/v1/sessions/${encodeURIComponent(sessionId)}/parts?${query}`),
+      withInterfaceLocale(`${sessionApiPath(sessionId)}/parts?${query}`),
       {
         signal: AbortSignal.timeout(30_000),
       },
@@ -1126,7 +1135,7 @@ export async function listSessionMessages(sessionId: string): Promise<MessageEnt
     const params = new URLSearchParams({ limit: '500' })
     if (cursor) params.set('cursor', cursor)
     const page = await apiJson<AgenaSessionParts>(
-      withInterfaceLocale(`/api/v1/sessions/${encodeURIComponent(sid)}/parts?${params.toString()}`),
+      withInterfaceLocale(`${sessionApiPath(sid)}/parts?${params.toString()}`),
       { signal: AbortSignal.timeout(30_000) },
     )
     for (const part of page.parts) parts.set(part.part_id, part)
@@ -1156,7 +1165,7 @@ export async function listTranscriptRunParts(
   if (typeof cursor === 'string' && cursor.trim()) params.set('cursor', cursor.trim())
   const parts = await apiJson<AgenaSessionParts>(
     withInterfaceLocale(
-      `/api/v1/sessions/${encodeURIComponent(sid)}/parts?run_ids=${encodeURIComponent(String(runId))}&${params.toString()}`,
+      `${sessionApiPath(sid)}/parts?run_ids=${encodeURIComponent(String(runId))}&${params.toString()}`,
     ),
     { signal: AbortSignal.timeout(30_000) },
   )
@@ -1182,7 +1191,7 @@ export async function listTranscriptFoldParts(
   if (typeof cursor === 'string' && cursor.trim()) params.set('cursor', cursor.trim())
   const parts = await apiJson<AgenaSessionParts>(
     withInterfaceLocale(
-      `/api/v1/sessions/${encodeURIComponent(sid)}/parts?run_ids=${encodeURIComponent(ids.join(','))}&${params.toString()}`,
+      `${sessionApiPath(sid)}/parts?run_ids=${encodeURIComponent(ids.join(','))}&${params.toString()}`,
     ),
     { signal: AbortSignal.timeout(30_000) },
   )
@@ -1207,7 +1216,7 @@ export function buildMessageRequestBody(payload: SendMessagePayload): JsonObject
 /** POST /api/v1/sessions/{id}/messages — submit a composer document + run options. */
 export async function sendMessage(sessionId: string, payload: SendMessagePayload): Promise<AgenaExecutionState | null> {
   const scope = sessionRoutingScope()
-  const state = await apiJson<AgenaExecutionState>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`, {
+  const state = await apiJson<AgenaExecutionState>(`${sessionApiPath(sessionId)}/messages`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(buildMessageRequestBody(payload)),
@@ -1230,7 +1239,7 @@ export function buildSessionSelectionRequest(options: RunOptionsPayload): JsonOb
 
 export async function setSessionSelection(sessionId: string, options: RunOptionsPayload): Promise<AgenaExecutionState> {
   const scope = sessionRoutingScope()
-  const state = await apiJson<AgenaExecutionState>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/selection`, {
+  const state = await apiJson<AgenaExecutionState>(`${sessionApiPath(sessionId)}/selection`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(buildSessionSelectionRequest(options)),
@@ -1254,7 +1263,7 @@ export async function setSessionPermissionProfile(
 
 async function updateSessionPermission(sessionId: string, update: JsonObject): Promise<AgenaExecutionState> {
   const scope = sessionRoutingScope()
-  const state = await apiJson<AgenaExecutionState>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/permission`, {
+  const state = await apiJson<AgenaExecutionState>(`${sessionApiPath(sessionId)}/permission`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(update),
@@ -1268,7 +1277,7 @@ async function updateSessionPermission(sessionId: string, update: JsonObject): P
 export async function continueSession(sessionId: string, options?: RunOptionsPayload): Promise<AgenaExecutionState> {
   const scope = sessionRoutingScope()
   const body = buildRunRequestBody(options)
-  const state = await apiJson<AgenaExecutionState>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/continue`, {
+  const state = await apiJson<AgenaExecutionState>(`${sessionApiPath(sessionId)}/continue`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
@@ -1282,7 +1291,7 @@ export async function continueSession(sessionId: string, options?: RunOptionsPay
 export async function compactSession(sessionId: string, options?: RunOptionsPayload): Promise<AgenaExecutionState> {
   const scope = sessionRoutingScope()
   const body = buildRunRequestBody(options)
-  const state = await apiJson<AgenaExecutionState>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/compact`, {
+  const state = await apiJson<AgenaExecutionState>(`${sessionApiPath(sessionId)}/compact`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
@@ -1300,7 +1309,7 @@ export type QueuedMessageEdit = {
 }
 
 export function getQueuedMessageForEdit(sessionId: string, executionId: string): Promise<QueuedMessageEdit> {
-  return apiJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(executionId)}`)
+  return apiJson(`${sessionApiPath(sessionId)}/queue/${encodeURIComponent(executionId)}`)
 }
 
 export async function editQueuedMessage(
@@ -1311,7 +1320,7 @@ export async function editQueuedMessage(
 ): Promise<AgenaExecutionState> {
   const scope = sessionRoutingScope()
   const state = await apiJson<AgenaExecutionState>(
-    `/api/v1/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(executionId)}`,
+    `${sessionApiPath(sessionId)}/queue/${encodeURIComponent(executionId)}`,
     {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
@@ -1325,7 +1334,7 @@ export async function editQueuedMessage(
 export async function deleteQueuedMessage(sessionId: string, executionId: string): Promise<AgenaExecutionState> {
   const scope = sessionRoutingScope()
   const state = await apiJson<AgenaExecutionState>(
-    `/api/v1/sessions/${encodeURIComponent(sessionId)}/queue/${encodeURIComponent(executionId)}`,
+    `${sessionApiPath(sessionId)}/queue/${encodeURIComponent(executionId)}`,
     {
       method: 'DELETE',
       headers: { 'content-type': 'application/json' },
@@ -1344,7 +1353,7 @@ export async function updateMessageQueue(
 ): Promise<AgenaExecutionState> {
   const scope = sessionRoutingScope()
   const state = await apiJson<AgenaExecutionState>(
-    `/api/v1/sessions/${encodeURIComponent(sessionId)}/queue/${action === 'clear' ? 'clear' : 'pause'}`,
+    `${sessionApiPath(sessionId)}/queue/${action === 'clear' ? 'clear' : 'pause'}`,
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -1358,7 +1367,7 @@ export async function updateMessageQueue(
 /** POST /api/v1/sessions/{id}/cancel — abort an active execution. */
 export async function cancelSession(sessionId: string, executionId?: string | null): Promise<CancellationOutcome> {
   const scope = sessionRoutingScope()
-  const response = await apiJson<JsonValue>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/cancel`, {
+  const response = await apiJson<JsonValue>(`${sessionApiPath(sessionId)}/cancel`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ execution_id: executionId || null }),
@@ -1401,7 +1410,7 @@ export async function rewindSession(
   if (!Number.isSafeInteger(atMessageId) || atMessageId <= 0)
     throw new Error(i18n.global.t('chat.errors.userMessageIdRequired'))
   const scope = sessionRoutingScope()
-  const created = await apiJson<AgenaExecutionState>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/rewind`, {
+  const created = await apiJson<AgenaExecutionState>(`${sessionApiPath(sessionId)}/rewind`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ at_message_id: atMessageId, mode }),
@@ -1428,7 +1437,7 @@ export async function forkSession(
   if (opts?.conversation_mode) (body as JsonObject).conversation_mode = opts.conversation_mode
   const title = typeof opts?.title === 'string' ? opts.title.trim() : ''
   if (title) (body as JsonObject).title = title
-  const created = await apiJson<AgenaExecutionState>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/fork`, {
+  const created = await apiJson<AgenaExecutionState>(`${sessionApiPath(sessionId)}/fork`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
@@ -1462,7 +1471,7 @@ export async function replyPermission(
     ;(replyBody as JsonObject).reason = message.trim()
   }
   const state = await apiJson<AgenaExecutionState>(
-    `/api/v1/sessions/${encodeURIComponent(sessionId)}/permission-replies`,
+    `${sessionApiPath(sessionId)}/permission-replies`,
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -1483,7 +1492,7 @@ export async function replyQuestion(
   const scope = sessionRoutingScope()
   const replyBody: JsonValue = { request_id: requestId, kind: 'submit', answers }
   const state = await apiJson<AgenaExecutionState>(
-    `/api/v1/sessions/${encodeURIComponent(sessionId)}/user-input-replies`,
+    `${sessionApiPath(sessionId)}/user-input-replies`,
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -1500,7 +1509,7 @@ export async function rejectQuestion(sessionId: string, requestId: string): Prom
   const scope = sessionRoutingScope()
   const replyBody: JsonValue = { request_id: requestId, kind: 'cancel' }
   const state = await apiJson<AgenaExecutionState>(
-    `/api/v1/sessions/${encodeURIComponent(sessionId)}/user-input-replies`,
+    `${sessionApiPath(sessionId)}/user-input-replies`,
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -1514,7 +1523,7 @@ export async function rejectQuestion(sessionId: string, requestId: string): Prom
 
 /** POST /api/v1/sessions/{id}/interactive/{request_id}/present — presentation ack. */
 export function interactivePresentationPath(sessionId: string, requestId: string): string {
-  return `/api/v1/sessions/${encodeURIComponent(sessionId)}/interactive/${encodeURIComponent(requestId)}/present`
+  return `${sessionApiPath(sessionId)}/interactive/${encodeURIComponent(requestId)}/present`
 }
 
 export async function presentInteractiveRequest(
@@ -1547,7 +1556,7 @@ export async function getSessionExecutionStatus(
   if (!sid) return null
   const { value: raw, observation } = await conditionalJsonObserved<AgenaExecutionState>(
     `session:${sid}:state`,
-    `/api/v1/sessions/${encodeURIComponent(sid)}/state?include_parts=false`,
+    `${sessionApiPath(sid)}/state?include_parts=false`,
     { signal: AbortSignal.timeout(30_000) },
     force,
     undefined,

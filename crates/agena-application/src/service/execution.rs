@@ -41,6 +41,16 @@ impl ApplicationService {
     ) -> ApplicationResult<agena_runtime::SessionRunOptions> {
         self.ensure_session_exists(session_id).await?;
 
+        let configuration = self
+            .session_kernel
+            .reader
+            .configuration(crate::kernel_session_id(session_id)?)
+            .await
+            .map_err(crate::kernel_error)?;
+        if let Some(agent) = configuration.external_agent {
+            return Ok(agena_runtime::SessionRunOptions::for_external_agent(agent));
+        }
+
         let inherited_selection = execution_control
             .selected_execution_selection(session_id)
             .await
@@ -417,6 +427,21 @@ impl ApplicationService {
                 provider_retry: execution_control.provider_retry(session_id).await,
                 conversation: context.conversation,
                 agent_id: context.agent_id,
+                external_agent_options: (!snapshot
+                    .configuration
+                    .external_agent_state
+                    .options
+                    .is_empty())
+                .then(|| agena_domain::ExternalAgentOptions {
+                    selection: snapshot.configuration.external_agent_selection.clone(),
+                    options: snapshot.configuration.external_agent_state.options.clone(),
+                }),
+                external_agent_commands: snapshot
+                    .configuration
+                    .external_agent_state
+                    .commands
+                    .clone(),
+                external_agent_details: snapshot.configuration.external_agent_state.details.clone(),
                 selected_permission: agena_api::resource::PermissionConfigResource::from(
                     &context.selected_permission,
                 ),
@@ -785,6 +810,7 @@ pub(crate) fn pending_interactive_request_from_domain(
                                 .collect(),
                             multiple: question.multiple,
                             allow_custom: question.allow_custom,
+                            optional: question.optional,
                         })
                         .collect(),
                     created_at: request.created_at,

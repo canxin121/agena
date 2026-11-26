@@ -195,10 +195,53 @@ impl App {
             .is_some_and(|current| current.session.state.active_execution().is_some());
         let session_id = execution.session.id;
         let sequence = execution.latest_event_seq;
+        let notice = self.transcript.execution.as_ref().and_then(|prior| {
+            let previous = &prior.execution.external_agent_details.notices;
+            let current = &execution.execution.external_agent_details.notices;
+            (previous != current)
+                .then(|| current.last().cloned())
+                .flatten()
+        });
+        let previous_commands = self
+            .transcript
+            .execution
+            .as_ref()
+            .map_or(&[][..], |current| {
+                current.execution.external_agent_commands.as_slice()
+            });
+        let commands_changed =
+            previous_commands != execution.execution.external_agent_commands.as_slice();
+        let suggestions_changed = self.transcript.execution.as_ref().map_or(
+            !execution
+                .execution
+                .external_agent_details
+                .suggestions
+                .is_empty(),
+            |prior| {
+                prior.execution.external_agent_details.suggestions
+                    != execution.execution.external_agent_details.suggestions
+            },
+        );
         self.session_mark_writes.project(&mut execution.session);
         match transcript {
             ExecutionTranscript::Window => self.transcript.apply_execution(execution),
             ExecutionTranscript::Shell => self.transcript.apply_execution_shell(execution),
+        }
+        self.refresh_external_agent_activity();
+        if let Some(notice) = notice {
+            match notice.severity.as_str() {
+                "error" => self.flash_error(notice.title),
+                "warning" => self.flash_warning(notice.title),
+                _ => self.flash_info(notice.title),
+            }
+        }
+        if commands_changed || suggestions_changed {
+            self.refresh_command_palette();
+        }
+        if commands_changed {
+            if self.slash_command_suggestions.take().is_some() {
+                self.sync_slash_command_suggestions();
+            }
         }
         if is_terminal && was_running && self.is_bot_session() {
             self.refresh_bot_registry(false);
@@ -306,8 +349,35 @@ impl App {
             .unwrap_or_default();
         self.user_input_interactions
             .retain(|request_id, _| outstanding.contains(request_id));
+        if self
+            .interaction_editing
+            .as_ref()
+            .is_some_and(|id| !outstanding.contains(id))
+        {
+            self.interaction_editing = None;
+        }
         self.revealed_user_input_request_ids
             .retain(|request_id| outstanding.contains(request_id));
+        let mut live_acp_activities = BTreeSet::new();
+        if let Some(session_id) = self.transcript.session_id {
+            for (id, request) in self.transcript.pending_acp_user_inputs() {
+                live_acp_activities.insert(id);
+                self.user_input_interactions
+                    .entry(request.request_id.clone())
+                    .or_insert_with(|| {
+                        Self::build_user_input_overlay(
+                            session_id,
+                            crate::app_session_interactive::user_input_request_from_wire(
+                                request.clone(),
+                            ),
+                        )
+                    });
+            }
+        }
+        self.transcript.node_expansions.retain(|key, _| {
+            !matches!(key.entry_id(), agena_tui_transcript::TranscriptEntryId::SessionActivity(id)
+                if !live_acp_activities.contains(&id))
+        });
         self.sync_interaction_documents();
     }
 

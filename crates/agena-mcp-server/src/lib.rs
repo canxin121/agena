@@ -39,8 +39,10 @@ use rmcp::model::{
     ServerInfo as RmcpServerInfo, Tool as RmcpTool,
 };
 use rmcp::service::{RequestContext, RoleServer};
+use tokio_util::sync::CancellationToken;
 
 mod stateless_tool_policy;
+pub mod stdio_relay;
 
 pub use stateless_tool_policy::{
     McpToolAccess, StatelessMcpToolMetadata, is_stateless_mcp_tool_exposed, mcp_tool_access,
@@ -412,18 +414,34 @@ pub async fn serve_tools_stdio<B>(backend: B) -> Result<(), McpServerError>
 where
     B: McpServerBackend,
 {
-    let running = match rmcp::serve_server(
+    serve_tools_transport(backend, rmcp::transport::stdio(), CancellationToken::new()).await
+}
+
+/// Serve only the MCP Tool API over a connection owned by the caller.
+pub async fn serve_tools_transport<B, T, E, A>(
+    backend: B,
+    transport: T,
+    closing: CancellationToken,
+) -> Result<(), McpServerError>
+where
+    B: McpServerBackend,
+    T: rmcp::transport::IntoTransport<RoleServer, E, A>,
+    E: std::error::Error + Send + Sync + 'static,
+{
+    let running = match rmcp::service::serve_server_with_ct(
         BackendHandler::new_tools_only(backend),
-        rmcp::transport::stdio(),
+        transport,
+        closing.clone(),
     )
     .await
     {
         Ok(running) => running,
         Err(rmcp::service::ServerInitializeError::ConnectionClosed(_)) => return Ok(()),
+        Err(_) if closing.is_cancelled() => return Ok(()),
         Err(error) => {
             return Err(McpServerError::Backend(
                 agena_failure::diagnostic::format_error_chain_with_context(
-                    "failed to initialize the tools-only MCP stdio server",
+                    "failed to initialize the tools-only MCP server",
                     &error,
                 ),
             ));
@@ -431,7 +449,7 @@ where
     };
     running.waiting().await.map_err(|error| {
         McpServerError::Backend(agena_failure::diagnostic::format_error_chain_with_context(
-            "tools-only MCP stdio server terminated with an error",
+            "tools-only MCP server terminated with an error",
             &error,
         ))
     })?;

@@ -537,6 +537,19 @@ impl SessionManager {
                     "user_plain_text",
                 );
             }
+            EntryPayload::Text { content_id } | EntryPayload::Reasoning { content_id }
+                if entry.content_kind == Some(agena_domain::ContentKind::Structured) =>
+            {
+                let text = self
+                    .assistant_text(session, *content_id, agena_domain::MAX_DOCUMENT_BYTES)
+                    .await?;
+                let source = if matches!(&entry.payload, EntryPayload::Reasoning { .. }) {
+                    "assistant_reasoning"
+                } else {
+                    "assistant_text"
+                };
+                return inline_chunk(session, entry, &text, offset, max, source);
+            }
             EntryPayload::Text { content_id } => (*content_id, "assistant_text", 0),
             // A cleared context carries no text: it only marks where the model
             // starts reading, so there is nothing for discovery to return.

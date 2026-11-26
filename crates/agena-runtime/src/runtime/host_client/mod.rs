@@ -198,9 +198,19 @@ impl RuntimeHostClient {
     }
 
     fn session_manager(&self) -> Result<Arc<crate::session::SessionManager>, PluginError> {
-        self.snapshot()?
+        let manager = self
+            .snapshot()?
             .session_manager()
-            .ok_or_else(|| host_unavailable("session manager is not enabled in this runtime"))
+            .ok_or_else(|| host_unavailable("session manager is not enabled in this runtime"))?;
+        if current_host_callback_context()
+            .and_then(|context| context.session_id)
+            .is_some_and(agena_domain::is_acp_session_id)
+        {
+            return manager
+                .acp_scope()
+                .ok_or_else(|| host_unavailable("ACP sessions are unavailable"));
+        }
+        Ok(manager)
     }
 
     fn tool_executor(&self) -> Result<crate::tool::ToolExecutor, PluginError> {

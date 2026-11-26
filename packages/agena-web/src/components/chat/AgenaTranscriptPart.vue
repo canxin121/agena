@@ -7,6 +7,7 @@ import CodeBlock from '@/components/ui/CodeBlock.vue'
 import BrailleSpinner from '@/components/ui/BrailleSpinner.vue'
 import AgenaAttachmentPreview from '@/components/chat/AgenaAttachmentPreview.vue'
 import AgenaOperationPart from '@/components/chat/AgenaOperationPart.vue'
+import AgenaOperationBlock from '@/components/chat/AgenaOperationBlock.vue'
 import AgenaContentText from '@/components/chat/AgenaContentText.vue'
 import DeferredPartBody from './DeferredPartBody.vue'
 import type { ContentRef } from '@/lib/content'
@@ -18,6 +19,8 @@ import {
   errorPresentation,
   partStatusPresentation,
   prettyJson,
+  jsonArray,
+  jsonRecord,
   skillPresentations,
 } from '@/pages/chat/transcriptPartPresentation'
 import { workspaceAttachmentPath } from '@/lib/attachmentLinks'
@@ -57,6 +60,9 @@ const errorHeadline = props.part.kind === 'error' ? useErrorPartHeadline(toRef(p
 const status = computed(() => errorHeadline.value?.status ?? partStatusPresentation(props.part.status))
 const body = computed(() => transcriptPartText(props.part.source))
 const content = computed(() => durablePartContent(props.part.source))
+const assistantBlocks = computed(() => content.value.external_agent_document === true
+  ? jsonArray(jsonRecord(props.part.source.agenaPresentation).blocks).map(jsonRecord)
+  : [])
 const resources = computed(() =>
   Array.isArray(content.value.resources) ? (content.value.resources as unknown as ContentRef[]) : [],
 )
@@ -223,7 +229,27 @@ async function openAttachment(attachment: AttachmentPresentation, path: string, 
       class="transcript-content bg-muted/[0.08]"
       :class="part.role === 'user' ? 'border-primary/35' : ''"
     >
-      <div v-if="part.kind === 'answer' || part.kind === 'text_segment'" class="py-0.5 text-sm leading-snug">
+      <div v-if="assistantBlocks.length" class="space-y-2 py-0.5 text-sm leading-snug">
+        <template v-for="(block, index) in assistantBlocks" :key="String(block.id ?? index)">
+          <MarkdownRenderer
+            v-if="block.type === 'markdown' && part.kind !== 'reasoning'"
+            :content="String(block.text ?? '')"
+            mode="markdown"
+            :stream="Boolean(streaming)"
+            :source-path="sourcePath || ''"
+            :allow-inline-ui="true"
+            :inline-documents="part.source.agenaInlineUi"
+            :inline-session-id="sessionId || ''"
+          />
+          <pre
+            v-else-if="block.type === 'markdown'"
+            class="overflow-x-auto whitespace-pre-wrap break-words font-mono text-xs text-muted-foreground"
+          >{{ block.text }}</pre>
+          <AgenaOperationBlock v-else :block="block" :session-id="sessionId" />
+        </template>
+      </div>
+
+      <div v-else-if="part.kind === 'answer' || part.kind === 'text_segment'" class="py-0.5 text-sm leading-snug">
         <template v-if="resources.length && sessionId">
           <AgenaContentText
             v-for="resource in resources"

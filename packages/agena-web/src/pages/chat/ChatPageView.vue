@@ -45,6 +45,8 @@ import Button from '@/components/ui/Button.vue'
 import OptionMenu from '@/components/ui/OptionMenu.vue'
 import ToolbarChipButton from '@/components/ui/ToolbarChipButton.vue'
 import ContextUsageChip from '@/components/chat/ContextUsageChip.vue'
+import ExternalAgentOptionsChip from '@/components/chat/ExternalAgentOptionsChip.vue'
+import ExternalAgentDetailsChip from '@/components/chat/ExternalAgentDetailsChip.vue'
 import AgentProfileChip from '@/components/settings/AgentProfileChip.vue'
 import type { ChatPageViewContext } from './chatPageViewContext'
 import type { OptionMenuItem } from '@/components/ui/optionMenu.types'
@@ -119,6 +121,7 @@ const {
   composerRef,
   composerControlsRef,
   composerPickerRef,
+  externalAgentLabel,
   modelTriggerRef,
   profileTriggerRef,
   thinkingTriggerRef,
@@ -829,7 +832,15 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                       </button>
                       <span class="text-muted-foreground/50">|</span>
                     </template>
+                    <ExternalAgentOptionsChip
+                      v-if="externalAgentLabel && chat.selectedSessionId"
+                      :key="`${authVersion}:${chat.selectedSessionId}`"
+                      :session-id="chat.selectedSessionId"
+                      :label="externalAgentLabel"
+                      :live-options="chat.selectedSessionExecution?.external_agent_options"
+                    />
                     <button
+                      v-else
                       ref="modelTriggerRef"
                       type="button"
                       data-oc-keyboard-tap="blur"
@@ -846,7 +857,16 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                       <RiStackLine class="h-3 w-3" />
                       <span :class="modelChipTextClass">{{ modelStatusLabel }}</span>
                     </button>
-                    <span v-if="chat.selectedSessionId" ref="profileTriggerRef" class="inline-flex">
+                    <ExternalAgentDetailsChip
+                      v-if="externalAgentLabel && chat.selectedSessionId"
+                      :key="chat.selectedSessionId"
+                      :session-id="chat.selectedSessionId"
+                      :label="externalAgentLabel"
+                      :details="chat.selectedSessionExecution?.external_agent_details"
+                      :suggestion-enabled="ctx.canFillExternalAgentSuggestion.value"
+                      @suggestion="ctx.fillExternalAgentSuggestion"
+                    />
+                    <span v-if="!externalAgentLabel && chat.selectedSessionId" ref="profileTriggerRef" class="inline-flex">
                       <AgentProfileChip
                         :profile="chat.selectedSessionExecution?.profile"
                         :profile-is-default="chat.selectedSessionExecution?.profile_is_default"
@@ -855,7 +875,7 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                         @keydown="toggleFooterPicker('profile', $event)"
                       />
                     </span>
-                    <template v-if="hasThinkingModesForSelection">
+                    <template v-if="!externalAgentLabel && hasThinkingModesForSelection">
                       <span class="text-muted-foreground/50">|</span>
                       <button
                         ref="thinkingTriggerRef"
@@ -875,7 +895,7 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                         <span :class="modeChipTextClass">{{ thinkingModeChipLabel }}</span>
                       </button>
                     </template>
-                    <template v-if="hasSpeedModesForSelection">
+                    <template v-if="!externalAgentLabel && hasSpeedModesForSelection">
                       <span class="text-muted-foreground/50">|</span>
                       <button
                         ref="speedTriggerRef"
@@ -902,6 +922,7 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                         :usage="sessionUsage"
                         :open="contextUsageOpen"
                         :busy="currentPhase === 'busy'"
+                        :context-only="Boolean(externalAgentLabel)"
                         @update:open="contextUsageOpen = $event"
                       />
                     </template>
@@ -1103,6 +1124,15 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
 
                       <!-- Region 3: Stop & Send Actions -->
                       <div class="flex-none flex items-center gap-1.5">
+                        <button
+                          v-if="ctx.canSteerExternalAgent.value"
+                          type="button"
+                          class="h-8 rounded-md border border-border px-2 text-xs hover:bg-secondary"
+                          aria-keyshortcuts="Alt+Enter"
+                          @click="ctx.steerExternalAgent"
+                        >
+                          {{ t('chat.page.primary.steer') }}
+                        </button>
                         <IconButton
                           v-if="showComposerStopAction"
                           variant="outline"

@@ -6,7 +6,7 @@ use agena_api::{
 };
 use agena_runtime::{RuntimeLiveSignal, RuntimeLiveSignalItem};
 use agena_session_api::bridge::SessionApiBackendSlot;
-use agena_storage::kernel::{KernelError, KernelWatch, WatchError};
+use agena_storage::kernel::{ChangeKind, KernelError, KernelWatch, WatchError};
 use tokio::sync::mpsc;
 
 #[derive(Debug, Clone)]
@@ -143,6 +143,7 @@ fn subscribe_with_queue_capacity(
     let mut signals = signals.subscribe();
     let (tx, rx) = mpsc::channel(capacity);
     let backend = application.session_api_backend.clone();
+    let acp = application.service().is_acp_scope();
     let projection_task = tokio::spawn(async move {
         loop {
             tokio::select! {
@@ -165,10 +166,22 @@ fn subscribe_with_queue_capacity(
                             continue;
                         },Err(_)=>{if tx.send(LiveItem::Lagged(1)).await.is_err(){break;}continue;}
                     };
-                    if !includes_session_change(&scope,id,metadata.workspace_id,change.include_in_lists){continue;}
+                    if !includes_session_change(&scope,id,metadata.workspace_id,change.include_in_lists)
+                        || (!acp && metadata.external_agent.is_some()) {continue;}
                     if tx.send(LiveItem::SessionChanged(SessionChangeResource::SessionMetaUpdated {session_id:id,
                         version:metadata.metadata_version.get(),title:metadata.title.clone(),favorite:metadata.favorite,
                         pinned:metadata.pinned,updated_at_ms:metadata.updated_at_ms})).await.is_err(){break;}
+                    if metadata.external_agent.is_some()
+                        && (change.requires_snapshot
+                            || matches!(change.kind, ChangeKind::ExternalAgentState | ChangeKind::Execution))
+                        && tx.send(LiveItem::RuntimeSignal(RuntimeSignalResource {
+                            kind: "external_agent_state_changed".into(),
+                            session_id: Some(id),
+                            payload: serde_json::Value::Null,
+                        })).await.is_err()
+                    {
+                        break;
+                    }
                     // Ordinary byte checkpoints have their own content watch.
                     // Content commits on this feed are terminal checkpoints:
                     // their changed entries and snapshot requirements matter.
@@ -193,6 +206,9 @@ fn subscribe_with_queue_capacity(
                     let signal=match signal {Some(RuntimeLiveSignalItem::Signal(signal))=>signal,
                         Some(RuntimeLiveSignalItem::Lagged(skipped))=>{if tx.send(LiveItem::Lagged(skipped)).await.is_err(){break;}continue;},None=>break};
                     let Some(signal)=project_signal(signal) else {continue};
+                    if signal.session_id.is_some_and(|id| agena_domain::is_acp_session_id(id) != acp) {
+                        continue;
+                    }
                     // Attention invalidates a runtime-wide plugin queue. A TUI
                     // viewing one session must also learn about another
                     // session's notification; this signal carries no transcript.

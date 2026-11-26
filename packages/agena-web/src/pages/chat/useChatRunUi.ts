@@ -54,6 +54,7 @@ type CanonicalSessionUsage = {
   projected_tokens?: number | null
   input_limit_tokens?: number | null
   limit_tokens?: number | null
+  limit_basis?: string | null
   model_context_window_tokens?: number | null
   last_cache_read_tokens?: number | null
   last_cache_input_tokens?: number | null
@@ -149,6 +150,9 @@ export function useChatRunUi(opts: {
   collapseAllActivities: () => void
   activityAutoCollapseOnIdle: ComputedRef<boolean>
   compacting?: ComputedRef<boolean>
+  // External-agent sessions bypass the Agena model selection entirely, so the
+  // composer must not require a provider/model just to enable Send.
+  isExternalAgent?: ComputedRef<boolean>
 }) {
   const {
     chat,
@@ -165,6 +169,7 @@ export function useChatRunUi(opts: {
     collapseAllActivities,
     activityAutoCollapseOnIdle,
     compacting,
+    isExternalAgent,
   } = opts
 
   void _directorySessions
@@ -207,6 +212,7 @@ export function useChatRunUi(opts: {
     // from the currently paged transcript makes the chip shrink when older
     // parts are not loaded, which is precisely what the TUI does not do.
     const canonical = chat.selectedSessionUsage
+    if (isExternalAgent?.value && canonical?.limit_basis !== 'context_window') return null
     if (canonical) {
       return {
         ...sessionContextUsage(canonical),
@@ -346,8 +352,10 @@ export function useChatRunUi(opts: {
   const canSend = computed(() => {
     if (!chat.selectedSessionId) return false
     if (sending.value) return false
-    if (!String(modelSelection.selectedProviderId.value || '').trim()) return false
-    if (!String(modelSelection.selectedModelId.value || '').trim()) return false
+    if (!isExternalAgent?.value) {
+      if (!String(modelSelection.selectedProviderId.value || '').trim()) return false
+      if (!String(modelSelection.selectedModelId.value || '').trim()) return false
+    }
     return Boolean(
       String(draft.value || '').trim() || attachedFiles.value.length > 0 || pendingAttachments.value.length > 0,
     )

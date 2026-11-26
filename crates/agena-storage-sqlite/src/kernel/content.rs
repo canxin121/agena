@@ -25,7 +25,7 @@ pub(super) mod loss;
 mod retention;
 pub(super) use retention::{prune, prune_measured};
 
-pub(super) const MAX_LIVE_SOURCES: i64 = 128;
+const MAX_LIVE_SOURCES: i64 = 128;
 pub(super) const MAX_APPEND_BYTES: usize = 256 * 1024;
 pub(super) const BLOCK_PIECE_BYTES: usize = 64 * 1024;
 const MAX_SOURCE_CHARGE: usize = 512 * 1024;
@@ -35,6 +35,26 @@ const MAX_CHECKPOINT_BYTES: usize = 512 * 1024;
 const MAX_RANGE_BYTES: usize = 256 * 1024;
 const ORPHAN_GRACE: Duration = Duration::from_secs(30);
 const MAX_PENDING_LOSS_WINDOWS: usize = 32;
+
+pub(super) async fn require_live_source_slot(connection: &mut SqliteConnection) -> Result<()> {
+    // Assistant document events are written by the command writer and do not
+    // occupy the in-memory source registry.
+    let active: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM agena_content_streams c WHERE c.capture_state='open'
+          AND NOT EXISTS (
+              SELECT 1 FROM agena_entries e WHERE e.id=c.entry_id
+                AND e.content_id=c.id AND e.kind IN ('text','reasoning')
+                AND c.kind='structured'
+          )",
+    )
+    .fetch_one(connection)
+    .await
+    .map_err(sql_error)?;
+    if active >= MAX_LIVE_SOURCES {
+        return Err(KernelError::Busy);
+    }
+    Ok(())
+}
 
 pub(super) struct Append {
     pub scope: OutputScope,
@@ -550,7 +570,7 @@ impl LiveContent {
                     {
                         CaptureState::Interrupted
                     }
-                    Command::Finish { scope, phase } if source.scope == OutputScope::Attempt(*scope) => {
+                    Command::Finish { scope, phase, .. } if source.scope == OutputScope::Attempt(*scope) => {
                         if *phase == ExecutionPhase::Succeeded {
                             CaptureState::Complete
                         } else {
@@ -916,7 +936,7 @@ pub(super) async fn seal_stored(
                 diagnostic: "execution cancelled".into(),
             },
         ),
-        Command::Finish { scope, phase } => (
+        Command::Finish { scope, phase, .. } => (
             TerminalTarget::Attempt(scope.session, scope.execution, Some(scope.generation)),
             if *phase == ExecutionPhase::Succeeded {
                 CaptureEnd::Complete
@@ -965,12 +985,20 @@ pub(super) async fn persist(
     connection: &mut SqliteConnection,
     sources: &mut [StagedSource],
 ) -> Result<()> {
+    persist_staged(connection, sources, false).await
+}
+
+async fn persist_staged(
+    connection: &mut SqliteConnection,
+    sources: &mut [StagedSource],
+    allow_sealed_document: bool,
+) -> Result<()> {
     for source in sources {
         let (source_key, current) = stored_head_with_key(connection, source.head.id).await?;
         if current.epoch != source.head.epoch {
             return Err(KernelError::ContentReset);
         }
-        if current.state != CaptureState::Open {
+        if current.state != CaptureState::Open && !allow_sealed_document {
             // A preceding command in this same batch already sealed capture.
             // Its exact outcome remains authoritative even if a later cancel
             // changes the independent execution outcome.

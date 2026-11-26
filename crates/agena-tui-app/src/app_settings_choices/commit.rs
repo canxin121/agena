@@ -5,6 +5,26 @@ impl App {
         selection: agena_tui::choice::ChoiceSelection,
     ) -> bool {
         match dialog.action.clone() {
+            ChoiceOverlayAction::ExternalAgentOptions {
+                session_id,
+                agent,
+                changes,
+            } => {
+                if let Some(change) = choice_selection_value(&selection)
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|index| changes.into_iter().nth(index))
+                {
+                    self.request_external_agent_options(session_id, agent, Some(change));
+                }
+                true
+            }
+            ChoiceOverlayAction::ExternalAgentWork { session_id } => {
+                if let Ok(cancel_id) = choice_selection_value(&selection).parse() {
+                    self.request_external_agent_work(session_id, Some(cancel_id));
+                }
+                true
+            }
             ChoiceOverlayAction::SessionProfile { session_id } => {
                 let value = choice_selection_value(&selection);
                 self.set_session_profile(session_id, (!value.is_empty()).then_some(value));

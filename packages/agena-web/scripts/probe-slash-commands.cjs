@@ -36,6 +36,7 @@ import { i18n } from '/@fs/${web}/src/i18n/index.ts'
 import '/@fs/${web}/src/style.css'
 const app = createApp({ setup() {
   const draft = ref(''), sent = [], selected = [], toasts = []
+  const externalAgent = ref(null)
   const unavailable = async () => { throw new Error('Unexpected session action in slash probe') }
   const sessionActions = useChatSessionActions({
     chat: {selectedSessionId:'7', selectedSession:{id:'7'}, messages:[], compactSession,
@@ -45,18 +46,24 @@ const app = createApp({ setup() {
   })
   const commands = useChatCommands({
     draft, composerRef:ref(null), composerPickerOpen:ref(null),
-    isBotSession:ref(false),
-    onSend:async()=>{sent.push(draft.value)},
+    isBotSession:ref(false), externalAgent,
+    onSend:async()=>{
+      sent.push({sessionId:externalAgent.value?.sessionId ?? '7', text:draft.value})
+      draft.value = ''
+    },
     onCommandSelected:async(command)=>{
       selected.push({kind:command.kind, action:command.kind==='builtin'?command.action:null})
       if (command.kind!=='builtin' || command.action!=='compact') throw new Error('Expected the catalog compact action')
       await sessionActions.handleCompactSession()
     },
   })
-  window.__slashCommandsProbe = { snapshot:()=>({
-    draft:draft.value, loading:commands.commandsLoading.value,
-    names:commands.commands.value.map(command=>command.name), selected, sent, toasts,
-  }) }
+  window.__slashCommandsProbe = {
+    setExternalAgent:(agent)=>{externalAgent.value=agent},
+    snapshot:()=>({
+      draft:draft.value, loading:commands.commandsLoading.value,
+      names:commands.commands.value.map(command=>command.name), selected, sent, toasts,
+    }),
+  }
   return ()=>h('main', [
     h('div', {class:'composer-fixture'}, [
       h(CommandPalette, {
@@ -131,6 +138,10 @@ app.use(createPinia()).use(createRouter({history:createMemoryHistory(),routes:[{
     await page.goto(origin + '/__slash-commands-probe', { waitUntil: 'domcontentloaded' })
     const composer = page.locator('[data-slash-composer]')
     await composer.waitFor({ timeout: 60000 })
+    const setExternalAgent = (agent) => page.evaluate((value) =>
+      window.__slashCommandsProbe.setExternalAgent(value), agent)
+    const snapshot = () => page.evaluate(() => window.__slashCommandsProbe.snapshot())
+
     await composer.fill('/')
     await page.waitForFunction(() => {
       const snapshot = window.__slashCommandsProbe.snapshot()
@@ -157,15 +168,60 @@ app.use(createPinia()).use(createRouter({history:createMemoryHistory(),routes:[{
     assert.equal((await compactResponse).status(), 200)
     await page.waitForFunction(() =>
       window.__slashCommandsProbe.snapshot().toasts.some(toast=>toast.kind==='success'))
-    const result = await page.evaluate(() => window.__slashCommandsProbe.snapshot())
+    const result = await snapshot()
     assert.deepEqual(result.selected, [{ kind: 'builtin', action: 'compact' }])
     assert.deepEqual(result.sent, [], '/compact must not be sent as a chat message')
     assert.equal(result.draft, '')
+
+    await setExternalAgent({ sessionId: '7', label: 'Claude Code', commands: [] })
+    await composer.fill('/agent:compact')
+    await composer.press('Enter')
+    assert.deepEqual((await snapshot()).sent, [{ sessionId: '7', text: '/agent:compact' }])
+
+    await setExternalAgent({
+      sessionId: '7', label: 'Claude Code', commands: [
+        { name: 'compact', description: 'Compact the native context' },
+        { name: 'mcp:repo:review', description: 'Review repository changes', argument_hint: '<scope>' },
+      ],
+    })
+    await composer.fill('/')
+    await options.filter({ hasText: '/agent:compact' }).filter({ hasText: 'Claude Code' }).waitFor()
+    assert.equal(await options.filter({ hasText: '/compact' }).count(), 0, 'ACP hides the Agena compaction command')
+
+    await composer.fill('/agent:compact')
+    await composer.press('Enter')
+    await page.waitForFunction(() => window.__slashCommandsProbe.snapshot().sent.length === 2)
+    assert.deepEqual((await snapshot()).sent.at(-1), { sessionId: '7', text: '/agent:compact' })
+
+    const review = '/agent:mcp:repo:review'
+    await composer.fill(review)
+    await options.filter({ hasText: review }).filter({ hasText: '<scope>' }).waitFor()
+    await composer.press('Enter')
+    assert.equal(await composer.inputValue(), review + ' ')
+    assert.equal((await snapshot()).sent.length, 2, 'selecting a command with a hint must allow argument entry')
+    const invocation = review + '  "scope"  all'
+    await composer.fill(invocation)
+    await composer.press('Control+Enter')
+    assert.deepEqual((await snapshot()).sent.at(-1), { sessionId: '7', text: invocation })
+
+    await composer.fill('/')
+    await options.filter({ hasText: review }).waitFor()
+    await setExternalAgent({
+      sessionId: '8', label: 'Antigravity',
+      commands: [{ name: 'status', description: 'Antigravity status' }],
+    })
+    await options.filter({ hasText: '/agent:status' }).filter({ hasText: 'Antigravity' }).waitFor()
+    assert.equal(await options.filter({ hasText: review }).count(), 0)
+    assert.equal(await options.filter({ hasText: '/agent:compact' }).count(), 0)
+    await setExternalAgent(null)
+    await options.filter({ hasText: '/agent:status' }).waitFor({ state: 'detached' })
+    await options.filter({ hasText: '/compact' }).waitFor()
+
     assert.equal(apiRequests.filter((request) => request.path.endsWith('/compact')).length, 1)
     assert.deepEqual(unexpectedRequests, [], 'slash commands must not invoke plugins or message submission')
     assert.deepEqual(externalRequests, [], 'the probe must not contact a live user service')
     assert.deepEqual(errors, [])
-    console.log(`Slash command browser probe passed: ${surface.catalog.commands.length} real catalog entries; / lists commands; /compact Enter invokes only compaction.`)
+    console.log(`Slash command browser probe passed. Verified ${surface.catalog.commands.length} catalog entries, local and native routing, argument hints, and session switching.`)
   } finally {
     await Promise.allSettled([browser?.close(), server?.close()])
     await fs.rm(temporary, { recursive: true, force: true })

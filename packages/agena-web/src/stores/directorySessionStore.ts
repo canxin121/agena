@@ -9,6 +9,7 @@ import { isDocumentVisible, limitBackgroundReads } from '@/lib/backgroundReads'
 import { createRevalidator } from '@/lib/revalidation'
 import { conditionalJsonObserved } from '@/lib/conditionalJson'
 import { apiJson } from '@/lib/api'
+import { isAcpSessionId } from '@/lib/acpSession'
 import {
   captureResourceObservation,
   canReuseResource,
@@ -149,7 +150,7 @@ function toSidebarRowFromAgenaSession(
   expandedParents?: Set<string>,
 ): SidebarSessionRow | null {
   const sid = agenaSessionId(record)
-  if (!sid || sessionWasDeleted(sid) || isBotOwnedSession(record)) return null
+  if (!sid || isAcpSessionId(sid) || record?.external_agent || sessionWasDeleted(sid) || isBotOwnedSession(record)) return null
   const session: SidebarSessionSummary = { ...(record as UnknownRecord), id: sid }
   const parentId = agenaSessionId({ id: record?.parent_id } as UnknownRecord) || null
   const rootId = agenaSessionId({ id: record?.root_id } as UnknownRecord) || sid

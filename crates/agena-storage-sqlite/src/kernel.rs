@@ -24,6 +24,7 @@ mod branches;
 
 mod commands;
 mod content;
+mod external_agent;
 
 mod control_snapshot;
 
@@ -78,6 +79,7 @@ struct Pending {
     response: oneshot::Sender<Reply>,
     _permit: OwnedSemaphorePermit,
     _retention_read: Option<OwnedSemaphorePermit>,
+    _bulk_import: Option<OwnedSemaphorePermit>,
 }
 
 struct Backend {
@@ -151,6 +153,62 @@ pub struct SqliteKernel {
 pub async fn open_kernel_runtime(url: &str) -> Result<SqliteKernel> {
     let database = KernelDatabase::open(url).await.map_err(storage)?;
     compose_kernel_runtime(database).await
+}
+
+/// A process-local runtime for live ACP views. A new ID range on restart keeps
+/// obsolete clients from opening an unrelated view with the same numeric ID.
+pub async fn open_acp_kernel() -> Result<SqliteKernel> {
+    use sea_orm::{ConnectionTrait, DbBackend, Statement};
+
+    let kernel = open_kernel_runtime("sqlite::memory:").await?;
+    let epoch = (uuid::Uuid::new_v4().as_u128() as i64) & ((1 << 30) - 1);
+    let first = agena_domain::ACP_SESSION_ID_START + (epoch << 22);
+    kernel
+        .database
+        .execute(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "INSERT INTO sqlite_sequence(name, seq)
+             VALUES('agena_sessions', ?1),('agena_entries', ?1)",
+            [first.into()],
+        ))
+        .await
+        .map_err(storage)?;
+    Ok(kernel)
+}
+
+impl SqliteKernel {
+    pub async fn acp_view(
+        &self,
+        workspace: i64,
+        agent: agena_domain::ExternalAgent,
+        link: &ExternalAgentLink,
+    ) -> Result<Option<SessionId>> {
+        let mut connection = self
+            .reader_database
+            .get_sqlite_connection_pool()
+            .acquire()
+            .await
+            .map_err(sql_error)?;
+        external_agent::existing_link(&mut connection, workspace, agent, link).await
+    }
+
+    /// Reflect the existing project identity in the ACP kernel so foreign keys
+    /// and workspace permission scopes use the same ID as the instance.
+    pub async fn register_acp_workspace(&self, id: i64, path: &str) -> Result<()> {
+        use sea_orm::{ConnectionTrait, DbBackend, Statement};
+
+        self.database
+            .execute(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "INSERT INTO agena_workspaces(id,path,created_at_ms,updated_at_ms)
+                 VALUES(?,?,0,0) ON CONFLICT(id) DO UPDATE SET path=excluded.path
+                 WHERE path!=excluded.path",
+                [id.into(), path.into()],
+            ))
+            .await
+            .map_err(storage)?;
+        Ok(())
+    }
 }
 
 async fn compose_kernel_runtime(database: KernelDatabase) -> Result<SqliteKernel> {
@@ -1306,6 +1364,28 @@ impl KernelBackend for Backend {
         let bytes = modeled_read_bytes(&value)?;
         self.wrap_read(session, value, bytes)
     }
+    async fn external_agent_fork_points(
+        &self,
+        session: SessionId,
+        link: &ExternalAgentLink,
+        message: Option<EntryId>,
+    ) -> Result<Vec<(ExternalAgentForkCursor, String)>> {
+        let mut tx = self
+            .reader
+            .get_sqlite_connection_pool()
+            .begin()
+            .await
+            .map_err(sql_error)?;
+        if lifecycle::configuration(&mut tx, session)
+            .await?
+            .native_session_link()
+            .as_ref()
+            != Some(link)
+        {
+            return Ok(Vec::new());
+        }
+        external_agent::fork_points(&mut tx, session, link, message).await
+    }
     async fn has_failure_notice(
         &self,
         session: SessionId,
@@ -1335,6 +1415,27 @@ impl KernelBackend for Backend {
         receiver.await.map_err(|_| KernelError::Closed)?
     }
     async fn commit(&self, request: RequestId, command: Command) -> Reply {
+        let _bulk_import = if let Command::ImportExternalAgent { turns, .. } = &command {
+            let media_bytes = turns
+                .iter()
+                .flat_map(ExternalAgentHistoryTurn::blobs)
+                .fold(0_usize, |total, blob| {
+                    total.saturating_add(blob.bytes.len())
+                });
+            if media_bytes > MAX_EXTERNAL_AGENT_HISTORY_MEDIA_BYTES {
+                return Err(invalid("ACP history exceeds the 8 MiB attachment limit"));
+            }
+            // Use the same admission as archive imports. The regular command
+            // queue still accounts for the non-media metadata below.
+            Some(
+                self.imports
+                    .clone()
+                    .try_acquire_owned()
+                    .map_err(|_| KernelError::Busy)?,
+            )
+        } else {
+            None
+        };
         let _retention_read = if matches!(command, Command::PruneContent { .. }) {
             Some(
                 self.frame_reads
@@ -1366,6 +1467,7 @@ impl KernelBackend for Backend {
             response,
             _permit: permit,
             _retention_read,
+            _bulk_import,
         };
         drop(encoded);
         self.sender
@@ -2080,17 +2182,21 @@ async fn commit_batch(
             }
         })
         .collect::<Vec<_>>();
-    // Agent settlement updates the child and a different session's mailbox in
-    // one transaction. A reset makes both observers take a consistent snapshot.
-    let agent_handoff = batch.iter().zip(&results).any(|(pending, result)| {
+    // These commands can change another view in the same transaction.
+    let scope_reset = batch.iter().zip(&results).any(|(pending, result)| {
         matches!(
             pending.command,
-            Command::FinishAgent { .. } | Command::DetachGlobal { .. }
+            Command::FinishAgent { .. }
+                | Command::DetachGlobal { .. }
+                | Command::ImportExternalAgent {
+                    replace_view: Some(_),
+                    ..
+                }
         ) && result
             .as_ref()
             .is_ok_and(|r| r.position.sequence == sequence)
     });
-    let shared_family = if agent_handoff {
+    let shared_family = if scope_reset {
         true
     } else if shared_entries.is_empty() && shared_sessions.is_empty() {
         false
@@ -2307,6 +2413,7 @@ fn aborted_batch(
 fn previous_list_session(command: &Command) -> Option<SessionId> {
     Some(match command {
         Command::CreateConfigured { .. }
+        | Command::ImportExternalAgent { .. }
         | Command::CreateGlobal { .. }
         | Command::CreateSession { .. }
         | Command::Fork { .. } => {
@@ -2316,8 +2423,10 @@ fn previous_list_session(command: &Command) -> Option<SessionId> {
             return None;
         }
         Command::PresentInteraction { session, .. }
+        | Command::SetExternalAgentInput { session, .. }
         | Command::DetachGlobal { session, .. }
         | Command::Configure { session, .. }
+        | Command::DetachExternalAgent { session, .. }
         | Command::RecoverChannelAuthority { session, .. }
         | Command::FinishAgent { session, .. }
         | Command::Withdraw { session, .. }
@@ -2346,11 +2455,13 @@ fn previous_list_session(command: &Command) -> Option<SessionId> {
         | Command::Reply { session, .. }
         | Command::PrepareBlob { session, .. }
         | Command::PinBlob { session, .. }
+        | Command::RefreshIdleExternalAgentState { session, .. }
         | Command::PruneContent { session, .. } => *session,
         Command::Notice { scope, .. }
         | Command::RecordCompaction { scope, .. }
         | Command::BeginRound { scope, .. }
-        | Command::BeginCurrentRound { scope }
+        | Command::BeginCurrentRound { scope, .. }
+        | Command::RecordExternalAgentState { scope, .. }
         | Command::BeginCompactionRound { scope, .. }
         | Command::FinishRound { scope, .. }
         | Command::CommitCompaction { scope, .. }
@@ -2359,6 +2470,7 @@ fn previous_list_session(command: &Command) -> Option<SessionId> {
         | Command::RequestInteraction { scope, .. }
         | Command::OpenText { scope, .. }
         | Command::OpenEvents { scope, .. }
+        | Command::BindExternalAgentLink { scope, .. }
         | Command::BeginActivity { scope, .. }
         | Command::CompleteTool { scope, .. }
         | Command::PrepareStop { scope, .. }
@@ -2367,6 +2479,7 @@ fn previous_list_session(command: &Command) -> Option<SessionId> {
             scope.session
         }
         Command::SealContent { scope, .. } => scope.session(),
+        Command::WriteAssistantDocument { target, .. } => target.session(),
         Command::PinSnapshotBlob { snapshot, .. } => snapshot.session,
         Command::WriteBlob { lease, .. } | Command::ReadyBlob { lease, .. } => lease.session,
     })
@@ -2426,8 +2539,15 @@ pub(super) async fn list_state(
 
 fn change_target(command: &Command, mutation: &Mutation) -> (SessionId, ChangeKind) {
     match command {
+        Command::RefreshIdleExternalAgentState { session, .. } => {
+            (*session, ChangeKind::ExternalAgentState)
+        }
+        Command::RecordExternalAgentState { scope, .. } => {
+            (scope.session, ChangeKind::ExternalAgentState)
+        }
         Command::RecordCompaction { scope, .. } => (scope.session, ChangeKind::Round),
         Command::CreateConfigured { .. }
+        | Command::ImportExternalAgent { .. }
         | Command::CreateGlobal { .. }
         | Command::CreateSession { .. } => match mutation {
             Mutation::Session(metadata) => (metadata.id, ChangeKind::Metadata),
@@ -2437,7 +2557,8 @@ fn change_target(command: &Command, mutation: &Mutation) -> (SessionId, ChangeKi
             Mutation::Session(metadata) => (metadata.id, ChangeKind::Metadata),
             _ => unreachable!("validated local Bot session result"),
         },
-        Command::PresentInteraction { session, .. } => (*session, ChangeKind::Interaction),
+        Command::PresentInteraction { session, .. }
+        | Command::SetExternalAgentInput { session, .. } => (*session, ChangeKind::Interaction),
         Command::Fork { session, .. } => match mutation {
             Mutation::Session(value) => (value.id, ChangeKind::Membership),
             Mutation::Rewind(value) => (value.session.id, ChangeKind::Membership),
@@ -2450,6 +2571,7 @@ fn change_target(command: &Command, mutation: &Mutation) -> (SessionId, ChangeKi
         Command::Withdraw { session, .. }
         | Command::Truncate { session, .. }
         | Command::Clear { session, .. }
+        | Command::DetachExternalAgent { session, .. }
         | Command::DeleteSession { session, .. }
         | Command::ConsumeDelivery { session, .. } => (*session, ChangeKind::Membership),
         Command::Continue { session, .. }
@@ -2482,7 +2604,7 @@ fn change_target(command: &Command, mutation: &Mutation) -> (SessionId, ChangeKi
         | Command::ClearQueued { session }
         | Command::Retry { session, .. } => (*session, ChangeKind::Execution),
         Command::BeginRound { scope, .. }
-        | Command::BeginCurrentRound { scope }
+        | Command::BeginCurrentRound { scope, .. }
         | Command::BeginCompactionRound { scope, .. }
         | Command::FinishRound { scope, .. } => (scope.session, ChangeKind::Round),
         Command::CommitCompaction { scope, .. } => (scope.session, ChangeKind::Membership),
@@ -2498,6 +2620,17 @@ fn change_target(command: &Command, mutation: &Mutation) -> (SessionId, ChangeKi
             },
         ),
         Command::OpenEvents { scope, .. } => (scope.session, ChangeKind::Content),
+        Command::WriteAssistantDocument { target, update, .. } => (
+            target.session(),
+            if update.previous.is_some() {
+                ChangeKind::Content
+            } else {
+                ChangeKind::Membership
+            },
+        ),
+        Command::BindExternalAgentLink { scope, .. } => {
+            (scope.session, ChangeKind::ExternalAgentState)
+        }
         Command::SealContent { scope, .. } => (scope.session(), ChangeKind::Content),
         Command::BeginActivity { scope, .. } => (scope.session, ChangeKind::Activity),
         Command::EndActivity { scope, .. } => (scope.session, ChangeKind::Activity),
@@ -2628,6 +2761,7 @@ async fn entry_changes(
     };
     match command {
         Command::Fork { .. }
+        | Command::ImportExternalAgent { .. }
         | Command::Withdraw { .. }
         | Command::Truncate { .. }
         | Command::Clear { .. }

@@ -20,10 +20,26 @@ pub async fn resource_revisions(
     }
     let index = state.revisions()?;
     index.refresh_durable(&state).await?;
+    let acp = if keys
+        .iter()
+        .any(|key| crate::revisions::is_acp_resource(key))
+    {
+        let state = state.acp_state()?;
+        let index = state.revisions()?;
+        index.refresh_durable(&state).await?;
+        Some(index)
+    } else {
+        None
+    };
     Ok(Json(
         keys.into_iter()
             .map(|key| {
-                let token = index.token(&key);
+                let owner = if crate::revisions::is_acp_resource(&key) {
+                    acp.as_ref().expect("ACP revision index for ACP resources")
+                } else {
+                    &index
+                };
+                let token = owner.token(&key);
                 (key, token)
             })
             .collect(),

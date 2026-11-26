@@ -1810,10 +1810,22 @@ impl TranscriptState {
                 .iter()
                 .map(|part| self.inline_ui_part(part))
                 .collect::<Vec<_>>();
-            let entries = agena_tui_transcript::parts_entries_with_folds(
+            let mut entries = agena_tui_transcript::parts_entries_with_folds(
                 &inline_parts,
                 &self.transcript_folds,
             );
+            for (id, request) in self.pending_acp_user_inputs() {
+                if entries.iter().flat_map(|entry| &entry.parts).any(|part| {
+                    agena_tui_transcript::interaction_request_id_for_part(part)
+                        == Some(request.request_id.as_str())
+                }) {
+                    continue;
+                }
+                entries.push(agena_tui_transcript::session_user_input_entry(
+                    id,
+                    crate::app_session_interactive::user_input_request_from_wire(request.clone()),
+                ));
+            }
 
             self.projected_resource_ids = self
                 .parts
@@ -3213,6 +3225,36 @@ impl TranscriptState {
             0,
             TranscriptRevealPolicy::Minimal,
         );
+    }
+
+    pub(crate) fn pending_acp_user_inputs(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            agena_domain::ActivityId,
+            &agena_api::resource::UserInputRequest,
+        ),
+    > {
+        self.execution
+            .iter()
+            .flat_map(|execution| execution.session.state.pending_interactive_requests())
+            .filter_map(|pending| {
+                let request = pending.request.as_user_input()?;
+                if Some(pending.session_id) != self.session_id
+                    || request.source != agena_domain::UserInputSource::Host
+                {
+                    return None;
+                }
+                let id = request.request_id.strip_prefix("acp:")?.parse().ok()?;
+                Some((id, request))
+            })
+    }
+
+    pub(crate) fn acp_user_input_key(id: agena_domain::ActivityId) -> TranscriptNodeKey {
+        TranscriptNodeKey::Activity {
+            entry_id: agena_tui_transcript::TranscriptEntryId::SessionActivity(id),
+            content_id: TranscriptContentId::Activity(id),
+        }
     }
 
     /// Reveal the title and preserve expansion. Short parts fit in view; tall

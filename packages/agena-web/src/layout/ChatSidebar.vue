@@ -711,7 +711,10 @@ function updateRenameDraft(next: string) {
 // Defensive: if a dialog stacks under the scroll container on some mobile browsers,
 // disable pointer events on the sidebar content so taps can't "fall through".
 const isSidebarDialogOpen = computed(() =>
-  Boolean(isAddDirectoryOpen.value || directoryActionsOpen.value || sessionActionsOpen.value || renameDialogOpen.value),
+  Boolean(
+    isAddDirectoryOpen.value || directoryActionsOpen.value || sessionActionsOpen.value
+    || renameDialogOpen.value,
+  ),
 )
 const sessionActionsDialogItems = computed<SessionDialogActionItem[]>(() => {
   const target = sessionActionsTarget.value
@@ -775,9 +778,7 @@ const sessionActionsDialogItems = computed<SessionDialogActionItem[]>(() => {
       cancelText: String(t('common.cancel')),
     },
   ]
-  return [base[0], base[1], ...buildSessionActionItemsForSessionI18n(t, target?.session), base[2]].filter(
-    (item): item is SessionDialogActionItem => Boolean(item),
-  )
+  return [base[0], base[1], ...buildSessionActionItemsForSessionI18n(t, target?.session), base[2]]
 })
 
 const filteredSessionActionsDialogItems = computed<SessionDialogActionItem[]>(() => {
@@ -805,7 +806,9 @@ const directoryActionMenuGroups = computed<OptionMenuGroup[]>(() => {
     },
     {
       id: 'directory-session-actions',
-      items: menuItemsById(items, ['refresh', 'toggle-session-multi-select', 'new-session']),
+      items: menuItemsById(items, [
+        'refresh', 'toggle-session-multi-select', 'new-session',
+      ]),
     },
     { id: 'directory-danger', items: menuItemsById(items, ['remove']) },
   ].filter((group) => group.items.length > 0)

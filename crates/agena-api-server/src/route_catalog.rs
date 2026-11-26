@@ -284,6 +284,15 @@
 //! | GET | `/api/v1/sessions/{session_id}/plan` | `get_session_plan()` |
 //! | GET | `/api/v1/sessions/{session_id}/cost` | `get_session_cost()` |
 //! | PUT | `/api/v1/sessions/{session_id}/selection` | `replace_session_selection()` |
+//! | POST | `/api/v1/sessions/{session_id}/agent-options` | `external_agent_options()` |
+//! | POST | `/api/v1/workspaces/{workspace_id}/agent-sessions` | `external_agent_workspace()` |
+//! | POST | `/api/v1/sessions/{session_id}/agent-session` | `external_agent_session()` |
+//! | POST | `/api/v1/sessions/{session_id}/agent-auth` | `external_agent_auth()` |
+//! | GET | `/api/v1/sessions/{session_id}/agent-auth` | `external_agent_live_auth()` |
+//! | GET | `/api/v1/sessions/{session_id}/agent-providers` | `external_agent_providers()` |
+//! | POST | `/api/v1/sessions/{session_id}/agent-steer` | `steer_external_agent()` |
+//! | GET | `/api/v1/sessions/{session_id}/agent-work` | `list_external_agent_work()` |
+//! | POST | `/api/v1/sessions/{session_id}/agent-work` | `cancel_external_agent_work()` |
 //! | PUT | `/api/v1/sessions/{session_id}/permission` | `replace_session_permission()` |
 //! | GET | `/api/v1/sessions/{session_id}/parts` | `list_session_parts()` |
 //! | GET | `/api/v1/sessions/{session_id}/content/{resource_id}` | `read_content()` |

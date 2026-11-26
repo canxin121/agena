@@ -33,6 +33,9 @@ fn filter<'a>(
     if query.exclude_bot_owned {
         builder.push(" AND s.owner_bot_id IS NULL");
     }
+    if query.exclude_external_agents {
+        builder.push(" AND json_extract(s.configuration_json,'$.external_agent') IS NULL");
+    }
     if let Some(bot) = &query.owner_bot_id {
         builder.push(" AND s.owner_bot_id=").push_bind(bot.clone());
     }
@@ -237,14 +240,19 @@ pub(super) async fn query_summaries(
 // and estimates that the broader workspace/owner index is more selective.
 static OVERVIEW_SQL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
     let visibility = schema::overview_visibility("s");
-    let scope = format!("s.workspace_id=?1 AND {visibility}");
+    let scope = format!(
+        "s.workspace_id=?1 AND {visibility}
+         AND json_extract(s.configuration_json,'$.external_agent') IS NULL"
+    );
     format!(
         "WITH included AS (
             SELECT s.id FROM agena_sessions s INDEXED BY idx_agena_sessions_favorite
             WHERE {scope} AND s.favorite=1
             UNION
             SELECT t.session_id FROM agena_session_statistics t
+            CROSS JOIN agena_sessions s ON s.id=t.session_id
             WHERE t.overview_workspace_id=?1 AND t.processing_state!='ready'
+              AND json_extract(s.configuration_json,'$.external_agent') IS NULL
             UNION
             SELECT id FROM (
                 SELECT s.id FROM agena_sessions s
@@ -300,7 +308,8 @@ pub(super) async fn activity_summary(
                 COALESCE(sum(t.processing_state='awaiting_interaction'),0) AS awaiting
          FROM agena_session_statistics t CROSS JOIN agena_sessions s ON s.id=t.session_id
          WHERE t.processing_state IN ('running','awaiting_interaction')
-           AND s.deleted_at_ms IS NULL AND s.temporary=0 AND s.relation_kind!='subagent'",
+           AND s.deleted_at_ms IS NULL AND s.temporary=0 AND s.relation_kind!='subagent'
+           AND json_extract(s.configuration_json,'$.external_agent') IS NULL",
     )
     .fetch_one(&mut *tx)
     .await
@@ -315,6 +324,7 @@ pub(super) async fn activity_summary(
          CROSS JOIN agena_sessions s ON s.id=a.session_id
          WHERE a.finished_at_ms IS NOT NULL AND s.deleted_at_ms IS NULL
            AND s.temporary=0 AND s.relation_kind!='subagent'
+           AND json_extract(s.configuration_json,'$.external_agent') IS NULL
          ORDER BY a.finished_at_ms DESC,(a.phase='failed') DESC LIMIT 1",
     )
     .fetch_optional(&mut *tx)

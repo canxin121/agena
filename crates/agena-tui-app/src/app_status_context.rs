@@ -525,14 +525,22 @@ impl App {
                         .text_args(key, &agena_tui::fl_args!("value" => value)),
                 ));
             }
-            let token_usage = agena_tui::session_status::token_usage_status(
-                execution.usage.current_tokens,
-                execution.usage.input_limit_tokens,
-            );
-            parts.push(StatusRow::normal(
-                "session-token-usage",
-                token_usage.label(),
-            ));
+            use agena_api::resource::SessionUsageLimitBasis::ContextWindow;
+            let limit = if execution.usage.limit_basis == Some(ContextWindow) {
+                execution.usage.limit_tokens
+            } else {
+                execution.usage.input_limit_tokens
+            };
+            if execution.session.external_agent.is_none() || limit.is_some() {
+                let token_usage = agena_tui::session_status::token_usage_status(
+                    execution.usage.current_tokens,
+                    limit,
+                );
+                parts.push(StatusRow::normal(
+                    "session-token-usage",
+                    token_usage.label(),
+                ));
+            }
         }
         parts
     }

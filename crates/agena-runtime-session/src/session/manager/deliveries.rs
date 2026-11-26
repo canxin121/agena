@@ -56,6 +56,11 @@ impl SessionManager {
         let dispatch = self.session_dispatch(session);
         let _submission = dispatch.submission.lock().await;
         self.require_writable_bot_history(id).await?;
+        if self.external_agent(session).await?.is_some() {
+            return Err(AppError::Config(
+                "External agent sessions require interactive user input.".into(),
+            ));
+        }
         let payload = serde_json::json!({"kind":"scheduler","job_id":job,"delivery_key":delivery,"text":prompt,"launch_provenance":provenance});
         if serde_json::to_vec(&payload)?.len() > 64 * 1024 {
             return Err(AppError::Config(
@@ -187,6 +192,9 @@ impl SessionManager {
                         tracing::warn!(session_id = summary.id.get(), %error, "queued input recovery deferred")
                     }
                 }
+                continue;
+            }
+            if summary.external_agent.is_some() {
                 continue;
             }
             let pending = self

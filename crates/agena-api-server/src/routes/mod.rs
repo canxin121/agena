@@ -5,6 +5,7 @@
 //! request-counting middleware is applied by the caller after the merge so it
 //! still runs exactly once for every route.
 
+pub(super) mod acp;
 mod bots;
 mod git;
 mod health;

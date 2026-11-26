@@ -41,7 +41,7 @@ import { attachmentPlaceholder } from './chat/attachmentPlaceholder'
 import { useChatScrollNav } from './chat/useChatScrollNav'
 import { useChatComposerLayout } from './chat/useChatComposerLayout'
 import { useChatModelSelection } from './chat/useChatModelSelection'
-import { useChatCommands, matchSlashCommand } from './chat/useChatCommands'
+import { useChatCommands, matchSlashCommand, isExternalAgentCommandInvocation } from './chat/useChatCommands'
 import type { BuiltInCommand, Command } from './chat/useChatCommands'
 import { commandUsage } from './chat/chatCommandsCatalog'
 import { useChatSessionActions } from './chat/useChatSessionActions'
@@ -69,6 +69,7 @@ import { transcriptProjectionLabels } from './chat/transcriptProjection'
 import { useChatRenderBlocks } from './chat/useChatRenderBlocks'
 import { queuedMessagePreviews } from './chat/queuedMessages'
 import { restoredComposerText, restoredComposerFiles } from './chat/queuedComposer'
+import { queuedEditorState } from './chat/queuedEditor'
 import { useChatMessageActions } from './chat/useChatMessageActions'
 import { activityInitiallyExpandedForPart as resolveActivityInitiallyExpanded } from './chat/transcriptExpansion'
 import { isAssistantMessageStreaming } from '@/lib/chatRunState'
@@ -76,7 +77,8 @@ import { deriveSendRunConfig } from './chat/modelSendDefaults'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import type { TranscriptDisplayPart } from '@/components/chat/messageList.types'
-import type { MessageFold } from '@/types/chat'
+import { externalAgentLabels, type ExternalAgentSuggestion, type MessageFold } from '@/types/chat'
+import { isAcpSessionId, sessionApiPath } from '@/lib/acpSession'
 import type { JsonObject, JsonValue } from '@/types/json'
 import type { PluginCommandResult } from '@/lib/pluginOperations'
 import { useTranscriptPreferencesStore } from '@/stores/transcriptPreferences'
@@ -100,6 +102,7 @@ type OutgoingMessagePart =
           reference:
             | { reference_type: 'workspace_path'; path: string }
             | { reference_type: 'artifact'; uri: string; sha256: string }
+            | { reference_type: 'url'; url: string }
           name: string
           media_type?: string
           size_bytes?: number
@@ -138,6 +141,13 @@ const toasts = useToastsStore()
 const bots = useBotsStore()
 const { t } = useI18n()
 const bot = useBotConversation()
+const isAcp = computed(() => route.path === '/acp')
+const acpViewError = ref('')
+const acpViewLoaded = ref(false)
+function openAcpSidebar() {
+  if (ui.isCompactLayout) ui.setSessionSwitcherOpen(true)
+  else ui.setSidebarOpen(true, { preserveWidth: true })
+}
 const openBotEditor = () => {
   if (bot.botId.value) bots.open('edit', bot.botId.value)
 }
@@ -185,9 +195,11 @@ async function openBotProjects() {
 watch(
   () => route.fullPath,
   (_path, _previous, onCleanup) => {
-    if (route.path !== '/chat') return
+    acpViewError.value = ''
+    acpViewLoaded.value = false
+    if (route.path !== '/chat' && !isAcp.value) return
     const sid = readSessionIdFromQuery(route.query) || readSessionIdFromFullPath(route.fullPath)
-    if (!sid) return
+    if (!sid || isAcp.value !== isAcpSessionId(sid)) return
     let current = true
     onCleanup(() => {
       current = false
@@ -197,7 +209,15 @@ watch(
         ...paneWindowScope(),
         isCurrent: () => current && bot.ownsConversation(),
       })
-      .catch(() => {})
+      .then(() => {
+        if (current && isAcp.value) acpViewLoaded.value = true
+      })
+      .catch((failure) => {
+        if (!current || !isAcp.value) return
+        acpViewError.value = failure?.status === 404
+          ? t('chat.nativeAgent.viewExpired')
+          : failure instanceof Error ? failure.message : String(failure)
+      })
   },
   { immediate: true },
 )
@@ -464,6 +484,11 @@ function returnFromSide() {
   if (sideParentId.value) void chat.selectSession(sideParentId.value)
 }
 
+const externalAgentLabel = computed(() => {
+  const agent = chat.selectedSession?.external_agent
+  return agent ? externalAgentLabels[agent] : undefined
+})
+
 const modelTriggerRef = ref<HTMLElement | null>(null)
 const profileTriggerRef = ref<HTMLElement | null>(null)
 const thinkingTriggerRef = ref<HTMLElement | null>(null)
@@ -499,6 +524,12 @@ const chatCommands = useChatCommands({
   composerRef,
   composerPickerOpen,
   isBotSession: bot.isBot,
+  externalAgent: computed(() => {
+    const sessionId = chat.selectedSessionId
+    const label = externalAgentLabel.value
+    if (!sessionId || !label) return null
+    return { sessionId, label, commands: chat.selectedSessionExecution?.external_agent_commands ?? [] }
+  }),
   onSend: send,
   onCommandSelected: handleCommandSelected,
 })
@@ -1134,6 +1165,12 @@ function handleDraftKeydown(e: KeyboardEvent) {
   }
   if (handleComposerWordKeydown(e)) return
   if (handleComposerCursorKeydown(e)) return
+  if (e.key === 'Enter' && e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey
+    && !commandOpen.value && !isImeComposing(e) && canSteerExternalAgent.value) {
+    e.preventDefault()
+    void steerExternalAgent()
+    return
+  }
   handleDraftKeydownInner(e)
 }
 
@@ -1327,6 +1364,7 @@ const runUi = useChatRunUi({
   collapseAllActivities,
   activityAutoCollapseOnIdle,
   compacting: computed(() => compactingSessionId.value === chat.selectedSessionId),
+  isExternalAgent: computed(() => Boolean(externalAgentLabel.value)),
 })
 
 const queueBusy = ref(false)
@@ -1384,6 +1422,64 @@ const {
   handleComposerPrimaryAction,
   handleComposerStopAction,
 } = runUi
+
+const canSteerExternalAgent = computed(() => Boolean(externalAgentLabel.value)
+  && showComposerStopAction.value && Boolean(draft.value.trim())
+  && attachedFiles.value.length === 0 && pendingAttachments.value.length === 0 && !sending.value)
+
+const canFillExternalAgentSuggestion = computed(() =>
+  Boolean(externalAgentLabel.value) && bot.ownsConversation() && !sending.value
+  && !draft.value && attachedFiles.value.length === 0 && pendingAttachments.value.length === 0,
+)
+
+async function fillExternalAgentSuggestion(suggestion: ExternalAgentSuggestion) {
+  const sid = chat.selectedSessionId
+  if (!canFillExternalAgentSuggestion.value ||
+    !chat.selectedSessionExecution?.external_agent_details?.suggestions?.includes(suggestion)) return
+  const document: JsonValue[] = suggestion.prompt.map((block) => block.type === 'text'
+    ? block
+    : {
+        type: 'activity',
+        activity: {
+          id: globalThis.crypto.randomUUID(),
+          payload: {
+            activity_type: 'resource',
+            kind: 'url',
+            reference: { reference_type: 'url', url: block.uri },
+            name: block.name,
+            ...(block.mimeType === undefined ? {} : { media_type: block.mimeType }),
+            ...(block.size === undefined ? {} : { size_bytes: block.size }),
+          },
+        },
+      })
+  const { text, segments, files } = queuedEditorState(document)
+  draft.value = text
+  attachedFiles.value = files
+  await nextTick()
+  if (chat.selectedSessionId === sid) {
+    composerRef.value?.restoreSegments?.(segments)
+    getComposerInput(composerRef.value)?.focus()
+  }
+}
+
+async function steerExternalAgent() {
+  const sid = chat.selectedSessionId
+  if (!sid || !canSteerExternalAgent.value || !bot.canSendConversation()) return
+  const text = draft.value
+  sending.value = true
+  try {
+    await apiJson(`${sessionApiPath(sid)}/agent-steer`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text }),
+    })
+    if (chat.selectedSessionId === sid && draft.value === text) draft.value = ''
+  } catch (error) {
+    toasts.push('error', error instanceof Error ? error.message : String(error))
+  } finally {
+    sending.value = false
+  }
+}
 
 // Vim mode is a browser preference: desktop defaults to on, mobile to off. The
 // focused-pane gate stays on top so embedded panes keep one keyboard owner.
@@ -1451,7 +1547,7 @@ const {
     if (tool === 'get') {
       const { value, observation } = await conditionalJsonObserved<Record<string, JsonValue>>(
         resource,
-        `/api/v1/sessions/${body.session_id}/plan`,
+        `${sessionApiPath(body.session_id)}/plan`,
         { signal },
         read?.force,
       )
@@ -1676,6 +1772,7 @@ function resourceComposerNode(input: {
   size?: number
 }): OutgoingMessagePart {
   const mediaType = String(input.mime || '').trim()
+  const inline = input.path.startsWith('data:application/octet-stream;base64,')
   return {
     type: 'activity',
     activity: {
@@ -1683,9 +1780,11 @@ function resourceComposerNode(input: {
       ...(input.sha256 ? { provenance: { content_hash: input.sha256 } } : {}),
       payload: {
         activity_type: 'resource',
-        delivery: input.delivery || 'reference',
+        delivery: inline ? 'model_input' : input.delivery || 'reference',
         kind: attachmentResourceKind(mediaType, input.filename),
-        reference: { reference_type: 'workspace_path', path: input.path },
+        reference: inline
+          ? { reference_type: 'url', url: input.path }
+          : { reference_type: 'workspace_path', path: input.path },
         name: input.filename,
         ...(mediaType ? { media_type: mediaType } : {}),
         ...(typeof input.size === 'number' ? { size_bytes: input.size } : {}),
@@ -1762,10 +1861,12 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
       openCommandPalette('')
       return
     case 'new':
-      await chat.createSession()
+      if (isAcp.value) openAcpSidebar()
+      else await chat.createSession()
       return
     case 'sessions':
-      ui.setSessionSwitcherOpen(true)
+      if (isAcp.value) openAcpSidebar()
+      else ui.setSessionSwitcherOpen(true)
       return
     case 'rewind': {
       if (!sid) {
@@ -2042,7 +2143,7 @@ async function applyPluginCommandResult(
   return returnedPrompt
 }
 
-async function handleCommandSelected(command: Command) {
+async function handleCommandSelected(command: Exclude<Command, { kind: 'external' }>) {
   try {
     if (command.kind === 'builtin') {
       await executeBuiltInCommand(command)
@@ -2105,9 +2206,9 @@ async function sendReady(sid: string | null) {
   if (!text) text = segmentText.trim()
   if ((!sid && filesSnapshot.length > 0) || (!text && filesSnapshot.length === 0)) return
 
-  if (text && filesSnapshot.length === 0) {
+  if (text && filesSnapshot.length === 0 && !(externalAgentLabel.value && isExternalAgentCommandInvocation(text))) {
     try {
-      if (commands.value.length === 0) await loadCommands()
+      await chatCommands.ensureLocalCommands()
       if (!bot.canSendConversation() || chat.selectedSessionId !== sid) return
       const matchedCommand = matchSlashCommand(commands.value, text)
       if (matchedCommand?.command.kind === 'builtin') {
@@ -2136,12 +2237,12 @@ async function sendReady(sid: string | null) {
 
   if (!bot.canSendConversation() || !sid || chat.selectedSessionId !== sid) return
 
-  if (!modelSelection.selectedProviderId.value || !modelSelection.selectedModelId.value) {
+  if (!externalAgentLabel.value && (!modelSelection.selectedProviderId.value || !modelSelection.selectedModelId.value)) {
     toasts.push('error', t('chat.toasts.selectModelBeforeSending'))
     return
   }
 
-  const runCfg = deriveSendRunConfig({
+  const runCfg = externalAgentLabel.value ? {} : deriveSendRunConfig({
     selectedProviderId: modelSelection.selectedProviderId.value,
     selectedAdapterId: modelSelection.selectedAdapterId.value,
     selectedModelId: modelSelection.selectedModelId.value,
@@ -2160,13 +2261,11 @@ async function sendReady(sid: string | null) {
   // The editor document is what reaches the provider, so derive the submitted
   // body from it: one text part with a placeholder per inline attachment, plus the
   // attachments as their own parts.
-  const composed = composeOutgoingText(
+  const messageSegments: ComposerSegment[] =
     outgoingSegments.some((part) => part.type === 'text' && part.text.trim()) || !text
       ? outgoingSegments
-      : [{ type: 'text', text } as ComposerSegment, ...outgoingSegments],
-    filesSnapshot,
-    String(t('chat.messageItem.fileFallback')).trim(),
-  )
+      : [{ type: 'text', text }, ...outgoingSegments]
+  const composed = composeOutgoingText(messageSegments, filesSnapshot, String(t('chat.messageItem.fileFallback')).trim())
 
   // Remove only the submitted draft and files. A newer edit or attachment
   // staged while this send was preparing belongs to the next message.
@@ -2180,22 +2279,18 @@ async function sendReady(sid: string | null) {
   await nextTick()
   scrollToBottom('smooth')
   try {
-    // One text part plus the attachments as their own parts: the text keeps one
-    // placeholder per inline attachment, so the transcript renders the
-    // attachments together above the text the user actually typed.
-    const parts: JsonValue[] = []
+    const readyAttachments = new Map<string, JsonValue>()
     const workspace = filesSnapshot.some(
       (file) => file.composerKind !== 'skill_ref' && !file.composerNode && !file.url && !!file.serverPath,
     )
       ? await chat.resolveSessionWorkspace(sid)
       : null
     const filesById = new Map(filesSnapshot.map((file) => [file.id, file]))
-    if (composed.typedText) parts.push({ type: 'text', text: composed.text })
     for (const id of composed.attachmentIds) {
       const f = filesById.get(id)
-      if (!f) continue
+      if (!f || readyAttachments.has(id)) continue
       if (f.composerNode) {
-        parts.push(f.composerNode)
+        readyAttachments.set(id, f.composerNode)
         continue
       }
       let path = ''
@@ -2217,7 +2312,8 @@ async function sendReady(sid: string | null) {
         path = workspaceRelativePath(f.serverPath, workspace.path)
       }
       if (!path) throw new Error(`Attachment could not be prepared: ${f.filename}`)
-      parts.push(
+      readyAttachments.set(
+        id,
         resourceComposerNode({
           path,
           filename: f.filename,
@@ -2232,12 +2328,28 @@ async function sendReady(sid: string | null) {
     if (!bot.canSendConversation() || chat.selectedSessionId !== sid) {
       throw new DOMException('Conversation changed before sending', 'AbortError')
     }
+    const parts: JsonValue[] = []
+    if (externalAgentLabel.value) {
+      // ACP prompts preserve the position of each reference among text blocks.
+      for (const segment of messageSegments) {
+        if (segment.type === 'text') {
+          if (segment.text) parts.push(segment)
+        } else {
+          const node = readyAttachments.get(segment.id)
+          if (node) parts.push(node)
+          readyAttachments.delete(segment.id)
+        }
+      }
+    } else if (composed.typedText) {
+      parts.push({ type: 'text', text: composed.text })
+    }
+    parts.push(...readyAttachments.values())
     await chat.sendMessage(sid, { ...runCfg, parts })
 
     // Match the TUI: only a successfully submitted plain-text draft enters
     // global prompt history. Messages containing resources/attachments are
     // intentionally excluded because recalling them would silently lose data.
-    if (filesSnapshot.length === 0) recordPromptHistory(text)
+    if (filesSnapshot.length === 0 && !isAcpSessionId(sid)) recordPromptHistory(text)
   } catch (e) {
     // Restore composer content on failure.
     if (
@@ -2498,6 +2610,8 @@ const viewCtx = {
     draft.value = draft.value.trim() ? `${draft.value}\n\n${text}` : text
     void nextTick(() => getComposerInput(composerRef.value)?.focus())
   },
+  canFillExternalAgentSuggestion,
+  fillExternalAgentSuggestion,
   sessionEnded,
   canAbort,
   abortRun,
@@ -2564,6 +2678,7 @@ const viewCtx = {
   scrollToBottom,
 
   // Model, thinking mode, and speed mode selection.
+  externalAgentLabel,
   composerPickerTitle,
   composerPickerSearchable,
   composerPickerSearchPlaceholder,
@@ -2601,6 +2716,8 @@ const viewCtx = {
   composerPrimaryDisabled,
   handleComposerPrimaryAction,
   handleComposerStopAction,
+  canSteerExternalAgent,
+  steerExternalAgent,
   aborting,
   sending,
 
@@ -2643,7 +2760,28 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="flex h-full min-h-0 flex-col">
-    <ChatPageView v-if="bot.ready.value" :ctx="viewCtx" />
+    <section
+      v-if="isAcp && (!isAcpSessionId(chat.selectedSessionId) || acpViewError || !chat.selectedSession)"
+      class="flex h-full flex-col items-center justify-center gap-3 px-6 text-center"
+      data-testid="acp-empty-view"
+    >
+      <h1 class="text-lg font-semibold">{{ t('nav.acp') }}</h1>
+      <p v-if="acpViewError || acpViewLoaded" role="alert" class="max-w-sm break-words text-sm text-destructive">
+        {{ acpViewError || t('chat.nativeAgent.viewExpired') }}
+      </p>
+      <p v-else-if="isAcpSessionId(chat.selectedSessionId)" role="status" class="text-sm text-muted-foreground">
+        {{ t('common.loading') }}
+      </p>
+      <p v-else class="text-sm text-muted-foreground">{{ t('chat.nativeAgent.historyDescription') }}</p>
+      <button
+        type="button"
+        class="min-h-10 rounded-md border px-4 text-sm hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+        @click="openAcpSidebar"
+      >
+        {{ t('header.openSessions') }}
+      </button>
+    </section>
+    <ChatPageView v-else-if="bot.ready.value" :ctx="viewCtx" />
     <section
       v-else
       class="flex h-full flex-col items-center justify-center gap-4 px-6 text-center"

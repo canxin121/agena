@@ -48,6 +48,7 @@ pub struct Application {
     service: ApplicationService,
     notifications: Arc<agena_runtime_notifications::store::InMemoryNotificationStore>,
     notification_aggregator: Arc<NotificationAggregator>,
+    acp: Option<Arc<Application>>,
     session_queries: Option<Arc<dyn agena_runtime::SessionQueryService>>,
     execution_control: Option<Arc<dyn agena_runtime::SessionExecutionControl>>,
     execution_commands: Option<Arc<dyn agena_runtime::SessionExecutionCommandService>>,
@@ -153,6 +154,7 @@ impl Application {
             execution_commands,
             tool_execution,
             plugin_commands,
+            acp_sessions,
         } = runtime;
         let instance_id = instance_id.ok_or_else(|| {
             ApplicationError::internal("runtime instance identity is unavailable")
@@ -194,6 +196,7 @@ impl Application {
                 agena_runtime_notifications::store::InMemoryNotificationStore::new(512),
             ),
             notification_aggregator: Arc::new(NotificationAggregator::default()),
+            acp: None,
             session_queries,
             execution_control,
             execution_commands,
@@ -208,8 +211,44 @@ impl Application {
         let backend = application.create_session_api_backend();
         session_api_backend.install(&backend);
         application._session_api_backend = Some(backend);
+        if let Some(agena_runtime::RuntimeAcpSessionServices {
+            kernel,
+            queries,
+            control,
+            commands,
+            tools,
+            plugin_commands,
+            permission_rules,
+        }) = acp_sessions
+        {
+            let mut acp = application.clone();
+            acp.service = acp
+                .service
+                .in_acp_scope(kernel, commands.clone(), permission_rules);
+            acp.session_queries = Some(queries);
+            acp.execution_control = Some(control);
+            acp.execution_commands = Some(commands);
+            acp.tool_execution = Some(tools);
+            acp.plugin_commands = Some(plugin_commands);
+            acp.part_documents = Arc::new(Default::default());
+            acp.file_changes = Arc::new(Default::default());
+            acp.session_api_backend = Default::default();
+            let backend = acp.create_session_api_backend();
+            acp.session_api_backend.install(&backend);
+            acp._session_api_backend = Some(backend);
+            application.acp = Some(Arc::new(acp));
+        }
         application.spawn_notification_aggregator();
         Ok(application)
+    }
+
+    pub fn acp_application(&self) -> Result<&Self, ApplicationError> {
+        if self.service.is_acp_scope() {
+            return Ok(self);
+        }
+        self.acp
+            .as_deref()
+            .ok_or_else(|| ApplicationError::internal("ACP sessions are unavailable"))
     }
 
     pub fn assistant_service(

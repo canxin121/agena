@@ -6,7 +6,7 @@ use agena_domain::{ContentDocument, ContentKind, MAX_DOCUMENT_BYTES, MAX_TERMINA
 use agena_storage::{
     backend::{
         content_events::{EncodedEvent, MAX_EVENT_PAYLOAD_BYTES},
-        kernel::EventInput,
+        kernel::{AssistantDocumentTarget, EventInput},
     },
     kernel::*,
 };
@@ -425,14 +425,7 @@ pub(crate) async fn open(
     if commands::check_tool(connection, scope, tool).await? != round {
         return Err(KernelError::Ownership);
     }
-    let active: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM agena_content_streams WHERE capture_state='open'")
-            .fetch_one(&mut *connection)
-            .await
-            .map_err(sql_error)?;
-    if active >= MAX_LIVE_SOURCES {
-        return Err(KernelError::Busy);
-    }
+    require_live_source_slot(connection).await?;
     let entry: i64 =
         sqlx::query_scalar("SELECT id FROM agena_entries WHERE tool_id=? AND kind='tool'")
             .bind(tool.get())
@@ -483,6 +476,176 @@ pub(crate) async fn initialize(
             }],
         )
         .await?;
+    }
+    Ok(Mutation::Content(head))
+}
+
+pub(crate) async fn write_assistant_document(
+    connection: &mut SqliteConnection,
+    target: &AssistantDocumentTarget,
+    update: &AssistantDocumentUpdate,
+    blobs: &[port::BlobLease],
+) -> Result<Mutation> {
+    update.document.validate().map_err(invalid)?;
+    let session = target.session();
+    let configuration = lifecycle::configuration(connection, session).await?;
+    let key = &update.key;
+    if configuration.external_agent.is_none()
+        || key.message_id.is_empty()
+        || key.message_id.len() > 512
+        || key.message_id.chars().any(char::is_control)
+        || !configuration
+            .external_agent_link
+            .as_ref()
+            .is_some_and(|link| {
+                link.native_id == key.native_id && link.incarnation == Some(key.incarnation)
+            })
+    {
+        return Err(KernelError::Ownership);
+    }
+    let active = match target {
+        AssistantDocumentTarget::Round { scope, round } => {
+            let execution = commands::check_scope(connection, *scope, true).await?;
+            commands::check_round(connection, *scope, *round).await?;
+            Some((*scope, *round, execution.message_id))
+        }
+        AssistantDocumentTarget::Parked(resume) => {
+            if configuration.external_agent_resume.as_ref() != Some(resume.as_ref()) {
+                return Err(KernelError::Ownership);
+            }
+            let running: bool = sqlx::query_scalar(
+                "SELECT running_executions>0 FROM agena_session_statistics WHERE session_id=?",
+            )
+            .bind(session.get())
+            .fetch_one(&mut *connection)
+            .await
+            .map_err(sql_error)?;
+            if running {
+                return Err(KernelError::Ownership);
+            }
+            None
+        }
+    };
+    let id = key.content_id(session);
+    let entry_kind = if key.reasoning { "reasoning" } else { "text" };
+    let mut head = if let Some(previous) = update.previous {
+        if previous.content != id {
+            return Err(KernelError::Ownership);
+        }
+        authorize(connection, session, id).await?;
+        let allowed: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM agena_entries e
+                 JOIN agena_content_streams c ON c.id=e.content_id AND c.entry_id=e.id
+                 WHERE c.id=? AND c.kind='structured' AND e.origin_session_id=? AND e.kind=?)",
+        )
+        .bind(id.to_string())
+        .bind(session.get())
+        .bind(entry_kind)
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(sql_error)?;
+        if !allowed {
+            return Err(KernelError::Ownership);
+        }
+        let head = stored_head(connection, id).await?;
+        if head.event_cursor()? != previous {
+            return Err(KernelError::ContentReset);
+        }
+        head
+    } else {
+        let (scope, round, message) = active.ok_or(KernelError::Ownership)?;
+        let entry: i64 = sqlx::query_scalar(
+            "INSERT INTO agena_entries
+                (origin_session_id,execution_id,generation,message_id,kind,round_id,content_id,created_at_ms)
+             VALUES (?,?,?,?,?,?,?,?) RETURNING id",
+        )
+        .bind(scope.session.get())
+        .bind(scope.execution.to_string())
+        .bind(scope.generation.get())
+        .bind(message.get())
+        .bind(entry_kind)
+        .bind(round.get())
+        .bind(id.to_string())
+        .bind(now_ms())
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(sql_error)?;
+        sqlx::query(
+            "INSERT INTO agena_content_streams
+                (id,entry_id,session_id,execution_id,generation,kind,epoch,capture_state)
+             VALUES (?,?,?,?,?,'structured',?,'open')",
+        )
+        .bind(id.to_string())
+        .bind(entry)
+        .bind(scope.session.get())
+        .bind(scope.execution.to_string())
+        .bind(scope.generation.get())
+        .bind(ContentEpoch::new().to_string())
+        .execute(&mut *connection)
+        .await
+        .map_err(sql_error)?;
+        commands::append_history(connection, scope.session, entry).await?;
+        assign_ordinal(connection, id).await?;
+        stored_head(connection, id).await?
+    };
+    let sequence = head
+        .committed
+        .checked_add(1)
+        .filter(|sequence| *sequence <= i64::MAX as u64)
+        .ok_or_else(|| invalid("assistant document sequence overflow"))?;
+    if !blobs.is_empty() {
+        let count: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM agena_blob_references WHERE entry_id=?")
+                .bind(head.entry.get())
+                .fetch_one(&mut *connection)
+                .await
+                .map_err(sql_error)?;
+        if count + blobs.len() as i64 > 16 {
+            return Err(invalid(
+                "assistant document exceeds its managed asset budget",
+            ));
+        }
+        crate::kernel::blobs::publish(connection, session, head.entry.get(), blobs).await?;
+    }
+    let payload = match &update.patch {
+        Some(mutation) if update.previous.is_some() && sequence % 64 != 0 => {
+            EventPayload::DocumentPatch {
+                base: head.committed,
+                mutation: mutation.clone(),
+            }
+        }
+        _ => EventPayload::DocumentCheckpoint {
+            document: update.document.clone(),
+        },
+    };
+    let mut assembler =
+        EventBlockAssembler::new(head.committed, DEFAULT_EVENT_BLOCK_BYTES).map_err(storage)?;
+    let push = assembler.push(EncodedEvent::new(now_ms(), &payload)?)?;
+    let blocks = push
+        .before
+        .into_iter()
+        .chain(push.after)
+        .chain(assembler.checkpoint())
+        .map(PendingBlock::Events)
+        .collect();
+    head.committed = sequence;
+    head.accepted = sequence;
+    persist_staged(
+        connection,
+        &mut [StagedSource {
+            head: head.clone(),
+            blocks,
+            losses: Vec::new(),
+        }],
+        true,
+    )
+    .await?;
+    if update.previous.is_some() && head.state == CaptureState::Open {
+        sqlx::query("UPDATE agena_entries SET revision=revision+1 WHERE id=?")
+            .bind(head.entry.get())
+            .execute(&mut *connection)
+            .await
+            .map_err(sql_error)?;
     }
     Ok(Mutation::Content(head))
 }

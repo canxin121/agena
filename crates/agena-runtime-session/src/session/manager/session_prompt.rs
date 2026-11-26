@@ -266,6 +266,34 @@ fn resolve_prompt_layers(
     Ok(resolution)
 }
 
+/// Compose configured instruction layers for an external agent's own system prompt.
+pub(super) fn resolve_configured_prompts(
+    state: &ExecutionState,
+    inputs: &PromptInputs<'_>,
+) -> String {
+    match resolve_prompt_layers(state, inputs, &[]) {
+        Ok(resolution) => {
+            log_prompt_warnings(&resolution.warnings);
+            resolution.text
+        }
+        Err(error) => {
+            tracing::error!(%error, "prompt layers could not be assembled");
+            format!("[Additional instructions could not be assembled: {error}]")
+        }
+    }
+}
+
+fn log_prompt_warnings(warnings: &[PromptWarning]) {
+    for warning in warnings {
+        tracing::warn!(
+            scope = warning.scope.as_str(),
+            fragment = %warning.id,
+            detail = %warning.detail,
+            "prompt fragment skipped"
+        );
+    }
+}
+
 /// Model-scoped layers whose `match` pattern selects this request route.
 fn matching_layers(
     models: &[crate::config::ModelPromptConfig],
@@ -705,14 +733,7 @@ impl SessionManager {
             crate::identity::builtin_prompt_sections(role, inputs.tools_enabled, &guidance);
         let mut resolution = match resolve_prompt_layers(state, inputs, &builtins) {
             Ok(resolution) => {
-                for warning in &resolution.warnings {
-                    tracing::warn!(
-                        scope = warning.scope.as_str(),
-                        fragment = %warning.id,
-                        detail = %warning.detail,
-                        "prompt fragment skipped"
-                    );
-                }
+                log_prompt_warnings(&resolution.warnings);
                 resolution
             }
             Err(error) => {

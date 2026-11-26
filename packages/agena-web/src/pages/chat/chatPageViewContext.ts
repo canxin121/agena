@@ -4,7 +4,7 @@ import type { RenderBlock, TranscriptDisplayPart } from '@/components/chat/messa
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import type { AttachedFile, PendingAttachment } from '@/pages/chat/useChatAttachments'
 import type { ComposerAttachment } from '@/pages/chat/attachmentIngestion'
-import type { AttentionEvent, MessageEntry, MessageFold } from '@/types/chat'
+import type { AttentionEvent, ExternalAgentSuggestion, MessageEntry, MessageFold } from '@/types/chat'
 import type { Command } from './useChatCommands'
 import type { SkillCatalogEntry } from './skillReferences'
 import type { ComposerExpose } from './composerInput'
@@ -52,6 +52,8 @@ export type ChatPageViewContext = {
   openBotEditor: () => void
   openBotProjects: () => void
   fillBotSuggestion: (text: string) => void
+  canFillExternalAgentSuggestion: ComputedRef<boolean>
+  fillExternalAgentSuggestion: (suggestion: ExternalAgentSuggestion) => void
   pageRef: Ref<HTMLElement | null>
   scrollEl: Ref<HTMLElement | null>
   contentEl: Ref<HTMLElement | null>
@@ -60,6 +62,7 @@ export type ChatPageViewContext = {
   composerRef: Ref<ComposerExpose | null>
   composerControlsRef: Ref<HTMLElement | null>
   composerPickerRef: Ref<ContainsTargetExpose | null>
+  externalAgentLabel: ComputedRef<string | undefined>
   modelTriggerRef: Ref<HTMLElement | null>
   profileTriggerRef: Ref<HTMLElement | null>
   thinkingTriggerRef: Ref<HTMLElement | null>
@@ -242,6 +245,8 @@ export type ChatPageViewContext = {
   composerPrimaryDisabled: MaybeRef<boolean>
   handleComposerPrimaryAction: () => void
   handleComposerStopAction: () => void
+  canSteerExternalAgent: ComputedRef<boolean>
+  steerExternalAgent: () => Promise<void>
   aborting: MaybeRef<boolean>
   sending: MaybeRef<boolean>
 

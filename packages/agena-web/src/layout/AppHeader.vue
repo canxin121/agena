@@ -51,6 +51,7 @@ const mobileTitle = computed(() => {
   const panelMap: Record<string, string> = {
     settings: String(t('nav.settings')),
     bot: String(t('bot.title')),
+    acp: String(t('nav.acp')),
     assistant: String(t('assistant.title')),
     integrations: String(t('integrations.title')),
     sessions: String(t('nav.chat')),
@@ -201,7 +202,7 @@ function openHelpDialog() {
           </IconButton>
 
           <IconButton
-            v-if="chat.selectedSessionId && route.path !== '/bot'"
+            v-if="chat.selectedSessionId && route.path !== '/bot' && route.path !== '/acp'"
             size="lg"
             :tooltip="String(t('header.locateSession'))"
             :is-touch-pointer="ui.isTouchPointer"

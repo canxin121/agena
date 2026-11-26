@@ -6,6 +6,7 @@ import { readPluginCommandCatalog } from '../../lib/pluginCommandRead'
 import { isPlainNavigationKey } from '@/lib/keyboardNavigation'
 import { getComposerInput, type ComposerExpose } from './composerInput'
 import type { ComposerPickerKind } from './composerPickerTypes'
+import type { ExternalAgentCommand } from '@/types/chat'
 import {
   clientCommandsFromCatalog,
   commandAppliesToSession,
@@ -13,6 +14,7 @@ import {
   parseSlashInvocation,
   shouldResetCommandPaletteSelection,
   type ClientCommand,
+  type ClientCommandAction,
 } from './chatCommandsCatalog'
 import {
   executePluginSlashCommand,
@@ -46,7 +48,36 @@ export type PluginCommand = {
   arguments: string
 }
 
-export type Command = BuiltInCommand | PluginCommand
+type LocalCommand = BuiltInCommand | PluginCommand
+
+type NativeCommand = {
+  kind: 'external'
+  sessionId: string
+  name: string
+  description: string
+  scope: string
+  aliases: string[]
+  arguments: string
+  requiresArguments: boolean
+}
+
+export type Command = LocalCommand | NativeCommand
+
+const externalCommandPrefix = 'agent:'
+const agenaSessionActions = new Set<ClientCommandAction>([
+  'rewind', 'rename', 'integrations', 'assistant', 'model', 'compact', 'clear',
+  'favorite', 'hub', 'lineage', 'fork', 'side', 'btw', 'children', 'parent', 'schedules',
+])
+
+function isQualifiedAgentName(name: string): boolean {
+  const bare = name.slice(externalCommandPrefix.length)
+  return name.toLowerCase().startsWith(externalCommandPrefix) && !!bare && !bare.startsWith('/') && !/\p{Cc}/u.test(bare)
+}
+
+export function isExternalAgentCommandInvocation(text: string): boolean {
+  const invocation = parseSlashInvocation(text)
+  return !!invocation && isQualifiedAgentName(invocation.name)
+}
 
 function text(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
@@ -102,11 +133,34 @@ export function useChatCommands(opts: {
   /** Whether the rendered conversation is the operator Bot. */
   isBotSession: Ref<boolean>
   onSend: () => Promise<void>
-  onCommandSelected: (command: Command) => void | Promise<void>
+  externalAgent?: Ref<{ sessionId: string; label: string; commands: readonly ExternalAgentCommand[] } | null>
+  onCommandSelected: (command: LocalCommand) => void | Promise<void>
 }) {
-  const { draft, composerRef, composerPickerOpen, isBotSession, onSend, onCommandSelected } = opts
+  const { draft, composerRef, composerPickerOpen, isBotSession, externalAgent, onSend, onCommandSelected } = opts
   const { t } = useI18n()
-  const commands = ref<Command[]>([])
+  const localCommands = ref<LocalCommand[]>([])
+  const commands = computed<Command[]>(() => {
+    const agent = externalAgent?.value
+    if (!agent) return localCommands.value
+    return [
+      ...localCommands.value
+        .filter((command) => command.kind !== 'builtin' || !agenaSessionActions.has(command.action))
+        .map((command) => ({
+          ...command,
+          aliases: command.aliases.filter((alias) => !isQualifiedAgentName(alias)),
+        })),
+      ...agent.commands.map((command): NativeCommand => ({
+        kind: 'external',
+        sessionId: agent.sessionId,
+        name: `${externalCommandPrefix}${command.name}`,
+        description: command.description,
+        scope: command.skill ? `${agent.label} · ${t('chat.skills.title')}` : agent.label,
+        aliases: [],
+        arguments: command.argument_hint ?? '',
+        requiresArguments: command.skill === true || command.argument_hint != null,
+      })),
+    ]
+  })
   const commandsLoading = ref(false)
   const commandQuery = ref('')
   const commandOpen = ref(false)
@@ -196,7 +250,7 @@ export function useChatCommands(opts: {
         // the next load picks it up.
       }
 
-      const next = new Map<string, Command>()
+      const next = new Map<string, LocalCommand>()
       for (const command of clientCommandsFromCatalog(catalogCommands, isBotSession.value)) {
         const builtIn = builtInFromCatalog(command)
         if (builtIn && !next.has(builtIn.name)) next.set(builtIn.name, builtIn)
@@ -213,7 +267,7 @@ export function useChatCommands(opts: {
         command.aliases = command.aliases.filter((alias) => !next.has(alias))
         next.set(command.name, command)
       }
-      commands.value = [...next.values()]
+      localCommands.value = [...next.values()]
     } finally {
       commandsLoading.value = false
     }
@@ -230,6 +284,10 @@ export function useChatCommands(opts: {
     }
   }
 
+  async function ensureLocalCommands() {
+    if (localCommands.value.length === 0) await loadCommands()
+  }
+
   // Switching between a project conversation and the Bot changes which
   // declarations belong in the palette. Keep the rows honest without asking
   // the server again: the catalog itself is session-agnostic, applicability is
@@ -237,7 +295,7 @@ export function useChatCommands(opts: {
   watch(
     () => isBotSession.value,
     () => {
-      if (commands.value.length === 0) return
+      if (localCommands.value.length === 0) return
       void loadCommands()
     },
   )
@@ -261,14 +319,16 @@ export function useChatCommands(opts: {
   const filteredCommands = computed(() => {
     const query = commandQuery.value.trim().toLowerCase()
     if (!query) return commands.value
+    const onlyExternal = externalAgent?.value && query.startsWith(externalCommandPrefix)
     return commands.value
       .map((command) => {
+        if (onlyExternal && command.kind !== 'external') return null
         const candidate = `${command.name} ${command.description || ''} ${(command.aliases || []).join(' ')} ${commandArguments(command)}`
         const score = commandScore(query, candidate)
-        return score == null ? null : { command, score }
+        return score == null ? null : { command, score, exact: commandMatches(command, query) }
       })
-      .filter((item): item is { command: Command; score: number } => Boolean(item))
-      .sort((left, right) => right.score - left.score || left.command.name.localeCompare(right.command.name))
+      .filter((item) => item !== null)
+      .sort((left, right) => Number(right.exact) - Number(left.exact) || right.score - left.score || left.command.name.localeCompare(right.command.name))
       .map((item) => item.command)
   })
 
@@ -291,6 +351,7 @@ export function useChatCommands(opts: {
 
   async function selectCommand(command: Command | null | undefined) {
     if (!command) return
+    if (command.kind === 'external' && !commands.value.includes(command)) return
     if (commandNeedsArguments(command)) {
       // TUI displays the required placeholder in the palette, but inserts
       // only the command name into the composer. Copying "<message>" into a
@@ -306,6 +367,13 @@ export function useChatCommands(opts: {
       return
     }
     closeCommandPalette()
+    if (command.kind === 'external') {
+      const invocation = `/${command.name}`
+      draft.value = invocation
+      await nextTick()
+      if (command.sessionId === externalAgent?.value?.sessionId && draft.value === invocation) await onSend()
+      return
+    }
     draft.value = ''
     await onCommandSelected(command)
   }
@@ -318,7 +386,8 @@ export function useChatCommands(opts: {
     // practical on touch keyboards. Keep the textarea focused here: the
     // command query is the text after the slash, so unknown slash commands
     // can still fall through to ordinary message sending.
-    if (/^\/[^\s/]*$/.test(trimmed)) {
+    const isQualifiedName = externalAgent?.value && !/\s/.test(trimmed) && isExternalAgentCommandInvocation(trimmed)
+    if (/^\/[^\s/]*$/.test(trimmed) || isQualifiedName) {
       openCommandPalette(trimmed.slice(1), { focusSearch: false })
       return
     }
@@ -359,7 +428,8 @@ export function useChatCommands(opts: {
       // that is not present in the current catalog.
       const typed = draft.value.trim()
       const fallback = typed.startsWith('/') && !typed.startsWith('//') ? typed : `/${commandQuery.value.trim()}`
-      if (/^\/[^\s/]+(?:\s|$)/.test(fallback)) {
+      const isQualified = externalAgent?.value && isExternalAgentCommandInvocation(fallback)
+      if (/^\/[^\s/]+(?:\s|$)/.test(fallback) || isQualified) {
         closeCommandPalette()
         draft.value = fallback
         void onSend()
@@ -381,7 +451,7 @@ export function useChatCommands(opts: {
   }
 
   async function runPluginSlashCommand(raw: string, sessionId: string): Promise<PluginCommandResult | null> {
-    if (commands.value.length === 0) await loadCommands()
+    await ensureLocalCommands()
     const matched = matchPluginSlashCommand(commands.value, raw)
     if (!matched) return null
     const numericSessionId = Number(sessionId)
@@ -406,6 +476,7 @@ export function useChatCommands(opts: {
     commandFocusSearch,
     filteredCommands,
     loadCommands,
+    ensureLocalCommands,
     openCommandPalette,
     closeCommandPalette,
     handleDraftInput,

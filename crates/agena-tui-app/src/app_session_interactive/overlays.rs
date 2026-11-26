@@ -17,6 +17,13 @@ impl App {
         self.sync_interaction_documents();
         // Reveal-and-expand the pending interaction part instead of opening a
         // modal: the expanded part is the interaction surface.
+        if self
+            .transcript
+            .pending_acp_user_inputs()
+            .any(|(_, request)| request.request_id == request_id)
+        {
+            self.focus = agena_tui::main_focus::Focus::Transcript;
+        }
         self.reveal_pending_user_input_interaction(&request_id);
     }
 
@@ -100,6 +107,13 @@ impl App {
         let Some(key) = self.pending_interaction_part_node_key(request_id) else {
             return;
         };
+        if matches!(
+            key.entry_id(),
+            agena_tui_transcript::TranscriptEntryId::SessionActivity(_)
+        ) && self.transcript.node_expansions.insert(key.clone(), true) == Some(false)
+        {
+            self.transcript.invalidate_render();
+        }
         self.revealed_user_input_request_ids
             .insert(request_id.to_string());
         let width = self.layout.transcript_body.width;
@@ -146,10 +160,8 @@ impl App {
         }
     }
 
-    /// The transcript node key of a pending user-input or permission part
-    /// matching `request_id`, if the part is present in the transcript parts.
-    /// Requests remain attached to the canonical tool operation. Reply cleanup
-    /// resolves this key against the pending snapshot before applying its reply.
+    /// Resolve a pending request to its stored operation, or to its live
+    /// session activity when the ACP connection owns the request.
     pub(crate) fn pending_interaction_part_node_key(
         &self,
         request_id: &str,
@@ -168,6 +180,11 @@ impl App {
                         entry_id: entry.id,
                         content_id: part.id,
                     })
+                })
+            })
+            .or_else(|| {
+                self.transcript.pending_acp_user_inputs().find_map(|(id, request)| {
+                    (request.request_id == request_id).then(|| crate::TranscriptState::acp_user_input_key(id))
                 })
             })
     }
@@ -227,6 +244,7 @@ impl App {
                             .collect(),
                         multiple: question.multiple,
                         allow_custom: question.allow_custom,
+                        optional: question.optional,
                     },
                 )
                 .collect(),
@@ -244,6 +262,7 @@ impl App {
         let question = request.questions.first()?;
         if !matches!(request.kind, agena_domain::UserInputKind::Review)
             || request.questions.len() != 1
+            || question.optional
             || question.multiple
             || question.options.iter().any(|option| option.custom)
         {
@@ -761,7 +780,9 @@ impl App {
     }
 }
 
-fn user_input_request_from_wire(value: agena_api::resource::UserInputRequest) -> UserInputRequest {
+pub(crate) fn user_input_request_from_wire(
+    value: agena_api::resource::UserInputRequest,
+) -> UserInputRequest {
     UserInputRequest {
         request_id: value.request_id,
         session_id: value.session_id,
@@ -788,6 +809,7 @@ fn user_input_request_from_wire(value: agena_api::resource::UserInputRequest) ->
                     .collect(),
                 multiple: question.multiple,
                 allow_custom: question.allow_custom,
+                optional: question.optional,
             })
             .collect(),
         created_at: value.created_at,

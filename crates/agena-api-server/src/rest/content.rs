@@ -2,11 +2,11 @@ use std::convert::Infallible;
 use std::time::Duration;
 
 use agena_domain::{ContentCursor, ContentId};
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, Query};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use serde::Deserialize;
 
-use crate::{AppState, error::ServerError};
+use crate::error::ServerError;
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -33,7 +33,7 @@ impl ContentReadQuery {
 }
 
 pub async fn read_content(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path((session_id, id)): Path<(i64, ContentId)>,
     Query(query): Query<ContentReadQuery>,
 ) -> Result<impl axum::response::IntoResponse, ServerError> {
@@ -55,7 +55,7 @@ pub struct ContentTextReadQuery {
 }
 
 pub async fn read_content_text(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path((session_id, resource_id)): Path<(i64, ContentId)>,
     Query(query): Query<ContentTextReadQuery>,
 ) -> Result<impl axum::response::IntoResponse, ServerError> {
@@ -86,7 +86,7 @@ pub async fn read_content_text(
 }
 
 pub async fn stream_content(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path((session_id, id)): Path<(i64, ContentId)>,
     Query(query): Query<ContentReadQuery>,
 ) -> Result<impl axum::response::IntoResponse, ServerError> {
@@ -116,7 +116,7 @@ pub async fn stream_content(
 
 /// Resolve only an immutable prepared result belonging to this session.
 pub async fn read_inline_ui_reference(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path((session_id, reference)): Path<(i64, String)>,
 ) -> Result<impl axum::response::IntoResponse, ServerError> {
     let document = state
@@ -134,7 +134,7 @@ pub async fn read_inline_ui_reference(
 }
 
 pub async fn read_inline_ui_snapshot(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path((session_id, reference)): Path<(i64, String)>,
 ) -> Result<impl axum::response::IntoResponse, ServerError> {
     let snapshot = state
@@ -150,7 +150,7 @@ pub async fn read_inline_ui_snapshot(
 }
 
 pub async fn stream_inline_ui(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path((session_id, reference)): Path<(i64, String)>,
 ) -> Result<impl axum::response::IntoResponse, ServerError> {
     let app = state.application().clone();

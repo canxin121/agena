@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { readConversationSessionId } from '../src/app/navigation/sessionQuery'
+import { sessionApiPath } from '../src/lib/acpSession'
+import { normalizeLastSessionId } from '../src/lib/lastSession'
 
 describe('runtime conversation route ownership', () => {
   test.each([
@@ -12,6 +14,7 @@ describe('runtime conversation route ownership', () => {
     '/preview',
     '/plugins',
     '/bot',
+    '/acp',
     '/chatbot',
   ])('%s cannot replace the last conversation through an old session query', (path) => {
     expect(readConversationSessionId({ path, query: { sessionId: '999' }, fullPath: `${path}?sessionId=999` })).toBe('')
@@ -31,5 +34,14 @@ describe('runtime conversation route ownership', () => {
     expect(
       readConversationSessionId({ path: '/settings/permissions', query: {}, fullPath: '/chat?sessionId=999' }),
     ).toBe('')
+  })
+
+  test('temporary ACP views use their own transport and cannot become the remembered Agena conversation', () => {
+    const id = String(2 ** 52)
+    expect(sessionApiPath(id)).toBe(`/api/v1/acp/sessions/${id}`)
+    expect(sessionApiPath('7')).toBe('/api/v1/sessions/7')
+    expect(normalizeLastSessionId(id)).toBe('')
+    expect(readConversationSessionId({ path: '/chat', query: { sessionId: id }, fullPath: '/chat' })).toBe('')
+    expect(readConversationSessionId({ path: '/acp', query: { sessionId: id }, fullPath: '/acp' })).toBe('')
   })
 })

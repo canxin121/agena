@@ -311,6 +311,14 @@ pub(crate) enum ChoiceOverlayAction {
         model: Option<ModelRef>,
         explicit_local: bool,
     },
+    ExternalAgentOptions {
+        session_id: i64,
+        agent: agena_domain::ExternalAgent,
+        changes: Vec<agena_domain::ExternalAgentOptionChange>,
+    },
+    ExternalAgentWork {
+        session_id: i64,
+    },
     SessionModelModeSource {
         step: SessionModelModeStep,
         session_id: i64,

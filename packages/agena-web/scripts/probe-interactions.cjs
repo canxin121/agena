@@ -40,11 +40,14 @@ import '/@fs/${web}/src/style.css'
 const pinia = createPinia()
 const chat = useChatStore(pinia)
 const drafts = new Map()
-const pending = reactive(new Set(['literal', 'explicit', 'cancel']))
+const pending = reactive(new Set(['literal', 'explicit', 'cancel', 'optional', 'authorization']))
 const replies = reactive([])
+const opened = []
+window.open = (...args) => { opened.push(args); return null }
 const request = (id, question, inputKind = 'ask_user') => interactionPresentationFromAttention({
   kind: 'question', payload: {properties: {id, request: {
-    request_id: id, kind: 'user_input', input_kind: inputKind, title: id, questions: [question],
+    request_id: id, kind: 'user_input', input_kind: inputKind, title: id,
+    questions: Array.isArray(question) ? question : [question],
   }}},
 })
 const plainQuestion = {header: 'Choice', question: 'Pick a fixture answer', allow_custom: true, options: [
@@ -56,6 +59,14 @@ const cases = reactive({
   literal: request('literal', plainQuestion),
   explicit: request('explicit', {header: 'Feedback', question: 'Provide feedback', allow_custom: false, options: [{label: 'Feedback', description: 'Explicit custom editor', custom: true}]}),
   cancel: request('cancel', {header: 'Cancel', question: 'Cancel this request', allow_custom: false, options: [{label: 'Continue', description: ''}]}),
+  optional: request('optional', [
+    {question: 'Add a note', optional: true, options: [{label: 'Note', custom: true}]},
+    {question: 'Choose a region', options: [{label: 'Europe'}]},
+  ], 'external_agent_form'),
+  authorization: request('authorization', {
+    question: 'https://example.invalid/consent?state=fixture',
+    options: [{label: 'Open authorization page'}],
+  }, 'external_agent_url'),
   history: {...request('history', plainQuestion), pending: false, reply: {request_id: 'history', kind: 'submit', cancelled: true, answers: {'0': ['Custom']}}},
   revoked: request('revoked', plainQuestion),
 })
@@ -86,6 +97,7 @@ const router = createRouter({history: createMemoryHistory(), routes: [{path: '/s
 await router.push({path: '/settings/plugins-tools', query: {view: 'plugin-workbench', plugin: 'fixture', pluginTab: 'settings'}})
 window.__interactionProbe = {
   replies,
+  opened,
   route: () => ({...router.currentRoute.value.query}),
   navigate: async (destination) => router.push({path: '/settings/' + destination.section, query: settingsQueryForDestination(destination, router.currentRoute.value.params.section, router.currentRoute.value.query)}),
 }
@@ -208,6 +220,35 @@ app.use(pinia).use(router).use(i18n).mount('#app')
       'freeform answer is submitted without its UI marker',
     )
 
+    const optional = page.locator('[data-case="optional"]')
+    check((await optional.innerText()).includes('Optional'), 'optional form fields are identified in the card')
+    await optional.locator('[data-interaction-control-key="page:next"]').click()
+    await optional.locator('[data-interaction-control-value="Europe"]').check()
+    await optional.locator('[data-interaction-control-key="page:next"]').click()
+    await optional.locator('[data-interaction-result]').waitFor()
+    check(
+      (await page.evaluate(() => JSON.stringify(
+        window.__interactionProbe.replies.find((reply) => reply.requestId === 'optional')?.answers,
+      ))) === '[[],["Europe"]]',
+      'submission advances past an unanswered optional field',
+    )
+
+    const authorization = page.locator('[data-case="authorization"]')
+    check((await authorization.innerText()).includes('https://example.invalid/consent?state=fixture'), 'the full external authorization URL is visible before consent')
+    check((await page.evaluate(() => window.__interactionProbe.opened.length)) === 0, 'authorization is not opened before a user action')
+    await authorization.getByRole('button', {name: 'Open authorization page'}).click()
+    await authorization.locator('[data-interaction-result]').waitFor()
+    check(
+      (await page.evaluate(() => JSON.stringify(window.__interactionProbe.opened))) ===
+        '[["https://example.invalid/consent?state=fixture","_blank","noopener,noreferrer"]]',
+      'consent opens the approved URL in a separate browsing context',
+    )
+    check(
+      (await page.evaluate(() => JSON.stringify(window.__interactionProbe.replies.find((reply) => reply.requestId === 'authorization')?.answers))) ===
+        '[["Open authorization page"]]',
+      'authorization action sends the selected consent option',
+    )
+
     console.log('stage: cancellation and authoritative request ownership')
     const cancelled = page.locator('[data-case="cancel"]')
     await cancelled.locator('[data-interaction-control-key="page:review"]').click()
@@ -226,7 +267,7 @@ app.use(pinia).use(router).use(i18n).mount('#app')
       'a request absent from current authoritative ownership has no active reply controls',
     )
     check(
-      (await page.evaluate(() => window.__interactionProbe.replies.length)) === 3,
+      (await page.evaluate(() => window.__interactionProbe.replies.length)) === 5,
       'only explicitly performed authorized fixture replies are sent',
     )
 

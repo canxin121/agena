@@ -75,7 +75,7 @@ impl App {
     }
 
     pub(crate) fn is_local_command(&self, input: &str) -> bool {
-        let Some((name, _)) = commands::parse_invocation(input) else {
+        let Some((name, _)) = self.parse_local_command(input) else {
             return false;
         };
         if self.find_client_command(name).is_some() {
@@ -84,6 +84,15 @@ impl App {
         self.plugin_slash_commands()
             .iter()
             .any(|entry| plugin_command_matches_name(entry, name))
+    }
+
+    fn parse_local_command<'a>(&self, input: &'a str) -> Option<(&'a str, &'a str)> {
+        if self.external_agent_commands().is_some()
+            && agena_domain::external_agent_command_input(input).is_some()
+        {
+            return None;
+        }
+        commands::parse_invocation(input)
     }
 
     /// Submit the entire document immediately. The server persists and queues
@@ -95,6 +104,41 @@ impl App {
     /// Both composer submit keys use server-owned admission.
     pub(crate) fn queue_or_submit(&mut self) {
         self.dispatch_composer_send();
+    }
+
+    pub(crate) fn steer_external_agent_from_composer(&mut self) -> bool {
+        let Some((session_id, _, _)) = self.external_agent_commands() else {
+            return false;
+        };
+        if !self.session_is_busy(session_id) {
+            return false;
+        }
+        let draft = self.current_composer_draft();
+        let text = draft.text();
+        if text.trim().is_empty() || draft.activities().next().is_some() {
+            return false;
+        }
+        let submitted = text.clone();
+        self.dispatch_backend_operation(
+            move |backend| async move {
+                backend
+                    .client()
+                    .steer_external_agent(session_id, &submitted)
+                    .await
+            },
+            move |app, result| match result {
+                Ok(()) => {
+                    if app.current_or_selected_session_id() == Some(session_id)
+                        && app.composer.text() == text
+                        && app.composer_items.is_empty()
+                    {
+                        app.clear_composer_state();
+                    }
+                }
+                Err(error) => app.flash_error(error),
+            },
+        );
+        true
     }
 
     fn dispatch_composer_send(&mut self) {
@@ -157,7 +201,7 @@ impl App {
         self.reset_prompt_history_recall();
 
         let draft_text = draft.text();
-        let parsed = commands::parse_invocation(draft_text.as_str());
+        let parsed = self.parse_local_command(draft_text.as_str());
         let client_command = parsed.and_then(|(name, _)| self.find_client_command(name));
         let plugin_command = parsed.and_then(|(name, args)| {
             self.plugin_slash_commands()
@@ -192,7 +236,13 @@ impl App {
     /// An HTTP acknowledgment can arrive while the user writes the next draft;
     /// routing through `submit_composer` would read that newer editor state.
     pub(crate) fn submit_user_draft(&mut self, draft: ComposerDraft) {
-        let draft = if draft.text().starts_with("//") {
+        let text = draft.text();
+        let escaped_agent_command = self.external_agent_commands().is_some()
+            && text
+                .strip_prefix('/')
+                .and_then(agena_domain::external_agent_command_input)
+                .is_some();
+        let draft = if text.starts_with("//") && !escaped_agent_command {
             composer_draft_with_text_prefix_stripped(draft, 1)
         } else {
             draft

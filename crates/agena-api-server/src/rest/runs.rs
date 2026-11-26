@@ -1,7 +1,7 @@
 //! Generic run membership windows. Display policies belong to clients.
-use crate::{error::ServerError, state::AppState};
+use crate::error::ServerError;
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, Query},
     http::HeaderMap,
 };
 use serde::Deserialize;
@@ -19,7 +19,7 @@ pub struct RunWindowQuery {
 }
 
 pub async fn read_session_runs(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path(session_id): Path<i64>,
     Query(query): Query<RunWindowQuery>,
     headers: HeaderMap,

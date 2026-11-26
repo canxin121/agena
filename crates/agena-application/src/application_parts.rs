@@ -477,9 +477,38 @@ pub(crate) async fn project_kernel_entry(
                 return Ok(part);
             }
             part.kind = if reasoning { "think" } else { "text" }.into();
-            part.content = serde_json::json!({"text":"","resources":[agena_domain::ContentRef {
-                resource_id:*content_id,kind:agena_domain::ContentKind::Text }],
-                "execution_id":entry.execution_id});
+            if entry.content_kind == Some(agena_domain::ContentKind::Structured) {
+                let snapshot = reader
+                    .event_snapshot(session, *content_id)
+                    .await
+                    .map_err(crate::kernel_error)?;
+                if let Some(document) = &snapshot.document {
+                    let text = document.plain_text();
+                    part.revision = part.revision.max(snapshot.through.sequence as i64);
+                    part.content = if reasoning {
+                        serde_json::json!({"raw":[text],"external_agent_document":true})
+                    } else {
+                        serde_json::json!({"text":text,"external_agent_document":true})
+                    };
+                    if document.blocks.iter().any(|block| {
+                        matches!(
+                            block,
+                            agena_domain::ViewBlock::Media { .. }
+                                | agena_domain::ViewBlock::Text { .. }
+                        )
+                    }) {
+                        part.presentation = Some(agena_domain::PartDocument {
+                            title: String::new(),
+                            summary: String::new(),
+                            blocks: document.blocks.clone(),
+                        });
+                    }
+                }
+            } else {
+                part.content = serde_json::json!({"text":"","resources":[agena_domain::ContentRef {
+                    resource_id:*content_id,kind:agena_domain::ContentKind::Text }],
+                    "execution_id":entry.execution_id});
+            }
         }
         EntryPayload::Compaction { summary, through } => {
             part.kind = "compaction".into();
@@ -729,6 +758,16 @@ pub(crate) async fn project_kernel_entry(
                 .and_then(|value| value.get("summary"))
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned);
+            // Once the provider publishes its final result the live document
+            // is superseded by the complete presentation of that result.
+            let external_preview: Option<agena_domain::ContentId> = output
+                .as_ref()
+                .filter(|_| {
+                    tool.execution_kind == agena_storage::kernel::ToolExecutionKind::ProviderHosted
+                })
+                .and_then(|raw| raw.payload.as_ref()?.pointer("/external_agent/preview_id"))
+                .and_then(serde_json::Value::as_str)
+                .and_then(|id| id.parse().ok());
             part.kind = "tool_call".into();
             part.content = agena_runtime_contracts::part_content::ToolCallContent {
                 name,
@@ -741,6 +780,7 @@ pub(crate) async fn project_kernel_entry(
                 resources: tool
                     .outputs
                     .iter()
+                    .filter(|source| Some(source.id) != external_preview)
                     .map(|source| agena_domain::ContentRef {
                         resource_id: source.id,
                         kind: source.kind,

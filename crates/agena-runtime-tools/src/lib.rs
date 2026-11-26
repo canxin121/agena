@@ -27,7 +27,9 @@ pub mod shell_sandbox;
 mod terminal;
 pub mod tool;
 
-pub use terminal::{TerminalOwner, TerminalRead, TerminalRegistry, TerminalStartParams};
+pub use terminal::{
+    TerminalOwner, TerminalRead, TerminalRegistry, TerminalStartParams, display_terminal_contents,
+};
 
 pub use atomic_file::{
     atomic_create_file, atomic_replace_file, atomic_replace_file_with_check, atomic_write_file,

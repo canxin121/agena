@@ -18,6 +18,7 @@ pub(crate) async fn spawn_content_delivery(
     tx: mpsc::Sender<agena_api::ws::ServerMessage>,
 ) -> Result<tokio::task::JoinHandle<()>, ServerError> {
     use agena_api::ws::ServerMessage;
+    let state = state.session_state(request.session_id)?;
     let watch = state
         .application()
         .watch_content(request.session_id, request.resource_id)
@@ -74,11 +75,15 @@ impl LiveSubscription {
         &self,
         item: &LiveItem,
     ) -> std::collections::BTreeMap<String, String> {
-        match item {
+        let mut tokens = match item {
             LiveItem::SessionChanged(change) => self.revisions.live_tokens(Some(change), None),
             LiveItem::RuntimeSignal(signal) => self.revisions.live_tokens(None, Some(signal)),
             LiveItem::Lagged(_) => Default::default(),
+        };
+        if self.state.service().is_acp_scope() {
+            tokens.retain(|key, _| crate::revisions::is_acp_resource(key));
         }
+        tokens
     }
     pub(crate) async fn recv(&mut self) -> Option<LiveItem> {
         let item = self.subscription.recv().await?;
@@ -92,10 +97,19 @@ impl LiveSubscription {
 }
 
 pub(crate) fn subscribe(state: &AppState, scope: Scope) -> Result<LiveSubscription, ServerError> {
+    let state = match scope {
+        Scope::Session { session_id } => state.session_state(session_id)?,
+        _ if state.service().is_acp_scope() => {
+            return Err(ServerError::bad_request(
+                "Choose an ACP view for the live stream.",
+            ));
+        }
+        _ => state.clone(),
+    };
     Ok(LiveSubscription {
         subscription: state.application().watch_changes(scope)?,
         revisions: state.revisions()?,
-        state: state.clone(),
+        state,
     })
 }
 

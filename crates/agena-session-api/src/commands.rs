@@ -115,9 +115,18 @@ pub struct ResolveWorkspaceParams {
 
 // ─── session ─────────────────────────────────────────────────────────────
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalAgentOptionsParams {
+    /// Without a change, inspect the installed agent's current choices.
+    pub change: Option<agena_domain::ExternalAgentOptionChange>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Parameters for creating a session inside a workspace.
 pub struct CreateSessionParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_agent: Option<agena_domain::ExternalAgent>,
     /// Named agent profile; an empty string uses the automatic main role.
     #[serde(default)]
     pub profile: Option<String>,

@@ -103,6 +103,14 @@ pub(super) fn routes() -> Router<AppState> {
         )
         .route("/api/v1/sessions/overview", get(rest::session_overview))
         .route(
+            "/api/v1/workspaces/{workspace_id}/agent-sessions",
+            post(rest::external_agent_workspace).layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/agent-session",
+            post(rest::external_agent_session).layer(DefaultBodyLimit::max(32 * 1024)),
+        )
+        .route(
             "/api/v1/sessions/{session_id}",
             get(rest::get_session)
                 .put(rest::replace_session)
@@ -135,6 +143,30 @@ pub(super) fn routes() -> Router<AppState> {
         .route(
             "/api/v1/sessions/{session_id}/selection",
             axum::routing::put(rest::replace_session_selection),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/agent-options",
+            post(rest::external_agent_options).layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/agent-auth",
+            get(rest::external_agent_live_auth)
+                .post(rest::external_agent_auth)
+                .layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/agent-providers",
+            get(rest::external_agent_providers),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/agent-steer",
+            post(rest::steer_external_agent).layer(DefaultBodyLimit::max(256 * 1024)),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/agent-work",
+            get(rest::list_external_agent_work)
+                .post(rest::cancel_external_agent_work)
+                .layer(DefaultBodyLimit::max(1024)),
         )
         .route(
             "/api/v1/sessions/{session_id}/permission",

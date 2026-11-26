@@ -115,6 +115,14 @@ impl DocumentMutation {
 }
 
 impl ContentDocument {
+    /// Plain textual projection for a semantic assistant message.
+    pub fn plain_text(&self) -> String {
+        self.blocks
+            .iter()
+            .filter_map(ViewBlock::text_value)
+            .collect()
+    }
+
     pub fn validate(&self) -> Result<(), &'static str> {
         if self.blocks.len() > MAX_DOCUMENT_BLOCKS {
             return Err("document block budget exhausted");

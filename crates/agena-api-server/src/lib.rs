@@ -97,6 +97,13 @@ pub fn router(state: AppState) -> Router {
             get(sse::notifications_stream),
         );
 
+    #[cfg(feature = "http")]
+    let router = if let Ok(acp) = state.acp_state() {
+        router.nest("/api/v1/acp", routes::acp::routes().with_state(acp))
+    } else {
+        router
+    };
+
     router.with_state(state)
 }
 

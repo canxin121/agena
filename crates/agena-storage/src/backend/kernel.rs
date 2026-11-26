@@ -57,6 +57,21 @@ impl OutputScope {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AssistantDocumentTarget {
+    Round { scope: Scope, round: RoundId },
+    Parked(Box<ExternalAgentResume>),
+}
+
+impl AssistantDocumentTarget {
+    pub fn session(&self) -> SessionId {
+        match self {
+            Self::Round { scope, .. } => scope.session,
+            Self::Parked(resume) => resume.session,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Command {
     RecordCompaction {
@@ -68,6 +83,13 @@ pub enum Command {
         session: SessionId,
         interaction: InteractionId,
     },
+    SetExternalAgentInput {
+        session: SessionId,
+        epoch: KernelEpoch,
+        input: RequestId,
+        /// A live scope publishes the input. Clearing removes only this token.
+        scope: Option<ExternalAgentInputScope>,
+    },
     CreateConfigured {
         workspace_id: i64,
         title: String,
@@ -76,6 +98,19 @@ pub enum Command {
     CreateGlobal {
         title: String,
         configuration: SessionConfiguration,
+    },
+    ImportExternalAgent {
+        workspace_id: i64,
+        agent: agena_domain::ExternalAgent,
+        title: String,
+        link: ExternalAgentLink,
+        turns: Vec<ExternalAgentHistoryTurn>,
+        state: ExternalAgentState,
+        replace_view: Option<SessionId>,
+    },
+    DetachExternalAgent {
+        session: SessionId,
+        expected: ExternalAgentLink,
     },
     /// Resolve or create the one local root of this Bot in one transaction.
     EnsureLocalBotSession {
@@ -108,6 +143,8 @@ pub enum Command {
         conversation_mode: Option<agena_domain::ConversationMode>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         management: Option<ForkGuard>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        external_agent: Option<ExternalAgentFork>,
     },
     Withdraw {
         session: SessionId,
@@ -256,6 +293,19 @@ pub enum Command {
     },
     BeginCurrentRound {
         scope: Scope,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        take_external_agent_resume: bool,
+    },
+    RecordExternalAgentState {
+        scope: Scope,
+        round: RoundId,
+        state: ExternalAgentState,
+    },
+    RefreshIdleExternalAgentState {
+        session: SessionId,
+        round: RoundId,
+        native_id: String,
+        state: ExternalAgentState,
     },
     BeginCompactionRound {
         scope: Scope,
@@ -306,6 +356,8 @@ pub enum Command {
     Finish {
         scope: Scope,
         phase: ExecutionPhase,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        external_agent_resume: Option<ExternalAgentResume>,
     },
     PrepareStop {
         scope: Scope,
@@ -335,6 +387,16 @@ pub enum Command {
         round: RoundId,
         tool: ToolId,
         kind: EventKind,
+    },
+    WriteAssistantDocument {
+        target: AssistantDocumentTarget,
+        update: AssistantDocumentUpdate,
+        blobs: Vec<BlobLease>,
+    },
+    BindExternalAgentLink {
+        scope: Scope,
+        round: RoundId,
+        link: ExternalAgentLink,
     },
     SealContent {
         scope: OutputScope,
@@ -482,6 +544,16 @@ pub enum Mutation {
     ClearedQueued(u64),
     StopDecision(StopDecision),
     Round(RoundId),
+    ExternalAgentRound {
+        round: RoundId,
+        previous: Option<ExternalAgentResume>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        link: Option<ExternalAgentLink>,
+        #[serde(default)]
+        selection: agena_domain::ExternalAgentSelection,
+        #[serde(default, skip_serializing_if = "ExternalAgentState::is_empty")]
+        state: Box<ExternalAgentState>,
+    },
     Checkpoint(EntryId),
     Tool(ToolId),
     Activity(ActivityId),
@@ -824,6 +896,12 @@ pub trait KernelBackend: Send + Sync {
         session: SessionId,
         round: RoundId,
     ) -> Result<ReadView<ProviderRoundView>>;
+    async fn external_agent_fork_points(
+        &self,
+        session: SessionId,
+        link: &ExternalAgentLink,
+        message: Option<EntryId>,
+    ) -> Result<Vec<(ExternalAgentForkCursor, String)>>;
     fn watch(&self, session: SessionId, after: Option<WatchCursor>) -> Result<KernelWatch>;
     async fn shutdown(&self) -> Result<()>;
     async fn commit(&self, request: RequestId, command: Command)

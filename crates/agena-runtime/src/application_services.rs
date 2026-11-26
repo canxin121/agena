@@ -50,6 +50,18 @@ pub struct RuntimeApplicationServices {
     pub execution_commands: Option<Arc<dyn SessionExecutionCommandService>>,
     pub tool_execution: Option<Arc<dyn SessionToolExecutionService>>,
     pub plugin_commands: Option<Arc<dyn SessionPluginCommandService>>,
+    pub acp_sessions: Option<RuntimeAcpSessionServices>,
+}
+
+#[derive(Clone)]
+pub struct RuntimeAcpSessionServices {
+    pub kernel: agena_storage::kernel::SessionKernel,
+    pub queries: Arc<dyn SessionQueryService>,
+    pub control: Arc<dyn SessionExecutionControl>,
+    pub commands: Arc<dyn SessionExecutionCommandService>,
+    pub tools: Arc<dyn SessionToolExecutionService>,
+    pub plugin_commands: Arc<dyn SessionPluginCommandService>,
+    pub permission_rules: Arc<dyn PermissionRuleRepository>,
 }
 
 /// Storage contracts that accompany a composed Runtime application service
@@ -90,6 +102,7 @@ pub(crate) struct RuntimeApplicationServiceCompositionInputs {
     pub(crate) execution_commands: Option<Arc<dyn SessionExecutionCommandService>>,
     pub(crate) tool_execution: Option<Arc<dyn SessionToolExecutionService>>,
     pub(crate) plugin_commands: Option<Arc<dyn SessionPluginCommandService>>,
+    pub(crate) acp_sessions: Option<RuntimeAcpSessionServices>,
 }
 
 pub(crate) fn compose_runtime_application_services(
@@ -119,5 +132,6 @@ pub(crate) fn compose_runtime_application_services(
         execution_commands: inputs.execution_commands,
         tool_execution: inputs.tool_execution,
         plugin_commands: inputs.plugin_commands,
+        acp_sessions: inputs.acp_sessions,
     }
 }

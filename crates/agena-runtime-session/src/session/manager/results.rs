@@ -12,13 +12,14 @@ impl SessionManager {
         &self,
         tool: &ToolHandle,
         session: SessionId,
-        model: &ModelRef,
+        target: &super::media::MediaTarget,
         providers: &ProviderRegistry,
         executor: &ToolExecutor,
         invocation: &agena_domain::ToolInvocation,
         execution: &ToolInvocationExecution,
     ) -> Result<(Value, Vec<PreparedBlob>), AppError> {
         let mut raw = execution.view.raw_output(&execution.output);
+        let model = target.model();
         let mut blobs = Vec::new();
         let mut media_bytes = 0usize;
         if raw.attachments.len() > 8 {
@@ -41,7 +42,7 @@ impl SessionManager {
             )
         });
         let route = if needs_route {
-            match providers.media_route_binding(model) {
+            match target.route(providers) {
                 Ok(route) => Some(route),
                 Err(error) => {
                     tracing::warn!(%error, "tool media cannot be bound to the selected route");
@@ -282,22 +283,29 @@ impl SessionManager {
         session: SessionId,
         bytes: &[u8],
     ) -> Result<PreparedBlob, AppError> {
-        let mut wait = Duration::from_millis(25);
-        loop {
-            let mut input = std::io::Cursor::new(bytes);
-            match self
-                .kernel()
-                .sessions
-                .prepare_blob(command, session, bytes.len() as u64, &mut input)
-                .await
-            {
-                Ok(blob) => return Ok(blob),
-                Err(error) if transient(&error) => {
-                    tokio::time::sleep(wait).await;
-                    wait = (wait * 2).min(Duration::from_secs(1));
-                }
-                Err(error) => return Err(kernel_error(error)),
+        prepare_immutable_blob(&self.kernel().sessions, command, session, bytes).await
+    }
+}
+
+pub(super) async fn prepare_immutable_blob(
+    sessions: &SessionCommands,
+    command: RequestId,
+    session: SessionId,
+    bytes: &[u8],
+) -> Result<PreparedBlob, AppError> {
+    let mut wait = Duration::from_millis(25);
+    loop {
+        let mut input = std::io::Cursor::new(bytes);
+        match sessions
+            .prepare_blob(command, session, bytes.len() as u64, &mut input)
+            .await
+        {
+            Ok(blob) => return Ok(blob),
+            Err(error) if transient(&error) => {
+                tokio::time::sleep(wait).await;
+                wait = (wait * 2).min(Duration::from_secs(1));
             }
+            Err(error) => return Err(kernel_error(error)),
         }
     }
 }

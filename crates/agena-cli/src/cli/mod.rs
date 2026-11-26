@@ -1116,10 +1116,24 @@ pub enum MemorySubcommand {
 /// Sessions subcommands.
 pub enum SessionsSubcommand {
     List(SessionListArgs),
-    /// Create a session, optionally choosing a named agent profile.
+    /// Create a session with an optional agent profile or external agent.
     Create(SessionCreateArgs),
     /// Change a session's named agent profile or restore its automatic role.
     Update(SessionUpdateArgs),
+    /// Inspect or change an external agent's configuration.
+    AgentOptions(SessionAgentOptionsArgs),
+    /// List or import conversations saved by an installed ACP agent.
+    AgentSessions(AgentSessionsArgs),
+    /// Inspect or manage the native conversation linked to an Agena session.
+    AgentSession(AgentSessionArgs),
+    /// Inspect or change an installed external agent's sign-in.
+    AgentAuth(SessionAgentAuthArgs),
+    /// Inspect the installed external agent's ACP provider routing.
+    AgentProviders(SessionAgentProvidersArgs),
+    /// Send an additional instruction into a running ACP turn.
+    AgentSteer(SessionAgentSteerArgs),
+    /// List cancellable ACP work or request cancellation of one live item.
+    AgentWork(SessionAgentWorkArgs),
     /// Export a session to a JSONL bundle (stdout). Pipe to a file to keep.
     Export(SessionExportArgs),
     /// Replay a JSONL bundle (read from stdin) as a fresh session in the
@@ -1137,6 +1151,9 @@ pub struct SessionCreateArgs {
     pub title: String,
     #[arg(long)]
     pub parent: Option<i64>,
+    /// Installed ACP agent to use for this session.
+    #[arg(long, value_name = "antigravity|claude-code")]
+    pub external_agent: Option<agena_domain::ExternalAgent>,
     /// Named agent profile. An empty value uses the automatic main role.
     #[arg(long, env = "AGENA_PROFILE", value_name = "NAME")]
     pub profile: Option<String>,
@@ -1151,6 +1168,171 @@ pub struct SessionUpdateArgs {
     /// Existing sessions change only when this option is explicitly supplied.
     #[arg(long, value_name = "NAME")]
     pub profile: String,
+    #[arg(long, default_value = "json")]
+    pub format: OutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct AgentSessionsArgs {
+    #[arg(long)]
+    pub workspace: Option<PathBuf>,
+    #[arg(long, default_value = "json")]
+    pub format: OutputFormat,
+    #[command(subcommand)]
+    pub action: AgentSessionsAction,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum AgentSessionsAction {
+    List {
+        agent: agena_domain::ExternalAgent,
+        #[arg(long)]
+        cursor: Option<String>,
+        /// Filter history by archive state when the agent supports archiving.
+        #[arg(long, value_enum)]
+        archived: Option<AgentArchiveFilterArg>,
+    },
+    /// Open a temporary view of the agent's current conversation history.
+    Open {
+        agent: agena_domain::ExternalAgent,
+        native_id: String,
+    },
+    /// Reuse a temporary view if this native conversation is already open.
+    Import {
+        agent: agena_domain::ExternalAgent,
+        native_id: String,
+    },
+    /// Read indexed metadata for native IDs in the selected workspace.
+    BatchGet {
+        agent: agena_domain::ExternalAgent,
+        #[arg(required = true, num_args = 1..=32)]
+        native_ids: Vec<String>,
+    },
+    /// Move a native conversation to the agent's archive.
+    Archive {
+        agent: agena_domain::ExternalAgent,
+        native_id: String,
+    },
+    /// Return a native conversation to the agent's active history.
+    Unarchive {
+        agent: agena_domain::ExternalAgent,
+        native_id: String,
+    },
+    /// Wait for one history change or until the subscription expires.
+    Watch {
+        agent: agena_domain::ExternalAgent,
+        #[arg(long)]
+        wait_seconds: Option<u16>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum AgentArchiveFilterArg {
+    Unarchived,
+    Archived,
+    All,
+}
+
+impl From<AgentArchiveFilterArg> for agena_domain::ExternalAgentArchiveFilter {
+    fn from(value: AgentArchiveFilterArg) -> Self {
+        match value {
+            AgentArchiveFilterArg::Unarchived => Self::Unarchived,
+            AgentArchiveFilterArg::Archived => Self::Archived,
+            AgentArchiveFilterArg::All => Self::All,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct AgentSessionArgs {
+    pub session_id: i64,
+    #[arg(long, default_value = "json")]
+    pub format: OutputFormat,
+    #[command(subcommand)]
+    pub action: AgentSessionAction,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum AgentSessionAction {
+    Status,
+    Rename {
+        title: String,
+    },
+    /// Replace the extra ACP roots. Omit directories to clear the list.
+    SetDirectories {
+        directories: Vec<PathBuf>,
+    },
+    /// Release the native conversation's active resources.
+    Close,
+    /// Remove the conversation from the agent's own history.
+    Delete,
+    /// Fork the local transcript and the corresponding native conversation.
+    Fork {
+        #[arg(long)]
+        title: Option<String>,
+        /// Fork before a local user message listed by native session status.
+        #[arg(long)]
+        before_message_id: Option<i64>,
+    },
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SessionAgentOptionsArgs {
+    pub session_id: i64,
+    /// Select an advertised model. An empty value follows the agent's settings.
+    #[arg(long, conflicts_with = "thinking", value_name = "ID")]
+    pub model: Option<String>,
+    /// Select an advertised thinking level. An empty value follows the agent's settings.
+    #[arg(long, value_name = "VALUE")]
+    pub thinking: Option<String>,
+    /// Set any advertised option by its kind key, for example config:fast=true.
+    /// An empty value follows the agent's settings.
+    #[arg(long, conflicts_with_all = ["model", "thinking"], value_name = "KEY=VALUE")]
+    pub option: Option<String>,
+    #[arg(long, default_value = "json")]
+    pub format: OutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SessionAgentAuthArgs {
+    pub session_id: i64,
+    /// Run an advertised login method.
+    #[arg(long, conflicts_with = "logout", value_name = "METHOD")]
+    pub login: Option<String>,
+    /// Enable terminal login on the Agena server host under its system account.
+    #[arg(long, conflicts_with = "logout")]
+    pub terminal: bool,
+    /// Read the account status announced by the current ACP connection.
+    #[arg(long, conflicts_with_all = ["terminal", "login", "logout"])]
+    pub live: bool,
+    /// Sign out of the installed external agent's account.
+    #[arg(long)]
+    pub logout: bool,
+    #[arg(long, default_value = "json")]
+    pub format: OutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SessionAgentProvidersArgs {
+    pub session_id: i64,
+    #[arg(long, default_value = "json")]
+    pub format: OutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SessionAgentSteerArgs {
+    pub session_id: i64,
+    pub text: String,
+    #[arg(long, default_value = "json")]
+    pub format: OutputFormat,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SessionAgentWorkArgs {
+    pub session_id: i64,
+    /// Request cancellation of an item using its current cancel_id.
+    #[arg(long, value_name = "CANCEL_ID")]
+    pub cancel: Option<String>,
     #[arg(long, default_value = "json")]
     pub format: OutputFormat,
 }

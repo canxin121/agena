@@ -179,12 +179,106 @@ export function sessionStateNeedsAttention(state: SessionState | null | undefine
   )
 }
 
+export const externalAgentLabels = {
+  antigravity: 'Antigravity',
+  'claude-code': 'Claude Code',
+}
+
+export type ExternalAgent = keyof typeof externalAgentLabels
+
+export type ExternalAgentOptions = {
+  selection: Record<string, string | undefined>
+  options: {
+    id: string
+    kind: string
+    name: string
+    description?: string
+    category?: string
+    type?: 'select' | 'boolean'
+    current_value: string
+    choices: { value: string; name: string; description?: string }[]
+  }[]
+}
+
+export type ExternalAgentCommand = {
+  name: string
+  description: string
+  argument_hint?: string | null
+  skill?: boolean
+  skill_path?: string | null
+}
+
+export type ExternalAgentMessage = {
+  id: string
+  role: string
+  text: string
+  sender_id?: string
+  recipient_id?: string
+}
+
+export type ExternalAgentSuggestion = {
+  prompt: (
+    | { type: 'text'; text: string }
+    | { type: 'resource_link'; uri: string; name: string; mimeType?: string; size?: number }
+  )[]
+}
+
+export type ExternalAgentWorkItem = {
+  cancel_id: string
+  kind: 'tool_call' | 'terminal' | 'subagent' | 'async_task'
+  session_id: string
+  target_id: string
+  title?: string
+}
+
+export type ExternalAgentAuthStatus = {
+  state: 'authenticated' | 'unauthenticated' | 'not_required' | 'unknown'
+  accounts?: {
+    label: string
+    active: boolean
+    description?: string
+    name?: string
+    email?: string
+    organization?: string
+  }[]
+}
+
+export type ExternalAgentDetails = {
+  cost?: { amount: number; currency: string }
+  notices?: { severity: string; title: string; description?: string; session_id?: string }[]
+  compactions?: { id: string; status: string; summary?: string; error?: string }[]
+  subagents?: Record<string, {
+    parent_id: string
+    title?: string
+    description?: string
+    state?: string
+    stop_reason?: string
+    error?: string
+    cwd?: string
+    additional_directories?: string[]
+    messages?: ExternalAgentMessage[]
+  }>
+  messages?: ExternalAgentMessage[]
+  suggestions?: ExternalAgentSuggestion[]
+  terminals?: {
+    id: string
+    session_id: string
+    command?: string
+    cwd?: string
+    output?: string
+    exited: boolean
+    exit_code?: number
+    signal?: string
+  }[]
+}
+
 export type Session = {
   id: string
   title?: string
   // Agena fields (kept on the open signature as well; listed for docs).
   state?: SessionState
   relation_kind?: SessionRelationKind
+  external_agent?: ExternalAgent
   favorite?: boolean
   pinned?: boolean
   version?: number

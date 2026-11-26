@@ -167,7 +167,7 @@ pub async fn upload_workspace_file(
 }
 
 pub async fn upload_session_file(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path(session_id): Path<i64>,
     AxumQuery(query): AxumQuery<BinaryUploadQuery>,
     request: axum::extract::Request,
@@ -235,7 +235,7 @@ pub struct SessionMediaQuery {
 }
 
 pub async fn download_session_media_file(
-    State(state): State<AppState>,
+    crate::state::SessionScope(state): crate::state::SessionScope,
     Path(session_id): Path<i64>,
     AxumQuery(query): AxumQuery<SessionMediaQuery>,
     headers: axum::http::HeaderMap,

@@ -23,6 +23,8 @@ pub struct Session {
     pub pinned: bool,
     pub version: i64,
     pub relation_kind: SessionRelationKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_agent: Option<agena_domain::ExternalAgent>,
     pub lifecycle_state: SessionLifecycleState,
     pub agent_name: Option<String>,
     pub created_at: DateTime<Utc>,

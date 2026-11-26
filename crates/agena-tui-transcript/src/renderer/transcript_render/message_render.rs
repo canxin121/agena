@@ -1307,6 +1307,61 @@ pub(crate) fn render_part_node(
                 children,
             }
         }
+        TranscriptPartContent::Activity(TranscriptActivityContent::AssistantDocument {
+            document,
+            reasoning,
+            answer,
+        }) => {
+            let key = TranscriptNodeKey::Activity {
+                entry_id: message.id,
+                content_id: part.id,
+            };
+            let expanded = expansions.get(&key).copied().unwrap_or_else(|| {
+                *answer
+                    || (*reasoning
+                        && defaults.default_expanded(Some(agena_domain::ACTIVITY_KIND_REASONING)))
+            });
+            let headline = part_headline(part, i18n);
+            push_activity_headline(
+                out,
+                part.status,
+                expanded,
+                true,
+                &headline.title,
+                &headline.summary,
+                width,
+                i18n,
+            );
+            if expanded {
+                if *reasoning {
+                    let mut display = (**document).clone();
+                    for block in &mut display.blocks {
+                        if let agena_domain::ViewBlock::Markdown { id, text } = block {
+                            *block = agena_domain::ViewBlock::Text {
+                                id: id.take(),
+                                text: std::mem::take(text),
+                            };
+                        }
+                    }
+                    super::render_content_document(&display, out, width, i18n);
+                } else {
+                    super::render_content_document(document, out, width, i18n);
+                }
+            }
+            RenderedNodeDraft {
+                key,
+                kind: TranscriptNodeKind::Activity,
+                copy_text: if expanded {
+                    document.plain_text()
+                } else {
+                    String::new()
+                },
+                toggleable: true,
+                expanded,
+                end_line: None,
+                children: Vec::new(),
+            }
+        }
         TranscriptPartContent::Activity(TranscriptActivityContent::Reasoning(reasoning)) => {
             let key = TranscriptNodeKey::Activity {
                 entry_id: message.id,
@@ -2569,6 +2624,15 @@ fn render_ask_user_question_block(
         Style::default(),
         width,
     );
+    if question.optional {
+        push_expanded_tool_text(
+            out,
+            BODY_PREFIX,
+            &i18n.text("overlay-user-input-optional"),
+            Style::default().fg(agena_tui_components::theme::muted_color()),
+            width,
+        );
+    }
     let legacy_custom =
         question.allow_custom && !question.options.iter().any(|option| option.custom);
     let options = question

@@ -245,7 +245,7 @@ pub(crate) fn slash_command_suggestion_context_for_text(
     }
 
     let name = &first_line[name_start..name_end];
-    if name.contains('/') {
+    if name.contains('/') && agena_domain::external_agent_command_input(first_line).is_none() {
         return None;
     }
     let rest_after_name = first_line[name_end..].trim_start();
@@ -258,6 +258,28 @@ pub(crate) fn slash_command_suggestion_context_for_text(
         fingerprint: format!("{first_line}:{cursor}"),
         name_range: 0..name_end,
     })
+}
+
+pub(crate) fn external_command_detail(
+    i18n: &agena_tui::i18n::I18n,
+    agent: agena_domain::ExternalAgent,
+    command: &agena_domain::ExternalAgentCommand,
+) -> String {
+    let skill_label = if command.skill {
+        i18n.text("insert-content-skill-label")
+    } else {
+        String::new()
+    };
+    [
+        agent.label(),
+        &skill_label,
+        command.argument_hint.as_deref().unwrap_or_default(),
+        &command.description,
+    ]
+    .into_iter()
+    .filter(|text| !text.is_empty())
+    .collect::<Vec<_>>()
+    .join(" · ")
 }
 use crate::Result;
 use crate::{

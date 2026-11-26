@@ -10,6 +10,103 @@ use agena_storage::kernel::{
 };
 
 impl ApplicationService {
+    pub async fn external_agent_workspace(
+        &self,
+        workspace_id: i64,
+        action: agena_domain::ExternalAgentWorkspaceAction,
+    ) -> ApplicationResult<agena_domain::ExternalAgentWorkspaceResult> {
+        let commands = self.session_commands.as_ref().ok_or_else(|| {
+            ApplicationError::internal("Session execution commands are unavailable.")
+        })?;
+        self.ensure_workspace_exists(workspace_id).await?;
+        commands
+            .external_agent_workspace(workspace_id, action)
+            .await
+            .map_err(|error| ApplicationError::from_failure(error.failure))
+    }
+
+    pub async fn external_agent_session(
+        &self,
+        session_id: i64,
+        action: agena_domain::ExternalAgentSessionAction,
+    ) -> ApplicationResult<agena_domain::ExternalAgentSessionResult> {
+        let commands = self.session_commands.as_ref().ok_or_else(|| {
+            ApplicationError::internal("Session execution commands are unavailable.")
+        })?;
+        commands
+            .external_agent_session(session_id, action)
+            .await
+            .map_err(|error| ApplicationError::from_failure(error.failure))
+    }
+
+    pub async fn external_agent_options(
+        &self,
+        session_id: i64,
+        request: agena_api::commands::ExternalAgentOptionsParams,
+    ) -> ApplicationResult<agena_domain::ExternalAgentOptions> {
+        let commands = self.session_commands.as_ref().ok_or_else(|| {
+            ApplicationError::internal("Session execution commands are unavailable.")
+        })?;
+        commands
+            .external_agent_options(session_id, request.change)
+            .await
+            .map_err(|error| ApplicationError::from_failure(error.failure))
+    }
+
+    pub async fn external_agent_auth(
+        &self,
+        session_id: i64,
+        action: agena_domain::ExternalAgentAuthAction,
+    ) -> ApplicationResult<agena_domain::ExternalAgentAuth> {
+        let commands = self.session_commands.as_ref().ok_or_else(|| {
+            ApplicationError::internal("Session execution commands are unavailable.")
+        })?;
+        commands
+            .external_agent_auth(session_id, action)
+            .await
+            .map_err(|error| ApplicationError::from_failure(error.failure))
+    }
+
+    pub async fn external_agent_live_auth(
+        &self,
+        session_id: i64,
+    ) -> ApplicationResult<Option<agena_domain::ExternalAgentAuthStatus>> {
+        let commands = self.session_commands.as_ref().ok_or_else(|| {
+            ApplicationError::internal("Session execution commands are unavailable.")
+        })?;
+        commands
+            .external_agent_live_auth(session_id)
+            .await
+            .map_err(|error| ApplicationError::from_failure(error.failure))
+    }
+
+    pub async fn external_agent_providers(
+        &self,
+        session_id: i64,
+    ) -> ApplicationResult<agena_domain::ExternalAgentProviders> {
+        let commands = self.session_commands.as_ref().ok_or_else(|| {
+            ApplicationError::internal("Session execution commands are unavailable.")
+        })?;
+        commands
+            .external_agent_providers(session_id)
+            .await
+            .map_err(|error| ApplicationError::from_failure(error.failure))
+    }
+
+    pub async fn external_agent_work(
+        &self,
+        session_id: i64,
+        cancel_id: Option<uuid::Uuid>,
+    ) -> ApplicationResult<Vec<agena_domain::ExternalAgentWorkItem>> {
+        let commands = self.session_commands.as_ref().ok_or_else(|| {
+            ApplicationError::internal("Session execution commands are unavailable.")
+        })?;
+        commands
+            .external_agent_work(session_id, cancel_id)
+            .await
+            .map_err(|error| ApplicationError::from_failure(error.failure))
+    }
+
     pub async fn list_sessions(
         &self,
         query: crate::dto::SessionListQuery,
@@ -39,6 +136,7 @@ impl ApplicationService {
                 exclude_bot_owned: query.owner_bot_id.is_none()
                     && query.owner_surface.is_none()
                     && (query.parent_id.is_none() || query.workspace_id.is_some()),
+                exclude_external_agents: !self.is_acp_scope(),
                 owner_bot_id: query.owner_bot_id.map(|id| id.to_string()),
                 owner_surface: query.owner_surface.map(|s| s.as_str().to_owned()),
                 workspace_id: query.workspace_id,
@@ -118,7 +216,10 @@ impl ApplicationService {
             .summary(crate::kernel_session_id(session_id)?)
             .await
         {
-            Ok(summary) => session_resource_from_kernel_summary(&summary).map(Some),
+            Ok(summary) if self.is_acp_scope() == summary.external_agent.is_some() => {
+                session_resource_from_kernel_summary(&summary).map(Some)
+            }
+            Ok(_) => Ok(None),
             Err(agena_storage::kernel::KernelError::NotFound(_)) => Ok(None),
             Err(error) => Err(crate::kernel_error(error)),
         }
@@ -128,12 +229,20 @@ impl ApplicationService {
         &self,
         request: SessionCreateRequest,
     ) -> ApplicationResult<SessionResource> {
+        if self.is_acp_scope() != request.session.external_agent.is_some()
+            || (self.is_acp_scope() && request.session.parent_id.is_some())
+        {
+            return Err(ApplicationError::bad_request(
+                "Choose the ACP or Agena session entry point for this conversation.",
+            ));
+        }
         self.ensure_workspace_exists(request.workspace_id).await?;
         if let Some(layer) = &request.session.prompts {
             validate_session_prompt_layer(layer)?;
         }
         let mut configuration = agena_storage::kernel::SessionConfiguration {
             prompts: request.session.prompts.unwrap_or_default(),
+            external_agent: request.session.external_agent,
             title_state: if request.session.auto_title {
                 agena_storage::kernel::SessionTitleState::automatic()
             } else {
@@ -325,6 +434,7 @@ pub(crate) fn session_resource_from_kernel_summary(
         root_id: summary.root_session_id.get(),
         workspace_id: summary.workspace_id,
         title: summary.title.clone(),
+        external_agent: summary.external_agent,
         owner_bot_id: summary.owner_bot_id.clone(),
         owner_surface: summary.owner_surface.clone(),
         favorite: summary.favorite,
@@ -359,6 +469,7 @@ pub(crate) fn session_resource_from_summary(
         root_id: summary.root_id,
         workspace_id: summary.workspace_id,
         title: summary.title,
+        external_agent: None,
         owner_bot_id: None,
         owner_surface: None,
         favorite: summary.favorite,

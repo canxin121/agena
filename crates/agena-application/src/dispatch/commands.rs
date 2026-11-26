@@ -13,6 +13,15 @@ pub async fn dispatch_command(
     state: &Application,
     command: Command,
 ) -> Result<CommandResult, ApplicationError> {
+    let state = if command
+        .session_id()
+        .is_some_and(agena_domain::is_acp_session_id)
+        || matches!(&command, Command::CreateSession(params) if params.external_agent.is_some())
+    {
+        state.acp_application()?
+    } else {
+        state
+    };
     match command {
         Command::Server(command) => Ok(CommandResult::Data(
             state.dispatch_server_command(command).await?,
@@ -66,12 +75,14 @@ pub async fn dispatch_command(
             parent_id,
             prompts,
             profile,
+            external_agent,
         }) => {
             let session = state
                 .service()
                 .create_session(SessionCreateRequest {
                     workspace_id,
                     session: SessionHierarchyRequest {
+                        external_agent,
                         title,
                         parent_id,
                         auto_title,

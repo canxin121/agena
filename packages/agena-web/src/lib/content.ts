@@ -1,3 +1,4 @@
+import { sessionApiPath } from './acpSession'
 import { mergeInlineReferences, type InlineUiReferences } from '@/features/inlineUi/references'
 import { i18n } from '@/i18n'
 import { apiJson, apiResponse, apiUrl } from './api'
@@ -346,7 +347,7 @@ export function readContent(sessionId: string, resourceId: string, after: Conten
     after: String(after.sequence),
     max_bytes: String(1024 * 1024),
   })
-  return apiJson(`/api/v1/sessions/${encodeURIComponent(sessionId)}/content/${encodeURIComponent(resourceId)}?${query}`)
+  return apiJson(`${sessionApiPath(sessionId)}/content/${encodeURIComponent(resourceId)}?${query}`)
 }
 
 /** The endpoint carries the same pages used by REST and the Rust SDK.
@@ -364,7 +365,7 @@ export async function streamContent(
     query.set('epoch', after.epoch)
     query.set('after', String(after.sequence))
   }
-  const endpoint = `/api/v1/sessions/${encodeURIComponent(sessionId)}/content/${encodeURIComponent(resourceId)}/stream?${query}`
+  const endpoint = `${sessionApiPath(sessionId)}/content/${encodeURIComponent(resourceId)}/stream?${query}`
   // A half-open content connection must not leave the reply loading forever.
   // The server emits a heartbeat every 15s; reset this watchdog on every byte,
   // including comments, rather than imposing a total response duration.

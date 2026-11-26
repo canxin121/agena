@@ -17,8 +17,10 @@ arc-swap = { workspace = true }
 base64 = { workspace = true }
 agena-domain = { workspace = true }
 agena-failure = { workspace = true }
+agena-mcp-server = { workspace = true }
 agena-plugin-host = { workspace = true }
 agena-permission = { workspace = true }
+agena-process = { workspace = true }
 agena-provider = { workspace = true }
 agena-runtime-config = { workspace = true }
 agena-prompt-layers = { workspace = true }
@@ -32,6 +34,7 @@ agena-storage = { workspace = true }
 agena-storage-sqlite = { workspace = true }
 agena-tool = { workspace = true }
 async-trait = { workspace = true }
+axum = { workspace = true }
 chrono = { workspace = true }
 hex = { workspace = true }
 futures-util = { workspace = true }
@@ -39,14 +42,16 @@ git2 = { version = "0.21.0", default-features = false, features = ["vendored-lib
 parking_lot = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls", "stream"] }
 regex = { workspace = true }
+rmcp = { workspace = true, features = ["transport-async-rw", "transport-streamable-http-server"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sea-orm = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
-tokio-util = { workspace = true, features = ["rt"] }
+tokio-util = { workspace = true, features = ["codec", "rt"] }
 tracing = { workspace = true }
+url = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]

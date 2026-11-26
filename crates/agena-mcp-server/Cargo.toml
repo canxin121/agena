@@ -13,6 +13,8 @@ rmcp = { workspace = true, features = ["server", "transport-io", "transport-stre
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true, features = ["io-std", "io-util", "macros", "net", "rt", "time"] }
+tokio-util = { workspace = true, features = ["rt"] }
 tracing = { workspace = true }
 
 [lints]

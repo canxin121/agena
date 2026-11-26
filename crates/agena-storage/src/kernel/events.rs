@@ -4,6 +4,7 @@
 
 use agena_domain::{CommandOutputStream, ContentDocument, DocumentMutation, TerminalSnapshot};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use super::output::Producer;
 use super::*;
@@ -18,6 +19,44 @@ pub struct EventCursor {
     pub content: ContentId,
     pub epoch: ContentEpoch,
     pub sequence: u64,
+}
+
+/// A native assistant message has one ordered transcript entry. Its current
+/// document is authoritative while an optional patch keeps incremental writes
+/// cheap between the existing periodic checkpoints.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssistantDocumentKey {
+    pub native_id: String,
+    pub incarnation: RoundId,
+    pub message_id: String,
+    pub reasoning: bool,
+}
+
+impl AssistantDocumentKey {
+    /// Use the existing content identity index as the durable message lookup.
+    /// The incarnation changes on session/new even if an adapter reuses IDs.
+    pub fn content_id(&self, session: SessionId) -> ContentId {
+        let mut hash = Sha256::new();
+        hash.update(b"agena-acp-message-v1");
+        hash.update(session.get().to_be_bytes());
+        hash.update(self.incarnation.get().to_be_bytes());
+        hash.update([u8::from(self.reasoning)]);
+        for field in [&self.native_id, &self.message_id] {
+            hash.update((field.len() as u64).to_be_bytes());
+            hash.update(field.as_bytes());
+        }
+        let mut bytes = [0; 16];
+        bytes.copy_from_slice(&hash.finalize()[..16]);
+        ContentId::from(uuid::Uuid::from_bytes(bytes))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssistantDocumentUpdate {
+    pub previous: Option<EventCursor>,
+    pub key: AssistantDocumentKey,
+    pub document: Box<ContentDocument>,
+    pub patch: Option<Box<DocumentMutation>>,
 }
 
 #[derive(Debug, Clone, Serialize)]

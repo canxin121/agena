@@ -695,7 +695,7 @@ pub(super) enum AppMessage {
     SessionPlanLoaded {
         session_id: i64,
         request_id: u64,
-        result: UiResult<Option<String>>,
+        result: UiResult<PlanViewerData>,
     },
     PlanAutorunToggled {
         request_id: u64,
@@ -1236,6 +1236,9 @@ impl UsageDashboardState {
 #[derive(Debug, Clone)]
 pub(super) struct PlanViewerState {
     pub(super) session_id: i64,
+    pub(super) external_activity: bool,
+    pub(super) external_auth_status: Option<agena_domain::ExternalAgentAuthStatus>,
+    pub(super) external_auth_refresh_at: Option<Instant>,
     pub(super) presentation: agena_tui::plan_viewer::PlanViewerPresentation,
     pub(super) loading: bool,
     pub(super) error: Option<String>,
@@ -1250,6 +1253,9 @@ impl PlanViewerState {
     pub(super) fn new(session_id: i64) -> Self {
         Self {
             session_id,
+            external_activity: false,
+            external_auth_status: None,
+            external_auth_refresh_at: None,
             presentation: agena_tui::plan_viewer::PlanViewerPresentation::new(),
             loading: false,
             error: None,

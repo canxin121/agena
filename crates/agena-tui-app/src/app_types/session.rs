@@ -47,6 +47,20 @@ pub(crate) enum CommandPaletteCommand {
     /// (docs, input contract) dwarfs the plugin variant.
     BuiltIn(Box<crate::commands::ClientCommand>),
     Plugin(Box<agena_plugin_sdk::inspection::CommandCatalogItem>),
+    ExternalAgentActivity {
+        session_id: i64,
+    },
+    ExternalAgentWork {
+        session_id: i64,
+    },
+    ExternalAgentSuggestion {
+        session_id: i64,
+        suggestion: agena_domain::ExternalAgentSuggestion,
+    },
+    External {
+        session_id: i64,
+        command: agena_domain::ExternalAgentCommand,
+    },
 }
 
 /// App-owned concrete effect map for the TUI-owned session-navigation

@@ -115,9 +115,7 @@ impl SessionManager {
             ));
         }
         let rules = self
-            .kernel_runtime
-            .permissions
-            .resolve(&key, session, workspace)
+            .permission_rule_rows(Some(&key), session, workspace)
             .await
             .map_err(|error| AppError::Internal(error.to_string()))?;
         let rules = rules
@@ -307,11 +305,23 @@ impl SessionManager {
             result
         };
         let command = request_key("host-input", &format!("{session}:{call}:{sequence}"));
+        self.request_input_for_tool(&tool, &control, command, input, None)
+            .await
+    }
+
+    pub(super) async fn request_input_for_tool(
+        &self,
+        tool: &ToolHandle,
+        control: &RunControl,
+        command: RequestId,
+        input: crate::part::AskUserToolInput,
+        withdrawal: Option<&CancellationToken>,
+    ) -> Result<AskUserResponse, AppError> {
         let timeout =
             Duration::from_millis(input.auto_resolution_ms.unwrap_or(600_000).min(86_400_000));
         let request = UserInputRequest {
             request_id: command.to_string(),
-            session_id: Some(session),
+            session_id: Some(control.session.get()),
             title: input.title,
             body_markdown: input.body_markdown,
             kind: input.kind.into(),
@@ -329,14 +339,23 @@ impl SessionManager {
             .map_err(kernel_error)?
             .value;
         control.phase(agena_domain::ExecutionPhase::AwaitingInteraction);
-        let decision = tokio::time::timeout(
-            timeout,
-            self.wait_interaction(control.session, id, Some(&control.cancel)),
-        )
-        .await;
+        let withdrawn = async {
+            match withdrawal {
+                Some(token) => token.cancelled().await,
+                None => std::future::pending().await,
+            }
+        };
+        let decision = tokio::select! {
+            biased;
+            () = withdrawn => None,
+            result = tokio::time::timeout(
+                timeout,
+                self.wait_interaction(control.session, id, Some(&control.cancel)),
+            ) => Some(result),
+        };
         control.phase(agena_domain::ExecutionPhase::ExecutingTools);
         match decision {
-            Ok(Ok(InteractionDecision::Input(text))) => {
+            Some(Ok(Ok(InteractionDecision::Input(text)))) => {
                 let reply: UserInputReply = serde_json::from_str(&text)?;
                 super::commands::validate_answers(&request, &reply)?;
                 Ok(AskUserResponse {
@@ -351,18 +370,18 @@ impl SessionManager {
                     answers: reply.answers,
                 })
             }
-            Ok(Ok(InteractionDecision::Cancel)) => Ok(AskUserResponse {
+            Some(Ok(Ok(InteractionDecision::Cancel))) => Ok(AskUserResponse {
                 cancelled: true,
                 ..Default::default()
             }),
-            Ok(Ok(_)) => Err(AppError::Internal(
+            Some(Ok(Ok(_))) => Err(AppError::Internal(
                 "an input interaction received an incompatible decision".into(),
             )),
-            Ok(Err(error)) => Err(error),
-            Err(_) => {
-                let command = request_key("host-input-timeout", &id.get().to_string());
-                // A timeout is a durable negative decision. A racing user reply
-                // remains authoritative and is read again after the command.
+            Some(Ok(Err(error))) => Err(error),
+            Some(Err(_)) | None => {
+                let timed_out = decision.is_some();
+                let command = request_key("host-input-dismissal", &id.get().to_string());
+                // Persist the dismissal before releasing its owning tool.
                 match persist(|| {
                     self.kernel().sessions.reply(
                         command,
@@ -375,7 +394,14 @@ impl SessionManager {
                 .await
                 {
                     Ok(_) => Ok(AskUserResponse {
-                        timed_out: true,
+                        timed_out,
+                        cancelled: !timed_out,
+                        ..Default::default()
+                    }),
+                    // A committed reply stays in history even if the external
+                    // agent has stopped waiting for it.
+                    Err(KernelError::Conflict(_)) if !timed_out => Ok(AskUserResponse {
+                        cancelled: true,
                         ..Default::default()
                     }),
                     Err(KernelError::Conflict(_)) => {
@@ -396,8 +422,9 @@ impl SessionManager {
                                         .and_then(|a| a.first())
                                         .cloned()
                                         .unwrap_or_default(),
+                                    cancelled: reply.kind == UserInputReplyKind::Cancel,
+                                    timed_out: reply.kind == UserInputReplyKind::Timeout,
                                     answers: reply.answers,
-                                    ..Default::default()
                                 })
                             }
                             _ => Ok(AskUserResponse {

@@ -1609,8 +1609,8 @@
           "tags": [
             "interactive"
           ],
-          "definition_identity": "c326b578afa2b0fb53db27f599ad8cac215e4d99d584c52d38cdcf5375ec4175",
-          "input_schema_sha256": "0aa4afd4eb2979663fb822a19b55e9eaf15f622730ecff3750be478d248bbee0",
+          "definition_identity": "6a3bde8dc6ea0f330dd4553d22ead0355e0a1cc74ad83a8003f1b566ac024c5e",
+          "input_schema_sha256": "845afd297bd0c56940d555ded5013c79b471d883ee087f4cbdfa36bc2a110258",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
         },
         {

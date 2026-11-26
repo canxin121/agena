@@ -22762,7 +22762,7 @@ Ask the user for short structured input.
 | --- | --- | --- | --- | --- |
 | `title` | `string` | No | — |  |
 | `kind` | `string` | No | — |  |
-| `body_markdown` | `string` | No | — | Optional Markdown body shown in the review dialog. Only the plan<br>approval review (`kind == "review"`) sets it to the full plan document;<br>other ask_user requests leave it empty. |
+| `body_markdown` | `string` | No | — | Optional Markdown body shown above the questions. |
 | `auto_resolution_ms` | `integer / null` | No | — | Automatically continue without an answer after this many milliseconds.<br>Values are limited to 60 seconds through 10 minutes.<br>A timeout is not approval; only independent, already-authorized work may continue. |
 | `questions` | `array<UserInputQuestion>` | No | — | One to three questions. Each option is a normal choice unless `custom: true`,<br>which lets the user select it and write an answer. A custom option may be<br>the only option; do not invent a fixed choice for free-text questions. |
 
@@ -22801,6 +22801,10 @@ Ask the user for short structured input.
         },
         "allow_custom": {
           "description": "Compatibility for older requests. New questions use an option with `custom: true`.",
+          "type": "boolean"
+        },
+        "optional": {
+          "description": "Whether the user may omit this question from a submitted reply.",
           "type": "boolean"
         }
       },
@@ -22844,7 +22848,7 @@ Ask the user for short structured input.
       "x-agena-order": "000001"
     },
     "body_markdown": {
-      "description": "Optional Markdown body shown in the review dialog. Only the plan\napproval review (`kind == \"review\"`) sets it to the full plan document;\nother ask_user requests leave it empty.",
+      "description": "Optional Markdown body shown above the questions.",
       "type": "string",
       "x-agena-order": "000002",
       "maxLength": 16000

@@ -256,13 +256,22 @@ impl App {
             .as_deref()
             .unwrap_or(&entry.session.native_id)
             .to_owned();
-        let mut rows = vec![self.native_agent_row(
-            "external-agent-open-session",
-            NativeAgentChoice::Open {
-                page: page.clone(),
-                entry: entry.clone(),
-            },
-        )];
+        let mut rows = vec![
+            self.native_agent_row(
+                "external-agent-open-session",
+                NativeAgentChoice::Open {
+                    page: page.clone(),
+                    entry: entry.clone(),
+                },
+            ),
+            self.native_agent_row(
+                "external-agent-preview-history",
+                NativeAgentChoice::Preview {
+                    page: page.clone(),
+                    entry: entry.clone(),
+                },
+            ),
+        ];
         if archive_supported
             && let Some(archive) = entry.archived.or(match page.archived {
                 ArchiveFilter::Unarchived => Some(false),

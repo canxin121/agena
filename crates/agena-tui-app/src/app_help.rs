@@ -189,6 +189,10 @@ impl App {
             Overlay::NativeAgentEdit(editor) => {
                 self.help_for_editor(editor.title.clone(), editor.multiline)
             }
+            Overlay::NativeAgentHistory(_) => self.help_for(
+                HelpPreset::ReadOnlyDetails,
+                self.i18n.text("external-agent-preview-history"),
+            ),
             Overlay::HubProject(dialog) => self.help_for_editor(dialog.editor.title.clone(), false),
             Overlay::SettingsValueEdit(dialog) => self.help_for_editor(dialog.title.clone(), false),
             Overlay::PermissionRawEdit(dialog) => {

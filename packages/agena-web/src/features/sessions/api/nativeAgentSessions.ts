@@ -34,6 +34,12 @@ export type NativeIndexedSession = NativeAgentSession & {
   last_prompt_at: string | null
 }
 
+export type NativeHistoryPreview = {
+  turns: { user: string; reply: string }[]
+  next_before_turn: number | null
+  omitted_content: boolean
+}
+
 export type NativeSessionStatus = {
   kind: 'status'
   session: NativeAgentSession | null
@@ -119,6 +125,25 @@ export async function openNativeAgentSession(workspace: number, agent: ExternalA
     },
   )
   return result.session_id
+}
+
+export async function previewNativeAgentHistory(
+  workspace: number,
+  agent: ExternalAgent,
+  nativeId: string,
+  beforeTurn: number | null,
+  signal?: AbortSignal,
+) {
+  const result = await apiJson<{ kind: 'history_preview'; preview: NativeHistoryPreview }>(
+    `/api/v1/acp/workspaces/${workspace}/sessions`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'preview_history', agent, native_id: nativeId, before_turn: beforeTurn }),
+      signal,
+    },
+  )
+  return result.preview
 }
 
 export async function manageNativeAgentSession(id: string, action: NativeSessionAction, signal?: AbortSignal) {

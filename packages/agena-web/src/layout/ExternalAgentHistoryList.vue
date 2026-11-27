@@ -3,12 +3,15 @@ import { onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import Button from '@/components/ui/Button.vue'
+import Dialog from '@/components/ui/Dialog.vue'
 import {
   listNativeAgentSessions,
   openNativeAgentSession,
+  previewNativeAgentHistory,
   setNativeAgentArchived,
   watchNativeAgentSessions,
   type NativeArchiveFilter,
+  type NativeHistoryPreview,
   type NativeIndexedSession,
   type NativeIndexCapabilities,
 } from '@/features/sessions/api/nativeAgentSessions'
@@ -27,9 +30,17 @@ const loading = ref(false)
 const mutation = ref<{ id: string; action: 'open' | 'archive' } | null>(null)
 const loaded = ref(false)
 const error = ref('')
+const preview = ref<{
+  session: NativeIndexedSession
+  page: NativeHistoryPreview | null
+  cursors: (number | null)[]
+  error: string
+} | null>(null)
+const previewLoading = ref(false)
 let read: AbortController | undefined
 let watcher: AbortController | undefined
 let actionRequest: AbortController | undefined
+let previewRequest: AbortController | undefined
 let refreshPending = false
 
 function refreshWhenIdle() {
@@ -121,6 +132,49 @@ async function changeSession(nativeId: string, action: 'open' | 'archive', nextA
   }
 }
 
+function showPreview(session: NativeIndexedSession) {
+  preview.value = { session, page: null, cursors: [null], error: '' }
+  void loadPreview([null])
+}
+
+function closePreview() {
+  previewRequest?.abort()
+  previewRequest = undefined
+  previewLoading.value = false
+  preview.value = null
+}
+
+async function loadPreview(cursors: (number | null)[]) {
+  const current = preview.value
+  if (!current || previewLoading.value) return
+  const request = new AbortController()
+  previewRequest = request
+  previewLoading.value = true
+  current.error = ''
+  try {
+    const page = await previewNativeAgentHistory(
+      props.workspace,
+      props.agent,
+      current.session.native_id,
+      cursors.at(-1) ?? null,
+      request.signal,
+    )
+    if (request.signal.aborted) return
+    current.page = page
+    current.cursors = cursors
+  } catch (failure) {
+    if (!request.signal.aborted) current.error = failure instanceof Error ? failure.message : String(failure)
+  } finally {
+    if (previewRequest === request) previewLoading.value = false
+  }
+}
+
+function previewEarlier() {
+  const current = preview.value
+  const cursor = current?.page?.next_before_turn
+  if (current && cursor != null) void loadPreview([...current.cursors, cursor])
+}
+
 function changeArchiveFilter() {
   sessions.value = []
   cursor.value = null
@@ -140,6 +194,7 @@ function dateLabel(value: string | null) {
 watch(
   () => [props.workspace, props.agent],
   () => {
+    closePreview()
     watcher?.abort()
     watcher = undefined
     capabilities.value = null
@@ -153,6 +208,7 @@ onBeforeUnmount(() => {
   read?.abort()
   watcher?.abort()
   actionRequest?.abort()
+  previewRequest?.abort()
 })
 </script>
 
@@ -180,13 +236,16 @@ onBeforeUnmount(() => {
       {{ t('chat.nativeAgent.noHistory') }}
     </p>
     <ul v-if="sessions.length" class="divide-y divide-border/70">
-      <li v-for="session in sessions" :key="session.native_id" class="flex items-center gap-3 py-2.5">
-        <div class="min-w-0 flex-1">
+      <li v-for="session in sessions" :key="session.native_id" class="flex flex-wrap items-center gap-2 py-2.5">
+        <div class="min-w-0 flex-1 basis-28">
           <p class="truncate text-sm font-medium">{{ session.title || session.native_id }}</p>
           <p v-if="dateLabel(session.updated_at)" class="truncate text-xs text-muted-foreground">
             {{ dateLabel(session.updated_at) }}
           </p>
         </div>
+        <Button size="sm" variant="ghost" :disabled="mutation !== null" @click="showPreview(session)">
+          {{ t('chat.nativeAgent.previewHistory') }}
+        </Button>
         <Button
           v-if="capabilities?.archive && session.archived !== null"
           variant="ghost"
@@ -222,5 +281,59 @@ onBeforeUnmount(() => {
         {{ t(loaded ? 'common.refresh' : 'common.retry') }}
       </Button>
     </div>
+    <Dialog
+      :open="preview !== null"
+      :title="preview?.session.title || preview?.session.native_id"
+      :description="t('chat.nativeAgent.historyPreviewDescription')"
+      max-width="max-w-2xl"
+      @close="closePreview"
+    >
+      <div v-if="preview" class="space-y-4">
+        <p v-if="previewLoading" class="text-sm text-muted-foreground" role="status">{{ t('common.loading') }}</p>
+        <p v-if="preview.error" class="text-sm text-destructive" role="alert">{{ preview.error }}</p>
+        <template v-if="preview.page">
+          <p v-if="preview.page.omitted_content" class="text-sm text-muted-foreground">
+            {{ t('chat.nativeAgent.historyPreviewOmitted') }}
+          </p>
+          <p v-if="!preview.page.turns.length" class="text-sm text-muted-foreground">
+            {{ t('chat.nativeAgent.historyPreviewEmpty') }}
+          </p>
+          <ol class="divide-y divide-border/70">
+            <li v-for="(turn, index) in preview.page.turns" :key="index" class="space-y-3 py-3">
+              <section v-if="turn.user">
+                <h4 class="text-xs font-medium text-muted-foreground">{{ t('chat.externalAgentDetails.roles.user') }}</h4>
+                <p class="whitespace-pre-wrap break-words text-sm">{{ turn.user }}</p>
+              </section>
+              <section v-if="turn.reply">
+                <h4 class="text-xs font-medium text-muted-foreground">{{ t('chat.externalAgentDetails.roles.assistant') }}</h4>
+                <p class="whitespace-pre-wrap break-words text-sm">{{ turn.reply }}</p>
+              </section>
+            </li>
+          </ol>
+        </template>
+      </div>
+      <template #footer>
+        <template v-if="preview">
+          <Button
+            v-if="preview.page?.next_before_turn != null"
+            variant="outline"
+            :disabled="previewLoading"
+            @click="previewEarlier"
+          >{{ t('chat.nativeAgent.historyPreviewEarlier') }}</Button>
+          <Button
+            v-if="preview.cursors.length > 1"
+            variant="outline"
+            :disabled="previewLoading"
+            @click="loadPreview(preview.cursors.slice(0, -1))"
+          >{{ t('chat.nativeAgent.historyPreviewNewer') }}</Button>
+          <Button
+            v-if="preview.error && !preview.page"
+            variant="outline"
+            :disabled="previewLoading"
+            @click="loadPreview(preview.cursors)"
+          >{{ t('common.retry') }}</Button>
+        </template>
+      </template>
+    </Dialog>
   </div>
 </template>

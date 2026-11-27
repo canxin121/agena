@@ -14,7 +14,10 @@ impl App {
             if let Overlay::SessionSearch(dialog) = overlay {
                 return dialog.focus == agena_tui_components::SearchPickerFocus::Input;
             }
-            return !matches!(overlay, Overlay::Confirm(_) | Overlay::Permission(_));
+            return !matches!(
+                overlay,
+                Overlay::Confirm(_) | Overlay::Permission(_) | Overlay::NativeAgentHistory(_)
+            );
         }
         match &self.current_route {
             Route::Main => self.focus == Focus::Composer,
@@ -257,7 +260,7 @@ impl App {
                     dialog.input.insert_str(text.as_str());
                     Self::refresh_timeline_overlay(dialog);
                 }
-                Overlay::Confirm(_) => {}
+                Overlay::Confirm(_) | Overlay::NativeAgentHistory(_) => {}
                 Overlay::Permission(_) => {}
             }
             if let Some(directory) = pending_path_browser_refresh {

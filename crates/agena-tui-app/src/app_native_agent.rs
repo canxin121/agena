@@ -1,6 +1,7 @@
 //! Browse and manage native ACP conversations from the command palette.
 
 mod browse;
+mod history;
 mod manage;
 #[cfg(test)]
 mod tests;
@@ -14,6 +15,8 @@ use agena_domain::{
 };
 use agena_tui::{choice::ChoicePresentationStyle, main_focus::Focus};
 use uuid::Uuid;
+
+pub(crate) use history::NativeAgentHistory;
 
 use crate::{
     App, ChoiceItem, ChoiceOverlay, ChoiceOverlayAction, ConfirmAction, ConfirmOverlay, Overlay,
@@ -41,6 +44,10 @@ enum NativeAgentChoice {
         archive_supported: bool,
     },
     Open {
+        page: NativeAgentPage,
+        entry: ExternalAgentIndexedSession,
+    },
+    Preview {
         page: NativeAgentPage,
         entry: ExternalAgentIndexedSession,
     },
@@ -166,6 +173,10 @@ impl App {
             }
             NativeAgentChoice::Open { page, entry } => {
                 self.open_native_conversation(page, entry, fallback())
+            }
+            NativeAgentChoice::Preview { page, entry } => {
+                self.overlay_stack.push(Overlay::Choice(dialog.clone()));
+                self.open_native_history(page, entry.session);
             }
             NativeAgentChoice::Create(page) => self.create_native_conversation(page, fallback()),
             NativeAgentChoice::Archive {

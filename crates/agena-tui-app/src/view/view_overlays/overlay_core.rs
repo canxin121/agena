@@ -71,6 +71,9 @@ impl App {
                     &editor.input,
                 );
             }
+            Overlay::NativeAgentHistory(history) => {
+                self.render_native_history(frame, area, history)
+            }
             Overlay::TranscriptFoldLoad(dialog) => {
                 render_overlay_line_input_dialog(
                     frame,

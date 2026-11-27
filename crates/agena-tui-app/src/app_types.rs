@@ -1116,6 +1116,7 @@ pub(super) enum Overlay {
     NativeAgentEdit(
         Box<agena_tui_components::EditorDialogState<crate::app_native_agent::NativeAgentEdit>>,
     ),
+    NativeAgentHistory(Box<crate::app_native_agent::NativeAgentHistory>),
     HubProject(crate::app_hub::HubProjectDialog),
     SettingsValueEdit(SettingsValueEditOverlay),
     PermissionRawEdit(crate::app_permission_raw::PermissionRawEditOverlay),

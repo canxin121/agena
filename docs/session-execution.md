@@ -76,7 +76,7 @@ agena sessions agent-auth <session-id> --terminal --login <terminal-method-id>
 
 Web 和 TUI 的 `/` 命令菜单会显示当前会话的外部 Agent 发布的命令、说明和参数提示。外部命令以 `/agent:` 开头。在 Claude Code 或 Antigravity 的 ACP 会话中，用 `/agent:compact` 压缩当前原生会话。直接输入 `/compact` 会调用 Agena 的压缩操作，该操作适用于 Agena 原生会话。选中带参数提示的外部命令会先把命令填入输入框。
 
-如果 Antigravity 的受限主 Agent 没有通过 ACP 发布 `compact`，Agena 会用同一受限配置启动官方 CLI，在当前原生会话执行 `/compact`。这种情况下请单独发送 `/agent:compact`，压缩后继续在原会话发送消息。[Antigravity 压缩命令](https://antigravity.google/docs/commands/compact/) · [自定义主 Agent 的 ACP 命令问题](https://github.com/google-antigravity/antigravity-cli/issues/1472)
+Antigravity 支持释放 ACP 会话连接时，Agena 用同一受限配置调用官方 CLI 并核对原生会话检查点。检查点完成后，命令附带的文字和附件通过 ACP 在同一个原生会话中执行。这也适用于 ACP 发布了 `compact` 的旧历史会话。适配器仅开放原生 `compact` 命令时，Agena 直接转交命令。[Antigravity 压缩命令](https://antigravity.google/docs/commands/compact/) · [自定义主 Agent 的 ACP 命令问题](https://github.com/google-antigravity/antigravity-cli/issues/1472)
 
 ACP v2 Agent 通过 `session/options` 提供预览时，第一次打开命令菜单即可查看它公布的部分原生命令。原生会话打开后，菜单根据实际返回的命令和后续更新刷新。旧版 Agent 通常在第一条消息后发布列表。已经知道命令名称时，可以直接提交 `/agent:<命令>`。
 
@@ -90,7 +90,7 @@ ACP v2 Agent 通过 `session/options` 提供预览时，第一次打开命令菜
 
 会话投影、执行状态和聊天附件在 Agena 服务内存中使用。同一次服务运行期间，重开空闲会话会保留 Agena 的 Profile、提示词、会话选择、权限和额外目录。服务重启后，再次打开原生历史会分配新的临时 ID。旧版已经写进 `agena.db` 的 ACP 记录保留原数据，普通会话列表会过滤这些记录。工具在项目里执行的文件修改按项目权限处理。
 
-单次回放接收至多 6,000 条记录、24 MiB 的协议更新和 8 MiB 的附件。投影超过 16 MiB 时，视图保留能容纳的最近完整轮次，并显示范围提示。续聊使用原生会话 ID，由 Agent 读取原生上下文。回放失败时，原有临时视图可继续使用。
+回放失败时，原有临时视图可继续使用。
 
 ```sh
 agena sessions agent-sessions --workspace /path/to/project list claude-code
@@ -110,9 +110,15 @@ agena sessions agent-sessions --workspace /path/to/project watch claude-code --w
 
 对应的 REST 操作是 `index_list`、`batch_get`、`set_archived` 和 `watch`。`index_list` 的 `archived` 参数可设为 `unarchived`、`archived` 或 `all`。索引查询和变更都以当前项目目录为范围。
 
+打开长会话时，Agena 滚动接收回放，优先载入最近的完整轮次。超出视图容量时，历史里会标出省略的轮次或内容。主视图载入的附件合计最多 8 MiB，每条记录最多 16 个附件。从 Web 的原生会话列表选「预览」，或在 TUI 的原生会话菜单选「预览历史」，可按页查看更早的用户和助手文字。预览是只读操作，打开的会话视图保持可用。每页至多八个轮次，每个角色每轮至多 32 KiB 的文字，完整记录由原生 Agent 保存。
+
+预览沿用 `POST /api/v1/acp/workspaces/{workspace_id}/sessions`。使用 `{"action":"preview_history","agent":"claude-code","native_id":"<native-id>"}` 获取最新页。可以把响应中的 `preview.next_before_turn` 作为 `before_turn` 请求上一页。Claude Code 当前的 ACP v2 适配器用 `session/resume` 从头回放，ACP v1 使用 `session/load`。Agena 在本地选页，翻页时 Agent 仍会重发历史，所以长会话的加载时间取决于原生回放。预览要求原生 Agent 提供历史回放能力。[ACP v1 加载会话](https://agentclientprotocol.com/protocol/session-setup#loading-sessions) · [Claude Code ACP v2 适配器](https://github.com/agentclientprotocol/claude-agent-acp/blob/main/src/v2/agent.ts)
+
 在 ACP 侧边栏点击「原生会话」，可查看关联信息和 Agent 提供的重命名、设置额外目录、关闭、删除或分叉操作。修改操作需要当前会话空闲。额外目录会按项目读取权限检查，下一次打开原生会话时生效。
 
-Agena 合成全局、工作区、匹配 ACP 路由的模型层、Profile 和会话提示词，并按配置加入项目指令和预加载技能。单次请求的 `system` 可以替换配置提示词层，项目指令和预加载技能仍会追加。ACP 的提示词预览显示默认配置下将追加的正文。Agent 在握手中声明相应能力时，Agena 在新建、恢复或分叉时追加系统提示词。Claude Code 使用 ACP 的 `systemPrompt`。Antigravity 在 ACP v1 使用 `_meta.antigravity.systemPrompt.append`。Claude Code 在原生会话首次推理时记录系统提示词，恢复时传入的变更可以在下一次原生压缩后生效。[ACP 客户端系统提示词](https://agentclientprotocol.com/rfds/client-system-prompt)
+Agena 合成全局、工作区、匹配 ACP 路由的模型层、Profile 和会话提示词，并按配置加入项目指令和预加载技能。单次请求的 `system` 可以替换配置提示词层，项目指令和预加载技能仍会追加。ACP 的提示词预览显示默认配置下将追加的正文。Agent 在握手中声明相应能力时，Agena 在新建、恢复或分叉时追加系统提示词。Claude Code 使用 ACP 的 `systemPrompt`，并通过 Agent SDK 的 `snapshot: false` 在恢复会话后重新生成系统提示词。该选项需要 TypeScript SDK 0.3.257 和 Claude Code 2.1.257 或更新版本。Antigravity 在 ACP v1 使用 `_meta.antigravity.systemPrompt.append`。[ACP 客户端系统提示词](https://agentclientprotocol.com/rfds/client-system-prompt) · [Claude Agent SDK 系统提示词](https://code.claude.com/docs/en/agent-sdk/modifying-system-prompts)
+
+发送时，已启用的 `chat.system` 可以调整 Agena 追加的系统提示词，`chat.message` 和 `chat.messages` 可以改写当前消息的文本。`chat.messages` 产生的额外上下文（例如召回的工作区记忆）作为本轮独立的文本块发送。附件和技能引用保留原有顺序，浏览中的 Agena 会话保留用户原文。重新打开会话时，历史取自原生 Agent。`/agent:` 命令按用户输入路由。
 
 ```sh
 agena sessions agent-session <session-id> status
@@ -149,15 +155,21 @@ REST 可用 `GET /api/v1/sessions/{session_id}/agent-work` 查看当前可取消
 
 ACP 请求超时或调用方撤回正在等待的插话与单项操作时，Agena 用 `$/cancel_request` 通知 Agent 取消对应的请求 ID。停止当前执行时走 `session/cancel`，随后结算 Agena 的本地执行和工具授权。
 
+Agent 从 ACP 或 MCP 撤回单个 Agena 工具请求时，对应的审批和仍在执行的工具会取消，同一轮的其他工具可以继续。ACP 断线时，本轮签发的工具授权会撤回，运行中的本地工具完成清理后才结算断线错误。
+
+提示词发出后，如果 Agent 持续 180 秒没有报告当前执行的进展，Agena 会发送 `session/cancel`、撤销工具授权并报告超时。等待用户答复、浏览器授权或 Agena 工具完成期间会延后计时。前台完成后，Agena 会继续观察 Agent 已报告的独立后台任务。后台清空后会短暂等待可能随之开始的前台工作。服务器可通过 `AGENA_ACP_PROMPT_IDLE_TIMEOUT_SECS` 配置无进展时限，单位为秒，有效范围为 1 至 86400。[ACP 后台工作](https://agentclientprotocol.com/protocol/v2/prompt-lifecycle#background-work)
+
 Agena 连接外部 Agent 时自动协商 ACP 版本。支持 v2 的 Agent 使用 v2，旧版 Agent 会通过新的 v1 握手连接。当前 Claude Code 适配器会选择 **ACP v2 Preview**，Antigravity 会选择 **ACP v1**。在 v2 会话里，Agent 的确认响应表示已接收消息，Agena 继续跟踪运行状态和已报告的后台任务。
 
-Agena 默认优先使用 Streamable HTTP。也可以在服务器环境中用 `AGENA_ACP_MCP_TRANSPORT` 指定 `http`、`acp`、`sse` 或 `stdio`，Agena 根据 Agent 声明的能力选择可用的传输。stdio 是 ACP v1 的基础传输，旧式 SSE 只用于声明支持它的 v1 Agent。v2 Agent 在没有共同 MCP 传输时仍可使用原生会话。MCP 工具使用当前轮次的权限，工具出口随轮次结束撤销。
+Agena 默认优先使用 Streamable HTTP。也可以在服务器环境中用 `AGENA_ACP_MCP_TRANSPORT` 指定 `http`、`acp`、`sse` 或 `stdio`，Agena 根据 Agent 声明的能力选择可用的传输。stdio 是 ACP v1 的基础传输，旧式 SSE 只用于声明支持它的 v1 Agent。没有共同 MCP 传输时，普通 v2 连接仍可使用原生会话，聊天记录会提示当前轮的 Agena 工具不可用。MCP 工具使用当前轮次的权限，工具出口随轮次结束撤销。
 
 - Claude Code 和 Antigravity 的 ACP 执行通过名为 `agena` 的 MCP server 调用项目工具。文件读写、Shell 和网页工具经过当前 Agena Profile 的权限、审批和执行流程。授权后产生的图片附件可以作为 MCP 图片内容返回，例如通过 `fs.read_media` 查看本地截图。
 - Claude Code 在会话打开时禁用内置工具和额外的 MCP 配置。`/agent:compact` 等原生会话命令由 Claude Code 执行，压缩结果写入它自己的会话。
-- Antigravity 通过隔离配置下的受限主 Agent 打开会话，保留 MCP 资源和会话任务管理等内部工具。Antigravity 通过 `agena` 的 `tool` 入口查询完整工具列表、参数和执行结果，避免加载大型工具定义时被 CLI 省略。新会话由 Antigravity 写入受限配置目录。旧版默认配置中的原生历史可以浏览。使用 Agena 工具续聊时，请新建 ACP 会话。
+- Antigravity 通过隔离配置下的受限主 Agent 打开会话，保留 MCP 资源和会话任务管理等内部工具。Antigravity 通过 `agena` 的 `tool` 入口查询完整工具列表、参数和执行结果，避免加载大型工具定义时被 CLI 省略。新会话由 Antigravity 写入受限配置目录。
+- 在 Unix 系统上，Agena 可用支持该钩子的 `agy 1.5.18` 继续默认配置中已有的原生会话并保留原生会话 ID。Agena 在自己的 Antigravity 配置中安装 `PreToolUse` 钩子，旧会话的模型工具调用只放行 Agena MCP 入口。有原生工作区 MCP 或钩子配置时，续聊需要 ACP 进程隔离。Agena 会在沙盒中屏蔽这些配置文件。旧历史可按需只读浏览，启用隔离后可从原生列表重新打开会话。[Antigravity 钩子](https://antigravity.google/docs/hooks?tab=cli) · [Antigravity MCP 配置](https://antigravity.google/docs/mcp)
+- `agy 1.5.18` 的原生分叉和删除可在官方终端里用 `/fork` 和 `/resume` 会话选择器操作。Agena 的原生管理入口随 ACP 适配器公布的分叉、归档和删除能力开放。[Antigravity 分叉](https://antigravity.google/docs/cli-conversations) · [Antigravity 删除会话](https://antigravity.google/docs/cli/commands/resume/#deleting-a-conversation)
 - 原生 Agent 可以通过 ACP v1 的文件与终端回调委托 Agena 读取文本、写入文件和运行命令。回调使用当前会话下的文件和 Shell 工具，终端句柄绑定到该轮次。
-- 一轮成功后，服务可以保留 ACP 读流以接收标题、命令列表、通知和当前原生会话发来的交互。空闲时的表单、授权链接和原生权限仍使用 Agena 的交互卡。下一轮恢复会话时会撤回旧连接的待答请求。Agena 的 MCP 工具、文件和终端回调需要活跃轮次。
+- 一轮成功后，服务可以保留 ACP 读流以接收标题、命令列表、通知和当前原生会话发来的交互。空闲时的表单、授权链接和原生权限仍使用 Agena 的交互卡。下一轮恢复会话时会撤回旧连接的待答请求。Agena 的 MCP 工具、文件和终端回调需要活跃轮次。ACP v2 恢复连接时，正在打开的原生会话可以使用该轮授予的 MCP 工具，重新发出的原生权限请求会在同一轮继续等待用户答复。
 - ACP 表单请求可以在 Web 和 TUI 中作答。表单支持文本、整数、数字、布尔值、单选和多选。可选字段可以跳过，回答在发给 Agent 前按表单校验。
 - 协议登录如果发来绑定到该次登录的交互请求，也会在对应 Agena 会话中显示。通过 CLI 发起此类登录时，可以在同一会话的 Web 或 TUI 中回答。TUI 使用 `Ctrl+R` 打开待答输入。
 - Agent 请求打开授权页面时，Web 和 TUI 会先展示完整地址。确认后由客户端打开页面，Agent 报告授权完成时会在对话中显示。对于原生工具权限，Agena 会展示 Agent 提供的全部选项，并回传用户选择的选项 ID。
@@ -168,12 +180,13 @@ Agena 默认优先使用 Streamable HTTP。也可以在服务器环境中用 `AG
 - 原生工具行可以显示工具报告的文本、文件差异和终端输出，并在工具完成后附上它返回的媒体。外部 Agent 提供后续提示建议时，可以在 Web 活动面板或 TUI 命令菜单里选一条填入空白输入框，再由用户发送。
 - 外部 Agent 声明支持时，可以在提示词里附带图片、音频或嵌入资源。附件经过项目读取权限校验，并以提交时的内容发送。外部 Agent 会收到当前消息选中的项目文件、目录和 Agena 技能引用，可以通过可用工具读取。其他文件可用项目路径引用。
 - 连续对话优先使用 `session/resume`，也可通过 `session/load` 恢复。恢复遇到临时错误时，执行会报告错误，重试使用原生会话 ID。Agent 明确报告原生会话已不存在时，Agena 会提示并建立当前消息的新上下文。清空上下文或使用普通 Agena 分叉也会开始新上下文。Agent 到达单轮请求上限时，Agena 会提示并保留当前进度。
+- 消息发送后断线或取消时，下一条新消息会续接同一个原生会话。v2 尚未确认的普通消息使用原提交键重试，并通过原生回放核对收到的消息 ID。Agent 明确在接受消息前拒绝请求，且 Agena 尚无该轮工具调用时，可以在同一会话重试。已确认的消息、交付不明的 v1 消息及可能只在当前连接生效的原生命令，适合先重开原生历史核对，再发送下一条消息。[ACP v2 提交重试](https://agentclientprotocol.com/protocol/v2/prompt-lifecycle#retrying-a-prompt)
 - 外部 Agent 会话面向用户主动发起的项目对话。计划任务、渠道和集成事件的自动推理仍由 Agena 原生会话处理。
 - Antigravity 的 ACP 可用性与个人账号、套餐、地区、版本及当时的厂商政策有关；请在部署前核对最新官方说明和适用条款。本项目不保证任意账号或套餐均可使用，也不构成厂商合规意见。[Google ACP 用法讨论](https://github.com/google-antigravity/antigravity-cli/issues/1493) · [Google Antigravity 条款](https://antigravity.google/terms) · [Anthropic Claude Code 条款](https://code.claude.com/docs/en/legal-and-compliance)。Claude Code 也使用用户自己的登录与用量，具体使用条件以 Anthropic 当前条款为准。
 
-### Linux ACP 进程隔离
+### ACP 进程隔离
 
-安装并启用 [MXC 沙盒](sandbox.md) 后，可在服务进程设置 `AGENA_ACP_SANDBOX_FILE`，为 `claude-code`、`antigravity` 或两者配置进程策略。策略将工作区及已授权的额外目录提供为只读，Agent 的原生配置和历史目录可写。外部 CLI 按策略直连其模型与登录端点。Agena MCP 通过 ACP 连接或 Unix socket 上的 stdio relay 提供。
+安装并启用 [MXC 沙盒](sandbox.md) 后，可在服务进程设置 `AGENA_ACP_SANDBOX_FILE`，为 `claude-code`、`antigravity` 或两者配置进程策略。策略将工作区及已授权的额外目录提供为只读，Agent 的原生配置和历史目录可写。外部 CLI 按策略直连其模型与登录端点。Agena MCP 通过 ACP 连接或经认证的本机 stdio relay 提供。Linux 和 macOS 使用 Unix socket，Windows 使用本机命名管道。
 
 ```json
 {
@@ -191,6 +204,10 @@ Agena 默认优先使用 Streamable HTTP。也可以在服务器环境中用 `AG
 ```
 
 将示例 IP 替换成部署允许的 Agent 服务地址，并按需要允许 DNS 和登录端点。`runtime_paths` 可列出需只读挂载的运行依赖，例如安装适配器的 Node.js 和 npm 包目录。Claude Code 使用 `CLAUDE_CONFIG_DIR` 或服务账号的 `.claude` 保存原生状态。某个 Agent 配置了此策略时，沙盒不可用会中止该 Agent 的连接。
+
+Linux 和 Windows 可按目的 IP、协议和端口允许出站。macOS Seatbelt 支持允许或拒绝出站两种默认动作。macOS 上需要厂商联网时，可以显式设置 `default` 为 `allow`，工作区仍由 Seatbelt 设为只读。[各平台网络能力](sandbox.md)
+
+在 Ubuntu 上，安装器为最终安装路径配置应用专用 AppArmor user namespace 授权。部署时可从该路径运行 `agena --agena-sandbox-check`，检查离线隔离和原生联网是否可用。[MXC 安装与自检](sandbox.md)
 
 ## Bot 与项目作用域
 

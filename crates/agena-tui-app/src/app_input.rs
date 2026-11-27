@@ -224,6 +224,7 @@ impl App {
             }
             Overlay::SessionRename(dialog) => self.handle_session_rename_overlay_key(key, dialog),
             Overlay::NativeAgentEdit(editor) => self.handle_native_agent_edit(key, editor),
+            Overlay::NativeAgentHistory(history) => self.handle_native_history_key(key, history),
             Overlay::HubProject(dialog) => self.handle_hub_project_key(key, dialog),
             Overlay::SettingsValueEdit(dialog) => {
                 self.handle_settings_value_edit_overlay_key(key, dialog)

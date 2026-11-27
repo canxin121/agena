@@ -1398,26 +1398,36 @@ fn archive_fixture(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn antigravity_reads_previous_history_and_prompts_only_in_the_restricted_profile()
--> TestResult {
+async fn antigravity_continues_previous_history_using_v1_load() -> TestResult {
     exercise_previous_antigravity_history(false).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn antigravity_continues_and_compacts_guarded_previous_history() -> TestResult {
+async fn antigravity_continues_and_compacts_previous_history() -> TestResult {
     exercise_previous_antigravity_history(true).await
 }
 
-async fn exercise_previous_antigravity_history(guarded: bool) -> TestResult {
+async fn exercise_previous_antigravity_history(supports_resume: bool) -> TestResult {
     let (_bin, builder) = archive_fixture("agy", "1")?;
-    let builder = if guarded {
-        builder.seed_file("workspace/.guarded-antigravity-history", Vec::new())
+    let builder = if supports_resume {
+        builder.seed_file("workspace/.antigravity-supports-resume", Vec::new())
     } else {
         builder
     };
     builder
         .seed_file("workspace/.split-antigravity-history", Vec::new())
         .seed_file("home/.gemini/antigravity-cli/conversations/fixture", Vec::new())
+        .seed_file("home/.gemini/agena-acp/config/hooks.json", serde_json::to_vec(&json!({
+            "workspace-check": {"PreToolUse": []},
+            "agena-acp-tools": {"PreToolUse": [{
+                "matcher": "*",
+                "hooks": [{
+                    "type": "command",
+                    "command": "'/old/agena' --internal-acp-antigravity-tool-guard",
+                    "timeout": 10,
+                }],
+            }]},
+        }))?)
         .run(|case| async move {
             let ordinary = case.user().new_session().await?;
             let workspace = ordinary.snapshot().await?.session.workspace_id.context("workspace")?;
@@ -1435,36 +1445,29 @@ async fn exercise_previous_antigravity_history(guarded: bool) -> TestResult {
             let SessionResult::Status { capabilities, session: native, .. } =
                 client.external_agent_session(session_id, SessionAction::Status).await?
             else { anyhow::bail!("expected native session status"); };
-            ensure!(capabilities.continue_conversation == guarded);
+            ensure!(capabilities.continue_conversation);
             ensure!(native.context("native ID")?.native_id == "ready");
             let run = legacy.send("Continue the legacy conversation").await?.wait_settled().await?;
-            if guarded {
-                run.assert_succeeded()?;
-                run.assert_assistant_text("Restricted Antigravity")?;
-                legacy.send("/agent:compact Continue after native compaction")
-                    .await?.wait_settled().await?.assert_succeeded()?;
-                let wire = tokio::fs::read_to_string(case.workspace().join(".archive-wire")).await?;
-                ensure!(wire.matches("legacy-resume ready").count() == 3, "{wire}");
-                ensure!(wire.matches("session/prompt ready").count() == 2, "{wire}");
-                ensure!(
-                    wire.find("compact-cli ready")
-                        .zip(wire.find("compact-followup ready"))
-                        .is_some_and(|(compact, followup)| compact < followup),
-                    "{wire}",
-                );
-                let native_config = case.workspace().join(".agents/mcp_config.json");
-                tokio::fs::create_dir_all(native_config.parent().context("MCP config directory")?).await?;
-                tokio::fs::write(&native_config, b"{}").await?;
-                legacy.send("Retry with workspace MCP configured").await?.wait_settled().await?.assert_failed()?;
-                let checked_wire = tokio::fs::read_to_string(case.workspace().join(".archive-wire")).await?;
-                ensure!(checked_wire.matches("session/prompt ready").count() == 2, "{checked_wire}");
-                tokio::fs::remove_file(native_config).await?;
-            } else {
-                run.assert_failed()?;
-            }
+            run.assert_succeeded()?;
+            run.assert_assistant_text("Native Antigravity")?;
+            legacy.send("/agent:compact Continue after native compaction")
+                .await?.wait_settled().await?.assert_succeeded()?;
+            let wire = tokio::fs::read_to_string(case.workspace().join(".archive-wire")).await?;
+            ensure!(wire.matches("legacy-continuation ready").count() == 3, "{wire}");
+            ensure!(wire.matches("session/prompt ready").count() == 2, "{wire}");
+            ensure!(
+                wire.find("compact-cli ready")
+                    .zip(wire.find("compact-followup ready"))
+                    .is_some_and(|(compact, followup)| compact < followup),
+                "{wire}",
+            );
+            let native_config = case.workspace().join(".agents/mcp_config.json");
+            tokio::fs::create_dir_all(native_config.parent().context("MCP config directory")?).await?;
+            tokio::fs::write(&native_config, b"{}").await?;
+            legacy.send("Continue with workspace MCP configured").await?.wait_settled().await?.assert_succeeded()?;
             let created: agena_api::resource::SessionResource = case.http().await
                 .send_json(Method::POST, "/api/v1/acp/sessions", &json!({
-                    "workspace_id": workspace, "title": "Restricted connection", "external_agent": "antigravity",
+                    "workspace_id": workspace, "title": "Managed connection", "external_agent": "antigravity",
                 }))
                 .await?.require_success()?.json()?;
             let session_id = created.id;
@@ -1473,7 +1476,7 @@ async fn exercise_previous_antigravity_history(guarded: bool) -> TestResult {
             let updated_prompt = "Follow the updated Agena instructions.";
             for (message, body) in [
                 ("Continue with Agena's tools", initial_prompt),
-                ("Continue the restricted conversation", updated_prompt),
+                ("Continue the conversation", updated_prompt),
             ] {
                 let prompt = serde_json::from_value(json!({
                     "mode": "replace",
@@ -1483,14 +1486,15 @@ async fn exercise_previous_antigravity_history(guarded: bool) -> TestResult {
                 client.set_session_prompts(session_id, Some(prompt)).await?;
                 let run = user.send(message).await?.wait_settled().await?;
                 run.assert_succeeded()?;
-                run.assert_assistant_text("Restricted Antigravity")?;
+                run.assert_assistant_text("Native Antigravity")?;
             }
             ensure!(matches!(list().await?, WorkspaceResult::Page { sessions, .. }
                 if sessions.iter().map(|session| session.native_id.as_str()).collect::<Vec<_>>() == ["managed-run", "ready"]));
             let wire = tokio::fs::read_to_string(case.workspace().join(".archive-wire")).await?;
             ensure!(wire.contains("history-port previous") && wire.contains("session/prompt managed-run"), "{wire}");
-            ensure!(wire.contains(&format!("session/new-system-prompt {initial_prompt}\n")), "{wire}");
-            ensure!(wire.contains(&format!("session/resume-system-prompt {updated_prompt}\n")), "{wire}");
+            ensure!(wire.matches("session/prompt ready").count() == 3, "{wire}");
+            ensure!(wire.contains(&format!("session/new-system-prompt {initial_prompt}")), "{wire}");
+            ensure!(wire.contains(&format!("session/resume-system-prompt {updated_prompt}")), "{wire}");
             Ok(())
         })
         .await

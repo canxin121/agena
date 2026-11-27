@@ -1573,7 +1573,7 @@ export default {
       chooseRewindMessage: 'Choose a message to rewind to',
       nativeRewindDescription: 'The agent will remove the selected message and later turns from the active conversation.',
       reopenForRewind: 'Reopen this conversation from history to load available rewind positions.',
-      readOnlyHistory: 'This history is read-only. Continuing requires a supported Antigravity release. Workspaces with native MCP or hooks also require ACP process isolation.',
+      readOnlyHistory: 'This conversation is available for viewing only.',
       closeSession: 'Close native session',
       delete: 'Delete native history',
       deleteDescription: 'Permanently delete this conversation from the agent’s history.',

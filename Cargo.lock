@@ -346,6 +346,7 @@ dependencies = [
  "agena-domain",
  "agena-failure",
  "agena-mcp-client",
+ "agena-mcp-server",
  "agena-notification",
  "agena-plugin-host",
  "agena-plugin-marketplace",
@@ -699,8 +700,10 @@ name = "agena-mcp-server"
 version = "0.1.0"
 dependencies = [
  "agena-async",
+ "agena-domain",
  "agena-failure",
  "agena-mcp-client",
+ "agena-tool-api",
  "async-trait",
  "rmcp",
  "serde",
@@ -788,6 +791,7 @@ version = "0.1.0"
 dependencies = [
  "abi_stable",
  "agena-async",
+ "agena-domain",
  "agena-failure",
  "agena-plugin-sdk",
  "agena-process",

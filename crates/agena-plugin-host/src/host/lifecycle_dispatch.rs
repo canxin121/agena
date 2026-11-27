@@ -1,6 +1,8 @@
 //! Runtime-facing dispatch of typed lifecycle events. Permission decisions are
 //! guarded; terminal observations never turn a completed action into an error.
 
+use agena_domain::is_acp_session_id;
+
 use super::{HookRunRecord, HookRunStatus, PluginHost};
 use crate::event_pipeline::{PluginGuardReport, PluginObserveReport};
 use crate::sdk::{
@@ -61,18 +63,27 @@ impl PluginHost {
         input: ModelRequestBeforeInput,
     ) -> Result<(), PluginError> {
         let session = input.session_id;
+        if is_acp_session_id(session) {
+            return Ok(());
+        }
         let report = self.lifecycle.model_before.dispatch(input).await;
         self.guard_result("model.request.before", session, report)
     }
 
     pub async fn broadcast_model_request_after(&self, input: ModelRequestAfterInput) {
         let session = input.session_id;
+        if is_acp_session_id(session) {
+            return;
+        }
         let report = self.lifecycle.model_after.dispatch(input).await;
         self.observe_result("model.request.after", session, report);
     }
 
     pub async fn dispatch_model_request_error(&self, input: ModelRequestErrorInput) -> bool {
         let session = input.session_id;
+        if is_acp_session_id(session) {
+            return false;
+        }
         let report = self.lifecycle.model_error.dispatch(input).await;
         for failure in report.failures {
             self.push_hook_runs(vec![HookRunRecord::new(
@@ -92,12 +103,18 @@ impl PluginHost {
         input: CompactionBeforeInput,
     ) -> Result<(), PluginError> {
         let session = input.session_id;
+        if is_acp_session_id(session) {
+            return Ok(());
+        }
         let report = self.lifecycle.compaction_before.dispatch(input).await;
         self.guard_result("compaction.before", session, report)
     }
 
     pub async fn broadcast_compaction_after(&self, input: CompactionAfterInput) {
         let session = input.session_id;
+        if is_acp_session_id(session) {
+            return;
+        }
         let report = self.lifecycle.compaction_after.dispatch(input).await;
         self.observe_result("compaction.after", session, report);
     }
@@ -107,12 +124,18 @@ impl PluginHost {
         input: SubagentStartInput,
     ) -> Result<(), PluginError> {
         let session = input.session_id;
+        if is_acp_session_id(session) {
+            return Ok(());
+        }
         let report = self.lifecycle.subagent_start.dispatch(input).await;
         self.guard_result("subagent.start", session, report)
     }
 
     pub async fn broadcast_subagent_stop(&self, input: SubagentStopInput) {
         let session = input.session_id;
+        if is_acp_session_id(session) {
+            return;
+        }
         let report = self.lifecycle.subagent_stop.dispatch(input).await;
         self.observe_result("subagent.stop", session, report);
     }
@@ -122,6 +145,9 @@ impl PluginHost {
         input: PermissionRequestInput,
     ) -> Result<(), PluginError> {
         let session = input.session_id;
+        if is_acp_session_id(session) {
+            return Ok(());
+        }
         let report = self.lifecycle.permission_request.dispatch(input).await;
         self.guard_result("permission.request", session, report)
     }

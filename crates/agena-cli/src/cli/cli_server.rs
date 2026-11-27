@@ -48,7 +48,8 @@ use agena_api::{
 };
 use agena_application::dto::{MemoryResource, OperatorToolResource};
 use agena_client::{AgenaClient, ClientError};
-use agena_mcp_server::{StatelessMcpToolMetadata, is_stateless_mcp_tool_exposed};
+use agena_domain::ToolApiFunction;
+use agena_mcp_server::{ToolApiAction, dispatch_tool_api, tool_api_descriptors};
 
 pub(super) struct ServerSessionClient {
     pub(super) client: AgenaClient,
@@ -160,73 +161,45 @@ pub(super) struct ServerMcpBackend {
     workspace_id: i64,
 }
 
-fn mcp_tool_is_exposed(tool: &OperatorToolResource) -> bool {
-    is_stateless_mcp_tool_exposed(StatelessMcpToolMetadata {
-        name: tool.name.as_str(),
-        plugin_id: tool.plugin_id.as_str(),
-        interactive: tool.interactive,
-        agent: tool.agent,
-    })
-}
-
-fn mcp_tool_is_callable(tools: &[OperatorToolResource], name: &str) -> bool {
-    tools
-        .iter()
-        .any(|tool| tool.name == name && mcp_tool_is_exposed(tool))
-}
-
 #[async_trait]
 impl McpServerBackend for ServerMcpBackend {
     async fn list_tools(&self) -> Result<Vec<ToolDescriptor>, McpServerError> {
-        let value = self
-            .client
-            .operator_tools()
-            .await
-            .map_err(|error| McpServerError::Backend(error.user_message()))?;
-        let tools: Vec<OperatorToolResource> = serde_json::from_value(value)?;
-        Ok(tools
-            .into_iter()
-            .filter(mcp_tool_is_exposed)
-            .map(|tool| ToolDescriptor {
-                name: tool.name,
-                title: None,
-                aliases: Vec::new(),
-                description: tool.summary,
-                before_help: tool.before_help,
-                after_help: tool.after_help,
-                input_schema: Some(tool.input_schema),
-                output_schema: None,
-                annotations: None,
-                execution: None,
-                icons: Vec::new(),
-                meta: None,
-            })
-            .collect())
+        Ok(tool_api_descriptors())
     }
 
     async fn call_tool(&self, params: CallToolParams) -> Result<CallToolResult, McpServerError> {
-        // Re-read the live catalog for every call. Besides handling runtime
-        // reloads, this closes the gap where a client skips tools/list and
-        // guesses the name of an interactive or provider-owned tool.
         let value = self
             .client
             .operator_tools()
             .await
             .map_err(|error| McpServerError::Backend(error.user_message()))?;
-        let tools: Vec<OperatorToolResource> = serde_json::from_value(value)?;
-        if !mcp_tool_is_callable(&tools, params.name.as_str()) {
-            return Err(McpServerError::NotFound(format!(
-                "tool '{}' is not exposed by the Agena MCP server",
-                params.name
-            )));
-        }
+        let tools = serde_json::from_value(value)?;
+        let plugins = if params.name == ToolApiFunction::PluginsList.function_name() {
+            self.client
+                .plugin_statuses()
+                .await
+                .map_err(|error| McpServerError::Backend(error.user_message()))?
+                .items
+        } else {
+            Vec::new()
+        };
+        let catalog = OperatorToolResource::stateless_mcp_catalog(tools, plugins);
+        let request = match dispatch_tool_api(&catalog, params)? {
+            ToolApiAction::Respond(response) => {
+                return Ok(agena_mcp_server::text_result(response.output_text));
+            }
+            ToolApiAction::Execute(request) => request,
+        };
+        let tool = catalog
+            .resolve_tool(&request.tool)
+            .ok_or(McpServerError::NotFound(request.tool))?;
 
         let result = self
             .client
             .invoke_operator_tool_with_sandbox(
                 self.workspace_id,
-                params.name.as_str(),
-                params.arguments,
+                &tool.canonical_name,
+                Some(serde_json::Value::from(request.input)),
                 false,
             )
             .await;

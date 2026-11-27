@@ -440,8 +440,7 @@ impl SessionManager {
                 };
                 client.find_workspace_native(&cwd, &link.native_id, filter, &cancel).await?;
             }
-            let mut capabilities = client.lifecycle_capabilities(&cancel).await?;
-            capabilities.continue_conversation &= !configuration.external_agent_state.history_read_only;
+            let capabilities = client.lifecycle_capabilities(&cancel).await?;
             if matches!(action, ExternalAgentSessionAction::Status) {
                 let native_status = match &link {
                     Some(_) if running => Some("open".to_owned()),

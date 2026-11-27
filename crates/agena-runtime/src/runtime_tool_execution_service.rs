@@ -32,9 +32,12 @@ pub struct RuntimeToolResultProjection {
 /// Descriptor of a runtime tool.
 pub struct RuntimeToolDescriptor {
     pub name: String,
+    pub canonical_name: String,
     pub summary: Option<String>,
     pub before_help: Option<String>,
+    pub help: Option<String>,
     pub after_help: Option<String>,
+    pub tags: Vec<String>,
     pub input_schema: serde_json::Value,
     pub output_schema: Option<serde_json::Value>,
     /// Whether this tool is marked as interactive by either its declared

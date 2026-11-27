@@ -85,24 +85,9 @@ pub(super) fn wrap(
         ));
     }
     let mut writes = Vec::new();
-    let mut denied = Vec::new();
     match agent {
         ExternalAgent::Antigravity => {
-            let root = policy::antigravity_profile()?;
-            // agy can discover workspace MCP servers during startup, before
-            // any PreToolUse decision. Hide the native workspace configuration
-            // from its sandbox while Agena uses the authorized project itself.
-            denied = policy::native_antigravity_customizations(cwd, additional_directories)?;
-            let guard =
-                agena_runtime_tools::canonicalize_mutation_path(&root.join("config/hooks.json"));
-            if denied.iter().any(|path| {
-                guard.starts_with(agena_runtime_tools::canonicalize_mutation_path(path))
-            }) {
-                return Err(AppError::Config(
-                    "An Antigravity workspace customization overlaps the ACP tool guard.".into(),
-                ));
-            }
-            writes.push(root);
+            writes.push(policy::antigravity_profile()?);
             if previous_history {
                 writes.push(policy::previous_antigravity_store()?);
             }
@@ -163,7 +148,6 @@ pub(super) fn wrap(
     let policy = SandboxPolicy {
         readonly_paths: reads,
         readwrite_paths: writes,
-        denied_paths: denied,
         runtime_paths: config.runtime_paths,
         private_paths,
         workload_home: private_home.map(Path::to_path_buf),

@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Observe current-turn ACP input and Claude SDK options after the real hook chain."""
+"""Check that ACP executes Agena tools with the original input and tool contracts."""
 
 import json
 from pathlib import Path
 import sys
 import traceback
+import urllib.request
 
 
 NATIVE_ID = "acp-input-hooks"
@@ -23,6 +24,45 @@ def send(**message):
     print(json.dumps({"jsonrpc": "2.0", **message}), flush=True)
 
 
+def check_agena_tools(descriptor):
+    headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+    headers.update((item["name"], item["value"]) for item in descriptor["headers"])
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+    def rpc(method, params, identifier):
+        body = {"jsonrpc": "2.0", "method": method, "params": params}
+        if identifier is not None:
+            body["id"] = identifier
+        request = urllib.request.Request(descriptor["url"], json.dumps(body).encode(), headers)
+        with opener.open(request, timeout=30) as response:
+            if "Mcp-Session-Id" in response.headers:
+                headers["Mcp-Session-Id"] = response.headers["Mcp-Session-Id"]
+            if identifier is None:
+                return
+            body = response.read().decode()
+            if response.headers.get_content_type() == "text/event-stream":
+                body = next(line[5:].strip() for line in body.splitlines()
+                            if line.startswith("data:") and line[5:].strip())
+        return json.loads(body)["result"]
+
+    rpc("initialize", {"protocolVersion": "2025-11-25", "capabilities": {},
+                       "clientInfo": {"name": "ACP hook fixture", "version": "1"}}, 1)
+    headers["Mcp-Protocol-Version"] = "2025-11-25"
+    rpc("notifications/initialized", {}, None)
+    help_text = rpc("tools/call", {"name": "tools_help", "arguments": {
+        "tool": "testkit.model-hooks.probe",
+    }}, 2)["content"][0]["text"]
+    assert "Return the plugin fixture marker" in help_text and "TOOL DEFINITION HOOK MARKER" not in help_text
+    for identifier, tool, args, marker in [
+        (3, "testkit.model-hooks.probe", {}, "ACP plugin tool executed"),
+        (4, "shell.exec", {"command": "printf 'ACP shell executed'"}, "ACP shell executed"),
+    ]:
+        result = rpc("tools/call", {"name": "tools_call", "arguments": {
+            "tool": tool, "input": args,
+        }}, identifier)
+        assert not result.get("isError", False) and marker in json.dumps(result), result
+
+
 for line in sys.stdin:
     request = json.loads(line)
     method, params = request["method"], request["params"]
@@ -39,7 +79,9 @@ for line in sys.stdin:
         assert params.get("sessionId", NATIVE_ID) == NATIVE_ID
         assert params["systemPrompt"]["mode"] == "append"
         text = params["systemPrompt"]["content"][0]["text"]
-        assert "SYSTEM HOOK MARKER" in text
+        assert "SYSTEM HOOK MARKER" not in text
+        assert "Prefer the `agena` MCP server's tools" in text
+        descriptor, = params["mcpServers"]
         if turns < 2:
             label = ["first", "second"][turns]
             assert f"ACP instruction {label}" in text, text
@@ -53,13 +95,10 @@ for line in sys.stdin:
         blocks = params["prompt"]
         if turns < 2:
             label = ["first", "second"][turns]
-            assert len(blocks) == 2 and blocks[0] == {
-                "type": "text", "text": f"acp-hook-rewritten-{label}",
-            }, blocks
-            context = blocks[1]["text"]
-            assert context.startswith("Agena input hook context\n\n"), context
-            assert "SAVED_ACP_MEMORY_FIXTURE" in context and "MEMORY HOOK MARKER" in context, context
-            answer = "ACP fixture accepted the input hooks"
+            assert blocks == [{"type": "text", "text": f"acp-hook-original-{label}"}], blocks
+            if turns == 0:
+                check_agena_tools(descriptor)
+            answer = "ACP fixture received the original message"
         else:
             assert turns == 2 and blocks == [{"type": "text", "text": "/status"}], blocks
             answer = "ACP fixture kept the native command"

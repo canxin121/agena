@@ -31,14 +31,9 @@ antigravity = Path(sys.argv[0]).name == "agy"
 if antigravity:
     arguments = sys.argv[1:]
     assert "--process-per-session" in arguments
-    assert "--include-default-customizations=false" in arguments
+    assert "--agent" not in arguments and "--include-default-customizations=false" not in arguments
     profile = Path(arguments[arguments.index("--gemini-dir") + 1])
-    name = arguments[arguments.index("--agent") + 1]
-    definition = (profile / "config" / "agents" / (name + ".md")).read_text()
     assert profile.parent == Path.home() / ".gemini"
-    assert definition.startswith(f"---\nname: {name}\n")
-    for field in ("tools: []", "inheritMcp: false", "inheritCustomizations: false"):
-        assert field in definition
 
 
 def send(**message):
@@ -227,40 +222,38 @@ def verify_tools(client, disconnect):
     assert "tools" in info["capabilities"] and not {"resources", "prompts"} & info["capabilities"].keys()
     call(None, "notifications/initialized")
     tools = call(2, "tools/list")["tools"]
-    if antigravity:
-        assert [tool["name"] for tool in tools] == ["tool"]
-        listed = call(5, "tools/call", {"name": "tool", "arguments": {}})
-        assert any(tool["name"] == "fs_read" for tool in json.loads(listed["content"][0]["text"])["tools"])
-        described = call(6, "tools/call", {"name": "tool", "arguments": {"name": "fs_read"}})
-        assert "file_path" in json.loads(described["content"][0]["text"])["inputSchema"]["properties"]
-    else:
-        assert any(tool["name"] == "fs_read" for tool in tools)
+    assert {tool["name"] for tool in tools} == {"plugins_list", "tools_list", "tools_help", "tools_call"}
+    plugins = call(10, "tools/call", {"name": "plugins_list", "arguments": {"plugin": "agena.fs"}})
+    assert "agena.fs" in plugins["content"][0]["text"], plugins
+    listed = call(5, "tools/call", {"name": "tools_list", "arguments": {"plugin": "agena.fs"}})
+    assert "fs.read" in listed["content"][0]["text"], listed
+    described = call(6, "tools/call", {"name": "tools_help", "arguments": {"tool": "fs.read"}})
+    assert "file_path" in described["content"][0]["text"], described
+
+    def agena_tool(tool, arguments):
+        return {"name": "tools_call", "arguments": {"tool": tool, "input": arguments}}
 
     def read(identifier, path):
-        args = {"file_path": path}
-        if antigravity:
-            return call(identifier, "tools/call", {"name": "tool", "arguments": {"name": "fs_read", "arguments": args}})
-        return call(identifier, "tools/call", {"name": "fs_read", "arguments": args})
+        return call(identifier, "tools/call", agena_tool("fs.read", json.dumps({"file_path": path})))
 
     shared = read(3, "shared.txt")
     assert not shared.get("isError") and "expected MCP payload" in json.dumps(shared)
     denied = read(4, "private.txt")
     assert denied.get("isError") and "withheld MCP payload" not in json.dumps(denied)
     if version == 2 and transport in ("http", "stdio"):
-        result = call(7, "tools/call", {"name": "shell_exec", "arguments": {
+        result = call(7, "tools/call", agena_tool("shell.exec", {
             "command": "sleep 5 && printf 'retained MCP progress'",
-        }})
+        }))
         assert not result.get("isError") and "retained MCP progress" in json.dumps(result), result
         time.sleep(1.2)
     if version == 2 and transport in ("http", "stdio"):
-        pending = {"jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": {
-            "name": "shell_exec",
-            "arguments": {
+        pending = {"jsonrpc": "2.0", "id": 8, "method": "tools/call", "params":
+            agena_tool("shell.exec", {
                 "command": "touch .mcp-shell-started; while [ ! -e .mcp-shell-release ]; do sleep .05; done; touch .mcp-shell-effect",
                 "reads": [".mcp-shell-release"],
                 "writes": [".mcp-shell-started", ".mcp-shell-effect"],
-            },
-        }}
+            })
+        }
         worker = None
         errors = Queue()
         if transport == "http":
@@ -302,6 +295,9 @@ for line in sys.stdin:
             break
         assert params["protocolVersion"] == version
         if version == 1:
+            if antigravity:
+                assert params["clientCapabilities"]["fs"] == {"readTextFile": False, "writeTextFile": False}
+                assert params["clientCapabilities"]["terminal"] is False
             capabilities = {"mcpCapabilities": {"sse": True}} if transport == "sse" else {}
             send(id=identifier, result={"protocolVersion": 1, "agentCapabilities": capabilities})
         else:
@@ -315,8 +311,8 @@ for line in sys.stdin:
             assert servers[0]["_meta"]["antigravity"]["forceAllToolsEager"] is True
         else:
             options = params["_meta"]["claudeCode"]["options"]
-            assert options["tools"] == []
-            assert options["strictMcpConfig"] and options["settingSources"] == []
+            assert not {"tools", "disallowedTools", "strictMcpConfig", "settingSources", "extraArgs", "env"} & options.keys()
+            assert options.get("allowedTools") == (["mcp__agena__*"] if servers else None)
             assert options["allowDangerouslySkipPermissions"] is False
         if transport == "none":
             assert not servers

@@ -5,6 +5,11 @@ Agena hooks belong to the runtime phase that produces their input. The
 dispatch all refer to the same typed event contracts. A plugin declares only
 the events it handles; the host dispatches only subscribed events.
 
+ACP sessions skip Agena's session-scoped hooks, including those for tools
+called through the Agena MCP server. Plugin tool handlers still run with
+Agena's tool permissions and approvals. The connected agent runs its own
+native hooks.
+
 ## Describe your hooks
 
 Every `#[hook(...)]` method **must** declare a non-empty `summary` and

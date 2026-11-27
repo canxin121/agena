@@ -6,8 +6,10 @@ license.workspace = true
 rust-version.workspace = true
 [dependencies]
 agena-async = { workspace = true }
+agena-domain = { workspace = true }
 agena-failure = { workspace = true }
 agena-mcp-client = { workspace = true }
+agena-tool-api = { workspace = true }
 async-trait = { workspace = true }
 rmcp = { workspace = true, features = ["server", "transport-io", "transport-streamable-http-server"] }
 serde = { workspace = true }

@@ -87,6 +87,65 @@ struct ModelHookProbe {
     summary = "Observe the actual provider and execution lifecycle over HTTP."
 )]
 impl ModelHookProbe {
+    #[tool(
+        name = "probe",
+        summary = "Return the plugin fixture marker",
+        tags(read_only)
+    )]
+    async fn probe(&self) -> agena_plugin_sdk::Result<ToolInvokeOutput> {
+        Ok(ToolInvokeOutput::text("ACP plugin tool executed"))
+    }
+
+    #[hook(tool.definition, summary = "Mark probe documentation", help = "Makes definition interception visible in the live tool contract.")]
+    async fn tool_definition(&self, input: ToolDefinitionInput) -> Option<ToolDefinitionPatch> {
+        (input.tool_name() == "probe").then(|| ToolDefinitionPatch {
+            summary: Some("TOOL DEFINITION HOOK MARKER".into()),
+            ..Default::default()
+        })
+    }
+
+    #[hook(tool.before, summary = "Observe tool input", help = "Records any intercepted execution input.")]
+    async fn tool_before(&self, input: ToolBeforeInput) -> Option<ToolBeforePatch> {
+        self.seen.record("tool.before", &input);
+        None
+    }
+
+    #[hook(tool.after, summary = "Observe tool output", help = "Records any intercepted execution output.")]
+    async fn tool_after(&self, input: ToolAfterInput) -> Option<ToolAfterPatch> {
+        self.seen.record("tool.after", &input);
+        None
+    }
+
+    #[hook(shell.before, summary = "Observe shell commands", help = "Records any intercepted shell launch.")]
+    async fn shell_before(&self, input: CommandBeforeInput) -> Option<CommandBeforeResponse> {
+        self.seen.record("shell.before", &input);
+        None
+    }
+
+    #[hook(shell.after, summary = "Observe shell completion", help = "Records any intercepted shell result.")]
+    async fn shell_after(&self, input: CommandAfterInput) -> Option<CommandAfterPatch> {
+        self.seen.record("shell.after", &input);
+        None
+    }
+
+    #[hook(shell.env, summary = "Observe shell environment", help = "Records any request for plugin shell environment overrides.")]
+    async fn shell_env(&self, input: ShellEnvInput) -> Option<ShellEnvPatch> {
+        self.seen.record("shell.env", &input);
+        None
+    }
+
+    #[hook(permission.request, summary = "Observe permission prompts", help = "Records hooks on interactive approval requests.")]
+    async fn permission(&self, input: PermissionRequestInput) -> Option<PermissionRequestPatch> {
+        self.seen.record("permission.request", &input);
+        None
+    }
+
+    #[hook(prompt.submit, summary = "Observe submitted input", help = "Records any intercepted submission.")]
+    async fn submit(&self, input: UserPromptSubmitInput) -> Option<UserPromptSubmitPatch> {
+        self.seen.record("prompt.submit", &input);
+        None
+    }
+
     #[hook(chat.system, summary = "Append system context", help = "Adds a provider-bound marker without changing persisted prompts.")]
     async fn system(&self, input: ChatSystemTransformInput) -> Option<ChatSystemTransformPatch> {
         self.seen.record("chat.system", &input);
@@ -209,7 +268,7 @@ fn assert_counts(seen: &Observations, expected: &[(&str, usize)]) -> anyhow::Res
 
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn acp_input_hooks_transform_only_the_current_turn() -> TestResult {
+async fn acp_runs_tools_and_native_commands_without_agena_hooks() -> TestResult {
     use agena_api::commands::CreateSessionParams;
     use agena_domain::ExternalAgent;
     use agena_storage::{MemoryKind, MemoryStore, NewMemory};
@@ -229,6 +288,7 @@ async fn acp_input_hooks_transform_only_the_current_turn() -> TestResult {
         // Exercise callback routing on hosts that cannot start an MXC worker.
         .configure_global(|config| config["sandbox"] = json!(false))
         .expect_plugin("agena.memory")
+        .expect_plugin("agena.shell")
         .env("PATH", path)
         .run(move |case| async move {
             let ordinary = case.user().new_session().await?;
@@ -255,7 +315,7 @@ async fn acp_input_hooks_transform_only_the_current_turn() -> TestResult {
                 .client()
                 .create_session_configured(CreateSessionParams {
                     workspace_id: workspace,
-                    title: "ACP input hook parity".into(),
+                    title: "ACP tool execution without hooks".into(),
                     external_agent: Some(ExternalAgent::ClaudeCode),
                     auto_title: false,
                     parent_id: None,
@@ -267,7 +327,10 @@ async fn acp_input_hooks_transform_only_the_current_turn() -> TestResult {
             user.client()
                 .set_session_permission(
                     user.id(),
-                    serde_json::from_value(json!({"path":{"workspace":"readonly"}}))?,
+                    serde_json::from_value(json!({
+                        "path":{"workspace":"readonly"},
+                        "tools":{"default":"allow", "names":{"agena.shell.exec":"ask"}},
+                    }))?,
                 )
                 .await?;
             for label in ["first", "second"] {
@@ -278,16 +341,22 @@ async fn acp_input_hooks_transform_only_the_current_turn() -> TestResult {
                         ..Default::default()
                     },
                 )
-                .await?
-                .wait_settled()
                 .await?;
-                if let Err(error) = run.assert_succeeded() {
+                let result = async {
+                    if label == "first" {
+                        run.wait_permission().await?.allow_once().await?;
+                    }
+                    let run = run.wait_settled().await?;
+                    run.assert_succeeded()?;
+                    run.assert_assistant_text("ACP fixture received the original message")
+                }
+                .await;
+                if let Err(error) = result {
                     let peer = tokio::fs::read_to_string(case.workspace().join(".acp-input-hook-error"))
                         .await
                         .unwrap_or_default();
                     anyhow::bail!("{error}\n{peer}");
                 }
-                run.assert_assistant_text("ACP fixture accepted the input hooks")?;
             }
             user.send("/agent:status")
                 .await?
@@ -296,39 +365,8 @@ async fn acp_input_hooks_transform_only_the_current_turn() -> TestResult {
                 .assert_assistant_text("ACP fixture kept the native command")?;
 
             let events = seen.events();
-            for (index, label) in ["first", "second"].into_iter().enumerate() {
-                let event = events
-                    .iter()
-                    .filter(|event| event.name == "chat.messages")
-                    .nth(index)
-                    .context("batch hook")?;
-                ensure!(event.input["session_id"] == session.id);
-                ensure!(
-                    event.input["workspace_root"] == case.workspace().to_string_lossy().as_ref()
-                );
-                let messages = event.input["messages"].as_array().context("messages")?;
-                let turns: Vec<_> = messages
-                    .iter()
-                    .filter(|message| message["role"] != "system")
-                    .cloned()
-                    .collect();
-                ensure!(
-                    turns
-                        == vec![
-                            json!({"role":"user","content":format!("acp-hook-rewritten-{label}")})
-                        ],
-                    "{:?}",
-                    event.input
-                );
-            }
-            assert_counts(
-                &seen,
-                &[
-                    ("chat.system", 3),
-                    ("chat.message", 2),
-                    ("chat.messages", 2),
-                ],
-            )?;
+            ensure!(events.iter().all(|event| event.input["session_id"] != session.id),
+                "Agena hooks ran in ACP: {events:?}");
             let parts = user.parts().await?;
             let texts: Vec<_> = parts
                 .iter()

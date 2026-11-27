@@ -1407,8 +1407,7 @@ pub(super) async fn finish(
             sqlx::query("UPDATE agena_sessions SET configuration_json=CASE
                     WHEN json_extract(configuration_json,'$.external_agent_state.antigravity_legacy_history')=1
                     THEN json_set(configuration_json,'$.external_agent_state',json_object(
-                        'antigravity_legacy_history',json('true'),
-                        'history_read_only',json(CASE WHEN json_extract(configuration_json,'$.external_agent_state.history_read_only')=1 THEN 'true' ELSE 'false' END)))
+                        'antigravity_legacy_history',json('true')))
                     ELSE json_remove(configuration_json,'$.external_agent_state') END
                 WHERE id=? AND json_type(configuration_json,'$.external_agent_state') IS NOT NULL
                     AND json_extract(configuration_json,'$.external_agent_resume') IS NULL")

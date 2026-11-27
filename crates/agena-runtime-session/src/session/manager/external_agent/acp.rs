@@ -80,7 +80,6 @@ pub(super) struct AcpClient {
     cwd: PathBuf,
     additional_directories: Vec<PathBuf>,
     previous_antigravity_history: bool,
-    antigravity_guard_installed: bool,
     agent_arguments: Vec<String>,
     isolation: Option<isolation::Isolation>,
     child: ManagedChild,
@@ -458,23 +457,9 @@ impl AcpClient {
             }
             ExternalAgent::ClaudeCode => Vec::new(),
         };
-        let antigravity_guard_installed = previous_antigravity_history
-            && match policy::install_antigravity_guard() {
-                Ok(installed) => installed,
-                Err(error) => {
-                    tracing::warn!(%error, "could not install the Antigravity ACP tool guard");
-                    false
-                }
-            };
         let mut command = Command::new(program);
         command.args(arguments).args(&agent_arguments);
         agent_environment(&mut command);
-        if agent == ExternalAgent::Antigravity && !previous_antigravity_history {
-            command.env(
-                agena_mcp_server::antigravity_guard::MANAGED_PROFILE_ENV,
-                "1",
-            );
-        }
         command.current_dir(cwd);
         let isolation = isolation::wrap(
             &mut command,
@@ -484,9 +469,6 @@ impl AcpClient {
             previous_antigravity_history,
             None,
         )?;
-        let antigravity_guard_installed = antigravity_guard_installed
-            && (isolation.is_some()
-                || policy::native_antigravity_customizations(cwd, directories)?.is_empty());
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -494,7 +476,7 @@ impl AcpClient {
 
         let mut child = agena_process::spawn(command).map_err(|error| {
             let setup = match agent {
-                ExternalAgent::Antigravity => "Install the official Antigravity CLI with custom Agent support and sign in from the ACP session.",
+                ExternalAgent::Antigravity => "Install the official Antigravity CLI with ACP support and sign in from the ACP session.",
                 ExternalAgent::ClaudeCode => "Install Claude Code and the claude-agent-acp adapter on the server's PATH, then sign in using claude.",
             };
             AppError::Config(format!("Could not start {}: {error}. {setup}", agent.label()))
@@ -512,7 +494,6 @@ impl AcpClient {
             cwd: cwd.to_owned(),
             additional_directories: directories.to_vec(),
             previous_antigravity_history,
-            antigravity_guard_installed,
             agent_arguments,
             isolation,
             child,
@@ -554,7 +535,7 @@ impl AcpClient {
             Version::V2
         };
         let (initialized, version) = loop {
-            let mut params = requested.initialize_params(self.terminal_auth);
+            let mut params = requested.initialize_params(self.agent, self.terminal_auth);
             if requested == Version::V1
                 && self.agent == ExternalAgent::ClaudeCode
                 && !self.air_index
@@ -820,11 +801,6 @@ impl AcpClient {
             .find(|(name, _, _)| preference.as_deref() == Some(*name))
             .or_else(|| available.into_iter().next())
         else {
-            if self.isolation.is_some() {
-                return Err(AppError::Config(
-                    "This isolated external agent must provide ACP or stdio MCP transport.".into(),
-                ));
-            }
             let notice = serde_json::to_string(&agena_runtime_contracts::NoticePart {
                 kind: "external_agent_mcp_unavailable".into(),
                 summary: format!(
@@ -883,12 +859,7 @@ impl AcpClient {
         cancel: &CancellationToken,
     ) -> Result<OpenedSession, AppError> {
         self.prepare_provider_routes(cancel).await?;
-        if self.history_read_only() {
-            return Err(AppError::Config(
-                "Continuing this Antigravity history requires a verified adapter and process isolation for native workspace MCP or hooks.".into(),
-            ));
-        }
-        if self.previous_antigravity_history && (previous.is_none() || mcp.is_none()) {
+        if self.previous_antigravity_history && previous.is_none() {
             return Err(AppError::ExternalAgentResumeUnavailable);
         }
         let setup = async {
@@ -1180,11 +1151,6 @@ impl AcpClient {
         replayed_users: Option<ReplayedUsers>,
         turn: &Arc<ExternalTurn>,
     ) -> Result<PromptResult, AppError> {
-        if self.history_read_only() {
-            return Err(AppError::Internal(
-                "Cannot prompt an Antigravity history connection.".into(),
-            ));
-        }
         if let Some(work) = &self.native_work {
             work.set_root(Some(session));
         }

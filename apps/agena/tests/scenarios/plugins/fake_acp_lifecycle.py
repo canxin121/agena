@@ -115,10 +115,7 @@ for raw in sys.stdin:
             continue
     if method in {"session/new", "session/load", "session/resume", "session/fork"}:
         options = params["_meta"]["claudeCode"]["options"]
-        assert options["tools"] == [] and options["strictMcpConfig"] is True
-        assert options["settingSources"] == []
-        assert "restricted" in options["extraArgs"]
-        assert "disable-slash-commands" not in options["extraArgs"]
+        assert not {"tools", "disallowedTools", "strictMcpConfig", "settingSources", "extraArgs"} & options.keys()
     if method == "initialize":
         if version == 1 and params["protocolVersion"] == 2:
             send(id=req["id"], result={"protocolVersion": 1})

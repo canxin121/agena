@@ -29,7 +29,6 @@ pub(super) async fn compact(
     cancel: &CancellationToken,
 ) -> Result<u64, AppError> {
     let profile = policy::antigravity_profile()?;
-    let name = policy::antigravity_agent_name(&profile)?;
     // Print mode selects its profile from the home directory. Link the
     // existing store so ACP and the command use the same native conversation.
     let command_home = tempfile::Builder::new()
@@ -50,16 +49,8 @@ pub(super) async fn compact(
     let (program, _) = ExternalAgent::Antigravity.command();
     let mut command = Command::new(program);
     agent_environment(&mut command);
-    if !previous_history {
-        command.env(
-            agena_mcp_server::antigravity_guard::MANAGED_PROFILE_ENV,
-            "1",
-        );
-    }
     command
         .args([
-            "--agent",
-            &name,
             "--resume",
             native_id,
             "--print",

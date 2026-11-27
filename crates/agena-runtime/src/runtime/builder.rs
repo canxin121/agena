@@ -771,9 +771,12 @@ impl agena_runtime::RuntimeToolExecutionService for AgenaRuntime {
                 let output_schema = (!output_schema.is_null()).then_some(output_schema);
                 agena_runtime::RuntimeToolDescriptor {
                     name,
+                    canonical_name: tool.canonical_name(),
                     summary: tool.summary_text().map(ToOwned::to_owned),
                     before_help: tool.before_help_text().map(ToOwned::to_owned),
+                    help: tool.help_text().map(ToOwned::to_owned),
                     after_help: tool.after_help_text().map(ToOwned::to_owned),
+                    tags: tags.iter().map(ToString::to_string).collect(),
                     input_schema: tool.input_schema(),
                     output_schema,
                     interactive,

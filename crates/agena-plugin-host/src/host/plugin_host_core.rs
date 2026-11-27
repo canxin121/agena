@@ -1,3 +1,5 @@
+use agena_domain::is_acp_session_id;
+
 fn parse_plugin_key_for_lookup(plugin_id: &str, command: &str) -> Option<PluginKey> {
     match plugin_id.parse() {
         Ok(key) => Some(key),
@@ -51,6 +53,16 @@ fn plugin_tool_registry_read<'a>(
 }
 
 impl PluginHost {
+    fn hook_plugins(&self, session_id: Option<i64>) -> &[Arc<LoadedPlugin>] {
+        // ACP sessions share the plugin registry for tool execution. Their
+        // input, lifecycle, and tool calls do not dispatch Agena hooks.
+        if session_id.is_some_and(is_acp_session_id) {
+            &[]
+        } else {
+            &self.plugins
+        }
+    }
+
     /// Activate business-dependent plugin work only after Application is bound.
     pub async fn application_ready(&self) -> Result<(), PluginError> {
         let timeout = self.timeouts.fast_or(Duration::from_secs(30));
@@ -139,7 +151,7 @@ impl PluginHost {
         F: FnMut(&mut I, P),
     {
         dispatcher::chain_patch_in_context(
-            &self.plugins,
+            self.hook_plugins(session_id),
             method,
             subscription,
             timeout,
@@ -803,6 +815,9 @@ impl PluginHost {
         input: ToolBeforeInput,
         cancellation: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<ToolBeforeInput, PluginError> {
+        if is_acp_session_id(input.session_id) {
+            return Ok(input);
+        }
         let report = self
             .tool_before_pipeline
             .dispatch(ToolBeforeDispatch {
@@ -830,6 +845,9 @@ impl PluginHost {
         input: ToolAfterInput,
         cancellation: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<ToolAfterInput, PluginError> {
+        if is_acp_session_id(input.session_id) {
+            return Ok(input);
+        }
         let report = self
             .tool_after_pipeline
             .dispatch(ToolAfterDispatch {
@@ -1022,54 +1040,57 @@ impl PluginHost {
 
         let timeout = self.timeouts.fast_or(Duration::from_secs(10));
         let contract = definition.input.clone();
+        let skip_middleware = input.session_id.is_some_and(is_acp_session_id);
         let dispatch = CommandDispatch::new(plugin_key.clone(), input);
         let host_handle = Arc::clone(&self._host_handle);
-        let result = self
-            .command_pipeline
-            .dispatch(dispatch, move |dispatch| {
-                let plugin = Arc::clone(&plugin);
-                let contract = contract.clone();
-                let host_handle = Arc::clone(&host_handle);
-                async move {
-                    let plugin_key = dispatch.plugin_id().clone();
-                    let command_id = dispatch.command_id().to_string();
-                    let input = dispatch.into_input();
-                    contract
-                        .validate_value(&input.input)
-                        .map_err(|error| PluginError::invalid_params_error(&error))?;
-                    let session_id = input.session_id;
-                    let call_id = input.call_id;
-                    let workspace_root = input.workspace_root.clone();
-                    let params = serde_json::to_value(&input)
-                        .map_err(|error| PluginError::invalid_params_error(&error))?;
-                    let value = host_handle
-                        .run_in_authorized_callback_context(
-                            &plugin_key,
-                            HostCallbackContext {
-                                session_id,
-                                call_id,
-                                workspace_root,
-                                tool_name: None,
-                                ..Default::default()
-                            },
-                            call_with_timeout(&plugin, method::COMMAND_INVOKE, params, timeout),
-                        )
-                        .await
-                        .map_err(transport_to_plugin_error)?;
-                    let result: CommandResult = serde_json::from_value(value).map_err(|error| {
-                        PluginError::invalid_params(format!(
-                            "invalid command result for `{command_id}`: {error}"
-                        ))
-                    })?;
-                    result.validate().map_err(|error| {
-                        PluginError::invalid_params(format!(
-                            "invalid command result for `{command_id}`: {error}"
-                        ))
-                    })?;
-                    Ok(result)
-                }
-            })
-            .await?;
+        let invoke = move |dispatch: CommandDispatch| {
+            let plugin = Arc::clone(&plugin);
+            let contract = contract.clone();
+            let host_handle = Arc::clone(&host_handle);
+            async move {
+                let plugin_key = dispatch.plugin_id().clone();
+                let command_id = dispatch.command_id().to_string();
+                let input = dispatch.into_input();
+                contract
+                    .validate_value(&input.input)
+                    .map_err(|error| PluginError::invalid_params_error(&error))?;
+                let session_id = input.session_id;
+                let call_id = input.call_id;
+                let workspace_root = input.workspace_root.clone();
+                let params = serde_json::to_value(&input)
+                    .map_err(|error| PluginError::invalid_params_error(&error))?;
+                let value = host_handle
+                    .run_in_authorized_callback_context(
+                        &plugin_key,
+                        HostCallbackContext {
+                            session_id,
+                            call_id,
+                            workspace_root,
+                            tool_name: None,
+                            ..Default::default()
+                        },
+                        call_with_timeout(&plugin, method::COMMAND_INVOKE, params, timeout),
+                    )
+                    .await
+                    .map_err(transport_to_plugin_error)?;
+                let result: CommandResult = serde_json::from_value(value).map_err(|error| {
+                    PluginError::invalid_params(format!(
+                        "invalid command result for `{command_id}`: {error}"
+                    ))
+                })?;
+                result.validate().map_err(|error| {
+                    PluginError::invalid_params(format!(
+                        "invalid command result for `{command_id}`: {error}"
+                    ))
+                })?;
+                Ok(result)
+            }
+        };
+        let result = if skip_middleware {
+            invoke(dispatch).await
+        } else {
+            self.command_pipeline.dispatch(dispatch, invoke).await
+        }?;
         result.validate().map_err(|error| {
             PluginError::invalid_params(format!(
                 "command middleware produced an invalid result for `{}`: {error}",
@@ -1228,10 +1249,9 @@ impl PluginHost {
         cancellation: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<ShellEnvPatch, PluginError> {
         let timeout = self.timeouts.fast_or(Duration::from_secs(2));
-        let plugins = self.plugins.clone();
         let mut set = std::collections::BTreeMap::new();
         let mut unset = Vec::new();
-        for plugin in &plugins {
+        for plugin in self.hook_plugins(input.session_id) {
             if !plugin.subscribes(HookSubscription::SHELL_ENV) {
                 continue;
             }
@@ -1351,7 +1371,7 @@ impl PluginHost {
         let result = await_transport_with_cancellation(
             cancellation,
             dispatcher::chain_patch_in_context::<ChatHeadersInput, ChatHeadersPatch, _, _>(
-                &self.plugins,
+                self.hook_plugins(session_id),
                 method::HOOK_CHAT_HEADERS,
                 HookSubscription::CHAT_HEADERS,
                 timeout,
@@ -1394,7 +1414,7 @@ impl PluginHost {
             _,
             _,
         >(
-            &self.plugins,
+            self.hook_plugins(session_id),
             method::HOOK_CHAT_SYSTEM_TRANSFORM,
             HookSubscription::CHAT_SYSTEM_TRANSFORM,
             timeout,
@@ -1429,7 +1449,7 @@ impl PluginHost {
     pub async fn broadcast_notification(&self, input: NotificationInput) {
         let timeout = Duration::from_secs(5);
         let mut notifications = Vec::new();
-        for plugin in &self.plugins {
+        for plugin in self.hook_plugins(input.session_id) {
             if !plugin.subscribes(HookSubscription::NOTIFICATION) {
                 continue;
             }
@@ -1494,7 +1514,7 @@ impl PluginHost {
         let timeout = self.timeouts.fast_or(Duration::from_secs(2));
         let session_id = input.session_id;
         let mut current = input;
-        for plugin in &self.plugins {
+        for plugin in self.hook_plugins(session_id) {
             if !plugin.subscribes(HookSubscription::COMMAND_BEFORE) {
                 continue;
             }
@@ -1651,26 +1671,37 @@ impl PluginHost {
     // ── run lifecycle ──────────────────────────────────────────────────────
 
     pub async fn broadcast_pre_run(&self, input: PreRunInput) {
-        self.broadcast_lifecycle(method::HOOK_PRE_RUN, HookSubscription::PRE_RUN, input)
-            .await;
+        self.broadcast_lifecycle(
+            method::HOOK_PRE_RUN,
+            HookSubscription::PRE_RUN,
+            input.session_id,
+            input,
+        )
+        .await;
     }
 
     pub async fn broadcast_post_run(&self, input: PostRunInput) {
-        self.broadcast_lifecycle(method::HOOK_POST_RUN, HookSubscription::POST_RUN, input)
-            .await;
+        self.broadcast_lifecycle(
+            method::HOOK_POST_RUN,
+            HookSubscription::POST_RUN,
+            input.session_id,
+            input,
+        )
+        .await;
     }
 
-    pub(super) async fn broadcast_lifecycle<T>(
+    async fn broadcast_lifecycle<T>(
         &self,
         method: &'static str,
         subscription: HookSubscription,
+        session_id: i64,
         input: T,
     ) where
         T: serde::Serialize + Clone + Send + 'static,
     {
         let timeout = Duration::from_secs(5);
         let mut notifications = Vec::new();
-        for plugin in &self.plugins {
+        for plugin in self.hook_plugins(Some(session_id)) {
             if !plugin.subscribes(subscription) {
                 continue;
             }
@@ -1733,7 +1764,7 @@ impl PluginHost {
         let session_id = Some(input.session_id);
         let mut additional_context: Option<String> = None;
         let mut initial_user_message = None;
-        for plugin in &self.plugins {
+        for plugin in self.hook_plugins(session_id) {
             if !plugin.subscribes(HookSubscription::SESSION_START) {
                 continue;
             }
@@ -1800,7 +1831,7 @@ impl PluginHost {
     pub async fn broadcast_session_end(&self, input: SessionEndInput) {
         let timeout = Duration::from_secs(5);
         let mut notifications = Vec::new();
-        for plugin in &self.plugins {
+        for plugin in self.hook_plugins(Some(input.session_id)) {
             if !plugin.subscribes(HookSubscription::SESSION_END) {
                 continue;
             }
@@ -1881,7 +1912,7 @@ impl PluginHost {
         let timeout = self.timeouts.fast_or(Duration::from_secs(5));
         let session_id = Some(input.session_id);
         let mut current = input;
-        for plugin in &self.plugins {
+        for plugin in self.hook_plugins(session_id) {
             if !plugin.subscribes(HookSubscription::USER_PROMPT_SUBMIT) {
                 continue;
             }
@@ -1955,7 +1986,7 @@ impl PluginHost {
     pub async fn broadcast_tool_failure(&self, input: ToolFailureInput) {
         let timeout = Duration::from_secs(5);
         let mut notifications = Vec::new();
-        for plugin in &self.plugins {
+        for plugin in self.hook_plugins(Some(input.session_id)) {
             if !plugin.subscribes(HookSubscription::TOOL_FAILURE) {
                 continue;
             }
@@ -2021,7 +2052,7 @@ impl PluginHost {
         let mut runs = Vec::new();
         let result =
             dispatcher::chain_patch_in_context::<ToolDefinitionInput, ToolDefinitionPatch, _, _>(
-                &self.plugins,
+                self.hook_plugins(session_id),
                 method::HOOK_TOOL_DEFINITION,
                 HookSubscription::TOOL_DEFINITION,
                 timeout,
@@ -2071,6 +2102,9 @@ impl PluginHost {
         session_id: Option<i64>,
         workspace_root: Option<String>,
     ) -> Vec<Result<ToolDefinitionInput, PluginError>> {
+        if self.hook_plugins(session_id).is_empty() {
+            return inputs.into_iter().map(Ok).collect();
+        }
         const CATALOG_DEADLINE: Duration = Duration::from_secs(5);
         let input_count = inputs.len();
         let dispatch = async {
@@ -2126,7 +2160,10 @@ impl PluginHost {
         // The notifications plugin observes the final stop decision to update
         // terminal activity. Run it after decision hooks so a continuation
         // cannot briefly project an idle title.
-        let mut stop_plugins = self.plugins.iter().collect::<Vec<_>>();
+        let mut stop_plugins = self
+            .hook_plugins(Some(input.session_id))
+            .iter()
+            .collect::<Vec<_>>();
         stop_plugins.sort_by_key(|plugin| plugin.key().to_string() == "agena.notifications");
         for plugin in stop_plugins {
             if !plugin.subscribes(HookSubscription::AGENT_STOP) {
@@ -2257,7 +2294,7 @@ impl PluginHost {
     /// never change the cancellation result.
     pub async fn dispatch_agent_cancel(&self, input: AgentCancelInput) {
         let timeout = self.timeouts.fast_or(Duration::from_secs(5));
-        for plugin in &self.plugins {
+        for plugin in self.hook_plugins(Some(input.session_id)) {
             if !plugin.subscribes(HookSubscription::AGENT_CANCEL) {
                 continue;
             }
@@ -2312,7 +2349,7 @@ impl PluginHost {
         let mut runs = Vec::new();
         let result =
             dispatcher::chain_patch_in_context::<CommandAfterInput, CommandAfterPatch, _, _>(
-                &self.plugins,
+                self.hook_plugins(session_id),
                 method::HOOK_COMMAND_AFTER,
                 HookSubscription::COMMAND_AFTER,
                 timeout,
@@ -2359,7 +2396,7 @@ impl PluginHost {
             _,
             _,
         >(
-            &self.plugins,
+            self.hook_plugins(session_id),
             method::HOOK_CHAT_MESSAGES_TRANSFORM,
             HookSubscription::CHAT_MESSAGES_TRANSFORM,
             timeout,

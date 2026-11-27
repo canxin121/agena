@@ -38,6 +38,14 @@ fn transport_fixture(agent: ExternalAgent) -> Result<(tempfile::TempDir, TestAge
     Ok((bin, builder))
 }
 
+fn v1_callback_fixture() -> Result<(tempfile::TempDir, TestAgenaBuilder)> {
+    let (bin, builder) = transport_fixture(ExternalAgent::ClaudeCode)?;
+    Ok((
+        bin,
+        builder.seed_file("workspace/.acp-force-v1", Vec::new()),
+    ))
+}
+
 async fn attach(case: &agena_testkit::TestCase, agent: ExternalAgent) -> Result<UserSession> {
     let ordinary = case.user().new_session().await?;
     let workspace_id = ordinary
@@ -557,8 +565,13 @@ async fn v2_resume_serves_bound_mcp_and_keeps_permission_pending_into_the_turn()
         .await
 }
 
-async fn withdraw_tool_requests(agent: ExternalAgent) -> TestResult {
-    let (_bin, builder) = transport_fixture(agent)?;
+async fn withdraw_tool_requests(v1: bool) -> TestResult {
+    let agent = ExternalAgent::ClaudeCode;
+    let (_bin, builder) = if v1 {
+        v1_callback_fixture()
+    } else {
+        transport_fixture(agent)
+    }?;
     builder
         .run(move |case| async move {
             let user = attach(&case, agent).await?;
@@ -578,10 +591,10 @@ async fn withdraw_tool_requests(agent: ExternalAgent) -> TestResult {
             result.assert_succeeded()?;
             result.assert_assistant_text("Another tool completed after the withdrawals")?;
             ensure!(approval.allow_once().await.is_err());
-            for name in if agent == ExternalAgent::ClaudeCode {
-                &["agena.fs.write", "agena.shell.exec"][..]
-            } else {
+            for name in if v1 {
                 &["fs.write"][..]
+            } else {
+                &["agena.fs.write", "agena.shell.exec"][..]
             } {
                 ensure!(
                     result.parts.iter().any(|part| part.kind == "tool_call"
@@ -603,18 +616,18 @@ async fn withdraw_tool_requests(agent: ExternalAgent) -> TestResult {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn v1_withdrawing_a_client_file_request_cancels_its_approval() -> TestResult {
-    withdraw_tool_requests(ExternalAgent::Antigravity).await
+    withdraw_tool_requests(true).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn v2_withdrawing_an_mcp_request_cancels_the_exact_tool() -> TestResult {
-    withdraw_tool_requests(ExternalAgent::ClaudeCode).await
+    withdraw_tool_requests(false).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn v1_lost_connection_settles_the_pending_client_write() -> TestResult {
-    let agent = ExternalAgent::Antigravity;
-    let (_bin, builder) = transport_fixture(agent)?;
+    let agent = ExternalAgent::ClaudeCode;
+    let (_bin, builder) = v1_callback_fixture()?;
     builder
         .run(move |case| async move {
             let user = attach(&case, agent).await?;
@@ -650,10 +663,10 @@ async fn v1_lost_connection_settles_the_pending_client_write() -> TestResult {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn v1_peer_uses_policy_scoped_file_and_terminal_callbacks() -> TestResult {
-    let (_bin, builder) = transport_fixture(ExternalAgent::Antigravity)?;
+    let (_bin, builder) = v1_callback_fixture()?;
     builder
         .run(|case| async move {
-            let user = attach(&case, ExternalAgent::Antigravity)
+            let user = attach(&case, ExternalAgent::ClaudeCode)
                 .await?
                 .with_timeout(Duration::from_secs(40));
             user.client().set_session_permission(

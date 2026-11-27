@@ -15,7 +15,8 @@ def failure(*args):
 
 
 sys.excepthook = failure
-version = 2 if Path(sys.argv[0]).name == "claude-agent-acp" else 1
+antigravity = Path(sys.argv[0]).name == "agy"
+version = 1 if antigravity or Path(".acp-force-v1").is_file() else 2
 session = "native-transport"
 request_id = 100_000
 
@@ -47,6 +48,10 @@ def say(text, message_id):
 
 def terminal_data(content):
     return base64.b64encode(content).decode("ascii")
+
+
+def agena_tool(tool, arguments):
+    return {"name": "tools_call", "arguments": {"tool": tool, "input": arguments}}
 
 
 def foreign_reply():
@@ -129,28 +134,26 @@ def withdraw_tools(descriptor, prompt_id):
     if version == 2:
         send(id=prompt_id, result={"messageId": "withdraw-tool-request"})
         update("state_update", state="running")
-        write = start_request("mcp/message", mcp_params(descriptor, "tools/call", {
-            "name": "fs_write", "arguments": {"path": file, "content": "Unexpected write"},
-        }, **scope))
+        write = start_request("mcp/message", mcp_params(
+            descriptor, "tools/call", agena_tool("fs.write", {
+                "path": file, "content": "Unexpected write",
+            }), **scope))
     else:
         write = start_request("fs/write_text_file", {**scope, "path": file, "content": "Unexpected write"})
     wait(".acp-withdraw-permission")
     withdraw(write)
     assert Path(file).read_text().startswith("native fixture first line")
     if version == 2:
-        shell = start_request("mcp/message", mcp_params(descriptor, "tools/call", {
-            "name": "shell_exec", "arguments": {
+        shell = start_request("mcp/message", mcp_params(
+            descriptor, "tools/call", agena_tool("shell.exec", {
                 "command": "touch .acp-shell-started; while [ ! -e .acp-shell-release ]; do sleep .05; done; touch .acp-shell-effect",
                 "reads": [".acp-shell-release"],
                 "writes": [".acp-shell-started", ".acp-shell-effect"],
-            },
-        }, **scope))
+            }), **scope))
         wait(".acp-shell-started")
         withdraw(shell)
         Path(".acp-shell-release").touch()
-        read = mcp(descriptor, "tools/call", {
-            "name": "fs_read", "arguments": {"file_path": file},
-        }, **scope)["result"]
+        read = mcp(descriptor, "tools/call", agena_tool("fs.read", {"file_path": file}), **scope)["result"]
         assert "native fixture first line" in json.dumps(read), read
     else:
         read = ask("fs/read_text_file", {**scope, "path": file})
@@ -191,9 +194,11 @@ for line in sys.stdin:
         else:
             assert Path(".acp-v2-init-closed").is_file()
             caps = params["clientCapabilities"]
-            assert caps["fs"] == {"readTextFile": True, "writeTextFile": True}
-            assert caps["terminal"] is True
+            assert caps["fs"] == {"readTextFile": not antigravity, "writeTextFile": not antigravity}
+            assert caps["terminal"] is (not antigravity)
             result = {"protocolVersion": 1, "agentCapabilities": {"mcpCapabilities": {"http": True}}}
+            if not antigravity:
+                result["_meta"] = {"steering": {"supported": True}}
         send(id=identifier, result=result)
     elif method in ("session/new", "session/resume"):
         assert Path(params["cwd"]) == Path.cwd(), params
@@ -203,7 +208,7 @@ for line in sys.stdin:
             discovery = mcp(descriptor, "server/discover")["result"]
             assert discovery["supportedVersions"] == ["2026-07-28"], discovery
             tools = mcp(descriptor, "tools/list")["result"]["tools"]
-            assert any(tool["name"] == "fs_read" and tool["inputSchema"]["type"] == "object" for tool in tools)
+            assert {tool["name"] for tool in tools} == {"plugins_list", "tools_list", "tools_help", "tools_call"}
             update("available_commands_update", availableCommands=[
                 {"type": "command", "name": "superseded", "description": "Before the setup response"},
             ])
@@ -228,7 +233,7 @@ for line in sys.stdin:
                        content={"type": "text", "text": "Appended during resume"})
                 foreign_reply()
             if resume_callbacks:
-                call = {"name": "fs_read", "arguments": {"file_path": "native.txt"}}
+                call = agena_tool("fs.read", {"file_path": "native.txt"})
                 blocked = ask("mcp/message", {
                     "serverId": descriptor["serverId"], "requestId": "resume-foreign",
                     "method": "tools/call", "sessionId": "another-session",
@@ -326,12 +331,13 @@ for line in sys.stdin:
                 blocked = ask("mcp/message", {
                     "serverId": descriptor["serverId"], "requestId": "foreign",
                     "method": "tools/call", "sessionId": "another-session",
-                    "params": {"name": "fs_read", "arguments": {"file_path": "native.txt"}, "_meta": revision},
+                    "params": {**agena_tool("fs.read", {"file_path": "native.txt"}), "_meta": revision},
                 }, expect_error=True)
                 assert blocked["code"] == -32602
-                result = mcp(descriptor, "tools/call", {
-                    "name": "fs_read", "arguments": {"file_path": "native.txt"},
-                }, sessionId=session)["result"]
+                result = mcp(
+                    descriptor, "tools/call", agena_tool("fs.read", {"file_path": "native.txt"}),
+                    sessionId=session,
+                )["result"]
                 assert "native fixture first line" in json.dumps(result), result
                 update("tool_call_update", toolCallId="job", title="Background", status="in_progress",
                        content=[{"type": "content", "content": {"type": "text", "text": "Superseded"}}])
@@ -388,7 +394,7 @@ for line in sys.stdin:
                 expired = ask("mcp/message", {
                     "serverId": descriptor["serverId"], "requestId": "expired",
                     "sessionId": session, "method": "tools/call",
-                    "params": {"name": "fs_read", "arguments": {"file_path": "native.txt"}},
+                    "params": agena_tool("fs.read", {"file_path": "native.txt"}),
                 }, expect_error=True)
                 assert expired["code"] == -32602 and "expired" in expired["message"], expired
                 update("available_commands_update", availableCommands=[
@@ -498,12 +504,13 @@ for line in sys.stdin:
             assert prompt == "client callbacks"
             say("Checking local callbacks", "callbacks-running")
             steer = receive()
-            assert steer["method"] == "session/prompt" and steer["id"] != identifier, steer
+            assert steer["method"] == "_session/steering" and steer["id"] != identifier, steer
             assert steer["params"] == {
                 "sessionId": session,
                 "prompt": [{"type": "text", "text": "Check the allowed file and terminal"}],
+                "_meta": {"steering": {"idleBehavior": "promptRequired"}},
             }, steer
-            send(id=steer["id"], result={"stopReason": "end_turn"})
+            send(id=steer["id"], result={"outcome": "accepted"})
             scoped = {"sessionId": session}
             path = str(Path.cwd() / "native.txt")
             denied = str(Path.cwd() / "private.txt")

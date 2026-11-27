@@ -274,13 +274,8 @@ impl ToolApiCatalog {
                 let mut helped = Vec::new();
                 let mut failures = 0usize;
                 for name in names {
-                    let found = self
-                        .tools
-                        .iter()
-                        .filter(|tool| tool.name == *name || tool.canonical_name == *name)
-                        .collect::<Vec<_>>();
-                    match found.as_slice() {
-                        [tool] => {
+                    match self.resolve_tool(name) {
+                        Some(tool) => {
                             outputs.push(self.render_help(tool));
                             // Record the callable name the model must use, so a
                             // later tools_call that names the compact or
@@ -290,7 +285,7 @@ impl ToolApiCatalog {
                                 helped.push(tool.canonical_name.clone());
                             }
                         }
-                        _ => {
+                        None => {
                             let message = format!(
                                 "Tool `{name}` is unavailable or ambiguous. Enumerate plugins_list, then tools_list for the owning plugin, and use an exact returned identifier."
                             );

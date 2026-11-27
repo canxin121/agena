@@ -31,3 +31,14 @@ pub struct ToolApiCatalog {
     pub tools: Vec<CatalogTool>,
     pub plugins: Vec<CatalogPlugin>,
 }
+
+impl ToolApiCatalog {
+    pub fn resolve_tool(&self, name: &str) -> Option<&CatalogTool> {
+        let mut candidates = self
+            .tools
+            .iter()
+            .filter(|tool| tool.name == name || tool.canonical_name == name);
+        let tool = candidates.next()?;
+        candidates.next().is_none().then_some(tool)
+    }
+}

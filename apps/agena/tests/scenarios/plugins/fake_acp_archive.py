@@ -2,14 +2,13 @@
 """Standard ACP archive capability, paginated workspace listing, and persistence."""
 import json
 from pathlib import Path
-import subprocess
 import sys
 
 
 directory = Path.cwd()
 version = int(Path(".archive-version").read_text())
 split_history = Path(".split-antigravity-history").is_file()
-guarded_history = Path(".guarded-antigravity-history").is_file()
+supports_resume = Path(".antigravity-supports-resume").is_file()
 previous = "--app-data-dir" in sys.argv
 state_file = Path(".archive-state")
 sessions = json.loads(state_file.read_text()) if state_file.is_file() else {
@@ -30,11 +29,20 @@ def log(method, detail=""):
         output.write(f"{method} {detail}\n")
 
 
+def check_profile(profile):
+    hooks = json.loads((profile / "config/hooks.json").read_text())
+    assert set(hooks) == {"workspace-check"}, hooks
+    assert hooks["workspace-check"] == {"PreToolUse": []}, hooks
+
+
+if split_history:
+    assert "--agent" not in sys.argv and "--include-default-customizations=false" not in sys.argv
+
 if "--print" in sys.argv:
-    assert guarded_history and sys.argv[sys.argv.index("--resume") + 1] == "ready"
+    assert split_history and sys.argv[sys.argv.index("--resume") + 1] == "ready"
     assert sys.argv[sys.argv.index("--print") + 1] == "/compact"
     assert (Path.home() / ".gemini/antigravity-cli/conversations/fixture").is_file()
-    assert (Path.home() / ".gemini/config/hooks.json").is_file()
+    check_profile(Path.home() / ".gemini")
     log("compact-cli", "ready")
     print(json.dumps({"event": "init", "conversation_id": "ready"}))
     print(json.dumps({"event": "step_update", "step_update": {
@@ -42,19 +50,6 @@ if "--print" in sys.argv:
     }}))
     print(json.dumps({"event": "result", "result": {"conversation_id": "ready", "status": "SUCCESS"}}))
     sys.exit(0)
-
-
-def check_guard():
-    profile = Path(sys.argv[sys.argv.index("--gemini-dir") + 1])
-    hooks = json.loads((profile / "config/hooks.json").read_text())
-    [gate] = hooks["agena-acp-tools"]["PreToolUse"]
-    assert gate["matcher"] == "*"
-    [handler] = gate["hooks"]
-    for name, expected in (("write_file", "deny"), ("run_command", "deny"), ("search_web", "deny"),
-                           ("mcp_other_tool", "deny"), ("mcp_agena_tool", "allow")):
-        checked = subprocess.run(handler["command"], shell=True, capture_output=True, text=True,
-                                 input=json.dumps({"toolCall": {"name": name}}), timeout=10, check=True)
-        assert json.loads(checked.stdout)["decision"] == expected
 
 
 for line in sys.stdin:
@@ -75,13 +70,14 @@ for line in sys.stdin:
             result = {"protocolVersion": 1, "agentCapabilities": {
                 "sessionCapabilities": capabilities, "loadSession": True,
             }}
-            if split_history and (not previous or guarded_history):
-                capabilities["resume"] = {}
+            if split_history:
+                if not previous or supports_resume:
+                    capabilities["resume"] = {}
                 result["agentCapabilities"]["_meta"] = {
                     "antigravity": {"systemPrompt": {"append": True}},
                 }
-            if guarded_history:
-                result["agentInfo"] = {"name": "Antigravity ACP Server", "version": "1.5.18"}
+                profile = Path(sys.argv[sys.argv.index("--gemini-dir") + 1])
+                check_profile(profile)
         else:
             result = {"protocolVersion": 2, "capabilities": {"session": capabilities}}
     elif method == "session/list":
@@ -129,7 +125,9 @@ for line in sys.stdin:
             continue
         meta = params["_meta"]["antigravity"]
         assert meta["eagerMcpServers"] == ["agena"]
-        log(f"{method}-system-prompt", meta["systemPrompt"]["append"])
+        instruction = meta["systemPrompt"]["append"]
+        assert "Prefer the `agena` MCP server's tools" in instruction, instruction
+        log(f"{method}-system-prompt", instruction)
         if method == "session/new":
             sessions["managed-run"] = {"archived": False, "active": True}
             state_file.write_text(json.dumps(sessions))
@@ -137,10 +135,12 @@ for line in sys.stdin:
         else:
             log(method, native_id)
             result = {}
-    elif method == "session/resume" and guarded_history and previous:
+    elif method in {"session/load", "session/resume"} and split_history and previous and params["mcpServers"]:
         assert native_id == "ready" and params["mcpServers"][0]["name"] == "agena"
-        check_guard()
-        log("legacy-resume", native_id)
+        assert method == ("session/resume" if supports_resume else "session/load"), params
+        instruction = params["_meta"]["antigravity"]["systemPrompt"]["append"]
+        assert "Prefer the `agena` MCP server's tools" in instruction, instruction
+        log("legacy-continuation", native_id)
         send(method="session/update", params={"sessionId": native_id, "update": {
             "sessionUpdate": "available_commands_update",
             "availableCommands": [{"name": "compact", "description": "Compact with optional summary guidance"}],
@@ -164,16 +164,16 @@ for line in sys.stdin:
         result = {}
     elif method == "session/prompt" and split_history:
         assert (not previous and native_id == "managed-run") or (
-            guarded_history and previous and native_id == "ready"
+            previous and native_id == "ready"
         )
         log(method, native_id)
-        if guarded_history and previous:
+        if previous:
             text = params["prompt"][0]["text"]
             assert not text.startswith("/compact"), text
             if text == "Continue after native compaction":
                 log("compact-followup", native_id)
         send(method="session/update", params={"sessionId": native_id, "update": {
-            "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Restricted Antigravity"},
+            "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Native Antigravity"},
         }})
         result = {"stopReason": "end_turn"}
     elif method == "session/close":

@@ -1,6 +1,6 @@
 # MCP server authentication
 
-Agena serves itself as a Model Context Protocol server on two transports:
+Agena serves standalone MCP clients over stdio and Streamable HTTP.
 
 - **stdio** (`agena mcp-server`): a thin client that forwards tool discovery and
   invocation to the long-lived server over the ordinary server API. The local
@@ -77,7 +77,8 @@ POST /mcp
  ├─ JSON-RPC metadata          method, batch shape, tool calls with ids
  ├─ discovery methods          initialize, ping, tools/list, resources/list,
  │                             prompts/list, notifications/*  → anonymous
- ├─ tools/call                 per tool:
+ ├─ tools/call                 plugins_list, tools_list, tools_help → anonymous
+ │  tools_call                 access policy for arguments.tool
  │      McpToolAccess::Anonymous → proceed
  │      McpToolAccess::OAuth     → valid bearer? proceed
  │                                 otherwise answer that single call with an
@@ -92,8 +93,11 @@ OAuth endpoints are always mounted: `/.well-known/oauth-protected-resource`
 
 ## Tool policy
 
-`agena-mcp-server::stateless_tool_policy` owns two decisions shared by both
-transports:
+Agena advertises `plugins_list`, `tools_list`, `tools_help`, and `tools_call`.
+Clients discover the live execution catalog through the first three functions
+and pass `{"tool":"fs.read","input":{"file_path":"README.md"}}` to `tools_call`
+to execute a tool. Both transports apply
+`agena-mcp-server::stateless_tool_policy` to the inner execution tool.
 
 - `is_stateless_mcp_tool_exposed`: which runtime tools belong on a surface that
   has no Agena session (provider adapters, session/UI/agent/control plugins and
@@ -103,14 +107,15 @@ transports:
 `mcp_tool_access` returns `OAuth` for everything until a tool is listed in
 `ANONYMOUS_MCP_TOOL_ALLOWLIST`. Read-only is deliberately *not* enough: on a
 stateless surface `fs.read` still exposes private workspace data. A tool owner
-opts in by adding its name, which switches that tool's advertised
-`securitySchemes` entry from `oauth2` to `noauth` and lets anonymous callers
-invoke it.
+opts in by adding its name, which lets anonymous callers invoke it through
+`tools_call`.
 
 The HTTP adapter rewrites `tools/list` responses at the boundary to add the
 Apps SDK `securitySchemes` extension, because the standard MCP `Tool` model has
-no such field. A tool missing from the authoritative catalog is treated as
-protected, never as anonymous.
+no such field. It advertises `noauth` for the three discovery functions and
+`oauth2` for `tools_call`. The inner target is checked against the current
+catalog before execution. Unknown targets require authentication and fail
+catalog lookup.
 
 ## Authorization server
 

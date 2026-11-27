@@ -41,13 +41,14 @@ use rmcp::model::{
 use rmcp::service::{RequestContext, RoleServer};
 use tokio_util::sync::CancellationToken;
 
-pub mod antigravity_guard;
 mod stateless_tool_policy;
 pub mod stdio_relay;
+mod tool_api;
 
 pub use stateless_tool_policy::{
     McpToolAccess, StatelessMcpToolMetadata, is_stateless_mcp_tool_exposed, mcp_tool_access,
 };
+pub use tool_api::{ToolApiAction, dispatch_tool_api, tool_api_descriptors};
 
 const LIST_CACHE_TTL_MS: u64 = 30_000;
 static PROJECTIONS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);

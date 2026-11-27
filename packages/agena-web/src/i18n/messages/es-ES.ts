@@ -1776,7 +1776,7 @@ export default {
       chooseRewindMessage: 'Elige el mensaje antes del que quieres volver',
       nativeRewindDescription: 'El agente retirará el mensaje seleccionado y los turnos posteriores de la conversación activa.',
       reopenForRewind: 'Vuelve a abrir esta conversación desde el historial para ver los puntos disponibles.',
-      readOnlyHistory: 'Este historial es de solo lectura. Para continuar, se necesita una versión compatible de Antigravity. Los espacios de trabajo con MCP nativo o hooks también requieren aislamiento de procesos ACP.',
+      readOnlyHistory: 'Esta conversación solo está disponible para consulta.',
       closeSession: 'Cerrar sesión nativa',
       delete: 'Eliminar historial nativo',
       deleteDescription: 'Elimina esta conversación del historial del agente de forma permanente.',

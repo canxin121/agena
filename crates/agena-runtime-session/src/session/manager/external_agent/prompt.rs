@@ -1,9 +1,7 @@
 use std::collections::BTreeSet;
 
-use agena_domain::{
-    ContentId, ContentKind, ExternalAgentCommand, Role, external_agent_command_input,
-};
-use agena_provider::{CompletionInputAttachmentSource, CompletionInputPart, CompletionInputRun};
+use agena_domain::{ContentId, ContentKind, ExternalAgentCommand, external_agent_command_input};
+use agena_provider::CompletionInputAttachmentSource;
 use agena_storage::kernel::ReadLease;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use sha2::{Digest, Sha256};
@@ -318,116 +316,6 @@ fn embedded_resource(uri: String, mime: &str, data: String) -> Value {
     } else {
         json!({"type":"resource","resource":{"uri":uri,"mimeType":mime,"blob":data}})
     }
-}
-
-/// Project this input for the ordinary chat hooks. ACP owns the previous
-/// messages, and the local transcript keeps the original composer document.
-pub(super) async fn apply_input_hooks(
-    processor: &SessionProcessor,
-    session: SessionId,
-    workspace: &std::path::Path,
-    system: &mut String,
-    blocks: &mut Vec<Value>,
-    native_command: bool,
-    cancel: &CancellationToken,
-) -> Result<(), AppError> {
-    let parts = if native_command {
-        Vec::new()
-    } else {
-        blocks
-            .iter()
-            .filter(|block| block["type"] == "text")
-            .filter_map(|block| block["text"].as_str())
-            .map(|text| CompletionInputPart::Text { text: text.into() })
-            .collect::<Vec<_>>()
-    };
-    let text_count = parts.len();
-    let transform = async {
-        if parts.is_empty() {
-            return processor
-                .transform_model_system(session.get(), system, &[])
-                .await;
-        }
-        let mut messages = vec![CompletionInputRun {
-            role: Role::User,
-            parts,
-            provider_state: Default::default(),
-        }];
-        processor
-            .transform_model_input(session.get(), Some(workspace), system, &[], &mut messages)
-            .await?;
-        apply_projected_input(blocks, text_count, messages)
-    };
-    tokio::select! {
-        biased;
-        _ = cancel.cancelled() => Err(AppError::Cancelled),
-        result = transform => result,
-    }
-}
-
-fn apply_projected_input(
-    blocks: &mut Vec<Value>,
-    text_count: usize,
-    messages: Vec<CompletionInputRun>,
-) -> Result<(), AppError> {
-    let mut rewritten = None;
-    let mut context = Vec::new();
-    for message in messages {
-        let texts = message
-            .parts
-            .into_iter()
-            .map(|part| match part {
-                CompletionInputPart::Text { text } => Ok(text),
-                _ => Err(AppError::Config(
-                    "ACP input hooks can return only text.".into(),
-                )),
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        match message.role {
-            Role::User if rewritten.is_none() => rewritten = Some(texts),
-            Role::System => {
-                context.extend(texts.into_iter().filter(|text| !text.trim().is_empty()))
-            }
-            _ => {
-                return Err(AppError::Config(
-                    "ACP input hooks can rewrite the current user message and add system context."
-                        .into(),
-                ));
-            }
-        }
-    }
-    let texts = rewritten
-        .filter(|texts| texts.len() == text_count)
-        .ok_or_else(|| {
-            AppError::Config(
-                "An ACP input hook must preserve the current message's text blocks.".into(),
-            )
-        })?;
-    if blocks.first().is_some_and(|block| block["type"] == "text")
-        && texts
-            .first()
-            .is_some_and(|text| external_agent_command_input(text).is_some())
-    {
-        return Err(AppError::Config(
-            "An ACP input hook cannot replace a user message with a native agent command.".into(),
-        ));
-    }
-    for (block, text) in blocks
-        .iter_mut()
-        .filter(|block| block["type"] == "text")
-        .zip(texts)
-    {
-        block["text"] = Value::String(text);
-    }
-    if !context.is_empty() {
-        // The ACP prompt contains one user turn. Keep hook context in a
-        // separate block, after the user's text and any positioned skills.
-        blocks.push(text_block(format!(
-            "Agena input hook context\n\n{}",
-            context.join("\n\n")
-        )));
-    }
-    Ok(())
 }
 
 pub(super) fn route_command(

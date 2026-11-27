@@ -1,13 +1,12 @@
-use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
 
-use agena_domain::{AttachmentKind, ContentKind, RawOutput, StructuredObject, ToolInvocation};
-use agena_mcp_server::antigravity_guard::TOOL as ANTIGRAVITY_TOOL;
+use agena_domain::{AttachmentKind, ContentKind, RawOutput, ToolInvocation};
 use agena_mcp_server::{
-    CallToolParams, CallToolResult, ContentBlock, McpServerBackend, McpServerError, ToolDescriptor,
-    text_error, text_result,
+    CallToolParams, CallToolResult, ContentBlock, McpServerBackend, McpServerError, ToolApiAction,
+    ToolDescriptor, dispatch_tool_api, text_error, text_result, tool_api_descriptors,
 };
 use agena_provider::CompletionInputAttachmentSource;
+use agena_tool_api::ToolApiCatalog;
 use axum::{
     Router,
     extract::{Request, State},
@@ -15,7 +14,6 @@ use axum::{
     middleware::{self, Next},
     response::{IntoResponse, Response},
 };
-use sha2::{Digest, Sha256};
 use tokio::{
     net::TcpListener,
     sync::{RwLock, watch},
@@ -31,12 +29,6 @@ mod sse;
 mod stdio;
 
 const RESULT_BYTES: usize = 50 * 1024;
-const MCP_NAME_BYTES: usize = 52; // Leave room for Claude's mcp__agena__ prefix.
-
-struct Tool {
-    target: String,
-    descriptor: ToolDescriptor,
-}
 
 #[derive(Clone)]
 struct Scope {
@@ -179,49 +171,6 @@ impl Bridge {
         relay_socket: Option<&std::path::Path>,
     ) -> Result<Self, AppError> {
         let catalog = super::super::tool_api::catalog(&turn.executor).await;
-        let mut tools = BTreeMap::new();
-        for tool in catalog.tools {
-            let mut name = tool.name.replace(
-                |c: char| !c.is_ascii_alphanumeric() && !matches!(c, '-' | '_'),
-                "_",
-            );
-            if name.len() > MCP_NAME_BYTES || tools.contains_key(&name) {
-                let suffix = hex::encode(&Sha256::digest(tool.canonical_name.as_bytes())[..8]);
-                name.truncate(MCP_NAME_BYTES - suffix.len() - 1);
-                name.push('_');
-                name.push_str(&suffix);
-            }
-            if tools.contains_key(&name) {
-                return Err(AppError::Config(
-                    "Two Agena tools have the same MCP name.".into(),
-                ));
-            }
-            let description = [tool.summary, tool.help]
-                .into_iter()
-                .filter(|text| !text.is_empty())
-                .collect::<Vec<_>>()
-                .join("\n\n");
-            tools.insert(
-                name.clone(),
-                Tool {
-                    target: tool.canonical_name,
-                    descriptor: ToolDescriptor {
-                        name,
-                        description: Some(description),
-                        input_schema: Some(tool.input_schema),
-                        title: None,
-                        aliases: Vec::new(),
-                        before_help: None,
-                        after_help: None,
-                        output_schema: None,
-                        annotations: None,
-                        execution: None,
-                        icons: Vec::new(),
-                        meta: None,
-                    },
-                },
-            );
-        }
         let scope = Scope {
             closing: turn.control.cancel.child_token(),
             turn,
@@ -230,7 +179,7 @@ impl Bridge {
         };
         let backend = Backend {
             scope: scope.clone(),
-            tools: Arc::new(tools),
+            catalog: Arc::new(catalog),
         };
         let transport = match kind {
             Kind::Acp => Transport::Acp(AcpEndpoint {
@@ -350,50 +299,13 @@ async fn authorize(
 #[derive(Clone)]
 struct Backend {
     scope: Scope,
-    tools: Arc<BTreeMap<String, Tool>>,
-}
-
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ToolRequest {
-    name: Option<String>,
-    arguments: Option<serde_json::Map<String, Value>>,
+    catalog: Arc<ToolApiCatalog>,
 }
 
 #[async_trait::async_trait]
 impl McpServerBackend for Backend {
     async fn list_tools(&self) -> Result<Vec<ToolDescriptor>, McpServerError> {
-        if self.scope.turn.agent == ExternalAgent::Antigravity {
-            // Antigravity drops large eager declarations and can reject schemas
-            // with regex syntax accepted by Agena. Publish a small entry point
-            // and return the exact schemas as data on demand.
-            return Ok(vec![ToolDescriptor {
-                name: ANTIGRAVITY_TOOL.into(),
-                description: Some("Use Agena tools for files, commands, and web access. Omit name to list available tools, pass name to see its input schema, or pass name and arguments to execute. Pass an empty object for a tool with no arguments.".into()),
-                input_schema: Some(json!({
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string", "description": "Name from the Agena tool catalog."},
-                        "arguments": {"type": "object", "additionalProperties": true}
-                    },
-                    "additionalProperties": false
-                })),
-                title: None,
-                aliases: Vec::new(),
-                before_help: None,
-                after_help: None,
-                output_schema: None,
-                annotations: None,
-                execution: None,
-                icons: Vec::new(),
-                meta: None,
-            }]);
-        }
-        Ok(self
-            .tools
-            .values()
-            .map(|tool| tool.descriptor.clone())
-            .collect())
+        Ok(tool_api_descriptors())
     }
 
     async fn call_tool(&self, params: CallToolParams) -> Result<CallToolResult, McpServerError> {
@@ -426,49 +338,16 @@ impl Backend {
         if self.scope.closing.is_cancelled() {
             return Ok(text_error("The Agena turn has ended."));
         }
-        let input = params.arguments.unwrap_or_else(|| json!({}));
-        let (name, input) =
-            if turn.agent == ExternalAgent::Antigravity && params.name == ANTIGRAVITY_TOOL {
-                let request: ToolRequest = serde_json::from_value(input)
-                    .map_err(|error| McpServerError::InvalidParams(error.to_string()))?;
-                let Some(name) = request.name else {
-                    if request.arguments.is_some() {
-                        return Err(McpServerError::InvalidParams(
-                            "Specify the Agena tool's name.".into(),
-                        ));
-                    }
-                    let tools = self
-                        .tools
-                        .values()
-                        .map(|tool| {
-                            let summary: String = tool
-                                .descriptor
-                                .description
-                                .as_deref()
-                                .and_then(|description| description.lines().next())
-                                .unwrap_or_default()
-                                .chars()
-                                .take(160)
-                                .collect();
-                            json!({"name": tool.descriptor.name, "summary": summary})
-                        })
-                        .collect::<Vec<_>>();
-                    return Ok(text_result(json!({"tools": tools}).to_string()));
-                };
-                (name, request.arguments.map(Value::Object))
-            } else {
-                (params.name, Some(input))
-            };
-        let target = self
-            .tools
-            .get(&name)
-            .ok_or(McpServerError::NotFound(name))?;
-        let Some(input) = input else {
-            return Ok(text_result(serde_json::to_string(&target.descriptor)?));
+        let request = match dispatch_tool_api(&self.catalog, params)? {
+            ToolApiAction::Respond(response) => return Ok(text_result(response.output_text)),
+            ToolApiAction::Execute(request) => request,
         };
-        let arguments =
-            StructuredObject::try_from(input.clone()).map_err(McpServerError::InvalidParams)?;
-        let invocation = ToolInvocation::new(target.target.clone(), arguments);
+        let target = self
+            .catalog
+            .resolve_tool(&request.tool)
+            .ok_or(McpServerError::NotFound(request.tool))?;
+        let input = Value::from(request.input.clone());
+        let invocation = ToolInvocation::new(target.canonical_name.clone(), request.input);
         self.scope
             .activity
             .send_modify(|activity| activity.active += 1);

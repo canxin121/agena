@@ -743,9 +743,12 @@ impl Application {
             .into_iter()
             .map(|tool| OperatorToolResource {
                 name: tool.name,
+                canonical_name: Some(tool.canonical_name),
                 summary: tool.summary,
                 before_help: tool.before_help,
+                help: tool.help,
                 after_help: tool.after_help,
+                tags: tool.tags,
                 input_schema: tool.input_schema,
                 output_schema: tool.output_schema,
                 interactive: tool.interactive,

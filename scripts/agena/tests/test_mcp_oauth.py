@@ -162,7 +162,8 @@ class McpOAuthTests(unittest.TestCase):
         status, _, body = self.request('/mcp', 'POST', {
             'jsonrpc': '2.0', 'id': 1,
             'method': 'tools/call', 'params': {
-                'name': '__oauth_integration_probe__', 'arguments': {},
+                'name': 'tools_call',
+                'arguments': {'tool': '__oauth_integration_probe__', 'input': {}},
                 '_meta': {'io.modelcontextprotocol/protocolVersion': '2025-11-25'},
             },
         }, headers={
@@ -215,8 +216,24 @@ class McpOAuthTests(unittest.TestCase):
         self.assertIsNotNone(read_tool, tools)
         self.assertIsNotNone(shell_tool, tools)
         before = trace.read_bytes() if trace.exists() else b''
+
+        def gateway_params(params):
+            return {'name': 'tools_call', 'arguments': {
+                'tool': params['name'], 'input': params['arguments'],
+            }}
+
+        headers = {'Authorization': 'Bearer ' + tokens['access_token'],
+                   'Accept': 'application/json, text/event-stream',
+                   'MCP-Protocol-Version': '2025-11-25'}
+        protocol = {'io.modelcontextprotocol/protocolVersion': '2025-11-25'}
+        direct_params = {'name': read_tool, 'arguments': {'file_path': 'Cargo.toml'}}
+        rejected = self.json_request('/mcp', 'POST', {
+            'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
+            'params': direct_params | {'_meta': protocol},
+        }, headers=headers, expected=404)
+        self.assertIn(read_tool, rejected['error']['message'])
         probes = [
-            ({'name': read_tool, 'arguments': {'file_path': 'Cargo.toml'}}, 'mcp-direct-execution-marker'),
+            ({'name': 'agena.fs.read', 'arguments': {'file_path': 'Cargo.toml'}}, 'mcp-direct-execution-marker'),
             ({'name': shell_tool, 'arguments': {
                 'command': 'git status --short', 'workdir': str(self.workspace),
                 'reads': [str(self.workspace)], 'writes': [], 'network': [], 'timeout_ms': 10000,
@@ -225,10 +242,11 @@ class McpOAuthTests(unittest.TestCase):
         for params, expected in probes:
             with self.subTest(transport='http', tool=params['name']):
                 response = self.json_request('/mcp', 'POST', {
-                    'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call',
-                    'params': params | {'_meta': {'io.modelcontextprotocol/protocolVersion': '2025-11-25'}},
-                }, headers={'Authorization': 'Bearer ' + tokens['access_token'],
-                            'Accept': 'application/json, text/event-stream', 'MCP-Protocol-Version': '2025-11-25'})
+                    'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call',
+                    'params': gateway_params(params) | {
+                        '_meta': protocol,
+                    },
+                }, headers=headers)
                 self.assertIn('result', response)
                 self.assertFalse(response['result'].get('isError', False), response)
                 self.assertIn(expected, json.dumps(response))
@@ -263,10 +281,13 @@ class McpOAuthTests(unittest.TestCase):
                 }})
                 self.assertIn('result', initialized)
                 rpc({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
-                for request_id, (params, expected) in enumerate(probes, start=2):
+                listed = rpc({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list'})
+                self.assertEqual({tool['name'] for tool in listed['result']['tools']},
+                                 {'plugins_list', 'tools_list', 'tools_help', 'tools_call'})
+                for request_id, (params, expected) in enumerate(probes, start=3):
                     with self.subTest(transport='stdio', tool=params['name']):
                         response = rpc({'jsonrpc': '2.0', 'id': request_id,
-                                        'method': 'tools/call', 'params': params})
+                                        'method': 'tools/call', 'params': gateway_params(params)})
                         self.assertIn('result', response)
                         self.assertFalse(response['result'].get('isError', False), response)
                         self.assertIn(expected, json.dumps(response))
@@ -330,8 +351,25 @@ class McpOAuthTests(unittest.TestCase):
             'jsonrpc': '2.0', 'id': 2, 'method': 'tools/list',
             'params': {'_meta': {'io.modelcontextprotocol/protocolVersion': '2025-11-25'}},
         }, headers={'Accept': 'application/json, text/event-stream', 'MCP-Protocol-Version': '2025-11-25'})
-        for tool in catalog['result']['tools']:
-            self.assertIn(tool['securitySchemes'][0]['type'], ('oauth2', 'noauth'))
+        self.assertEqual(
+            {tool['name']: tool['securitySchemes'][0]['type'] for tool in catalog['result']['tools']},
+            {'plugins_list': 'noauth', 'tools_list': 'noauth',
+             'tools_help': 'noauth', 'tools_call': 'oauth2'},
+        )
+        discovery = [
+            ('plugins_list', {'plugin': 'agena.fs'}, 'agena.fs'),
+            ('tools_list', {'plugin': 'agena.fs'}, 'fs.read'),
+            ('tools_help', {'tool': 'agena.fs.read'}, 'file_path'),
+        ]
+        for request_id, (name, arguments, expected) in enumerate(discovery, start=3):
+            with self.subTest(function=name):
+                result = self.json_request('/mcp', 'POST', {
+                    'jsonrpc': '2.0', 'id': request_id, 'method': 'tools/call',
+                    'params': {'name': name, 'arguments': arguments,
+                               '_meta': {'io.modelcontextprotocol/protocolVersion': '2025-11-25'}},
+                }, headers={'Accept': 'application/json, text/event-stream',
+                            'MCP-Protocol-Version': '2025-11-25'})
+                self.assertIn(expected, result['result']['content'][0]['text'])
         forwarded = self.json_request('/.well-known/oauth-authorization-server', headers={
             'X-Forwarded-Host': 'attacker.example.com', 'X-Forwarded-Proto': 'https',
         })

@@ -113,15 +113,6 @@ pub(in crate::session::manager::external_agent) struct NativePage {
 }
 
 impl AcpClient {
-    pub(in crate::session::manager::external_agent) fn history_read_only(&self) -> bool {
-        self.previous_antigravity_history
-            && !(self.antigravity_guard_installed
-                && self
-                    .initialization
-                    .as_ref()
-                    .is_some_and(policy::antigravity_guard_supported))
-    }
-
     pub(in crate::session::manager::external_agent) fn has_previous_history(&self) -> bool {
         self.agent == ExternalAgent::Antigravity
             && !self.previous_antigravity_history
@@ -146,7 +137,7 @@ impl AcpClient {
                 caps.lifecycle.system_prompt,
                 SystemPromptSupport::Unsupported
             ),
-            continue_conversation: !self.history_read_only(),
+            continue_conversation: !self.previous_antigravity_history || caps.resume || caps.load,
         })
     }
 
@@ -390,7 +381,6 @@ impl AcpClient {
             .await?;
         let (turns, mut state) = replay.finish(self.agent, cwd).await?;
         state.antigravity_legacy_history = self.previous_antigravity_history;
-        state.history_read_only = self.history_read_only();
         Ok((turns, state))
     }
 

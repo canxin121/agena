@@ -13,9 +13,11 @@ use std::{
 };
 
 use agena_application::{Application, dto::OperatorToolResource};
+use agena_domain::ToolApiFunction;
 use agena_mcp_server::{
-    CallToolParams, CallToolResult, McpServerBackend, McpServerError, McpToolAccess,
-    StatelessMcpToolMetadata, ToolDescriptor, is_stateless_mcp_tool_exposed, mcp_tool_access,
+    CallToolParams, CallToolResult, McpServerBackend, McpServerError, McpToolAccess, ToolApiAction,
+    ToolDescriptor, dispatch_tool_api, is_stateless_mcp_tool_exposed, mcp_tool_access,
+    tool_api_descriptors,
 };
 use async_trait::async_trait;
 use axum::{
@@ -60,7 +62,7 @@ struct McpRequestMetadata {
     has_id: bool,
     tools_list: bool,
     is_batch: bool,
-    tool_calls: Vec<(String, Option<serde_json::Value>)>,
+    tool_calls: Vec<(Option<String>, Option<serde_json::Value>)>,
 }
 
 impl McpRequestMetadata {
@@ -79,16 +81,19 @@ impl McpRequestMetadata {
             if request.get("method").and_then(serde_json::Value::as_str) != Some("tools/call") {
                 return;
             }
-            let Some(name) = request
-                .get("params")
-                .and_then(serde_json::Value::as_object)
-                .and_then(|params| params.get("name"))
-                .and_then(serde_json::Value::as_str)
-            else {
+            let params = &request["params"];
+            let Some(name) = params["name"].as_str() else {
                 return;
             };
+            let target = match ToolApiFunction::from_function_name(name) {
+                Some(ToolApiFunction::Call) => params["arguments"]["tool"]
+                    .as_str()
+                    .map(|tool| tool.trim().to_owned()),
+                Some(_) => return,
+                None => None,
+            };
             metadata.tool_calls.push((
-                name.to_owned(),
+                target,
                 request.get("id").cloned().filter(|id| !id.is_null()),
             ));
         };
@@ -155,19 +160,6 @@ pub(crate) struct McpServerState {
     oauth: Arc<OAuthState>,
     control: Arc<McpControlState>,
     fallback_resource: String,
-}
-
-fn mcp_tool_metadata(tool: &OperatorToolResource) -> StatelessMcpToolMetadata<'_> {
-    StatelessMcpToolMetadata {
-        name: tool.name.as_str(),
-        plugin_id: tool.plugin_id.as_str(),
-        interactive: tool.interactive,
-        agent: tool.agent,
-    }
-}
-
-fn mcp_tool_is_exposed(tool: &OperatorToolResource) -> bool {
-    is_stateless_mcp_tool_exposed(mcp_tool_metadata(tool))
 }
 
 fn refresh_token_fingerprint(token: &str) -> String {
@@ -570,30 +562,25 @@ impl McpServerState {
             .clone()
     }
 
-    fn tool_is_exposed(&self, tool: &OperatorToolResource) -> bool {
-        mcp_tool_is_exposed(tool)
-    }
-
-    /// Whether one exposed tool requires an OAuth access token.
-    ///
-    /// The decision belongs to the tool catalog, not to a deployment-wide
-    /// switch: the shared stateless MCP policy marks a tool as anonymously
-    /// callable only when it is explicitly listed as safe for that transport.
-    fn tool_requires_auth(&self, tool: &OperatorToolResource) -> bool {
-        mcp_tool_access(mcp_tool_metadata(tool)) == McpToolAccess::OAuth
-    }
-
     async fn exposed_tool_auth_requirements(&self) -> HashMap<String, bool> {
-        self.application
+        let mut requirements = HashMap::<String, bool>::new();
+        for tool in self
+            .application
             .list_operator_tools()
             .await
             .into_iter()
-            .filter(|tool| self.tool_is_exposed(tool))
-            .map(|tool| {
-                let requires_auth = self.tool_requires_auth(&tool);
-                (tool.name, requires_auth)
-            })
-            .collect()
+            .filter(|tool| is_stateless_mcp_tool_exposed(tool.stateless_mcp_metadata()))
+        {
+            let requires_auth =
+                mcp_tool_access(tool.stateless_mcp_metadata()) == McpToolAccess::OAuth;
+            for name in [tool.name.as_str(), tool.canonical_name()] {
+                requirements
+                    .entry(name.to_owned())
+                    .and_modify(|required| *required |= requires_auth)
+                    .or_insert(requires_auth);
+            }
+        }
+        requirements
     }
 
     fn accepts_host(&self, authority: &str) -> bool {
@@ -1062,10 +1049,7 @@ pub(crate) fn router(state: Arc<McpServerState>) -> Router {
         // top-level `securitySchemes` extension. Rewrite only tools/list at the
         // HTTP boundary; all protocol negotiation and modern stateless
         // discovery are handled by rmcp 3.x itself.
-        .layer(middleware::from_fn_with_state(
-            Arc::clone(&state),
-            rewrite_tool_security_schemes,
-        ))
+        .layer(middleware::from_fn(rewrite_tool_security_schemes))
         .with_state(Arc::clone(&state));
 
     let oauth_routes = Router::new()
@@ -1232,39 +1216,37 @@ struct ApplicationMcpBackend {
 #[async_trait]
 impl McpServerBackend for ApplicationMcpBackend {
     async fn list_tools(&self) -> Result<Vec<ToolDescriptor>, McpServerError> {
-        Ok(self
-            .state
-            .application
-            .list_operator_tools()
-            .await
-            .into_iter()
-            .filter(|tool| self.state.tool_is_exposed(tool))
-            .map(operator_tool_descriptor)
-            .collect())
+        Ok(tool_api_descriptors())
     }
 
     async fn call_tool(&self, params: CallToolParams) -> Result<CallToolResult, McpServerError> {
-        // Always re-read the catalog immediately before invocation. This
-        // prevents a client from bypassing the list filter by guessing a
-        // hidden tool name, and also tracks runtime/plugin reloads.
-        let tools = self.state.application.list_operator_tools().await;
-        if !tools
-            .iter()
-            .any(|tool| tool.name == params.name && self.state.tool_is_exposed(tool))
-        {
-            return Err(McpServerError::NotFound(format!(
-                "tool '{}' is not exposed by the Agena MCP server",
-                params.name
-            )));
-        }
+        let application = &self.state.application;
+        let tools = application.list_operator_tools().await;
+        let plugins = if params.name == ToolApiFunction::PluginsList.function_name() {
+            let value = application
+                .query_plugin_management(agena_api::management::PluginQuery::List)
+                .await
+                .map_err(|error| McpServerError::Backend(error.to_string()))?;
+            serde_json::from_value::<agena_api::resource::PluginListResponse>(value)?.items
+        } else {
+            Vec::new()
+        };
+        let catalog = OperatorToolResource::stateless_mcp_catalog(tools, plugins);
+        let request = match dispatch_tool_api(&catalog, params)? {
+            ToolApiAction::Respond(response) => {
+                return Ok(agena_mcp_server::text_result(response.output_text));
+            }
+            ToolApiAction::Execute(request) => request,
+        };
+        let tool = catalog
+            .resolve_tool(&request.tool)
+            .ok_or(McpServerError::NotFound(request.tool))?;
 
-        let result = self
-            .state
-            .application
+        let result = application
             .invoke_operator_tool_with_sandbox(
                 self.state.workspace_id,
-                params.name.as_str(),
-                params.arguments,
+                &tool.canonical_name,
+                Some(serde_json::Value::from(request.input)),
                 self.state.next_call_id(),
                 false,
             )
@@ -1281,28 +1263,6 @@ impl McpServerBackend for ApplicationMcpBackend {
             }
             Err(error) => Ok(agena_mcp_server::text_error(error.to_string())),
         }
-    }
-}
-
-fn operator_tool_descriptor(tool: OperatorToolResource) -> ToolDescriptor {
-    ToolDescriptor {
-        name: tool.name,
-        title: None,
-        aliases: Vec::new(),
-        description: tool.summary,
-        before_help: tool.before_help,
-        after_help: tool.after_help,
-        input_schema: Some(tool.input_schema),
-        output_schema: tool.output_schema,
-        annotations: Some(serde_json::json!({
-            "readOnlyHint": tool.read_only,
-            "destructiveHint": tool.destructive,
-            "idempotentHint": tool.read_only,
-            "openWorldHint": tool.open_world,
-        })),
-        execution: None,
-        icons: Vec::new(),
-        meta: None,
     }
 }
 
@@ -1501,7 +1461,6 @@ fn rewrite_tool_list_sse(
 }
 
 async fn rewrite_tool_security_schemes(
-    State(state): State<Arc<McpServerState>>,
     request: axum::http::Request<Body>,
     next: middleware::Next,
 ) -> Response {
@@ -1518,15 +1477,18 @@ async fn rewrite_tool_security_schemes(
         Ok(metadata) => metadata,
         Err(error) => return mcp_worker_unavailable(error),
     };
-    let should_rewrite = metadata.tools_list;
-    let auth_requirements = if should_rewrite {
-        state.exposed_tool_auth_requirements().await
-    } else {
-        HashMap::new()
-    };
     let request = axum::http::Request::from_parts(parts, Body::from(body));
     let response = next.run(request).await;
-    if should_rewrite {
+    if metadata.tools_list {
+        let auth_requirements = ToolApiFunction::ALL
+            .into_iter()
+            .map(|function| {
+                (
+                    function.function_name().to_owned(),
+                    function == ToolApiFunction::Call,
+                )
+            })
+            .collect();
         rewrite_tool_list_response(response, auth_requirements).await
     } else {
         response
@@ -3307,10 +3269,12 @@ async fn tool_call_auth_requirement(
     let requirements = state.exposed_tool_auth_requirements().await;
     MCP_METADATA
         .run(move || {
-            let protected = metadata
-                .tool_calls
-                .iter()
-                .find(|(name, _)| requirements.get(name).copied().unwrap_or(true));
+            let protected = metadata.tool_calls.iter().find(|(target, _)| {
+                target
+                    .as_ref()
+                    .and_then(|name| requirements.get(name).copied())
+                    .unwrap_or(true)
+            });
             match protected {
                 Some(_) if metadata.is_batch => McpAuthRequirement::Transport,
                 Some((_, Some(id))) => McpAuthRequirement::ToolCall(id.clone()),

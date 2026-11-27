@@ -53,8 +53,8 @@ def commands():
 
 def check_workspace(params):
     assert params["additionalDirectories"] == [str(Path.cwd() / "shared")], params
-    restrictions = params["_meta"]["claudeCode"]["options"]
-    assert restrictions["tools"] == [] and restrictions["settingSources"] == [], restrictions
+    options = params["_meta"]["claudeCode"]["options"]
+    assert not {"tools", "strictMcpConfig", "settingSources", "extraArgs"} & options.keys(), options
 
 
 for line in sys.stdin:
@@ -95,6 +95,8 @@ for line in sys.stdin:
             instruction = params["systemPrompt"]["content"][0]["text"]
             assert "ACP_PROJECT_GUIDANCE_FIXTURE" in instruction, instruction
             assert "ACP_PROFILE_SKILL_FIXTURE" in instruction, instruction
+            assert "Prefer the `agena` MCP server's tools" in instruction, instruction
+            assert "Use native tools when the server is unavailable or has no suitable tool." in instruction
             record(PROMPT_RECORD, {"method": method, "text": instruction})
             # Echo applied values. The first setup leaves one otherwise
             # valid initial option unchanged so the client exercises its setter.

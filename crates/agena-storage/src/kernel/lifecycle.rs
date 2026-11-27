@@ -303,7 +303,8 @@ pub struct ExternalAgentRewind {
 pub struct ExternalAgentState {
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub antigravity_legacy_history: bool,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    /// Legacy field accepted when decoding snapshots from the former ACP tool guard.
+    #[serde(skip_serializing)]
     pub history_read_only: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor_tail: Option<ExternalAgentCursorEntity>,
@@ -385,7 +386,6 @@ impl ExternalAgentState {
             } else {
                 return Self {
                     antigravity_legacy_history: snapshot.antigravity_legacy_history,
-                    history_read_only: snapshot.history_read_only,
                     ..Self::default()
                 };
             }
@@ -395,7 +395,6 @@ impl ExternalAgentState {
 
     pub fn is_empty(&self) -> bool {
         !self.antigravity_legacy_history
-            && !self.history_read_only
             && self.cursor_tail.is_none()
             && self.plans.is_empty()
             && self.options.is_empty()

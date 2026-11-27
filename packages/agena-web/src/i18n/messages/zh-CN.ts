@@ -1545,7 +1545,7 @@ export default {
       chooseRewindMessage: '选择回退位置',
       nativeRewindDescription: '外部 Agent 会从当前对话上下文中移除所选消息及后续轮次。',
       reopenForRewind: '从原生历史重新打开会话，读取可用的回退位置。',
-      readOnlyHistory: '此历史当前为只读。续聊需要受支持的 Antigravity 版本。如果工作区配置了原生 MCP 或钩子，还需要 ACP 进程隔离。',
+      readOnlyHistory: '此会话当前仅支持浏览历史。',
       closeSession: '关闭原生会话',
       delete: '删除原生历史',
       deleteDescription: '从 Agent 的历史中永久删除这段对话。',

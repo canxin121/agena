@@ -169,8 +169,6 @@ impl SessionManager {
         system: Option<&str>,
     ) -> Result<(), AppError> {
         self.close_idle_external_agent(control.session).await;
-        self.flush_hook_runs(attempt, control.session, &state)
-            .await?;
         control.phase(agena_domain::ExecutionPhase::PreparingModel);
         let context = self
             .execution_context_for_execution(control.session, &state, Some(control.execution))
@@ -190,11 +188,6 @@ impl SessionManager {
             self.kernel().reader.configuration(control.session)
         })
         .await?;
-        if configuration.external_agent_state.history_read_only {
-            return Err(AppError::Config(
-                "Continuing this Antigravity history requires a verified adapter and process isolation for native workspace MCP or hooks.".into(),
-            ));
-        }
         let directories = lifecycle::directories_for_agent(
             &executor,
             &cwd,
@@ -308,16 +301,6 @@ impl SessionManager {
             ));
         }
         let is_native_command = native_command.is_some();
-        prompt::apply_input_hooks(
-            &state.processor,
-            control.session,
-            &cwd,
-            &mut session_context.system_prompt,
-            &mut blocks,
-            is_native_command,
-            &control.cancel,
-        )
-        .await?;
         if !session_context.system_prompt.trim().is_empty()
             && !client
                 .lifecycle_capabilities(&control.cancel)

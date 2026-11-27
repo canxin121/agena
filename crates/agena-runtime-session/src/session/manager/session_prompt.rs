@@ -320,6 +320,13 @@ pub(super) async fn external_agent_system_prompt(
             &project,
         ));
     }
+    resolution.fragments.push(runtime_fragment(
+        "agena.runtime.acp-tools",
+        "Agena MCP tools",
+        "Prefer the `agena` MCP server's tools for workspace files, shell commands, and web access. \
+         Use `plugins_list` and `tools_list` to discover Agena tools, `tools_help` for their schemas, and `tools_call` with `tool` and `input` to execute them. \
+         Use native tools when the server is unavailable or has no suitable tool. Honor permission decisions for the same action across tools.",
+    ));
     PromptResolution::from_fragments(resolution.fragments, resolution.warnings)
 }
 

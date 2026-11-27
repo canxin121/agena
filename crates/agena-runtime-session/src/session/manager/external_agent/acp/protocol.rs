@@ -1,5 +1,6 @@
 use std::{collections::HashSet, time::Duration};
 
+use agena_domain::ExternalAgent;
 use agena_provider::CompletionUsage;
 use agena_storage::kernel::{ExternalAgentCursorEntity, ExternalAgentNativeCursor};
 use serde_json::{Value, json};
@@ -18,15 +19,17 @@ pub(super) enum Version {
 }
 
 impl Version {
-    pub(super) fn initialize_params(self, terminal_auth: bool) -> Value {
+    pub(super) fn initialize_params(self, agent: ExternalAgent, terminal_auth: bool) -> Value {
         let info = json!({"name": "agena", "title": "Agena", "version": env!("CARGO_PKG_VERSION")});
         let elicitation = json!({"form": {}, "url": {}});
+        // Antigravity advertises its file and shell tools when the client leaves these operations to it.
+        let client_tools = agent != ExternalAgent::Antigravity;
         let mut params = match self {
             Self::V1 => json!({
                 "protocolVersion": 1,
                 "clientCapabilities": {
-                    "fs": {"readTextFile": true, "writeTextFile": true},
-                    "terminal": true,
+                    "fs": {"readTextFile": client_tools, "writeTextFile": client_tools},
+                    "terminal": client_tools,
                     "elicitation": elicitation,
                     "plan": {},
                     "subagents": {},

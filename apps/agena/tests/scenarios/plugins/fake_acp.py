@@ -25,15 +25,12 @@ def record_exception(*error):
 
 sys.excepthook = record_exception
 
-if PROGRAM == "agy" and sys.argv[1:2] == ["--agent"]:
-    _, _, agent, resume, session, print_flag, prompt, output, output_format = sys.argv
+if PROGRAM == "agy" and sys.argv[1:2] == ["--resume"]:
+    _, resume, session, print_flag, prompt, output, output_format = sys.argv
     assert (resume, print_flag, prompt, output, output_format) == (
         "--resume", "--print", "/compact", "--output-format", "stream-json",
     )
     assert Path(f".acp-closed-{session}").is_file()
-    profile = Path.home() / ".gemini"
-    definition = (profile / "config" / "agents" / f"{agent}.md").read_text()
-    assert "tools: []" in definition and "inheritMcp: false" in definition
     Path(f".acp-compacted-{session}").touch()
     print(json.dumps({
         "event": "step_update", "step_update": {
@@ -47,8 +44,8 @@ if PROGRAM == "agy" and sys.argv[1:2] == ["--agent"]:
     sys.exit(0)
 if PROGRAM == "agy":
     assert sys.argv[1:3] == ["acp", "--process-per-session"]
-    assert "--gemini-dir" in sys.argv and "--agent" in sys.argv
-    assert "--include-default-customizations=false" in sys.argv
+    assert "--gemini-dir" in sys.argv and "--agent" not in sys.argv
+    assert "--include-default-customizations=false" not in sys.argv
 else:
     assert sys.argv[1:] == []
 
@@ -151,14 +148,12 @@ def call_fixture(name, arguments):
     })
     mcp("notifications/initialized", {}, request_id=None)
     listing = mcp("tools/list", {})["result"]["tools"]
-    if PROGRAM == "agy":
-        assert [tool["name"] for tool in listing] == ["tool"]
-        return mcp("tools/call", {
-            "name": "tool", "arguments": {"name": name, "arguments": arguments},
-        })["result"]
-    tool = next(tool for tool in listing if tool["name"] == name)
-    assert tool["inputSchema"]["type"] == "object"
-    return mcp("tools/call", {"name": tool["name"], "arguments": arguments})["result"]
+    assert {tool["name"] for tool in listing} == {"plugins_list", "tools_list", "tools_help", "tools_call"}
+    help = mcp("tools/call", {"name": "tools_help", "arguments": {"tool": name}})["result"]
+    assert "Input schema:" in help["content"][0]["text"], help
+    return mcp("tools/call", {
+        "name": "tools_call", "arguments": {"tool": name, "input": arguments},
+    })["result"]
 
 
 def config_options():
@@ -400,8 +395,8 @@ for line in sys.stdin:
         elif prompt in ("read fixture", "deny fixture"):
             if PROGRAM == "claude-agent-acp":
                 session_update(sessionUpdate="tool_call", toolCallId="bridge-mirror",
-                               title="agena: fs_read", name="mcp__agena__fs_read", status="pending")
-            output = call_fixture("fs_read", {"file_path": "acp-input.txt"})
+                               title="agena: tools_call", name="mcp__agena__tools_call", status="pending")
+            output = call_fixture("fs.read", {"file_path": "acp-input.txt"})
             if PROGRAM == "claude-agent-acp":
                 session_update(sessionUpdate="tool_call_update", toolCallId="bridge-mirror", status="completed")
             if prompt == "read fixture":
@@ -444,7 +439,7 @@ for line in sys.stdin:
             update("native status received")
         elif prompt == "inspect after compacting":
             assert resumed and Path(f".acp-compacted-{session}").is_file()
-            output = call_fixture("fs_read", {"file_path": "acp-input.txt"})
+            output = call_fixture("fs.read", {"file_path": "acp-input.txt"})
             assert "acp callback content" in json.dumps(output), output
             update("read through Agena after checkpoint")
         elif prompt == "show project plan":
@@ -492,7 +487,7 @@ for line in sys.stdin:
             cancel_request = identifier
             continue
         elif prompt in ("check tool image", "deny tool image"):
-            output = call_fixture("fs_read_media", {"path": "acp-image.png"})
+            output = call_fixture("fs.read_media", {"path": "acp-image.png"})
             images = [block for block in output["content"] if block["type"] == "image"]
             if prompt == "check tool image":
                 assert not output.get("isError", False), output

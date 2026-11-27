@@ -332,6 +332,7 @@ async fn compose_database(
         cache,
         history_pins,
         frame_reads,
+        acp_views,
     ));
     Ok((port::session_kernel(backend, epoch), maintenance))
 }
@@ -1727,6 +1728,7 @@ async fn writer(
     cache: Arc<read_cache::ReadCache>,
     history_pins: Arc<snapshots::Pins>,
     frame_reads: Arc<Semaphore>,
+    acp_views: bool,
 ) {
     let mut shutdown = Vec::new();
     let mut carry = None;
@@ -1905,6 +1907,13 @@ async fn writer(
                     receiver.close();
                     cache.close();
                     live.fail_closed("history snapshot collection outcome is unknown");
+                } else if acp_views && result.is_ok() {
+                    if let Err(error) =
+                        session_storage::collect_acp_views(&database, &feed, &cache, &blob_pins)
+                            .await
+                    {
+                        tracing::warn!(%error, "ephemeral ACP view collection failed");
+                    }
                 }
                 let _ = response.send(result);
                 continue;

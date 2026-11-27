@@ -885,3 +885,62 @@ async fn bot_totals_include_owned_sessions_and_binding_storage_once() {
     assert_eq!(inventory.bots[0].channel_files, 15);
     fixture.runtime.ports.clone().shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn ephemeral_acp_views_are_physically_reclaimed_and_evicted_beyond_cap() {
+    let runtime = agena_storage_sqlite::open_acp_kernel().await.unwrap();
+    let workspace = runtime
+        .workspaces
+        .ensure_id("/acp-gc-project")
+        .await
+        .unwrap();
+    let mut created = Vec::new();
+    for i in 0..132 {
+        let session = runtime
+            .ports
+            .sessions
+            .create(RequestId::new(), workspace, format!("ACP view {i}"))
+            .await
+            .unwrap()
+            .value;
+        created.push(session.id);
+    }
+    // Explicitly delete two views; they should be reclaimed completely.
+    for id in [created[0], created[1]] {
+        runtime
+            .ports
+            .sessions
+            .delete(RequestId::new(), id)
+            .await
+            .unwrap();
+    }
+
+    // Run maintenance twice (batch size 16): soft-delete overflow + reclaim deleted.
+    for _ in 0..3 {
+        runtime
+            .maintenance
+            .collect_history_snapshots()
+            .await
+            .unwrap();
+    }
+
+    let pool = runtime.database.get_sqlite_connection_pool();
+    let live_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM agena_sessions WHERE deleted_at_ms IS NULL")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let total_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agena_sessions")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    assert!(
+        live_count <= 128,
+        "expected at most 128 live ACP views, got {live_count}"
+    );
+    assert_eq!(
+        total_count, live_count,
+        "deleted ACP views should be physically reclaimed without leaving tombstones"
+    );
+    runtime.ports.clone().shutdown().await.unwrap();
+}

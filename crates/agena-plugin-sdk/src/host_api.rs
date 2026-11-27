@@ -1134,6 +1134,7 @@ mod host_session_scope_tests {
             root_id: 1,
             workspace_id: None,
             title: "Bot".into(),
+            external_agent: None,
             owner_bot_id: None,
             owner_surface: None,
             favorite: false,

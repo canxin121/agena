@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{ViewBlock, WebSearchResult};
 
-pub const MAX_DOCUMENT_BYTES: usize = 64 * 1024;
+pub const MAX_DOCUMENT_BYTES: usize = 512 * 1024;
 pub const MAX_DOCUMENT_BLOCKS: usize = 128;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

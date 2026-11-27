@@ -1490,6 +1490,7 @@ pub(super) async fn export(
         let mut value = lifecycle::configuration(&mut tx, lease.session).await?;
         value.external_agent_resume = None;
         value.external_agent_link = None;
+        value.external_agent_pending_turn = None;
         value.external_agent_state = Default::default();
         value.external_agent_inputs = None;
         tx.rollback().await.map_err(storage)?;

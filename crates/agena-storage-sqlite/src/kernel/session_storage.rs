@@ -24,6 +24,9 @@ use files::File;
 const JOB_PREFIX: &str = "session-storage/";
 const PAGE_LIMIT: usize = 100;
 const FILES_PER_BATCH: usize = 16;
+/// Upper bound on live ephemeral ACP views kept in the in-memory SQLite kernel.
+const MAX_ACP_VIEWS: i64 = 128;
+const ACP_RECLAIM_BATCH: i64 = 16;
 static FILE_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 
 #[derive(Default)]
@@ -896,6 +899,151 @@ pub(super) async fn reclaim_database(
         database,
         released_bytes,
     })
+}
+
+/// Evict excess idle ACP views and physically purge soft-deleted ACP views
+/// inside the ephemeral in-memory kernel so RAM stays bounded across repeated
+/// `Open`/`replace_view` and session creation cycles.
+pub(super) async fn collect_acp_views(
+    database: &KernelDatabase,
+    feed: &Arc<ChangeFeed>,
+    cache: &Arc<read_cache::ReadCache>,
+    pins: &blobs::Pins,
+) -> Result<u64> {
+    let _permit = crate::acquire_write_permit(&database.writer)
+        .await
+        .map_err(storage)?;
+    let mut transaction = database
+        .writer
+        .get_sqlite_connection_pool()
+        .begin()
+        .await
+        .map_err(storage)?;
+    let active_tokens = pins.active_tokens();
+    let mut changed = false;
+    let mut reclaimed = 0u64;
+
+    // 1. Soft-delete excess idle live views beyond MAX_ACP_VIEWS (oldest first).
+    let overflow: Vec<i64> = sqlx::query_scalar(
+        r#"
+        SELECT s.id FROM agena_sessions s
+        WHERE s.deleted_at_ms IS NULL
+          AND s.id NOT IN (
+              SELECT id FROM agena_sessions
+              WHERE deleted_at_ms IS NULL
+              ORDER BY updated_at_ms DESC, id DESC
+              LIMIT ?
+          )
+        ORDER BY s.updated_at_ms ASC, s.id ASC
+        LIMIT ?
+        "#,
+    )
+    .bind(MAX_ACP_VIEWS)
+    .bind(ACP_RECLAIM_BATCH)
+    .fetch_all(&mut *transaction)
+    .await
+    .map_err(sql_error)?;
+    for id in overflow {
+        let session = SessionId::try_from(id).map_err(storage)?;
+        let Ok(owner) = session_state(&mut transaction, session, false, &active_tokens).await
+        else {
+            continue;
+        };
+        if owner.summary.busy {
+            continue;
+        }
+        let has_pending: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM agena_interactions WHERE session_id=? AND decision_json IS NULL)",
+        )
+        .bind(id)
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(sql_error)?;
+        if has_pending {
+            continue;
+        }
+        lifecycle::delete(&mut transaction, session).await?;
+        changed = true;
+    }
+
+    // 2. Physically reclaim payloads and rows of soft-deleted ACP views.
+    let deleted: Vec<i64> = sqlx::query_scalar(
+        r#"
+        SELECT s.id FROM agena_sessions s
+        WHERE s.deleted_at_ms IS NOT NULL
+          AND NOT EXISTS(SELECT 1 FROM agena_history_snapshots h WHERE h.session_id=s.id)
+        ORDER BY s.deleted_at_ms ASC, s.id ASC
+        LIMIT ?
+        "#,
+    )
+    .bind(ACP_RECLAIM_BATCH)
+    .fetch_all(&mut *transaction)
+    .await
+    .map_err(sql_error)?;
+    for id in deleted {
+        let session = SessionId::try_from(id).map_err(storage)?;
+        let Ok(owner) = session_state(&mut transaction, session, false, &active_tokens).await
+        else {
+            continue;
+        };
+        if owner.summary.busy {
+            continue;
+        }
+        let mut purged_all = false;
+        for _ in 0..64 {
+            let savepoint = transaction.begin().await.map_err(sql_error)?;
+            match purge::reclaim(savepoint, session, owner.shared_history).await {
+                Ok((removed, pending)) => {
+                    reclaimed += removed;
+                    changed = true;
+                    if !pending {
+                        purged_all = true;
+                        break;
+                    }
+                }
+                Err(error) => {
+                    tracing::debug!(%error, session = id, "deferred ephemeral ACP view reclamation");
+                    break;
+                }
+            }
+        }
+        if purged_all && !owner.shared_history {
+            let referenced: bool = sqlx::query_scalar(
+                r#"
+                SELECT EXISTS(SELECT 1 FROM agena_sessions WHERE (parent_session_id=?1 OR root_session_id=?1) AND id != ?1)
+                  OR EXISTS(SELECT 1 FROM agena_entries WHERE origin_session_id=?1)
+                  OR EXISTS(SELECT 1 FROM agena_blobs WHERE session_id=?1)
+                  OR EXISTS(SELECT 1 FROM agena_branch_sources WHERE session_id=?1)
+                  OR EXISTS(SELECT 1 FROM agena_history_snapshots WHERE session_id=?1)
+                "#,
+            )
+            .bind(id)
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(sql_error)?;
+            if !referenced {
+                let mut sp = transaction.begin().await.map_err(sql_error)?;
+                let deleted_row = sqlx::query("DELETE FROM agena_sessions WHERE id=?")
+                    .bind(id)
+                    .execute(&mut *sp)
+                    .await;
+                if deleted_row.is_ok() {
+                    let _ = sp.commit().await;
+                    changed = true;
+                } else {
+                    let _ = sp.rollback().await;
+                }
+            }
+        }
+    }
+
+    let _fence = changed.then(|| cache.pause());
+    transaction.commit().await.map_err(sql_error)?;
+    if changed {
+        cache.clear();
+        feed.invalidate();
+    }
+    Ok(reclaimed)
 }
 
 async fn checkpoint(connection: &mut SqliteConnection) -> Result<()> {

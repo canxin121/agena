@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
 import { useBotConversation } from './chat/useBotConversation'
+import AcpWelcome from './chat/AcpWelcome.vue'
 import ChatPageView from './chat/ChatPageView.vue'
 import type { ChatPageViewContext } from './chat/chatPageViewContext'
 import type { ComposerPickerKind } from './chat/composerPickerTypes'
@@ -2807,27 +2808,12 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="flex h-full min-h-0 flex-col">
-    <section
+    <AcpWelcome
       v-if="isAcp && (!isAcpSessionId(chat.selectedSessionId) || acpViewError || !chat.selectedSession)"
-      class="flex h-full flex-col items-center justify-center gap-3 px-6 text-center"
-      data-testid="acp-empty-view"
-    >
-      <h1 class="text-lg font-semibold">{{ t('nav.acp') }}</h1>
-      <p v-if="acpViewError || acpViewLoaded" role="alert" class="max-w-sm break-words text-sm text-destructive">
-        {{ acpViewError || t('chat.nativeAgent.viewExpired') }}
-      </p>
-      <p v-else-if="isAcpSessionId(chat.selectedSessionId)" role="status" class="text-sm text-muted-foreground">
-        {{ t('common.loading') }}
-      </p>
-      <p v-else class="text-sm text-muted-foreground">{{ t('chat.nativeAgent.historyDescription') }}</p>
-      <button
-        type="button"
-        class="min-h-10 rounded-md border px-4 text-sm hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
-        @click="openAcpSidebar"
-      >
-        {{ t('header.openSessions') }}
-      </button>
-    </section>
+      :loading="isAcpSessionId(chat.selectedSessionId) && !acpViewError && !acpViewLoaded"
+      :error="acpViewError || (acpViewLoaded ? String(t('chat.nativeAgent.viewExpired')) : '')"
+      @open-sidebar="openAcpSidebar"
+    />
     <ChatPageView v-else-if="bot.ready.value" :ctx="viewCtx" />
     <section
       v-else

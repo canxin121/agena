@@ -122,6 +122,13 @@ const SETTINGS_CATEGORIES: readonly SettingsCategory[] = [
         label: () => st('MCP service'),
         keywords: ['MCP server', 'OAuth', 'ChatGPT', '对外', '服务'],
       },
+      {
+        id: 'acp-agents',
+        section: 'runtime-session',
+        view: 'acp-agents',
+        label: () => st('ACP agents'),
+        keywords: ['ACP', 'external agent', 'claude-code', 'antigravity', 'codex', 'stdio', '外部智能体', '自定义'],
+      },
     ],
   },
   {

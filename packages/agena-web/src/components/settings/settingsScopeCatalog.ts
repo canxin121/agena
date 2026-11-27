@@ -93,6 +93,7 @@ const SETTINGS_PAGE_SCOPE_SOURCES: Partial<Record<SettingsTab, Record<string, re
     access: PERMISSION_SCOPE_SOURCES,
   },
   'runtime-session': {
+    'acp-agents': LAYER_SCOPE_SOURCES.filter((scope) => scope.id === 'global'),
     'agent-profiles': [
       ...LAYER_SCOPE_SOURCES,
       {

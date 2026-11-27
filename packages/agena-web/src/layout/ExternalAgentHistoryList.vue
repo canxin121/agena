@@ -1,9 +1,22 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import {
+  RiArrowLeftSLine,
+  RiArrowRightSLine,
+  RiEyeLine,
+  RiInboxArchiveLine,
+  RiInboxUnarchiveLine,
+  RiLoader4Line,
+  RiRefreshLine,
+} from '@remixicon/vue'
 
 import Button from '@/components/ui/Button.vue'
 import Dialog from '@/components/ui/Dialog.vue'
+import IconButton from '@/components/ui/IconButton.vue'
+import SearchInput from '@/components/ui/SearchInput.vue'
+import SegmentedButton from '@/components/ui/SegmentedButton.vue'
+import SegmentedControl from '@/components/ui/SegmentedControl.vue'
 import {
   listNativeAgentSessions,
   openNativeAgentSession,
@@ -15,17 +28,20 @@ import {
   type NativeIndexedSession,
   type NativeIndexCapabilities,
 } from '@/features/sessions/api/nativeAgentSessions'
+import { useUiStore } from '@/stores/ui'
 import { formatExternalAgentLabel, type ExternalAgent } from '@/types/chat'
 
 const props = defineProps<{ workspace: number; agent: ExternalAgent; agentLabel?: string }>()
 const emit = defineEmits<{
   (event: 'opened', session: number): void
 }>()
-const { t } = useI18n()
+const { locale, t } = useI18n()
+const ui = useUiStore()
 const sessions = ref<NativeIndexedSession[]>([])
 const cursor = ref<string | null>(null)
 const capabilities = ref<NativeIndexCapabilities | null>(null)
 const archived = ref<NativeArchiveFilter>('unarchived')
+const searchQuery = ref('')
 const loading = ref(false)
 const mutation = ref<{ id: string; action: 'open' | 'archive' } | null>(null)
 const loaded = ref(false)
@@ -42,6 +58,16 @@ let watcher: AbortController | undefined
 let actionRequest: AbortController | undefined
 let previewRequest: AbortController | undefined
 let refreshPending = false
+
+const filteredSessions = computed(() => {
+  const q = searchQuery.value.trim().toLowerCase()
+  if (!q) return sessions.value
+  return sessions.value.filter((session) =>
+    [session.title || '', session.native_id, session.model || ''].some((value) => value.toLowerCase().includes(q)),
+  )
+})
+
+const showSearch = computed(() => sessions.value.length > 3 || searchQuery.value.trim().length > 0)
 
 function refreshWhenIdle() {
   if (refreshPending && !loading.value && !mutation.value) {
@@ -144,6 +170,13 @@ function closePreview() {
   preview.value = null
 }
 
+async function openFromPreview() {
+  const nativeId = preview.value?.session.native_id
+  if (!nativeId) return
+  closePreview()
+  await changeSession(nativeId, 'open')
+}
+
 async function loadPreview(cursors: (number | null)[]) {
   const current = preview.value
   if (!current || previewLoading.value) return
@@ -171,11 +204,13 @@ async function loadPreview(cursors: (number | null)[]) {
 
 function previewEarlier() {
   const current = preview.value
-  const cursor = current?.page?.next_before_turn
-  if (current && cursor != null) void loadPreview([...current.cursors, cursor])
+  const nextCursor = current?.page?.next_before_turn
+  if (current && nextCursor != null) void loadPreview([...current.cursors, nextCursor])
 }
 
-function changeArchiveFilter() {
+function setArchiveFilter(next: NativeArchiveFilter) {
+  if (archived.value === next || mutation.value !== null) return
+  archived.value = next
   sessions.value = []
   cursor.value = null
   loaded.value = false
@@ -186,9 +221,32 @@ function canChangeArchive(session: NativeIndexedSession) {
   return !capabilities.value?.index || (session.state !== 'running' && session.state !== 'requires_action')
 }
 
-function dateLabel(value: string | null) {
+function fullDateLabel(value: string | null) {
   const timestamp = value ? Date.parse(value) : NaN
-  return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleString() : ''
+  return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleString(locale.value) : ''
+}
+
+function relativeDateLabel(value: string | null) {
+  const timestamp = value ? Date.parse(value) : NaN
+  if (!Number.isFinite(timestamp)) return ''
+  const diffSeconds = Math.round((timestamp - Date.now()) / 1000)
+  const abs = Math.abs(diffSeconds)
+  try {
+    const rtf = new Intl.RelativeTimeFormat(locale.value, { numeric: 'auto', style: 'narrow' })
+    if (abs < 60) return rtf.format(diffSeconds, 'second')
+    if (abs < 3600) return rtf.format(Math.round(diffSeconds / 60), 'minute')
+    if (abs < 86400) return rtf.format(Math.round(diffSeconds / 3600), 'hour')
+    if (abs < 86400 * 30) return rtf.format(Math.round(diffSeconds / 86400), 'day')
+  } catch {
+    // Fallback to locale date below.
+  }
+  return new Date(timestamp).toLocaleDateString(locale.value)
+}
+
+function stateBadgeClass(state: string | null) {
+  if (state === 'running') return 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+  if (state === 'requires_action') return 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+  return 'bg-muted/70 text-muted-foreground'
 }
 
 watch(
@@ -199,7 +257,11 @@ watch(
     watcher = undefined
     capabilities.value = null
     archived.value = 'unarchived'
-    changeArchiveFilter()
+    searchQuery.value = ''
+    sessions.value = []
+    cursor.value = null
+    loaded.value = false
+    void load(false)
   },
   { immediate: true },
 )
@@ -213,77 +275,175 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="space-y-3">
-    <h3 class="text-xs font-medium text-muted-foreground">
-      {{ t('chat.nativeAgent.history', { agent: agentLabel || formatExternalAgentLabel(agent) }) }}
-    </h3>
-    <label v-if="capabilities?.archive" class="flex flex-wrap items-center gap-2 text-sm">
-      <span>{{ t('chat.nativeAgent.archiveFilter') }}</span>
-      <select
-        v-model="archived"
-        class="rounded-md border border-input bg-background px-2 py-1"
-        :disabled="mutation !== null"
-        @change="changeArchiveFilter"
+  <div class="space-y-2">
+    <div class="flex items-center justify-between gap-2 px-1">
+      <div class="flex min-w-0 items-center gap-1.5">
+        <h3 class="truncate text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          {{ t('chat.nativeAgent.history', { agent: agentLabel || formatExternalAgentLabel(agent) }) }}
+        </h3>
+        <span
+          v-if="loaded && sessions.length"
+          class="shrink-0 rounded-full bg-muted/70 px-1.5 py-0.2 text-[10px] font-medium tabular-nums text-muted-foreground"
+        >
+          {{ sessions.length }}
+        </span>
+      </div>
+      <IconButton
+        v-if="loaded || error"
+        size="sm"
+        variant="ghost"
+        class="h-6 w-6 shrink-0"
+        :disabled="loading || mutation !== null"
+        :tooltip="t(loaded ? 'common.refresh' : 'common.retry')"
+        :aria-label="t(loaded ? 'common.refresh' : 'common.retry')"
+        @click="load(false)"
       >
-        <option value="unarchived">{{ t('chat.nativeAgent.unarchived') }}</option>
-        <option value="archived">{{ t('chat.nativeAgent.archived') }}</option>
-        <option value="all">{{ t('common.all') }}</option>
-      </select>
-    </label>
-    <p v-if="error" role="alert" class="text-sm text-destructive">{{ error }}</p>
-    <p v-else-if="loading && !loaded" role="status" class="text-sm text-muted-foreground">{{ t('common.loading') }}</p>
-    <p v-else-if="loaded && !sessions.length && cursor === null" class="text-sm text-muted-foreground">
+        <RiRefreshLine class="h-3.5 w-3.5" :class="loading ? 'animate-spin' : ''" />
+      </IconButton>
+    </div>
+
+    <SegmentedControl
+      v-if="capabilities?.archive"
+      class="grid-cols-3"
+      :aria-label="t('chat.nativeAgent.archiveFilter')"
+    >
+      <SegmentedButton :active="archived === 'unarchived'" @click="setArchiveFilter('unarchived')">
+        {{ t('chat.nativeAgent.unarchived') }}
+      </SegmentedButton>
+      <SegmentedButton :active="archived === 'archived'" @click="setArchiveFilter('archived')">
+        {{ t('chat.nativeAgent.archived') }}
+      </SegmentedButton>
+      <SegmentedButton :active="archived === 'all'" @click="setArchiveFilter('all')">
+        {{ t('common.all') }}
+      </SegmentedButton>
+    </SegmentedControl>
+
+    <SearchInput
+      v-if="showSearch"
+      v-model="searchQuery"
+      :placeholder="t('chat.nativeAgent.searchHistory')"
+      :input-aria-label="t('chat.nativeAgent.searchHistory')"
+      :show-search-button="false"
+    />
+
+    <p
+      v-if="error"
+      role="alert"
+      class="break-words rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-2 text-xs text-destructive"
+    >
+      {{ error }}
+    </p>
+    <div v-else-if="loading && !loaded" role="status" class="space-y-1.5 py-1">
+      <div v-for="n in 3" :key="n" class="h-11 animate-pulse rounded-md bg-muted/40" />
+    </div>
+    <p v-else-if="loaded && !sessions.length && cursor === null" class="px-1 py-2 text-xs text-muted-foreground">
       {{ t('chat.nativeAgent.noHistory') }}
     </p>
-    <ul v-if="sessions.length" class="divide-y divide-border/70">
-      <li v-for="session in sessions" :key="session.native_id" class="flex flex-wrap items-center gap-2 py-2.5">
-        <div class="min-w-0 flex-1 basis-28">
-          <p class="truncate text-sm font-medium">{{ session.title || session.native_id }}</p>
-          <p
-            v-if="session.model || session.state || dateLabel(session.updated_at)"
-            class="truncate text-xs text-muted-foreground"
-          >
-            {{ [session.model, session.state, dateLabel(session.updated_at)].filter(Boolean).join(' · ') }}
-          </p>
-        </div>
-        <Button size="sm" variant="ghost" :disabled="mutation !== null" @click="showPreview(session)">
-          {{ t('chat.nativeAgent.previewHistory') }}
-        </Button>
-        <Button
-          v-if="capabilities?.archive && session.archived !== null"
-          variant="ghost"
-          size="sm"
-          :disabled="mutation !== null || !canChangeArchive(session)"
-          @click="changeSession(session.native_id, 'archive', !session.archived)"
-        >
-          {{
-            mutation?.id === session.native_id && mutation.action === 'archive'
-              ? t('common.working')
-              : t(session.archived ? 'chat.nativeAgent.unarchive' : 'chat.nativeAgent.archive')
-          }}
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
+    <p v-else-if="loaded && !filteredSessions.length" class="px-1 py-2 text-xs text-muted-foreground">
+      {{ t('chat.nativeAgent.noHistoryMatch') }}
+    </p>
+
+    <ul v-if="filteredSessions.length" class="space-y-0.5">
+      <li
+        v-for="session in filteredSessions"
+        :key="session.native_id"
+        class="group relative flex items-center gap-1 rounded-md transition-colors hover:bg-sidebar-accent/70 focus-within:bg-sidebar-accent/70"
+      >
+        <button
+          type="button"
+          class="flex min-w-0 flex-1 flex-col gap-0.5 rounded-md px-2 py-1.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
           :disabled="mutation !== null"
+          :title="session.title || session.native_id"
           @click="changeSession(session.native_id, 'open')"
         >
-          {{
-            mutation?.id === session.native_id && mutation.action === 'open'
-              ? t('common.working')
-              : t('chat.nativeAgent.openHistory')
-          }}
-        </Button>
+          <span class="flex items-center gap-1.5">
+            <RiLoader4Line
+              v-if="mutation?.id === session.native_id && mutation.action === 'open'"
+              class="h-3.5 w-3.5 shrink-0 animate-spin text-primary"
+            />
+            <span class="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
+              {{ session.title || session.native_id }}
+            </span>
+          </span>
+          <span class="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+            <span
+              v-if="session.state === 'running' || session.state === 'requires_action'"
+              class="inline-flex items-center gap-1 rounded px-1 py-0.2 text-[10px] font-medium"
+              :class="stateBadgeClass(session.state)"
+            >
+              <span
+                class="h-1.5 w-1.5 rounded-full"
+                :class="session.state === 'running' ? 'animate-pulse bg-emerald-500' : 'bg-amber-500'"
+                aria-hidden="true"
+              />
+              {{ t(`chat.externalAgentDetails.states.${session.state}`, session.state) }}
+            </span>
+            <span
+              v-if="session.archived"
+              class="rounded bg-muted/70 px-1 py-0.2 text-[10px] font-medium text-muted-foreground"
+            >
+              {{ t('chat.nativeAgent.archived') }}
+            </span>
+            <span v-if="session.model" class="max-w-28 truncate font-mono text-[10px] opacity-85">
+              {{ session.model }}
+            </span>
+            <span
+              v-if="relativeDateLabel(session.updated_at)"
+              class="shrink-0 tabular-nums opacity-80"
+              :title="fullDateLabel(session.updated_at)"
+            >
+              {{ relativeDateLabel(session.updated_at) }}
+            </span>
+          </span>
+        </button>
+
+        <div
+          class="flex shrink-0 items-center gap-0.5 pr-1 transition-opacity"
+          :class="
+            ui.isTouchPointer || mutation?.id === session.native_id
+              ? 'opacity-100'
+              : 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
+          "
+        >
+          <IconButton
+            size="sm"
+            variant="ghost"
+            class="h-6 w-6"
+            :disabled="mutation !== null"
+            :tooltip="t('chat.nativeAgent.previewHistory')"
+            :aria-label="t('chat.nativeAgent.previewHistory')"
+            @click.stop="showPreview(session)"
+          >
+            <RiEyeLine class="h-3.5 w-3.5" />
+          </IconButton>
+          <IconButton
+            v-if="capabilities?.archive && session.archived !== null"
+            size="sm"
+            variant="ghost"
+            class="h-6 w-6"
+            :disabled="mutation !== null || !canChangeArchive(session)"
+            :tooltip="t(session.archived ? 'chat.nativeAgent.unarchive' : 'chat.nativeAgent.archive')"
+            :aria-label="t(session.archived ? 'chat.nativeAgent.unarchive' : 'chat.nativeAgent.archive')"
+            @click.stop="changeSession(session.native_id, 'archive', !session.archived)"
+          >
+            <RiLoader4Line
+              v-if="mutation?.id === session.native_id && mutation.action === 'archive'"
+              class="h-3.5 w-3.5 animate-spin"
+            />
+            <RiInboxUnarchiveLine v-else-if="session.archived" class="h-3.5 w-3.5" />
+            <RiInboxArchiveLine v-else class="h-3.5 w-3.5" />
+          </IconButton>
+        </div>
       </li>
     </ul>
-    <div class="flex justify-end gap-2">
-      <Button v-if="cursor !== null" variant="ghost" :disabled="loading || mutation !== null" @click="load(true)">
+
+    <div v-if="cursor !== null" class="flex justify-center pt-1">
+      <Button size="sm" variant="ghost" class="w-full text-xs" :disabled="loading || mutation !== null" @click="load(true)">
+        <RiLoader4Line v-if="loading" class="mr-1.5 h-3.5 w-3.5 animate-spin" />
         {{ t('common.loadMore') }}
       </Button>
-      <Button v-if="loaded || error" variant="ghost" :disabled="loading || mutation !== null" @click="load(false)">
-        {{ t(loaded ? 'common.refresh' : 'common.retry') }}
-      </Button>
     </div>
+
     <Dialog
       :open="preview !== null"
       :title="preview?.session.title || preview?.session.native_id"
@@ -291,25 +451,50 @@ onBeforeUnmount(() => {
       max-width="max-w-2xl"
       @close="closePreview"
     >
-      <div v-if="preview" class="space-y-4">
-        <p v-if="previewLoading" class="text-sm text-muted-foreground" role="status">{{ t('common.loading') }}</p>
-        <p v-if="preview.error" class="text-sm text-destructive" role="alert">{{ preview.error }}</p>
-        <template v-if="preview.page">
-          <p v-if="preview.page.omitted_content" class="text-sm text-muted-foreground">
+      <div v-if="preview" class="space-y-3">
+        <div class="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <span class="rounded bg-muted/60 px-1.5 py-0.5 font-mono text-[11px]">{{ preview.session.native_id }}</span>
+          <span v-if="preview.session.model" class="rounded bg-muted/60 px-1.5 py-0.5 font-mono text-[11px]">
+            {{ preview.session.model }}
+          </span>
+          <span v-if="fullDateLabel(preview.session.updated_at)">{{ fullDateLabel(preview.session.updated_at) }}</span>
+        </div>
+
+        <div v-if="previewLoading" role="status" class="space-y-2 py-2">
+          <div v-for="n in 3" :key="n" class="h-16 animate-pulse rounded-lg bg-muted/40" />
+        </div>
+        <p
+          v-else-if="preview.error"
+          role="alert"
+          class="break-words rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
+        >
+          {{ preview.error }}
+        </p>
+        <template v-else-if="preview.page">
+          <p
+            v-if="preview.page.omitted_content"
+            class="rounded-md border border-border/70 bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
+          >
             {{ t('chat.nativeAgent.historyPreviewOmitted') }}
           </p>
-          <p v-if="!preview.page.turns.length" class="text-sm text-muted-foreground">
+          <p v-if="!preview.page.turns.length" class="py-6 text-center text-sm text-muted-foreground">
             {{ t('chat.nativeAgent.historyPreviewEmpty') }}
           </p>
-          <ol class="divide-y divide-border/70">
-            <li v-for="(turn, index) in preview.page.turns" :key="index" class="space-y-3 py-3">
-              <section v-if="turn.user">
-                <h4 class="text-xs font-medium text-muted-foreground">{{ t('chat.externalAgentDetails.roles.user') }}</h4>
-                <p class="whitespace-pre-wrap break-words text-sm">{{ turn.user }}</p>
+          <ol v-else class="space-y-3">
+            <li
+              v-for="(turn, index) in preview.page.turns"
+              :key="index"
+              class="space-y-2 rounded-lg border border-border/70 bg-card/40 p-3"
+            >
+              <section v-if="turn.user" class="rounded-md border border-primary/20 bg-primary/5 px-3 py-2">
+                <h4 class="text-[11px] font-medium text-primary">{{ t('chat.externalAgentDetails.roles.user') }}</h4>
+                <p class="mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed">{{ turn.user }}</p>
               </section>
-              <section v-if="turn.reply">
-                <h4 class="text-xs font-medium text-muted-foreground">{{ t('chat.externalAgentDetails.roles.assistant') }}</h4>
-                <p class="whitespace-pre-wrap break-words text-sm">{{ turn.reply }}</p>
+              <section v-if="turn.reply" class="px-1">
+                <h4 class="text-[11px] font-medium text-muted-foreground">
+                  {{ t('chat.externalAgentDetails.roles.assistant') }}
+                </h4>
+                <p class="mt-1 whitespace-pre-wrap break-words text-sm leading-relaxed">{{ turn.reply }}</p>
               </section>
             </li>
           </ol>
@@ -317,24 +502,43 @@ onBeforeUnmount(() => {
       </div>
       <template #footer>
         <template v-if="preview">
-          <Button
-            v-if="preview.page?.next_before_turn != null"
-            variant="outline"
-            :disabled="previewLoading"
-            @click="previewEarlier"
-          >{{ t('chat.nativeAgent.historyPreviewEarlier') }}</Button>
-          <Button
-            v-if="preview.cursors.length > 1"
-            variant="outline"
-            :disabled="previewLoading"
-            @click="loadPreview(preview.cursors.slice(0, -1))"
-          >{{ t('chat.nativeAgent.historyPreviewNewer') }}</Button>
-          <Button
-            v-if="preview.error && !preview.page"
-            variant="outline"
-            :disabled="previewLoading"
-            @click="loadPreview(preview.cursors)"
-          >{{ t('common.retry') }}</Button>
+          <div class="flex flex-1 flex-wrap items-center gap-2">
+            <Button
+              v-if="preview.page?.next_before_turn != null"
+              size="sm"
+              variant="outline"
+              :disabled="previewLoading"
+              @click="previewEarlier"
+            >
+              <RiArrowLeftSLine class="mr-1 h-4 w-4" />
+              {{ t('chat.nativeAgent.historyPreviewEarlier') }}
+            </Button>
+            <Button
+              v-if="preview.cursors.length > 1"
+              size="sm"
+              variant="outline"
+              :disabled="previewLoading"
+              @click="loadPreview(preview.cursors.slice(0, -1))"
+            >
+              {{ t('chat.nativeAgent.historyPreviewNewer') }}
+              <RiArrowRightSLine class="ml-1 h-4 w-4" />
+            </Button>
+            <Button
+              v-if="preview.error && !preview.page"
+              size="sm"
+              variant="outline"
+              :disabled="previewLoading"
+              @click="loadPreview(preview.cursors)"
+            >
+              {{ t('common.retry') }}
+            </Button>
+            <span v-if="preview.cursors.length > 1" class="text-xs tabular-nums text-muted-foreground">
+              #{{ preview.cursors.length }}
+            </span>
+          </div>
+          <Button size="sm" :disabled="mutation !== null" @click="openFromPreview">
+            {{ t('chat.nativeAgent.openConversation') }}
+          </Button>
         </template>
       </template>
     </Dialog>

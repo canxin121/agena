@@ -28,6 +28,17 @@ export function movedSettingsPage(
   return undefined
 }
 
+export function acpAgentsSettingsDestination(query: LocationQuery = {}) {
+  return {
+    path: '/settings/runtime-session',
+    query: settingsQueryForDestination(
+      { section: 'runtime-session', view: 'acp-agents', scope: 'global' },
+      'runtime-session',
+      query,
+    ),
+  }
+}
+
 export function agentProfileDefaultsDestination(scope: 'global' | 'workspace', query: LocationQuery) {
   return {
     path: '/settings/runtime-session',

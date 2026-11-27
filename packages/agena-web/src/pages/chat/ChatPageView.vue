@@ -17,6 +17,8 @@ import {
   RiSearchLine,
   RiCloseLine,
   RiCommandLine,
+  RiCornerDownRightLine,
+  RiEqualizerLine,
   RiBookOpenLine,
   RiGitBranchLine,
   RiGlobalLine,
@@ -24,6 +26,7 @@ import {
 
 import BotWelcome from './BotWelcome.vue'
 import BotAvatar from '@/features/bots/BotAvatar.vue'
+import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import { readServerAuthTokenVersion, subscribeServerAuthTokenVersion } from '@/lib/serverAuthToken'
 import { openBrowserKey } from '@/features/browser/api'
@@ -62,7 +65,21 @@ const WorkspaceChangesSection = defineAsyncComponent(() => import('@/components/
 const BtwSection = defineAsyncComponent(() => import('@/components/chat/BtwSection.vue'))
 const PlanSection = defineAsyncComponent(() => import('@/components/chat/PlanSection.vue'))
 const SessionBrowser = defineAsyncComponent(() => import('@/features/browser/SessionBrowser.vue'))
+const ExternalAgentSessionDialog = defineAsyncComponent(
+  () => import('@/layout/chatSidebar/components/ExternalAgentSessionDialog.vue'),
+)
 const btw = useBtwStore()
+const nativeManageOpen = ref(false)
+const workspaceNavigation = useWorkspaceNavigation()
+
+function openAcpSessionFromDialog(sessionId?: number) {
+  nativeManageOpen.value = false
+  void workspaceNavigation.openMainTab('acp', {
+    path: '/acp',
+    query: sessionId ? { sessionId: String(sessionId) } : {},
+    replace: true,
+  })
+}
 
 // This view is template-only: it takes a context bag from ChatPage.
 // Keep it "dumb" so we can aggressively split ChatPage logic into composables.
@@ -866,6 +883,19 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                       :suggestion-enabled="ctx.canFillExternalAgentSuggestion.value"
                       @suggestion="ctx.fillExternalAgentSuggestion"
                     />
+                    <button
+                      v-if="externalAgentLabel && chat.selectedSessionId"
+                      type="button"
+                      data-oc-keyboard-tap="blur"
+                      class="pointer-events-auto flex min-h-7 shrink-0 touch-manipulation items-center gap-1 rounded px-1 py-0.5 text-muted-foreground hover:bg-secondary/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      :title="t('chat.nativeAgent.manage')"
+                      :aria-label="t('chat.nativeAgent.manage')"
+                      @mousedown.prevent
+                      @click.stop="nativeManageOpen = true"
+                    >
+                      <RiEqualizerLine class="h-3 w-3 shrink-0" />
+                      <span class="hidden sm:inline font-mono text-[11px] font-medium">{{ t('chat.nativeAgent.manageShort') }}</span>
+                    </button>
                     <span v-if="!externalAgentLabel && chat.selectedSessionId" ref="profileTriggerRef" class="inline-flex">
                       <AgentProfileChip
                         :profile="chat.selectedSessionExecution?.profile"
@@ -1127,11 +1157,14 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                         <button
                           v-if="ctx.canSteerExternalAgent.value"
                           type="button"
-                          class="h-8 rounded-md border border-border px-2 text-xs hover:bg-secondary"
+                          class="inline-flex h-8 items-center gap-1 rounded-md border border-primary/40 bg-primary/10 px-2.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                          :title="t('chat.page.primary.steerTooltip')"
+                          :aria-label="t('chat.page.primary.steer')"
                           aria-keyshortcuts="Alt+Enter"
                           @click="ctx.steerExternalAgent"
                         >
-                          {{ t('chat.page.primary.steer') }}
+                          <RiCornerDownRightLine class="h-3.5 w-3.5 shrink-0" />
+                          <span>{{ t('chat.page.primary.steer') }}</span>
                         </button>
                         <IconButton
                           v-if="showComposerStopAction"
@@ -1200,6 +1233,14 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
     :attached-count="attachedFiles.length"
     @update:open="(v) => (attachProjectDialogOpen = v)"
     @add="addProjectAttachment"
+  />
+
+  <ExternalAgentSessionDialog
+    v-if="nativeManageOpen && externalAgentLabel && chat.selectedSessionId"
+    :session="chat.selectedSessionId"
+    @close="nativeManageOpen = false"
+    @deleted="openAcpSessionFromDialog()"
+    @forked="openAcpSessionFromDialog"
   />
 
   <SessionBrowser

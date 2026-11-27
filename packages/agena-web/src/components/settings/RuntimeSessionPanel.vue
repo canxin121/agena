@@ -6,6 +6,7 @@ import { useRoute } from 'vue-router'
 import { RiRefreshLine, RiRefreshFill, RiCpuLine, RiStackLine } from '@remixicon/vue'
 
 import SettingsCard from './SettingsCard.vue'
+import AcpAgentsPanel from './AcpAgentsPanel.vue'
 import AgentProfilesPanel from './AgentProfilesPanel.vue'
 import AgentProfileDefaultsPanel from './AgentProfileDefaultsPanel.vue'
 import ModelSettingsPanel from './ModelSettingsPanel.vue'
@@ -36,15 +37,24 @@ const autoCompactionField = ref<InstanceType<typeof ServerSettingField> | null>(
 const tokensField = ref<InstanceType<typeof ServerSettingField> | null>(null)
 const titleFields = ref<InstanceType<typeof ServerSettingField>[]>([])
 const modelSettingsPanel = ref<InstanceType<typeof ModelSettingsPanel> | null>(null)
+const acpAgentsPanel = ref<InstanceType<typeof AcpAgentsPanel> | null>(null)
 const agentProfilesPanel = ref<InstanceType<typeof AgentProfilesPanel> | null>(null)
 const promptLibraryPanel = ref<InstanceType<typeof PromptLibraryPanel> | null>(null)
 const systemPromptPanel = ref<InstanceType<typeof SystemPromptPanel> | null>(null)
 const profileDefaultsPanel = ref<InstanceType<typeof AgentProfileDefaultsPanel> | null>(null)
 const saving = computed(
-  () => modelSettingsPanel.value?.saving || profileDefaultsPanel.value?.saving || systemPromptPanel.value?.saving,
+  () =>
+    modelSettingsPanel.value?.saving ||
+    profileDefaultsPanel.value?.saving ||
+    systemPromptPanel.value?.saving ||
+    acpAgentsPanel.value?.saving,
 )
 const dirty = computed(
-  () => modelSettingsPanel.value?.dirty || profileDefaultsPanel.value?.dirty || systemPromptPanel.value?.dirty,
+  () =>
+    modelSettingsPanel.value?.dirty ||
+    profileDefaultsPanel.value?.dirty ||
+    systemPromptPanel.value?.dirty ||
+    acpAgentsPanel.value?.dirty,
 )
 
 useSettingsDraftGuard({
@@ -115,6 +125,7 @@ async function refresh() {
       autoCompactionField.value,
       tokensField.value,
       modelSettingsPanel.value,
+      acpAgentsPanel.value,
       agentProfilesPanel.value,
       promptLibraryPanel.value,
       systemPromptPanel.value,
@@ -192,6 +203,7 @@ async function refreshClientVersions() {
         />
       </SettingsCard>
     </div>
+    <AcpAgentsPanel v-else-if="activePage === 'acp-agents'" ref="acpAgentsPanel" />
     <AgentProfilesPanel
       v-else-if="activePage === 'agent-profiles'"
       ref="agentProfilesPanel"

@@ -1,16 +1,28 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import {
+  RiCheckLine,
+  RiFileCopyLine,
+  RiGitBranchLine,
+  RiHistoryLine,
+  RiRefreshLine,
+} from '@remixicon/vue'
 
 import Button from '@/components/ui/Button.vue'
 import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
 import FormDialog from '@/components/ui/FormDialog.vue'
+import IconButton from '@/components/ui/IconButton.vue'
 import Input from '@/components/ui/Input.vue'
+import OptionPicker from '@/components/ui/OptionPicker.vue'
+import type { PickerOption } from '@/components/ui/pickerOption.types'
 import {
   manageNativeAgentSession,
   type NativeSessionAction,
   type NativeSessionStatus,
 } from '@/features/sessions/api/nativeAgentSessions'
+import { copyTextToClipboard } from '@/lib/clipboard'
+import { useToastsStore } from '@/stores/toasts'
 
 const props = defineProps<{ session: string }>()
 const emit = defineEmits<{
@@ -20,15 +32,49 @@ const emit = defineEmits<{
   (event: 'forked', session: number): void
 }>()
 const { t } = useI18n()
+const toasts = useToastsStore()
 const state = ref<NativeSessionStatus | null>(null)
 const loading = ref(false)
 const mutation = ref<NativeSessionAction['action'] | null>(null)
 const title = ref('')
 const directories = ref('')
-const beforeMessageId = ref<number | null>(null)
-const rewindMessageId = ref<number | null>(null)
+const beforeMessageId = ref('')
+const rewindMessageId = ref('')
 const error = ref('')
+const copiedId = ref(false)
+let copyTimer: number | undefined
 let read: AbortController | undefined
+
+const forkPointOptions = computed<PickerOption[]>(() =>
+  (state.value?.fork_points ?? []).map((point) => ({
+    value: String(point.message_id),
+    label: point.label,
+    description: `#${point.message_id}`,
+    keywords: `${point.message_id} ${point.label}`,
+  })),
+)
+
+const rewindPointOptions = computed<PickerOption[]>(() =>
+  (state.value?.rewind_points ?? []).map((point) => ({
+    value: String(point.message_id),
+    label: point.label,
+    description: `#${point.message_id}`,
+    keywords: `${point.message_id} ${point.label}`,
+  })),
+)
+
+async function copyNativeId() {
+  const id = state.value?.session?.native_id
+  if (!id) return
+  const ok = await copyTextToClipboard(id)
+  if (!ok) return
+  copiedId.value = true
+  toasts.push('success', String(t('common.copied')))
+  window.clearTimeout(copyTimer)
+  copyTimer = window.setTimeout(() => {
+    copiedId.value = false
+  }, 1800)
+}
 
 async function refresh() {
   read?.abort()
@@ -42,11 +88,11 @@ async function refresh() {
     state.value = response
     title.value = response.session?.title ?? ''
     directories.value = response.additional_directories.join('\n')
-    if (!response.fork_points?.some((point) => point.message_id === beforeMessageId.value)) {
-      beforeMessageId.value = null
+    if (!response.fork_points?.some((point) => String(point.message_id) === beforeMessageId.value)) {
+      beforeMessageId.value = ''
     }
-    if (!response.rewind_points?.some((point) => point.message_id === rewindMessageId.value)) {
-      rewindMessageId.value = null
+    if (!response.rewind_points?.some((point) => String(point.message_id) === rewindMessageId.value)) {
+      rewindMessageId.value = ''
     }
   } catch (failure) {
     if (!request.signal.aborted) error.value = failure instanceof Error ? failure.message : String(failure)
@@ -62,21 +108,27 @@ async function manage(action: NativeSessionAction) {
   try {
     const result = await manageNativeAgentSession(props.session, action)
     if (result.kind === 'forked') {
+      toasts.push('success', String(t('chat.nativeAgent.forkedToast')))
       emit('forked', result.session_id)
       return
     }
     emit('changed')
     if (result.kind === 'deleted') {
+      toasts.push('success', String(t('chat.nativeAgent.deletedToast')))
       emit('deleted')
       return
     }
     if (result.kind === 'title' && state.value?.session) {
       state.value.session.title = result.title
       title.value = result.title
+      toasts.push('success', String(t('chat.nativeAgent.renamedToast')))
     } else if (result.kind === 'directories' && state.value) {
       state.value.additional_directories = result.directories
       directories.value = result.directories.join('\n')
+      toasts.push('success', String(t('chat.nativeAgent.directoriesSavedToast')))
     } else {
+      if (result.kind === 'closed') toasts.push('info', String(t('chat.nativeAgent.closedToast')))
+      if (result.kind === 'rewound') toasts.push('success', String(t('chat.nativeAgent.rewoundToast')))
       await refresh()
     }
   } catch (failure) {
@@ -87,28 +139,43 @@ async function manage(action: NativeSessionAction) {
 }
 
 function saveDirectories() {
-  void manage({ action: 'set_directories', directories: directories.value.split('\n').map((path) => path.trim()).filter(Boolean) })
+  void manage({
+    action: 'set_directories',
+    directories: directories.value
+      .split('\n')
+      .map((path) => path.trim())
+      .filter(Boolean),
+  })
 }
 
 function forkBeforeMessage() {
-  if (beforeMessageId.value !== null) {
-    void manage({ action: 'fork', before_message_id: beforeMessageId.value })
+  const id = Number(beforeMessageId.value)
+  if (Number.isFinite(id) && id > 0) {
+    void manage({ action: 'fork', before_message_id: id })
   }
 }
 
 function rewindBeforeMessage() {
-  if (rewindMessageId.value !== null) {
-    void manage({ action: 'rewind', before_message_id: rewindMessageId.value })
+  const id = Number(rewindMessageId.value)
+  if (Number.isFinite(id) && id > 0) {
+    void manage({ action: 'rewind', before_message_id: id })
   }
 }
 
-watch(() => props.session, () => {
-  state.value = null
-  beforeMessageId.value = null
-  rewindMessageId.value = null
-  void refresh()
-}, { immediate: true })
-onBeforeUnmount(() => read?.abort())
+watch(
+  () => props.session,
+  () => {
+    state.value = null
+    beforeMessageId.value = ''
+    rewindMessageId.value = ''
+    void refresh()
+  },
+  { immediate: true },
+)
+onBeforeUnmount(() => {
+  window.clearTimeout(copyTimer)
+  read?.abort()
+})
 </script>
 
 <template>
@@ -119,17 +186,63 @@ onBeforeUnmount(() => read?.abort())
     @update:open="(value) => { if (!value && mutation === null) emit('close') }"
   >
     <div class="space-y-4">
-      <p v-if="error" class="text-sm text-destructive" role="alert">{{ error }}</p>
-      <p v-else-if="loading && !state" class="text-sm text-muted-foreground" role="status">{{ t('common.loading') }}</p>
+      <p
+        v-if="error"
+        class="break-words rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+        role="alert"
+      >
+        {{ error }}
+      </p>
+      <div v-else-if="loading && !state" role="status" class="space-y-2 py-2">
+        <div class="h-14 animate-pulse rounded-lg bg-muted/40" />
+        <div class="h-10 animate-pulse rounded-lg bg-muted/40" />
+      </div>
+
       <template v-if="state">
-        <div v-if="state.session" class="space-y-2">
-          <div class="text-xs text-muted-foreground">
-            <p class="break-all font-mono">{{ state.session.native_id }}</p>
-            <p v-if="state.native_status === 'open'">{{ t('chat.nativeAgent.open') }}</p>
-            <p v-else-if="state.native_status === 'saved'">{{ t('chat.nativeAgent.saved') }}</p>
-            <p v-if="state.capabilities.continue_conversation === false">{{ t('chat.nativeAgent.readOnlyHistory') }}</p>
+        <div v-if="state.session" class="space-y-3.5">
+          <div class="space-y-2 rounded-lg border border-border/70 bg-muted/20 p-3">
+            <div class="flex items-center justify-between gap-2">
+              <div class="flex flex-wrap items-center gap-1.5">
+                <span
+                  v-if="state.native_status === 'open'"
+                  class="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-300"
+                >
+                  <span class="h-1.5 w-1.5 rounded-full bg-emerald-500" aria-hidden="true" />
+                  {{ t('chat.nativeAgent.open') }}
+                </span>
+                <span
+                  v-else-if="state.native_status === 'saved'"
+                  class="rounded-full border border-border/70 bg-background px-2 py-0.5 text-[11px] font-medium text-muted-foreground"
+                >
+                  {{ t('chat.nativeAgent.saved') }}
+                </span>
+                <span
+                  v-if="state.capabilities.continue_conversation === false"
+                  class="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:text-amber-300"
+                >
+                  {{ t('chat.nativeAgent.readOnlyHistory') }}
+                </span>
+              </div>
+              <IconButton
+                size="sm"
+                variant="ghost"
+                class="h-6 w-6 shrink-0"
+                :tooltip="t('common.copy')"
+                :aria-label="t('common.copy')"
+                @click="copyNativeId"
+              >
+                <RiCheckLine v-if="copiedId" class="h-3.5 w-3.5 text-emerald-500" />
+                <RiFileCopyLine v-else class="h-3.5 w-3.5" />
+              </IconButton>
+            </div>
+            <p class="select-all break-all font-mono text-xs text-muted-foreground">{{ state.session.native_id }}</p>
           </div>
-          <form v-if="state.capabilities.title" class="flex gap-2" @submit.prevent="manage({ action: 'set_title', title })">
+
+          <form
+            v-if="state.capabilities.title"
+            class="flex gap-2"
+            @submit.prevent="manage({ action: 'set_title', title })"
+          >
             <Input
               :model-value="title"
               :aria-label="t('chat.sidebar.sessionRow.placeholders.sessionTitle')"
@@ -137,13 +250,29 @@ onBeforeUnmount(() => read?.abort())
               :disabled="mutation !== null"
               @update:model-value="(value) => { title = String(value) }"
             />
-            <Button type="submit" variant="outline" :disabled="mutation !== null || !title.trim()">{{ t('common.rename') }}</Button>
+            <Button type="submit" variant="outline" :disabled="mutation !== null || !title.trim()">
+              {{ t('common.rename') }}
+            </Button>
           </form>
+
           <div class="flex flex-wrap gap-2">
-            <Button v-if="state.capabilities.fork" variant="outline" :disabled="mutation !== null" @click="manage({ action: 'fork' })">
+            <Button
+              v-if="state.capabilities.fork"
+              size="sm"
+              variant="outline"
+              :disabled="mutation !== null"
+              @click="manage({ action: 'fork' })"
+            >
+              <RiGitBranchLine class="mr-1.5 h-3.5 w-3.5" />
               {{ t('chat.nativeAgent.fork') }}
             </Button>
-            <Button v-if="state.capabilities.close" variant="outline" :disabled="mutation !== null" @click="manage({ action: 'close' })">
+            <Button
+              v-if="state.capabilities.close"
+              size="sm"
+              variant="outline"
+              :disabled="mutation !== null"
+              @click="manage({ action: 'close' })"
+            >
               {{ t('chat.nativeAgent.closeSession') }}
             </Button>
             <ConfirmPopover
@@ -155,71 +284,90 @@ onBeforeUnmount(() => read?.abort())
               :busy="mutation !== null"
               @confirm="manage({ action: 'delete' })"
             >
-              <Button variant="ghost" class="text-destructive" :disabled="mutation !== null">
+              <Button size="sm" variant="ghost" class="text-destructive hover:bg-destructive/10" :disabled="mutation !== null">
                 {{ t('chat.nativeAgent.delete') }}
               </Button>
             </ConfirmPopover>
           </div>
+
           <form
-            v-if="state.capabilities.fork_before_message && state.fork_points?.length"
-            class="flex flex-wrap gap-2"
+            v-if="state.capabilities.fork_before_message && forkPointOptions.length"
+            class="space-y-1.5 rounded-lg border border-border/60 bg-muted/15 p-3"
             @submit.prevent="forkBeforeMessage"
           >
-            <select
-              v-model="beforeMessageId"
-              :aria-label="t('chat.nativeAgent.chooseForkMessage')"
-              :disabled="loading || mutation !== null"
-              class="min-w-0 flex-1 rounded-md border border-input bg-background px-2 py-1 text-sm"
-            >
-              <option :value="null" disabled>{{ t('chat.nativeAgent.chooseForkMessage') }}</option>
-              <option v-for="point in state.fork_points" :key="point.message_id" :value="point.message_id">
-                {{ point.label }}
-              </option>
-            </select>
-            <Button type="submit" variant="outline" :disabled="loading || mutation !== null || beforeMessageId === null">
-              {{ t('chat.nativeAgent.forkBeforeMessage') }}
-            </Button>
-          </form>
-          <div v-if="state.capabilities.rewind_before_message && state.rewind_points?.length" class="flex flex-wrap gap-2">
-            <select
-              v-model="rewindMessageId"
-              :aria-label="t('chat.nativeAgent.chooseRewindMessage')"
-              :disabled="loading || mutation !== null"
-              class="min-w-0 flex-1 rounded-md border border-input bg-background px-2 py-1 text-sm"
-            >
-              <option :value="null" disabled>{{ t('chat.nativeAgent.chooseRewindMessage') }}</option>
-              <option v-for="point in state.rewind_points" :key="point.message_id" :value="point.message_id">
-                {{ point.label }}
-              </option>
-            </select>
-            <ConfirmPopover
-              :title="t('chat.nativeAgent.rewindBeforeMessage')"
-              :description="t('chat.nativeAgent.nativeRewindDescription')"
-              :confirm-text="t('chat.nativeAgent.rewindBeforeMessage')"
-              variant="destructive"
-              :busy="mutation !== null"
-              @confirm="rewindBeforeMessage"
-            >
-              <Button variant="outline" :disabled="loading || mutation !== null || rewindMessageId === null">
-                {{ t('chat.nativeAgent.rewindBeforeMessage') }}
+            <span class="block text-xs font-medium text-muted-foreground">{{ t('chat.nativeAgent.forkBeforeMessage') }}</span>
+            <div class="flex flex-wrap items-center gap-2">
+              <div class="min-w-0 flex-1">
+                <OptionPicker
+                  v-model="beforeMessageId"
+                  :options="forkPointOptions"
+                  :title="t('chat.nativeAgent.chooseForkMessage')"
+                  :placeholder="t('chat.nativeAgent.chooseForkMessage')"
+                  :include-empty="false"
+                  :disabled="loading || mutation !== null"
+                  size="sm"
+                  trigger-class="w-full"
+                />
+              </div>
+              <Button type="submit" size="sm" variant="outline" :disabled="loading || mutation !== null || !beforeMessageId">
+                <RiGitBranchLine class="mr-1 h-3.5 w-3.5" />
+                {{ t('chat.nativeAgent.forkBeforeMessage') }}
               </Button>
-            </ConfirmPopover>
+            </div>
+          </form>
+
+          <div
+            v-if="state.capabilities.rewind_before_message && rewindPointOptions.length"
+            class="space-y-1.5 rounded-lg border border-border/60 bg-muted/15 p-3"
+          >
+            <span class="block text-xs font-medium text-muted-foreground">{{ t('chat.nativeAgent.rewindBeforeMessage') }}</span>
+            <div class="flex flex-wrap items-center gap-2">
+              <div class="min-w-0 flex-1">
+                <OptionPicker
+                  v-model="rewindMessageId"
+                  :options="rewindPointOptions"
+                  :title="t('chat.nativeAgent.chooseRewindMessage')"
+                  :placeholder="t('chat.nativeAgent.chooseRewindMessage')"
+                  :include-empty="false"
+                  :disabled="loading || mutation !== null"
+                  size="sm"
+                  trigger-class="w-full"
+                />
+              </div>
+              <ConfirmPopover
+                :title="t('chat.nativeAgent.rewindBeforeMessage')"
+                :description="t('chat.nativeAgent.nativeRewindDescription')"
+                :confirm-text="t('chat.nativeAgent.rewindBeforeMessage')"
+                variant="destructive"
+                :busy="mutation !== null"
+                @confirm="rewindBeforeMessage"
+              >
+                <Button size="sm" variant="outline" :disabled="loading || mutation !== null || !rewindMessageId">
+                  <RiHistoryLine class="mr-1 h-3.5 w-3.5" />
+                  {{ t('chat.nativeAgent.rewindBeforeMessage') }}
+                </Button>
+              </ConfirmPopover>
+            </div>
           </div>
-          <p v-else-if="state.capabilities.rewind_before_message" class="text-sm text-muted-foreground">
+          <p v-else-if="state.capabilities.rewind_before_message" class="text-xs text-muted-foreground">
             {{ t('chat.nativeAgent.reopenForRewind') }}
           </p>
         </div>
-        <p v-else class="text-sm text-muted-foreground">{{ t('chat.nativeAgent.notStarted') }}</p>
+
+        <p v-else class="rounded-lg border border-dashed border-border/70 bg-muted/15 px-3 py-4 text-center text-sm text-muted-foreground">
+          {{ t('chat.nativeAgent.notStarted') }}
+        </p>
+
         <form
           v-if="state.capabilities.additional_directories || state.additional_directories.length"
-          class="space-y-2"
+          class="space-y-2 rounded-lg border border-border/60 bg-muted/15 p-3"
           @submit.prevent="saveDirectories"
         >
-          <label class="block space-y-1.5 text-sm">
+          <label class="block space-y-1.5 text-xs font-medium text-muted-foreground">
             <span>{{ t('chat.nativeAgent.directories') }}</span>
             <textarea
               v-model="directories"
-              class="w-full rounded-md border border-input bg-background p-2 font-mono text-sm"
+              class="w-full rounded-md border border-input bg-background p-2 font-mono text-xs text-foreground outline-none focus:border-ring disabled:opacity-60"
               :placeholder="t('chat.nativeAgent.directoriesPlaceholder')"
               :disabled="mutation !== null"
               rows="3"
@@ -228,14 +376,21 @@ onBeforeUnmount(() => read?.abort())
           <Button type="submit" variant="outline" size="sm" :disabled="mutation !== null">{{ t('common.save') }}</Button>
         </form>
       </template>
-      <div class="flex justify-end gap-2">
+
+      <div class="flex justify-end gap-2 border-t border-border/50 pt-3">
         <Button
           v-if="state || error"
+          size="sm"
           variant="ghost"
           :disabled="loading || mutation !== null"
           @click="refresh"
-        >{{ t('common.refresh') }}</Button>
-        <Button variant="ghost" :disabled="mutation !== null" @click="emit('close')">{{ t('common.close') }}</Button>
+        >
+          <RiRefreshLine class="mr-1.5 h-3.5 w-3.5" :class="loading ? 'animate-spin' : ''" />
+          {{ t('common.refresh') }}
+        </Button>
+        <Button size="sm" variant="ghost" :disabled="mutation !== null" @click="emit('close')">
+          {{ t('common.close') }}
+        </Button>
       </div>
     </div>
   </FormDialog>

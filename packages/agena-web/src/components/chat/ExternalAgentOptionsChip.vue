@@ -1,26 +1,44 @@
 <script setup lang="ts">
-import { sessionApiPath } from '@/lib/acpSession'
-import { RiRefreshLine, RiStackLine } from '@remixicon/vue'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import {
+  RiArrowDownSLine,
+  RiArrowRightSLine,
+  RiCheckLine,
+  RiFileCopyLine,
+  RiLoader4Line,
+  RiRefreshLine,
+  RiRouteLine,
+  RiShieldUserLine,
+  RiStackLine,
+} from '@remixicon/vue'
 
 import SessionChip from './SessionChip.vue'
+import SettingsToggle from '@/components/settings/SettingsToggle.vue'
 import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
+import OptionPicker from '@/components/ui/OptionPicker.vue'
+import type { PickerOption } from '@/components/ui/pickerOption.types'
 import {
   getExternalAgentProviders,
   type ExternalAgentProviders,
 } from '@/features/sessions/api/nativeAgentSessions'
+import { sessionApiPath } from '@/lib/acpSession'
 import { apiJson } from '@/lib/api'
+import { copyTextToClipboard } from '@/lib/clipboard'
+import { useToastsStore } from '@/stores/toasts'
 import type { ExternalAgentAuthStatus, ExternalAgentOptions } from '@/types/chat'
 
 const props = defineProps<{ sessionId: string; label: string; liveOptions?: ExternalAgentOptions }>()
 const { t } = useI18n()
+const toasts = useToastsStore()
 const open = ref(false)
 const loading = ref(false)
 const error = ref('')
 const options = ref<ExternalAgentOptions>()
 type AgentAuth = Partial<ExternalAgentAuthStatus> & {
+  command?: string
+  base_args?: string[]
   methods: { id: string; name: string; description?: string; type: 'agent' | 'terminal' }[]
   logout_supported: boolean
 }
@@ -34,14 +52,30 @@ const providersOpen = ref(false)
 const providersBusy = ref(false)
 const providersError = ref('')
 const providers = ref<ExternalAgentProviders | null>(null)
+const copiedCommand = ref('')
+let copyTimer: number | undefined
+
 const displayedAuth = computed(() => liveAuth.value ?? auth.value)
-const authPath = `${sessionApiPath(props.sessionId)}/agent-auth`
+const authPath = computed(() => `${sessionApiPath(props.sessionId)}/agent-auth`)
 const authStateKey = computed(() => ({
   authenticated: 'agentSignedIn',
   unauthenticated: 'agentSignInRequired',
   not_required: 'agentSignInNotRequired',
   unknown: 'agentStatusUnavailable',
 }[displayedAuth.value?.state ?? 'unknown']))
+const authDotClass = computed(() => {
+  const state = displayedAuth.value?.state
+  if (state === 'authenticated') return 'bg-emerald-500'
+  if (state === 'unauthenticated') return 'bg-amber-500'
+  return 'bg-muted-foreground/40'
+})
+const agentLoginMethods = computed(() => (auth.value?.methods ?? []).filter((method) => method.type === 'agent'))
+const terminalLoginMethods = computed(() => (auth.value?.methods ?? []).filter((method) => method.type === 'terminal'))
+const terminalInspectCommand = computed(() => `agena sessions agent-auth ${props.sessionId} --terminal`)
+const routedProviderCount = computed(
+  () => providers.value?.providers.filter((provider) => provider.current !== null).length ?? 0,
+)
+
 const title = computed(() => `${props.label} · ${t('chat.composer.picker.optionsTitle')}`)
 const rows = computed(() => {
   if (!options.value) return []
@@ -52,6 +86,7 @@ const rows = computed(() => {
     return [{
       id: kind,
       kind,
+      type: 'select' as const,
       selected,
       name: kind.startsWith('config:') ? kind.slice(7) : kind,
       description: undefined,
@@ -64,6 +99,7 @@ const rows = computed(() => {
 watch(() => props.liveOptions, (live) => {
   if (live) options.value = live
 }, { immediate: true })
+
 const chipLabel = computed(() => {
   const model = rows.value.find((row) => row.kind === 'model')
   const value = model?.current_value || model?.selected
@@ -71,6 +107,42 @@ const chipLabel = computed(() => {
   const name = model.choices.find((choice) => choice.value === value)?.name || value
   return `${props.label} · ${name}`
 })
+
+function isBooleanOption(row: (typeof rows.value)[number]): boolean {
+  if (row.type === 'boolean') return true
+  if (row.choices.length === 2) {
+    const values = new Set(row.choices.map((c) => c.value.toLowerCase()))
+    return values.has('true') && values.has('false')
+  }
+  return false
+}
+
+function booleanEffectiveValue(row: (typeof rows.value)[number]): boolean {
+  const raw = (row.selected || row.current_value || '').toLowerCase()
+  return raw === 'true'
+}
+
+function pickerOptionsForRow(row: (typeof rows.value)[number]): PickerOption[] {
+  const items: PickerOption[] = row.choices.map((choice) => ({
+    value: choice.value,
+    label: choice.name,
+    description: choice.description,
+    keywords: `${choice.value} ${choice.name} ${choice.description || ''}`,
+  }))
+  if (row.selected && !items.some((item) => item.value === row.selected)) {
+    items.unshift({ value: row.selected, label: row.selected, disabled: true })
+  }
+  return items
+}
+
+function emptyLabelForRow(row: (typeof rows.value)[number]): string {
+  const currentName = row.current_value
+    ? row.choices.find((choice) => choice.value === row.current_value)?.name || row.current_value
+    : ''
+  return currentName
+    ? `${t('chat.composer.picker.agentSettings')} · ${currentName}`
+    : String(t('chat.composer.picker.agentSettings'))
+}
 
 async function load(change?: { kind: string; value: string | null }) {
   if (loading.value) return
@@ -94,11 +166,12 @@ function setOpen(next: boolean) {
   if (next) void load()
 }
 
-function select(kind: string, event: Event) {
-  const input = event.currentTarget as HTMLSelectElement
-  const value = input.value
-  input.value = options.value?.selection[kind] ?? ''
+function selectValue(kind: string, value: string) {
   void load({ kind, value: value || null })
+}
+
+function toggleBooleanOption(kind: string, enabled: boolean) {
+  void load({ kind, value: enabled ? 'true' : 'false' })
 }
 
 async function runAuth(action: AuthAction = { action: 'inspect' }) {
@@ -106,7 +179,7 @@ async function runAuth(action: AuthAction = { action: 'inspect' }) {
   authBusy.value = true
   authError.value = ''
   try {
-    auth.value = await apiJson<AgentAuth>(authPath, {
+    auth.value = await apiJson<AgentAuth>(authPath.value, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(action),
@@ -141,6 +214,17 @@ function toggleProviders() {
   if (providersOpen.value) void loadProviders()
 }
 
+async function copyCommand(command: string) {
+  const ok = await copyTextToClipboard(command)
+  if (!ok) return
+  copiedCommand.value = command
+  toasts.push('success', String(t('common.copied')))
+  window.clearTimeout(copyTimer)
+  copyTimer = window.setTimeout(() => {
+    if (copiedCommand.value === command) copiedCommand.value = ''
+  }, 1800)
+}
+
 watch([open, authOpen], ([panel, account], _previous, onCleanup) => {
   if (!panel || !account) {
     liveAuth.value = null
@@ -152,7 +236,7 @@ watch([open, authOpen], ([panel, account], _previous, onCleanup) => {
     if (refreshing || controller.signal.aborted) return
     refreshing = true
     try {
-      const status = await apiJson<ExternalAgentAuthStatus | null>(authPath, { signal: controller.signal })
+      const status = await apiJson<ExternalAgentAuthStatus | null>(authPath.value, { signal: controller.signal })
       if (!controller.signal.aborted) liveAuth.value = status
     } catch {
       if (!controller.signal.aborted) liveAuth.value = null
@@ -173,96 +257,287 @@ watch([open, authOpen], ([panel, account], _previous, onCleanup) => {
   <SessionChip
     :title="title"
     :label="chipLabel"
+    :hint="chipLabel"
     :open="open"
     :busy="loading"
-    panel-class="w-[min(92vw,22rem)]"
+    panel-class="w-[min(92vw,24rem)]"
     @update:open="setOpen"
   >
-    <template #icon>
-      <RiStackLine class="h-3 w-3" />
+    <template #trigger>
+      <RiStackLine class="h-3 w-3 shrink-0" />
+      <span class="max-w-52 truncate font-mono text-[11px] font-medium">{{ chipLabel }}</span>
+      <span
+        v-if="liveAuth?.state === 'unauthenticated'"
+        class="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500"
+        :title="t('chat.composer.picker.agentSignInRequired')"
+      />
+      <RiLoader4Line v-if="loading" class="h-3 w-3 shrink-0 animate-spin" />
     </template>
     <template #actions>
-      <IconButton :aria-label="t('common.refresh')" :tooltip="t('common.refresh')" size="sm" :disabled="loading" @click="load()">
-        <RiRefreshLine class="h-3.5 w-3.5" />
+      <IconButton
+        :aria-label="t('common.refresh')"
+        :tooltip="t('common.refresh')"
+        size="sm"
+        :disabled="loading"
+        @click="load()"
+      >
+        <RiRefreshLine class="h-3.5 w-3.5" :class="loading ? 'animate-spin' : ''" />
       </IconButton>
     </template>
-    <div class="grid gap-2.5 py-1 text-xs" :aria-busy="loading">
-      <p v-if="error" role="alert" class="whitespace-pre-wrap text-destructive">{{ error }}</p>
-      <p v-if="!options && loading" role="status" class="text-muted-foreground">{{ t('chat.composer.status.loading') }}</p>
+
+    <div class="grid gap-3 py-1 text-xs" :aria-busy="loading">
+      <p
+        v-if="error"
+        role="alert"
+        class="whitespace-pre-wrap break-words rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-2 text-destructive"
+      >
+        {{ error }}
+      </p>
+
+      <div v-if="!options && loading" role="status" class="space-y-2 py-1">
+        <div v-for="n in 2" :key="n" class="h-9 animate-pulse rounded-md bg-muted/40" />
+      </div>
+
       <p v-if="options && !rows.length && !loading" class="text-muted-foreground">
         {{ t('chat.composer.picker.emptyOptions') }}
       </p>
-      <label v-for="row in rows" :key="row.kind" class="grid min-w-0 gap-1">
-        <span class="text-muted-foreground">{{ row.name }}</span>
-        <span v-if="row.description" class="text-muted-foreground">{{ row.description }}</span>
-        <select
-          :value="row.selected"
-          :disabled="loading"
-          class="min-h-8 w-full rounded border border-input bg-background px-2 text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
-          @change="select(row.kind, $event)"
-        >
-          <option value="">
-            {{ t('chat.composer.picker.agentSettings') }}{{ row.current_value ? ` · ${row.choices.find((choice) => choice.value === row.current_value)?.name || row.current_value}` : '' }}
-          </option>
-          <option v-if="row.selected && !row.choices.some((choice) => choice.value === row.selected)" :value="row.selected" disabled>
-            {{ row.selected }}
-          </option>
-          <option v-for="choice in row.choices" :key="choice.value" :value="choice.value" :title="choice.description">
-            {{ choice.name }}
-          </option>
-        </select>
-      </label>
-      <p v-if="rows.length" class="text-muted-foreground">{{ t('chat.composer.picker.agentOptionNextTurn') }}</p>
-      <div class="grid gap-2 border-t border-border pt-2">
-        <Button size="sm" variant="outline" class="justify-self-start" :aria-expanded="authOpen" @click="toggleAuth">
-          {{ t('chat.composer.picker.agentAccount') }}
-        </Button>
-        <div v-if="authOpen" class="grid gap-2" :aria-busy="authBusy">
-          <p v-if="authError" role="alert" class="whitespace-pre-wrap text-destructive">{{ authError }}</p>
-          <p v-else-if="authBusy" role="status" class="text-muted-foreground">{{ t('chat.composer.status.loading') }}</p>
-          <template v-if="displayedAuth">
-            <p role="status" class="text-muted-foreground">
-              <span v-if="liveAuth">{{ t('chat.composer.picker.agentConnectionStatus') }} · </span>
-              {{ t(`chat.composer.picker.${authStateKey}`) }}
-            </p>
-            <div v-for="(account, index) in displayedAuth.accounts" :key="index" class="break-words">
-              <p>{{ [account.label, account.name, account.email, account.organization].filter(Boolean).join(' · ') }}</p>
-              <p v-if="account.description" class="text-muted-foreground">{{ account.description }}</p>
+
+      <div v-if="rows.length" class="grid gap-2.5">
+        <template v-for="row in rows" :key="row.kind">
+          <div
+            v-if="isBooleanOption(row)"
+            class="flex items-start justify-between gap-3 rounded-md border border-border/60 bg-muted/20 px-2.5 py-2"
+          >
+            <div class="min-w-0 flex-1">
+              <div class="flex flex-wrap items-center gap-1.5">
+                <span class="font-medium text-foreground">{{ row.name }}</span>
+                <button
+                  v-if="row.selected"
+                  type="button"
+                  class="text-[11px] text-primary hover:underline"
+                  :disabled="loading"
+                  @click="selectValue(row.kind, '')"
+                >
+                  {{ t('chat.composer.picker.agentSettings') }}
+                </button>
+              </div>
+              <p v-if="row.description" class="mt-0.5 text-[11px] text-muted-foreground">{{ row.description }}</p>
             </div>
-          </template>
+            <SettingsToggle
+              :model-value="booleanEffectiveValue(row)"
+              :label="row.name"
+              :disabled="loading"
+              @update:model-value="toggleBooleanOption(row.kind, $event)"
+            />
+          </div>
+
+          <div v-else class="grid min-w-0 gap-1">
+            <div class="flex items-baseline justify-between gap-2">
+              <span class="font-medium text-foreground">{{ row.name }}</span>
+              <span v-if="!row.selected && row.current_value" class="truncate font-mono text-[10px] text-muted-foreground">
+                {{ row.choices.find((choice) => choice.value === row.current_value)?.name || row.current_value }}
+              </span>
+            </div>
+            <p v-if="row.description" class="text-[11px] text-muted-foreground">{{ row.description }}</p>
+            <OptionPicker
+              :model-value="row.selected"
+              :options="pickerOptionsForRow(row)"
+              :title="row.name"
+              :empty-label="emptyLabelForRow(row)"
+              :search-placeholder="t('chat.composer.picker.searchOptions')"
+              :disabled="loading"
+              size="sm"
+              trigger-class="w-full"
+              @update:model-value="selectValue(row.kind, $event)"
+            />
+          </div>
+        </template>
+        <p class="text-[11px] text-muted-foreground">{{ t('chat.composer.picker.agentOptionNextTurn') }}</p>
+      </div>
+
+      <!-- Account disclosure -->
+      <section class="border-t border-border/70 pt-2.5">
+        <div class="flex items-center justify-between gap-2">
+          <button
+            type="button"
+            class="flex min-w-0 flex-1 items-center gap-1.5 rounded px-1 py-1 text-left font-medium text-foreground hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            :aria-expanded="authOpen"
+            @click="toggleAuth"
+          >
+            <component :is="authOpen ? RiArrowDownSLine : RiArrowRightSLine" class="h-4 w-4 shrink-0 text-muted-foreground" />
+            <RiShieldUserLine class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span class="truncate">{{ t('chat.composer.picker.agentAccount') }}</span>
+            <span
+              v-if="displayedAuth"
+              class="h-2 w-2 shrink-0 rounded-full"
+              :class="authDotClass"
+              :title="t(`chat.composer.picker.${authStateKey}`)"
+            />
+          </button>
+          <IconButton
+            v-if="authOpen"
+            size="sm"
+            variant="ghost"
+            class="h-6 w-6 shrink-0"
+            :disabled="authBusy"
+            :tooltip="t('common.refresh')"
+            :aria-label="t('common.refresh')"
+            @click="runAuth()"
+          >
+            <RiRefreshLine class="h-3.5 w-3.5" :class="authBusy ? 'animate-spin' : ''" />
+          </IconButton>
+        </div>
+
+        <div v-if="authOpen" class="mt-2 grid gap-2 pl-1" :aria-busy="authBusy">
+          <p
+            v-if="authError"
+            role="alert"
+            class="whitespace-pre-wrap break-words rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-2 text-destructive"
+          >
+            {{ authError }}
+          </p>
+          <p v-else-if="authBusy && !displayedAuth" role="status" class="text-muted-foreground">
+            {{ t('chat.composer.status.loading') }}
+          </p>
+
+          <div
+            v-if="displayedAuth"
+            class="space-y-1 rounded-md border border-border/60 bg-muted/20 px-2.5 py-2"
+          >
+            <p role="status" class="flex items-center gap-1.5 font-medium text-foreground">
+              <span class="h-2 w-2 shrink-0 rounded-full" :class="authDotClass" aria-hidden="true" />
+              <span v-if="liveAuth" class="text-muted-foreground">{{ t('chat.composer.picker.agentConnectionStatus') }} ·</span>
+              <span>{{ t(`chat.composer.picker.${authStateKey}`) }}</span>
+            </p>
+            <div v-for="(account, index) in displayedAuth.accounts" :key="index" class="break-words text-[11px] text-muted-foreground">
+              <p class="text-foreground">
+                {{ [account.label, account.name, account.email, account.organization].filter(Boolean).join(' · ') }}
+              </p>
+              <p v-if="account.description">{{ account.description }}</p>
+            </div>
+          </div>
+
           <template v-if="auth">
-            <div class="flex flex-wrap gap-1.5">
+            <div v-if="agentLoginMethods.length || auth.logout_supported" class="flex flex-wrap gap-1.5">
               <Button
-                v-for="method in auth.methods"
+                v-for="method in agentLoginMethods"
                 :key="method.id"
                 size="sm"
                 variant="outline"
-                :disabled="authBusy || method.type !== 'agent'"
+                :disabled="authBusy"
                 :title="method.description"
                 @click="runAuth({ action: 'login', method_id: method.id })"
-              >{{ method.name }}</Button>
+              >
+                {{ method.name }}
+              </Button>
               <Button
                 v-if="auth.logout_supported"
                 size="sm"
-                variant="outline"
+                variant="ghost"
+                class="text-destructive hover:bg-destructive/10 hover:text-destructive"
                 :disabled="authBusy"
                 @click="runAuth({ action: 'logout' })"
-              >{{ t('chat.composer.picker.agentSignOut') }}</Button>
+              >
+                {{ t('chat.composer.picker.agentSignOut') }}
+              </Button>
             </div>
-            <p class="text-muted-foreground">
-              {{ t('chat.composer.picker.agentTerminalSignIn') }}
-              <code>agena sessions agent-auth {{ sessionId }} --terminal</code>
-            </p>
+
+            <div class="space-y-1.5 rounded-md border border-border/60 bg-muted/20 px-2.5 py-2">
+              <p class="text-[11px] text-muted-foreground">{{ t('chat.composer.picker.agentTerminalSignIn') }}</p>
+              <div v-if="terminalLoginMethods.length" class="space-y-1.5">
+                <div
+                  v-for="method in terminalLoginMethods"
+                  :key="method.id"
+                  class="space-y-1"
+                >
+                  <p class="text-[11px] font-medium text-foreground">
+                    {{ method.name }}
+                    <span v-if="method.description" class="font-normal text-muted-foreground"> · {{ method.description }}</span>
+                  </p>
+                  <div class="flex items-center gap-1 rounded border border-border/70 bg-background px-2 py-1">
+                    <code class="min-w-0 flex-1 select-all break-all font-mono text-[11px]">
+                      agena sessions agent-auth {{ sessionId }} --terminal --login {{ method.id }}
+                    </code>
+                    <IconButton
+                      size="sm"
+                      variant="ghost"
+                      class="h-6 w-6 shrink-0"
+                      :tooltip="t('common.copy')"
+                      :aria-label="t('common.copy')"
+                      @click="copyCommand(`agena sessions agent-auth ${sessionId} --terminal --login ${method.id}`)"
+                    >
+                      <RiCheckLine
+                        v-if="copiedCommand === `agena sessions agent-auth ${sessionId} --terminal --login ${method.id}`"
+                        class="h-3.5 w-3.5 text-emerald-500"
+                      />
+                      <RiFileCopyLine v-else class="h-3.5 w-3.5" />
+                    </IconButton>
+                  </div>
+                </div>
+              </div>
+              <div v-else class="flex items-center gap-1 rounded border border-border/70 bg-background px-2 py-1">
+                <code class="min-w-0 flex-1 select-all break-all font-mono text-[11px]">{{ terminalInspectCommand }}</code>
+                <IconButton
+                  size="sm"
+                  variant="ghost"
+                  class="h-6 w-6 shrink-0"
+                  :tooltip="t('common.copy')"
+                  :aria-label="t('common.copy')"
+                  @click="copyCommand(terminalInspectCommand)"
+                >
+                  <RiCheckLine v-if="copiedCommand === terminalInspectCommand" class="h-3.5 w-3.5 text-emerald-500" />
+                  <RiFileCopyLine v-else class="h-3.5 w-3.5" />
+                </IconButton>
+              </div>
+            </div>
           </template>
         </div>
-      </div>
-      <div class="grid gap-2 border-t border-border pt-2">
-        <Button size="sm" variant="outline" class="justify-self-start" :aria-expanded="providersOpen" @click="toggleProviders">
-          {{ t('chat.composer.picker.agentProviders') }}
-        </Button>
-        <div v-if="providersOpen" class="grid gap-2" :aria-busy="providersBusy">
-          <p v-if="providersError" role="alert" class="whitespace-pre-wrap text-destructive">{{ providersError }}</p>
-          <p v-else-if="providersBusy" role="status" class="text-muted-foreground">{{ t('chat.composer.status.loading') }}</p>
+      </section>
+
+      <!-- Provider routing disclosure -->
+      <section class="border-t border-border/70 pt-2.5">
+        <div class="flex items-center justify-between gap-2">
+          <button
+            type="button"
+            class="flex min-w-0 flex-1 items-center gap-1.5 rounded px-1 py-1 text-left font-medium text-foreground hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            :aria-expanded="providersOpen"
+            @click="toggleProviders"
+          >
+            <component :is="providersOpen ? RiArrowDownSLine : RiArrowRightSLine" class="h-4 w-4 shrink-0 text-muted-foreground" />
+            <RiRouteLine class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span class="truncate">{{ t('chat.composer.picker.agentProviders') }}</span>
+            <span
+              v-if="providers?.supported && routedProviderCount > 0"
+              class="rounded-full bg-muted/70 px-1.5 py-0.2 text-[10px] font-medium tabular-nums text-muted-foreground"
+            >
+              {{ routedProviderCount }}
+            </span>
+          </button>
+          <IconButton
+            v-if="providersOpen"
+            size="sm"
+            variant="ghost"
+            class="h-6 w-6 shrink-0"
+            :disabled="providersBusy"
+            :tooltip="t('common.refresh')"
+            :aria-label="t('common.refresh')"
+            @click="loadProviders"
+          >
+            <RiRefreshLine class="h-3.5 w-3.5" :class="providersBusy ? 'animate-spin' : ''" />
+          </IconButton>
+        </div>
+
+        <div v-if="providersOpen" class="mt-2 grid gap-2 pl-1" :aria-busy="providersBusy">
+          <p
+            v-if="providersError"
+            role="alert"
+            class="whitespace-pre-wrap break-words rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-2 text-destructive"
+          >
+            {{ providersError }}
+          </p>
+          <p v-else-if="providersBusy" role="status" class="text-muted-foreground">
+            {{ t('chat.composer.status.loading') }}
+          </p>
           <template v-else-if="providers">
             <p v-if="!providers.supported" class="text-muted-foreground">
               {{ t('chat.composer.picker.agentProvidersUnsupported') }}
@@ -274,18 +549,27 @@ watch([open, authOpen], ([panel, account], _previous, onCleanup) => {
               <li
                 v-for="provider in providers.providers"
                 :key="provider.provider_id"
-                class="rounded border border-border p-2"
+                class="space-y-1 rounded-md border border-border/70 bg-muted/20 p-2"
               >
-                <p class="break-words font-medium">
-                  {{ provider.provider_id }}
-                  <span v-if="provider.required" class="ml-1 text-muted-foreground">
-                    ({{ t('chat.composer.picker.agentProviderRequired') }})
+                <div class="flex flex-wrap items-center gap-1.5">
+                  <span class="break-words font-medium text-foreground">{{ provider.provider_id }}</span>
+                  <span
+                    v-if="provider.required"
+                    class="rounded-full border border-border/70 bg-background px-1.5 py-0.2 text-[10px] text-muted-foreground"
+                  >
+                    {{ t('chat.composer.picker.agentProviderRequired') }}
                   </span>
-                </p>
-                <p v-if="provider.supported.length" class="break-words text-muted-foreground">
-                  {{ provider.supported.join(', ') }}
-                </p>
-                <p class="break-all font-mono text-muted-foreground">
+                </div>
+                <div v-if="provider.supported.length" class="flex flex-wrap gap-1">
+                  <span
+                    v-for="apiType in provider.supported"
+                    :key="apiType"
+                    class="rounded bg-muted/70 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
+                  >
+                    {{ apiType }}
+                  </span>
+                </div>
+                <p class="break-all font-mono text-[11px] text-muted-foreground">
                   {{
                     provider.current
                       ? `${provider.current.api_type} · ${provider.current.base_url}`
@@ -296,7 +580,7 @@ watch([open, authOpen], ([panel, account], _previous, onCleanup) => {
             </ul>
           </template>
         </div>
-      </div>
+      </section>
     </div>
   </SessionChip>
 </template>

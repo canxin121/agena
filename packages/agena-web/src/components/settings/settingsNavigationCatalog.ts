@@ -188,6 +188,23 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
       fillsViewport: true,
     },
     {
+      id: 'acp-agents',
+      label: () => st('ACP agents'),
+      description: () => st('Register custom ACP stdio agents, override built-in commands, or disable installed agents.'),
+      keywords: [
+        'acp',
+        'external agent',
+        'claude-code',
+        'antigravity',
+        'codex',
+        'stdio',
+        'custom agent',
+        '外部智能体',
+        '自定义',
+      ],
+      fillsViewport: true,
+    },
+    {
       id: 'client-versions',
       label: () => st('Provider client versions'),
       description: () =>

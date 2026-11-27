@@ -5,7 +5,7 @@
 //! tool calls require OAuth unless the tool explicitly allows anonymous use.
 
 use agena_web::network::is_public_ip;
-use portable_atomic::AtomicI64;
+use portable_atomic::{AtomicI64, AtomicU64};
 use std::{
     collections::{HashMap, HashSet},
     sync::{Arc, RwLock, atomic::Ordering},
@@ -146,6 +146,7 @@ const MAX_OAUTH_LABEL_BYTES: usize = 256;
 const MAX_OAUTH_TOKEN_BYTES: usize = 8192;
 const MAX_OAUTH_SCOPE_BYTES: usize = 512;
 const MAX_REGISTERED_CLIENTS: usize = 256;
+const OAUTH_PURGE_INTERVAL_SECS: u64 = 30;
 // ChatGPT submits the user-facing OAuth authorization form from its hosted
 // connector origin. Keep this allowlist explicit and narrow; arbitrary
 // browser origins must not be accepted for the MCP/OAuth surface.
@@ -600,26 +601,12 @@ impl McpServerState {
     }
 
     fn accepts_origin(&self, origin: &str) -> bool {
-        let Ok(origin) = Url::parse(origin.trim()) else {
-            return false;
-        };
-        if !origin.username().is_empty()
-            || origin.password().is_some()
-            || origin.query().is_some()
-            || origin.fragment().is_some()
-            || origin.path() != "/"
-        {
-            return false;
-        }
-        let candidate = origin.origin().ascii_serialization();
-        TRUSTED_MCP_CLIENT_ORIGINS.contains(&candidate.as_str())
-            || self.identity_urls().into_iter().any(|url| {
-                Url::parse(url.as_str())
-                    .map(|url| url.origin().ascii_serialization() == candidate)
-                    .unwrap_or(false)
-            })
-            || (is_loopback_resource(self.fallback_resource.as_str())
-                && is_loopback_resource(candidate.as_str()))
+        accepts_origin_for_identity(
+            origin,
+            self.fallback_resource.as_str(),
+            self.configured_public_url().as_deref(),
+            self.configured_oauth_issuer_url().as_deref(),
+        )
     }
 
     fn identity_urls(&self) -> Vec<String> {
@@ -2002,16 +1989,34 @@ async fn register_client(
         );
     }
 
-    if state.oauth.registered_clients.len() >= MAX_REGISTERED_CLIENTS
-        && let Some(oldest) = state
+    let _registration_guard = state.oauth.registration_lock.lock().await;
+    let evicted = if state.oauth.registered_clients.len() >= MAX_REGISTERED_CLIENTS {
+        let now_unix = unix_timestamp();
+        let active_clients: HashSet<String> = state
+            .oauth
+            .refresh_tokens
+            .iter()
+            .filter(|entry| !entry.revoked && entry.expires_at > now_unix)
+            .map(|entry| entry.client_id.clone())
+            .collect();
+        let oldest_inactive = state
             .oauth
             .registered_clients
             .iter()
+            .filter(|entry| !active_clients.contains(entry.key()))
             .min_by_key(|entry| entry.value().created_at)
-            .map(|entry| entry.key().clone())
-    {
-        state.oauth.registered_clients.remove(oldest.as_str());
-    }
+            .map(|entry| entry.key().clone());
+        let Some(oldest) = oldest_inactive else {
+            return registration_error(
+                StatusCode::TOO_MANY_REQUESTS,
+                "temporarily_unavailable",
+                "the authorization server has reached its active client registration limit",
+            );
+        };
+        state.oauth.registered_clients.remove(oldest.as_str())
+    } else {
+        None
+    };
 
     let client_id = crate::server::issue_token();
     let created_at = unix_timestamp();
@@ -2025,6 +2030,10 @@ async fn register_client(
         },
     );
     if let Err(error) = state.oauth.persist().await {
+        state.oauth.registered_clients.remove(client_id.as_str());
+        if let Some((old_id, old_client)) = evicted {
+            state.oauth.registered_clients.insert(old_id, old_client);
+        }
         tracing::error!(
             diagnostic = %error,
             "OAuth client registration could not be persisted"
@@ -2329,12 +2338,12 @@ async fn authorize_post(
     headers: HeaderMap,
     request: Result<Form<AuthorizeRequest>, axum::extract::rejection::FormRejection>,
 ) -> Response {
-    // Keep password verification and grant creation in the same control
-    // generation as password/identity updates and disabling the MCP surface.
-    let _control_guard = state.control.update_lock.lock().await;
     if !state.is_enabled() {
         return mcp_auth_disabled();
     }
+    let expected_generation = state.oauth.current_token_generation();
+    let expected_resource = state.configured_public_url();
+    let expected_issuer = state.configured_oauth_issuer_url();
     let Form(request) = match request {
         Ok(request) => request,
         Err(error) => {
@@ -2411,6 +2420,26 @@ async fn authorize_post(
         return response;
     }
 
+    // Re-check control state under `update_lock` only while minting the code so
+    // external CIMD fetches and Argon2 checks never stall control/token paths.
+    let _control_guard = state.control.update_lock.lock().await;
+    if !state.is_enabled() {
+        return mcp_auth_disabled();
+    }
+    if state.oauth.current_token_generation() != expected_generation
+        || state.configured_public_url() != expected_resource
+        || state.configured_oauth_issuer_url() != expected_issuer
+    {
+        return authorization_error_redirect(
+            validated.redirect_uri.as_str(),
+            Some(validated.state.as_str()),
+            validated.issuer.as_str(),
+            &OAuthRequestError::new(
+                "temporarily_unavailable",
+                "authorization server configuration changed; retry authorization",
+            ),
+        );
+    }
     let _authorization_guard = state.oauth.authorization_lock.lock().await;
     state.oauth.purge_expired();
     if state.oauth.authorization_codes.len() >= MAX_OUTSTANDING_AUTHORIZATION_CODES {
@@ -2622,10 +2651,12 @@ struct OAuthState {
     authorization_codes: DashMap<String, AuthorizationCodeRecord>,
     refresh_tokens: DashMap<String, RefreshTokenRecord>,
     revoked_jti: DashMap<String, u64>,
+    registration_lock: tokio::sync::Mutex<()>,
     authorization_lock: tokio::sync::Mutex<()>,
     cimd_fetch_lock: tokio::sync::Mutex<()>,
     refresh_rotation_lock: tokio::sync::Mutex<()>,
     persist_lock: tokio::sync::Mutex<()>,
+    last_purge_unix: AtomicU64,
     signing_key: OAuthSigningKey,
     token_generation: RwLock<String>,
     database: Option<Arc<ServerStateDb>>,
@@ -2647,10 +2678,12 @@ impl OAuthState {
             authorization_codes: DashMap::new(),
             refresh_tokens: DashMap::new(),
             revoked_jti: DashMap::new(),
+            registration_lock: tokio::sync::Mutex::new(()),
             authorization_lock: tokio::sync::Mutex::new(()),
             cimd_fetch_lock: tokio::sync::Mutex::new(()),
             refresh_rotation_lock: tokio::sync::Mutex::new(()),
             persist_lock: tokio::sync::Mutex::new(()),
+            last_purge_unix: AtomicU64::new(0),
             signing_key,
             token_generation: RwLock::new(token_generation),
             database,
@@ -2727,7 +2760,14 @@ impl OAuthState {
         self.persist().await
     }
 
-    async fn revoke_refresh_token_family(&self, token: &str, client_id: Option<&str>) {
+    fn current_token_generation(&self) -> String {
+        self.token_generation
+            .read()
+            .expect("MCP token generation lock poisoned")
+            .clone()
+    }
+
+    async fn revoke_refresh_token_family(&self, token: &str, client_id: Option<&str>) -> bool {
         let _rotation_guard = self.refresh_rotation_lock.lock().await;
         let family_id = self
             .refresh_tokens
@@ -2736,24 +2776,43 @@ impl OAuthState {
             .map(|record| record.family_id.clone());
         // Drop the DashMap reference before iterating mutably: it may lock the
         // same shard, including the record being revoked.
+        let mut changed = false;
         if let Some(family_id) = family_id {
             for mut entry in self.refresh_tokens.iter_mut() {
-                if entry.family_id == family_id {
+                if entry.family_id == family_id && !entry.revoked {
                     entry.revoked = true;
+                    changed = true;
                 }
             }
         }
+        changed
     }
 
     fn purge_expired(&self) {
         let now = Instant::now();
         let now_unix = unix_timestamp();
+        self.last_purge_unix.store(now_unix, Ordering::Relaxed);
         self.authorization_codes
             .retain(|_, record| record.expires_at > now);
         self.refresh_tokens
             .retain(|_, record| record.expires_at > now_unix);
         self.revoked_jti
             .retain(|_, expires_at| *expires_at > now_unix);
+    }
+
+    fn purge_expired_if_due(&self) {
+        let now_unix = unix_timestamp();
+        let last = self.last_purge_unix.load(Ordering::Relaxed);
+        if now_unix.saturating_sub(last) < OAUTH_PURGE_INTERVAL_SECS {
+            return;
+        }
+        if self
+            .last_purge_unix
+            .compare_exchange(last, now_unix, Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
+        {
+            self.purge_expired();
+        }
     }
 
     fn issue_tokens(
@@ -2764,9 +2823,12 @@ impl OAuthState {
         scope: &str,
         family_id: Option<&str>,
     ) -> Result<TokenResponse, String> {
-        self.purge_expired();
-        if self.refresh_tokens.len() >= MAX_REFRESH_TOKEN_RECORDS {
-            return Err("the MCP OAuth refresh-token limit has been reached".to_owned());
+        let issue_refresh = scope_contains(scope, OFFLINE_ACCESS_SCOPE);
+        if issue_refresh {
+            self.purge_expired();
+            if self.refresh_tokens.len() >= MAX_REFRESH_TOKEN_RECORDS {
+                return Err("the MCP OAuth refresh-token limit has been reached".to_owned());
+            }
         }
         let issued_at = unix_timestamp();
         let claims = AccessTokenClaims {
@@ -2779,34 +2841,35 @@ impl OAuthState {
             nbf: issued_at,
             exp: issued_at + ACCESS_TOKEN_TTL.as_secs(),
             jti: crate::server::issue_token(),
-            generation: self
-                .token_generation
-                .read()
-                .expect("MCP token generation lock poisoned")
-                .clone(),
+            generation: self.current_token_generation(),
         };
         let mut header = Header::new(Algorithm::EdDSA);
         header.kid = Some(self.signing_key.kid.clone());
         let encoding_key = self.signing_key.encoding_key()?;
         let access_token = encode(&header, &claims, &encoding_key)
             .map_err(|error| format!("failed to sign MCP OAuth access token: {error}"))?;
-        let refresh_token = crate::server::issue_token();
-        let family_id = family_id
-            .map(str::to_owned)
-            .unwrap_or_else(crate::server::issue_token);
-        self.refresh_tokens.insert(
-            refresh_token_fingerprint(refresh_token.as_str()),
-            RefreshTokenRecord {
-                client_id: client_id.to_owned(),
-                issuer: issuer.to_owned(),
-                resource: resource.to_owned(),
-                scope: scope.to_owned(),
-                expires_at: issued_at + REFRESH_TOKEN_TTL.as_secs(),
-                family_id,
-                used: false,
-                revoked: false,
-            },
-        );
+        let refresh_token = if issue_refresh {
+            let refresh_token = crate::server::issue_token();
+            let family_id = family_id
+                .map(str::to_owned)
+                .unwrap_or_else(crate::server::issue_token);
+            self.refresh_tokens.insert(
+                refresh_token_fingerprint(refresh_token.as_str()),
+                RefreshTokenRecord {
+                    client_id: client_id.to_owned(),
+                    issuer: issuer.to_owned(),
+                    resource: resource.to_owned(),
+                    scope: scope.to_owned(),
+                    expires_at: issued_at + REFRESH_TOKEN_TTL.as_secs(),
+                    family_id,
+                    used: false,
+                    revoked: false,
+                },
+            );
+            Some(refresh_token)
+        } else {
+            None
+        };
         Ok(TokenResponse {
             access_token,
             token_type: "Bearer",
@@ -2817,7 +2880,7 @@ impl OAuthState {
     }
 
     fn validate_access_token(&self, token: &str, issuer: &str, resource: &str) -> bool {
-        self.purge_expired();
+        self.purge_expired_if_due();
         let Ok(header) = jsonwebtoken::decode_header(token) else {
             return false;
         };
@@ -2884,7 +2947,8 @@ struct TokenResponse {
     access_token: String,
     token_type: &'static str,
     expires_in: u64,
-    refresh_token: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refresh_token: Option<String>,
     scope: String,
 }
 
@@ -3033,16 +3097,21 @@ async fn exchange_authorization_code(
                 "the authorization server could not issue an access token",
             )
         })?;
-    oauth.persist().await.map_err(|error| {
+    if let Some(refresh_token) = response.refresh_token.as_deref()
+        && let Err(error) = oauth.persist().await
+    {
+        oauth
+            .refresh_tokens
+            .remove(&refresh_token_fingerprint(refresh_token));
         tracing::error!(
             diagnostic = %error,
             "MCP OAuth issued token could not be persisted"
         );
-        OAuthTokenError::new(
+        return Err(OAuthTokenError::new(
             "server_error",
             "the authorization server could not persist the issued token",
-        )
-    })?;
+        ));
+    }
     Ok(response)
 }
 
@@ -3085,6 +3154,7 @@ async fn refresh_access_token(
         || current.client_id != client_id
         || current.issuer != issuer
         || !resource_matches_grant(request.resource.as_deref(), &current.resource)
+        || !scope_contains(current.scope.as_str(), OFFLINE_ACCESS_SCOPE)
         || current.revoked
     {
         return Err(OAuthTokenError::new(
@@ -3127,34 +3197,46 @@ async fn refresh_access_token(
     current.used = true;
     let record = current.clone();
     drop(current);
-    let response = oauth
-        .issue_tokens(
-            client_id,
-            record.issuer.as_str(),
-            record.resource.as_str(),
-            record.scope.as_str(),
-            Some(record.family_id.as_str()),
-        )
-        .map_err(|error| {
+    let response = match oauth.issue_tokens(
+        client_id,
+        record.issuer.as_str(),
+        record.resource.as_str(),
+        record.scope.as_str(),
+        Some(record.family_id.as_str()),
+    ) {
+        Ok(response) => response,
+        Err(error) => {
+            if let Some(mut previous) = oauth.refresh_tokens.get_mut(refresh_key.as_str()) {
+                previous.used = false;
+            }
             tracing::error!(
                 diagnostic = %error,
                 "MCP OAuth refresh-token rotation failed during token issuance"
             );
-            OAuthTokenError::new(
+            return Err(OAuthTokenError::new(
                 "server_error",
                 "the authorization server could not issue an access token",
-            )
-        })?;
-    oauth.persist().await.map_err(|error| {
+            ));
+        }
+    };
+    if let Err(error) = oauth.persist().await {
+        if let Some(rotated) = response.refresh_token.as_deref() {
+            oauth
+                .refresh_tokens
+                .remove(&refresh_token_fingerprint(rotated));
+        }
+        if let Some(mut previous) = oauth.refresh_tokens.get_mut(refresh_key.as_str()) {
+            previous.used = false;
+        }
         tracing::error!(
             diagnostic = %error,
             "MCP OAuth rotated refresh token could not be persisted"
         );
-        OAuthTokenError::new(
+        return Err(OAuthTokenError::new(
             "server_error",
             "the authorization server could not persist the rotated token",
-        )
-    })?;
+        ));
+    }
     Ok(response)
 }
 
@@ -3203,6 +3285,7 @@ async fn revoke(
             "client_id must be at most 4096 bytes",
         );
     }
+    let mut changed = false;
     if let Some(claims) = state
         .oauth
         .verified_access_token_claims(request.token.as_str())
@@ -3211,13 +3294,17 @@ async fn revoke(
             .as_deref()
             .is_none_or(|client_id| client_id == claims.sub)
     {
-        state.oauth.revoked_jti.insert(claims.jti, claims.exp);
+        changed |= state
+            .oauth
+            .revoked_jti
+            .insert(claims.jti, claims.exp)
+            .is_none();
     }
-    state
+    changed |= state
         .oauth
         .revoke_refresh_token_family(&request.token, request.client_id.as_deref())
         .await;
-    if let Err(error) = state.oauth.persist().await {
+    if changed && let Err(error) = state.oauth.persist().await {
         tracing::error!(error = %error, "failed to persist revoked MCP OAuth token");
         return oauth_error(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -3674,6 +3761,38 @@ fn permitted_metadata_addresses(
         ));
     }
     Ok(permitted)
+}
+
+fn accepts_origin_for_identity(
+    origin: &str,
+    fallback_resource: &str,
+    configured_public: Option<&str>,
+    configured_issuer: Option<&str>,
+) -> bool {
+    let Ok(origin) = Url::parse(origin.trim()) else {
+        return false;
+    };
+    if !origin.username().is_empty()
+        || origin.password().is_some()
+        || origin.query().is_some()
+        || origin.fragment().is_some()
+        || origin.path() != "/"
+    {
+        return false;
+    }
+    let candidate = origin.origin().ascii_serialization();
+    let effective_resource = configured_public.unwrap_or(fallback_resource);
+    let mut allowed_urls = vec![effective_resource];
+    if let Some(issuer) = configured_issuer {
+        allowed_urls.push(issuer);
+    }
+    TRUSTED_MCP_CLIENT_ORIGINS.contains(&candidate.as_str())
+        || allowed_urls.into_iter().any(|url| {
+            Url::parse(url)
+                .map(|url| url.origin().ascii_serialization() == candidate)
+                .unwrap_or(false)
+        })
+        || (is_loopback_resource(effective_resource) && is_loopback_resource(candidate.as_str()))
 }
 
 fn is_loopback_host_name(host: &str) -> bool {
@@ -4390,7 +4509,7 @@ mod tests {
             .await
             .unwrap();
         assert!(oauth.validate_access_token(&issued.access_token, TEST_ISSUER, TEST_RESOURCE));
-        let mut refresh = refresh_request(&issued.refresh_token);
+        let mut refresh = refresh_request(issued.refresh_token.as_deref().unwrap());
         refresh.resource = Some("https://other.example.com/mcp".to_owned());
         assert!(
             refresh_access_token(&oauth, TEST_ISSUER, &refresh)
@@ -4429,32 +4548,33 @@ mod tests {
                 None,
             )
             .unwrap();
-        let rotated =
-            refresh_access_token(&oauth, TEST_ISSUER, &refresh_request(&issued.refresh_token))
+        let issued_refresh = issued.refresh_token.as_deref().unwrap();
+        let rotated = refresh_access_token(&oauth, TEST_ISSUER, &refresh_request(issued_refresh))
+            .await
+            .unwrap();
+        let rotated_refresh = rotated.refresh_token.as_deref().unwrap();
+        assert!(
+            !oauth
+                .revoke_refresh_token_family(rotated_refresh, Some("another-client"))
                 .await
-                .unwrap();
-        oauth
-            .revoke_refresh_token_family(&rotated.refresh_token, Some("another-client"))
-            .await;
+        );
         assert!(
             !oauth
                 .refresh_tokens
-                .get(&refresh_token_fingerprint(&rotated.refresh_token))
+                .get(&refresh_token_fingerprint(rotated_refresh))
                 .unwrap()
                 .revoked
         );
-        oauth
-            .revoke_refresh_token_family(&issued.refresh_token, Some(TEST_CLIENT))
-            .await;
+        assert!(
+            oauth
+                .revoke_refresh_token_family(issued_refresh, Some(TEST_CLIENT))
+                .await
+        );
         assert!(oauth.refresh_tokens.iter().all(|record| record.revoked));
         assert!(
-            refresh_access_token(
-                &oauth,
-                TEST_ISSUER,
-                &refresh_request(&rotated.refresh_token)
-            )
-            .await
-            .is_err()
+            refresh_access_token(&oauth, TEST_ISSUER, &refresh_request(rotated_refresh))
+                .await
+                .is_err()
         );
     }
 
@@ -4586,9 +4706,13 @@ mod tests {
         oauth.clear_runtime().await.unwrap();
         assert!(!oauth.validate_access_token(&issued.access_token, TEST_ISSUER, TEST_RESOURCE));
         assert!(
-            refresh_access_token(&oauth, TEST_ISSUER, &refresh_request(&issued.refresh_token))
-                .await
-                .is_err()
+            refresh_access_token(
+                &oauth,
+                TEST_ISSUER,
+                &refresh_request(issued.refresh_token.as_deref().unwrap())
+            )
+            .await
+            .is_err()
         );
         let runtime = database
             .get_json::<PersistedOAuthRuntime>(KV_KEY_MCP_OAUTH_RUNTIME)
@@ -4662,34 +4786,24 @@ mod tests {
                 None,
             )
             .expect("initial tokens");
-        let rotated = refresh_access_token(
-            &oauth,
-            TEST_ISSUER,
-            &refresh_request(issued.refresh_token.as_str()),
-        )
-        .await
-        .expect("rotated tokens");
-        assert_ne!(rotated.refresh_token, issued.refresh_token);
+        let issued_refresh = issued.refresh_token.as_deref().unwrap();
+        let rotated = refresh_access_token(&oauth, TEST_ISSUER, &refresh_request(issued_refresh))
+            .await
+            .expect("rotated tokens");
+        let rotated_refresh = rotated.refresh_token.as_deref().unwrap();
+        assert_ne!(rotated_refresh, issued_refresh);
 
         // Reusing the consumed refresh token is treated as replay and revokes
         // the whole family, including the freshly rotated token.
         assert!(
-            refresh_access_token(
-                &oauth,
-                TEST_ISSUER,
-                &refresh_request(issued.refresh_token.as_str())
-            )
-            .await
-            .is_err()
+            refresh_access_token(&oauth, TEST_ISSUER, &refresh_request(issued_refresh))
+                .await
+                .is_err()
         );
         assert!(
-            refresh_access_token(
-                &oauth,
-                TEST_ISSUER,
-                &refresh_request(rotated.refresh_token.as_str())
-            )
-            .await
-            .is_err()
+            refresh_access_token(&oauth, TEST_ISSUER, &refresh_request(rotated_refresh))
+                .await
+                .is_err()
         );
     }
 
@@ -4729,5 +4843,145 @@ mod tests {
                 "{host} must not be fetchable"
             );
         }
+    }
+
+    #[test]
+    fn access_token_without_offline_access_omits_refresh_token() {
+        let oauth = test_oauth_state();
+        let issued = oauth
+            .issue_tokens(TEST_CLIENT, TEST_ISSUER, TEST_RESOURCE, MCP_SCOPE, None)
+            .expect("tokens without offline_access");
+        assert!(issued.refresh_token.is_none());
+        assert!(oauth.refresh_tokens.is_empty());
+        assert!(oauth.validate_access_token(&issued.access_token, TEST_ISSUER, TEST_RESOURCE));
+    }
+
+    #[test]
+    fn accepts_origin_stops_trusting_loopback_when_public_url_is_configured() {
+        let fallback = "http://127.0.0.1:3210/mcp";
+        assert!(accepts_origin_for_identity(
+            "http://localhost:9999",
+            fallback,
+            None,
+            None
+        ));
+        assert!(!accepts_origin_for_identity(
+            "http://localhost:9999",
+            fallback,
+            Some("https://agena.example.com/mcp"),
+            None
+        ));
+        assert!(!accepts_origin_for_identity(
+            "http://127.0.0.1:3210",
+            fallback,
+            Some("https://agena.example.com/mcp"),
+            None
+        ));
+        assert!(accepts_origin_for_identity(
+            "https://agena.example.com",
+            fallback,
+            Some("https://agena.example.com/mcp"),
+            None
+        ));
+        assert!(accepts_origin_for_identity(
+            "https://chatgpt.com",
+            fallback,
+            Some("https://agena.example.com/mcp"),
+            None
+        ));
+    }
+
+    struct ToggleFailingStore {
+        values: RwLock<HashMap<String, String>>,
+        fail_writes: std::sync::atomic::AtomicBool,
+    }
+
+    #[async_trait]
+    impl agena_storage::instance_state::InstanceStateRepository for ToggleFailingStore {
+        fn path(&self) -> &std::path::Path {
+            std::path::Path::new("mcp-oauth-failing-test")
+        }
+
+        async fn get_payload(
+            &self,
+            key: &str,
+        ) -> Result<Option<String>, agena_storage::instance_state::InstanceStateError> {
+            Ok(self.values.read().unwrap().get(key).cloned())
+        }
+
+        async fn set_payload(
+            &self,
+            key: &str,
+            payload: String,
+        ) -> Result<(), agena_storage::instance_state::InstanceStateError> {
+            if self.fail_writes.load(Ordering::Acquire) {
+                return Err(agena_storage::instance_state::InstanceStateError::Backend(
+                    "simulated transient write failure".into(),
+                ));
+            }
+            self.values.write().unwrap().insert(key.to_owned(), payload);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_persist_failure_rolls_back_used_flag_without_poisoning_family() {
+        let store = Arc::new(ToggleFailingStore {
+            values: RwLock::new(HashMap::new()),
+            fail_writes: std::sync::atomic::AtomicBool::new(false),
+        });
+        let database = Arc::new(ServerStateDb::new(store.clone()));
+        let oauth = OAuthState::new(OAuthSigningKey::generate().unwrap(), Some(database), None);
+        let issued = oauth
+            .issue_tokens(
+                TEST_CLIENT,
+                TEST_ISSUER,
+                TEST_RESOURCE,
+                DEFAULT_OAUTH_SCOPE,
+                None,
+            )
+            .unwrap();
+        let initial_refresh = issued.refresh_token.as_deref().unwrap();
+        oauth.persist().await.unwrap();
+
+        store.fail_writes.store(true, Ordering::Release);
+        let err = refresh_access_token(&oauth, TEST_ISSUER, &refresh_request(initial_refresh))
+            .await
+            .unwrap_err();
+        assert_eq!(err.error, "server_error");
+        assert_eq!(oauth.refresh_tokens.len(), 1);
+        assert!(
+            !oauth
+                .refresh_tokens
+                .get(&refresh_token_fingerprint(initial_refresh))
+                .unwrap()
+                .used
+        );
+
+        // Once persistence recovers, retrying the same refresh token succeeds
+        // rather than triggering false replay revocation.
+        store.fail_writes.store(false, Ordering::Release);
+        let rotated = refresh_access_token(&oauth, TEST_ISSUER, &refresh_request(initial_refresh))
+            .await
+            .expect("retry succeeds after rollback");
+        assert!(rotated.refresh_token.is_some());
+    }
+
+    #[tokio::test]
+    async fn revoke_refresh_token_family_reports_whether_state_changed() {
+        let oauth = test_oauth_state();
+        assert!(!oauth.revoke_refresh_token_family("unknown-token", None).await);
+        let issued = oauth
+            .issue_tokens(
+                TEST_CLIENT,
+                TEST_ISSUER,
+                TEST_RESOURCE,
+                DEFAULT_OAUTH_SCOPE,
+                None,
+            )
+            .unwrap();
+        let rt = issued.refresh_token.as_deref().unwrap();
+        assert!(oauth.revoke_refresh_token_family(rt, Some(TEST_CLIENT)).await);
+        assert!(!oauth.revoke_refresh_token_family(rt, Some(TEST_CLIENT)).await);
     }
 }

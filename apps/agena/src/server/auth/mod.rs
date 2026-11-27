@@ -24,6 +24,7 @@ const LOGIN_LOCKOUT_DURATION: Duration = Duration::from_secs(15 * 60);
 const GLOBAL_LOGIN_FAILURE_LIMIT: u32 = 64;
 const GLOBAL_LOGIN_LOCKOUT_DURATION: Duration = Duration::from_secs(5 * 60);
 const GLOBAL_LOGIN_ATTEMPT_KEY: &str = "__global__";
+const MAX_LOGIN_ATTEMPT_BUCKETS: usize = 4096;
 const MAX_LOGIN_PASSWORD_BYTES: usize = 4096;
 // Argon2 consumes CPU and tens of MiB per check. Its admission limit is
 // independent of request concurrency and ordinary filesystem workers.
@@ -330,6 +331,21 @@ fn login_lockout_remaining_seconds(
     None
 }
 
+fn prune_expired_login_attempts(inner: &ServerAuthInner, now: OffsetDateTime) {
+    let login_window = login_failure_window_duration();
+    inner.login_attempts.retain(|key, record| {
+        if key == GLOBAL_LOGIN_ATTEMPT_KEY {
+            return true;
+        }
+        if let Some(locked_until) = record.locked_until
+            && locked_until > now
+        {
+            return true;
+        }
+        record.failures > 0 && now - record.window_started <= login_window
+    });
+}
+
 fn record_failed_login_attempt(
     inner: &ServerAuthInner,
     attempt_key: &str,
@@ -337,6 +353,15 @@ fn record_failed_login_attempt(
     failure_limit: u32,
     lockout_duration: Duration,
 ) -> Option<i64> {
+    if attempt_key != GLOBAL_LOGIN_ATTEMPT_KEY
+        && !inner.login_attempts.contains_key(attempt_key)
+        && inner.login_attempts.len() >= MAX_LOGIN_ATTEMPT_BUCKETS
+    {
+        prune_expired_login_attempts(inner, now);
+        if inner.login_attempts.len() >= MAX_LOGIN_ATTEMPT_BUCKETS {
+            return None;
+        }
+    }
     let mut entry = inner
         .login_attempts
         .entry(attempt_key.to_string())

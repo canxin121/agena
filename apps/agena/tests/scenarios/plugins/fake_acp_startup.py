@@ -53,8 +53,9 @@ def commands():
 
 def check_workspace(params):
     assert params["additionalDirectories"] == [str(Path.cwd() / "shared")], params
-    options = params["_meta"]["claudeCode"]["options"]
-    assert not {"tools", "strictMcpConfig", "settingSources", "extraArgs"} & options.keys(), options
+    options = params.get("_meta", {}).get("claudeCode", {}).get("options", {})
+    has_agena = any(server.get("name") == "agena" for server in params.get("mcpServers", []))
+    assert options == ({"allowedTools": ["mcp__agena__*"]} if has_agena else {}), options
 
 
 for line in sys.stdin:

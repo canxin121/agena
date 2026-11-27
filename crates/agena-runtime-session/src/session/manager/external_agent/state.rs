@@ -405,7 +405,7 @@ fn apply_compaction(state: &mut ExternalAgentState, update: &Value) -> bool {
         if let Some(status) = nonempty_text(&update["status"], 80) {
             next.status = status;
         }
-        if let Some(summary) = update.get("summary") {
+        if let Some(summary) = update.get("summary").filter(|value| !value.is_null()) {
             next.summary = content_summary(summary, MAX_SUMMARY_BYTES);
         }
         if let Some(error) = update.get("error") {
@@ -427,11 +427,22 @@ fn update_child(state: &mut ExternalAgentState, root: &str, parent: &str, update
     };
     let children = &mut state.details.subagents;
     let prior = children.get(child_id);
-    if prior.is_some_and(|child| child.parent_id != parent)
-        || (prior.is_none() && children.len() >= MAX_CHILDREN)
-    {
+    if prior.is_some_and(|child| child.parent_id != parent) {
         return false;
     }
+    if prior.is_none() && children.len() >= MAX_CHILDREN {
+        let Some(evict) = children
+            .iter()
+            .find(|(_, child)| {
+                !matches!(child.state.as_deref(), Some("running" | "requires_action"))
+            })
+            .map(|(id, _)| id.clone())
+        else {
+            return false;
+        };
+        children.remove(&evict);
+    }
+    let prior = children.get(child_id);
     let mut next = prior.cloned().unwrap_or_else(|| ExternalAgentSubagent {
         parent_id: parent.to_owned(),
         ..Default::default()
@@ -494,7 +505,11 @@ fn update_message(messages: &mut Vec<ExternalAgentMessage>, update: &Value) -> b
         return false;
     }
     let index = id
-        .and_then(|id| messages.iter().position(|message| message.id == id))
+        .and_then(|id| {
+            messages
+                .iter()
+                .position(|message| message.id == id && message.role == role)
+        })
         .or_else(|| {
             if id.is_none()
                 && messages
@@ -514,15 +529,15 @@ fn update_message(messages: &mut Vec<ExternalAgentMessage>, update: &Value) -> b
         },
         |i| messages[i].clone(),
     );
+    if let Some(sender) = update.get("senderSessionId") {
+        next.sender_id = identifier(sender).map(str::to_owned);
+    }
+    if let Some(recipient) = update.get("recipientSessionId") {
+        next.recipient_id = identifier(recipient).map(str::to_owned);
+    }
     if replace {
         if let Some(content) = update.get("content") {
             next.text = content_summary(content, MAX_MESSAGE_BYTES);
-        }
-        if let Some(sender) = update.get("senderSessionId") {
-            next.sender_id = identifier(sender).map(str::to_owned);
-        }
-        if let Some(recipient) = update.get("recipientSessionId") {
-            next.recipient_id = identifier(recipient).map(str::to_owned);
         }
     } else {
         append_content(&mut next.text, &update["content"], MAX_MESSAGE_BYTES);

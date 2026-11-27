@@ -262,7 +262,7 @@ pub(crate) fn slash_command_suggestion_context_for_text(
 
 pub(crate) fn external_command_detail(
     i18n: &agena_tui::i18n::I18n,
-    agent: agena_domain::ExternalAgent,
+    agent: &agena_domain::ExternalAgent,
     command: &agena_domain::ExternalAgentCommand,
 ) -> String {
     let skill_label = if command.skill {

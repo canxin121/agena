@@ -68,6 +68,34 @@ pub(super) fn validate_document(document: &ComposerDocument) -> Result<(), AppEr
 }
 
 impl SessionManager {
+    pub(super) fn list_external_agents(&self) -> Vec<agena_domain::ExternalAgentCatalogEntry> {
+        self.global_state
+            .load_full()
+            .config
+            .acp
+            .resolve_catalog()
+            .into_iter()
+            .map(|entry| entry.catalog_entry())
+            .collect()
+    }
+
+    pub(super) fn resolve_external_agent(
+        &self,
+        agent: &ExternalAgent,
+    ) -> Result<agena_domain::ResolvedExternalAgent, AppError> {
+        self.global_state
+            .load_full()
+            .config
+            .acp
+            .resolve(agent)
+            .ok_or_else(|| {
+                AppError::Config(format!(
+                    "External agent `{}` is not configured or is disabled. Configure it under acp.agents in global settings.",
+                    agent.id()
+                ))
+            })
+    }
+
     pub(super) async fn external_agent(
         &self,
         session: SessionId,
@@ -76,7 +104,8 @@ impl SessionManager {
             self.kernel().reader.configuration(session)
         })
         .await?
-        .external_agent;
+        .external_agent
+        .clone();
         if agent.is_some() && !self.is_acp_scope() {
             return Err(AppError::Config(
                 "Open the native conversation in ACP sessions.".into(),
@@ -98,13 +127,9 @@ impl SessionManager {
         let state = self.state_for_session(session).await?;
         let context = self.execution_context_with_state(session, &state).await?;
         let executor = state.executor.for_session_context_async(&context).await;
-        let cwd = executor.workspace_root();
-        if !cwd.is_absolute() {
-            return Err(AppError::Config(
-                "External agent sessions require a project workspace.".into(),
-            ));
-        }
-        let mut client = acp::AcpClient::spawn(agent, cwd)?;
+        let cwd = lifecycle::canonical_directory(executor.workspace_root()).await?;
+        let spec = self.resolve_external_agent(&agent)?;
+        let mut client = acp::AcpClient::spawn(spec.clone(), &cwd)?;
         let supports_prompt = client
             .lifecycle_capabilities(&self.shutdown.child_token())
             .await;
@@ -119,7 +144,7 @@ impl SessionManager {
                     kind: PromptWarningKind::ConditionNotMatched,
                     detail: format!(
                         "{} does not advertise appended system instructions over ACP.",
-                        agent.label()
+                        spec.name
                     ),
                 }],
             ));
@@ -140,20 +165,16 @@ impl SessionManager {
             .external_agent(session)
             .await?
             .ok_or_else(|| AppError::Config("This session has no external agent.".into()))?;
+        let spec = self.resolve_external_agent(&agent)?;
         let _permit = self.reserve_execution()?;
         let state = self.state_for_session(session).await?;
         let context = self
             .execution_context_for_execution(session, &state, None)
             .await?;
         let executor = state.executor.for_session_context_async(&context).await;
-        let cwd = executor.workspace_root();
-        if !cwd.is_absolute() {
-            return Err(AppError::Config(
-                "ACP provider inspection requires a project workspace.".into(),
-            ));
-        }
+        let cwd = lifecycle::canonical_directory(executor.workspace_root()).await?;
         let cancel = self.shutdown.child_token();
-        let mut client = acp::AcpClient::spawn(agent, cwd)?;
+        let mut client = acp::AcpClient::spawn(spec, &cwd)?;
         let result = client.provider_catalog(&cancel).await;
         client.close().await;
         result
@@ -178,12 +199,7 @@ impl SessionManager {
             .for_session_context_async(&context)
             .await
             .with_cancellation_token(Some(control.cancel.clone()));
-        let cwd = executor.workspace_root().to_owned();
-        if !cwd.is_absolute() {
-            return Err(AppError::Config(
-                "External agent sessions require a project workspace.".into(),
-            ));
-        }
+        let cwd = lifecycle::canonical_directory(executor.workspace_root()).await?;
         let configuration = read_with_busy_retry(control.session, "external_agent_context", || {
             self.kernel().reader.configuration(control.session)
         })
@@ -195,7 +211,7 @@ impl SessionManager {
         )
         .await?;
         let mut session_context = lifecycle::session_context(
-            agent,
+            agent.clone(),
             control.session,
             &executor,
             &state,
@@ -259,10 +275,10 @@ impl SessionManager {
         if keyed_retry.is_some() && native_resume.is_none() {
             return Err(AppError::ExternalAgentPromptUncertain);
         }
-        let mut client = acp::AcpClient::spawn_profile(
-            agent,
+        let spec = self.resolve_external_agent(&agent)?;
+        let mut client = acp::AcpClient::spawn_with_directories(
+            spec.clone(),
             &cwd,
-            opened.state.antigravity_legacy_history && native_resume.is_some(),
             &session_context.additional_directories,
         )?;
         client.track_auth_status(auth::LiveStatus::register(self, control.session));
@@ -275,32 +291,11 @@ impl SessionManager {
                 &self.kernel().reader,
                 control.session,
                 &agent.run_identity(),
-                agent,
+                agent.clone(),
                 &cwd,
                 capabilities,
             )
             .await?;
-        let native_command = blocks
-            .first()
-            .and_then(|block| block["text"].as_str())
-            .and_then(agena_domain::external_agent_command_input)
-            .map(str::trim_end);
-        let antigravity_compact = agent == ExternalAgent::Antigravity
-            && native_command
-                .is_some_and(|command| command.split_whitespace().next() == Some("compact"));
-        let compact_followup = native_command
-            .filter(|_| antigravity_compact)
-            .and_then(|command| command.split_once(char::is_whitespace))
-            .map(|(_, followup)| followup.trim_start())
-            .filter(|followup| !followup.is_empty())
-            .map(str::to_owned);
-        let bare_compact = compact_followup.is_none() && blocks.len() == 1;
-        if antigravity_compact && native_resume.is_none() {
-            return Err(AppError::Config(
-                "Antigravity needs an existing conversation to compact.".into(),
-            ));
-        }
-        let is_native_command = native_command.is_some();
         if !session_context.system_prompt.trim().is_empty()
             && !client
                 .lifecycle_capabilities(&control.cancel)
@@ -311,7 +306,7 @@ impl SessionManager {
                 kind: "external_agent_system_prompt_unavailable".into(),
                 summary: format!(
                     "{} cannot accept Agena's additional system instructions in this session.",
-                    agent.label()
+                    spec.name
                 ),
                 detail: None,
                 title: Some("Agena system instructions unavailable".into()),
@@ -328,13 +323,12 @@ impl SessionManager {
             attempt: attempt.clone(),
             executor,
             round: round.clone(),
-            agent,
+            agent: agent.clone(),
             transcript: Default::default(),
             terminals: Default::default(),
         });
         let bridge = client.bridge(turn.clone()).await?;
         let mut native = None;
-        let mut used_compaction_cli = false;
         let outcome = async {
             let mut session = client
                 .start_with_context(
@@ -344,8 +338,6 @@ impl SessionManager {
                     has_images,
                     if keyed_retry.is_some() {
                         acp::OpenPurpose::RetryPrompt
-                    } else if antigravity_compact {
-                        acp::OpenPurpose::Compact
                     } else {
                         acp::OpenPurpose::Prompt
                     },
@@ -353,16 +345,6 @@ impl SessionManager {
                     &control.cancel,
                 )
                 .await?;
-            // Antigravity's ACP command can interpret trailing text as
-            // summary instructions and omit a checkpoint notification.
-            // Print mode confirms the checkpoint before an ACP follow-up.
-            let compact_via_cli = antigravity_compact
-                && (session.close_supported
-                    || !session
-                        .state
-                        .commands
-                        .iter()
-                        .any(|command| command.name == "compact"));
             let incarnation = opened
                 .link
                 .as_ref()
@@ -385,8 +367,9 @@ impl SessionManager {
                     .set_option(&mut session, kind, value, &control.cancel)
                     .await?;
             }
-            prompt::route_command(&mut blocks, &session.state.commands, capabilities)?;
-            let delivery = if client.uses_v2() && !is_native_command {
+            let routed_command =
+                prompt::route_command(&mut blocks, &session.state.commands, capabilities)?;
+            let delivery = if client.uses_v2() && !routed_command {
                 let prompt = Sha256::digest(serde_json::to_vec(&blocks)?).into();
                 if keyed_retry.is_some_and(|previous| prompt != previous) {
                     return Err(AppError::ExternalAgentPromptUncertain);
@@ -396,7 +379,7 @@ impl SessionManager {
                 ExternalAgentPromptDelivery::Unconfirmed
             };
             let replayed_users = session.replacements.take_replayed_users();
-            let mut activity = session.activity;
+            let activity = session.activity;
             session.state.options = session.options.clone();
             turn.transcript
                 .lock()
@@ -415,12 +398,12 @@ impl SessionManager {
                 let summary = if session.missing_previous {
                     format!(
                         "{} no longer has the linked conversation and opened a new one.",
-                        agent.label()
+                        spec.name
                     )
                 } else {
                     format!(
                         "{} opened a new conversation with fresh context.",
-                        agent.label()
+                        spec.name
                     )
                 };
                 let notice = serde_json::to_string(&agena_runtime_contracts::NoticePart {
@@ -436,69 +419,6 @@ impl SessionManager {
             }
             control.phase(agena_domain::ExecutionPhase::StreamingModel);
             turn.record_prompt_delivery(delivery).await?;
-            if compact_via_cli {
-                let checkpoint = client
-                    .compact_antigravity(&link.native_id, &control.cancel)
-                    .await?;
-                used_compaction_cli = true;
-                turn.transcript
-                    .lock()
-                    .await
-                    .update(
-                        &turn,
-                        &link.native_id,
-                        &link.native_id,
-                        &json!({
-                            "sessionUpdate": "compaction_update",
-                            "compactionId": format!("agy-checkpoint-{checkpoint}"),
-                            "status": "completed",
-                        }),
-                    )
-                    .await?;
-                if bare_compact {
-                    return Ok(acp::PromptResult {
-                        stop_reason: Some("end_turn".into()),
-                        usage: None,
-                        fork_cursor: None,
-                    });
-                }
-                // Print mode performed only the checkpoint. Send the follow-up
-                // through ACP, where the Agena tool grant and approvals apply.
-                blocks.remove(0);
-                if let Some(followup) = compact_followup {
-                    blocks.insert(0, json!({"type": "text", "text": followup}));
-                }
-                let current = turn.transcript.lock().await.snapshot_state();
-                let mut reopened = client
-                    .start_with_context(
-                        &cwd,
-                        bridge.as_ref().map(mcp::Bridge::descriptor),
-                        Some((&link.native_id, &current)),
-                        has_images,
-                        acp::OpenPurpose::Compact,
-                        &session_context,
-                        &control.cancel,
-                    )
-                    .await?;
-                for (kind, value) in &opened.selection {
-                    client
-                        .set_option(&mut reopened, kind, value, &control.cancel)
-                        .await?;
-                }
-                activity = reopened.activity;
-                turn.transcript
-                    .lock()
-                    .await
-                    .start_native_session(
-                        &turn,
-                        link.clone(),
-                        &current,
-                        reopened.state,
-                        reopened.replacements.into_updates(),
-                    )
-                    .await?;
-                used_compaction_cli = false;
-            }
             client
                 .prompt(&link.native_id, blocks, activity, replayed_users, &turn)
                 .await
@@ -530,7 +450,7 @@ impl SessionManager {
             Some("max_turn_requests") => {
                 let notice = serde_json::to_string(&agena_runtime_contracts::NoticePart {
                     kind: "external_agent_turn_limit".into(),
-                    summary: format!("{} reached its request limit for this turn.", agent.label()),
+                    summary: format!("{} reached its request limit for this turn.", spec.name),
                     detail: None,
                     title: None,
                 })?;
@@ -589,12 +509,8 @@ impl SessionManager {
                 Err(error) => return Err(kernel_error(error)),
             }
         }
-        if used_compaction_cli {
-            client.close().await;
-        } else {
-            let state = turn.transcript.lock().await.snapshot_state();
-            self.park_external_agent(client, resume, state).await;
-        }
+        let state = turn.transcript.lock().await.snapshot_state();
+        self.park_external_agent(client, resume, state).await;
         Ok(())
     }
 }
@@ -659,6 +575,7 @@ impl ExternalTurn {
 
     async fn begin_tool(&self, name: String, input: Value) -> Result<ToolHandle, AppError> {
         let mut transcript = self.transcript.lock().await;
+        transcript.flush_messages(self).await?;
         transcript.finish_text().await?;
         let command = RequestId::new();
         let call = ToolStart {
@@ -699,7 +616,7 @@ impl ExternalTurn {
                 }),
             )
             .await?;
-        let result = self
+        let result = match self
             .manager
             .request_input_for_tool(
                 &tool,
@@ -708,7 +625,19 @@ impl ExternalTurn {
                 prompt,
                 Some(withdrawal),
             )
-            .await?;
+            .await
+        {
+            Ok(result) => result,
+            Err(error) => {
+                let outcome = ToolResult {
+                    phase: ToolPhase::Cancelled,
+                    value: json!({"title": title, "summary": "Permission cancelled"}),
+                };
+                let command = RequestId::new();
+                let _ = persist(|| tool.complete(command, outcome.clone())).await;
+                return Err(error);
+            }
+        };
         let selection = if result.cancelled
             || result.timed_out
             || withdrawal.is_cancelled()
@@ -755,15 +684,23 @@ fn permission_input<'a>(params: &'a Value, label: &str) -> Option<PermissionInpu
         return None;
     }
     let call = &params["toolCall"];
-    let mut title = call["title"].as_str().unwrap_or("Tool request").to_owned();
+    let mut title: String = call["title"]
+        .as_str()
+        .unwrap_or("Tool request")
+        .chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect();
     super::results_text::truncate(&mut title, 512);
-    let mut details = if call["rawInput"].is_null() {
+    let mut details: String = if call["rawInput"].is_null() {
         call.get("locations")
             .map(Value::to_string)
             .unwrap_or_default()
     } else {
         call["rawInput"].to_string()
-    };
+    }
+    .chars()
+    .filter(|ch| !ch.is_control() || matches!(ch, '\n' | '\t'))
+    .collect();
     super::results_text::truncate(&mut details, 6 * 1024);
     let prompt = crate::part::AskUserToolInput {
         title: format!("{label} tool permission"),
@@ -773,7 +710,13 @@ fn permission_input<'a>(params: &'a Value, label: &str) -> Option<PermissionInpu
                 .iter()
                 .map(|choice| UserInputOption {
                     label: choice.label.clone(),
-                    description: String::new(),
+                    description: match choice.kind {
+                        "allow_always" => "Always allow".into(),
+                        "allow_once" => "Allow once".into(),
+                        "reject_always" => "Always reject".into(),
+                        "reject_once" => "Reject once".into(),
+                        _ => String::new(),
+                    },
                     custom: false,
                 })
                 .collect(),
@@ -804,7 +747,7 @@ fn permission_choices(options: &[Value]) -> Vec<PermissionChoice<'_>> {
     let mut used_ids = std::collections::HashSet::new();
     let mut labels = std::collections::HashSet::new();
     let mut choices = Vec::new();
-    for option in options {
+    for option in options.iter().take(16) {
         let Some(id) = option["optionId"]
             .as_str()
             .filter(|id| !id.is_empty() && id.len() <= 1024)

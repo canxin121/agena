@@ -72,7 +72,7 @@ impl SessionManager {
         let input = super::input_requests::Host::new(
             self,
             session,
-            client.agent(),
+            client.agent().clone(),
             Some(resume.clone()),
             monitor_stop.clone(),
         );
@@ -91,7 +91,9 @@ impl SessionManager {
             client.close().await;
         });
         let mut peers = self.external_idle_peers.lock().await;
-        peers.retain(|(id, _)| *id != session);
+        peers.retain(|(id, peer)| {
+            *id != session && peer.task.as_ref().is_none_or(|task| !task.is_finished())
+        });
         if peers.len() >= MAX_IDLE_AGENTS {
             // Dropping the eldest reader cancels its process and releases its
             // tracker slot. The native conversation is already durable.

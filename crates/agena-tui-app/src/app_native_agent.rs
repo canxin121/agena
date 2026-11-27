@@ -83,6 +83,7 @@ enum NativeAgentChoice {
         session_id: i64,
         action: AuthAction,
     },
+    Providers(i64),
 }
 
 #[derive(Clone, Debug)]
@@ -117,6 +118,7 @@ struct NativeAgentPage {
     workspace_id: i64,
     workspace_path: String,
     agent: ExternalAgent,
+    agent_name: String,
     archived: ArchiveFilter,
     // The first page has no cursor. An advertised empty cursor is valid.
     cursors: Vec<String>,
@@ -249,6 +251,10 @@ impl App {
             }
             NativeAgentChoice::Auth { session_id, action } => {
                 self.request_native_auth(session_id, action)
+            }
+            NativeAgentChoice::Providers(session_id) => {
+                self.overlay_stack.push(Overlay::Choice(dialog.clone()));
+                self.open_native_agent_providers(session_id);
             }
         }
         true

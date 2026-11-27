@@ -9,8 +9,7 @@ use agena_domain::{
 use anyhow::bail;
 
 use super::{
-    ArchiveFilter, ExternalAgent, ExternalAgentIndexedSession, NativeAgentChoice, NativeAgentPage,
-    menu_row,
+    ArchiveFilter, ExternalAgentIndexedSession, NativeAgentChoice, NativeAgentPage, menu_row,
 };
 use crate::{App, Overlay, ui_text};
 
@@ -92,39 +91,50 @@ impl App {
     }
 
     pub(super) fn choose_native_agent(&mut self, workspace_id: i64, path: String) {
-        let rows = [ExternalAgent::ClaudeCode, ExternalAgent::Antigravity]
-            .into_iter()
-            .flat_map(|agent| {
-                let page = NativeAgentPage {
-                    workspace_id,
-                    workspace_path: path.clone(),
-                    agent,
-                    archived: ArchiveFilter::Unarchived,
-                    cursors: Vec::new(),
-                };
-                [
-                    menu_row(
-                        agent.label().into(),
-                        self.i18n.text("external-agent-current-sessions"),
-                        NativeAgentChoice::Agent(page.clone()),
-                    ),
-                    menu_row(
-                        self.i18n.text_args(
-                            "external-agent-new-with",
-                            &agena_tui::fl_args!("agent" => agent.label()),
-                        ),
-                        String::new(),
-                        NativeAgentChoice::Create(page),
-                    ),
-                ]
-            })
-            .collect();
-        self.open_native_agent_menu("external-agent-choose-agent", path, rows, None);
+        self.native_agent_request(
+            "external-agent-choose-agent",
+            None,
+            move |backend| async move {
+                let agents = backend.client().list_external_agents().await?;
+                Ok(agents)
+            },
+            move |app, agents| {
+                let rows = agents
+                    .into_iter()
+                    .flat_map(|entry| {
+                        let page = NativeAgentPage {
+                            workspace_id,
+                            workspace_path: path.clone(),
+                            agent: entry.id,
+                            agent_name: entry.name.clone(),
+                            archived: ArchiveFilter::Unarchived,
+                            cursors: Vec::new(),
+                        };
+                        [
+                            menu_row(
+                                entry.name.clone(),
+                                app.i18n.text("external-agent-current-sessions"),
+                                NativeAgentChoice::Agent(page.clone()),
+                            ),
+                            menu_row(
+                                app.i18n.text_args(
+                                    "external-agent-new-with",
+                                    &agena_tui::fl_args!("agent" => entry.name.as_str()),
+                                ),
+                                String::new(),
+                                NativeAgentChoice::Create(page),
+                            ),
+                        ]
+                    })
+                    .collect();
+                app.open_native_agent_menu("external-agent-choose-agent", path, rows, None);
+            },
+        );
     }
 
     pub(super) fn load_native_page(&mut self, page: NativeAgentPage, fallback: Option<Overlay>) {
         let workspace = page.workspace_id;
-        let agent = page.agent;
+        let agent = page.agent.clone();
         let cursor = page.cursors.last().cloned();
         let archived = page.archived;
         self.native_agent_request(
@@ -165,14 +175,14 @@ impl App {
         next_cursor: Option<String>,
         capabilities: ExternalAgentIndexCapabilities,
     ) {
-        let listing = if page.archived == ArchiveFilter::Archived {
-            "external-agent-archived-sessions"
-        } else {
-            "external-agent-current-sessions"
+        let listing = match page.archived {
+            ArchiveFilter::Unarchived => "external-agent-current-sessions",
+            ArchiveFilter::Archived => "external-agent-archived-sessions",
+            ArchiveFilter::All => "external-agent-all-sessions",
         };
         let mut description = format!(
             "{} · {}\n{}",
-            page.agent.label(),
+            page.agent_name,
             self.i18n.text(listing),
             page.workspace_path
         );
@@ -231,12 +241,19 @@ impl App {
         if capabilities.archive {
             let mut alternate = page.clone();
             alternate.cursors.clear();
-            let filter = if page.archived == ArchiveFilter::Archived {
-                alternate.archived = ArchiveFilter::Unarchived;
-                "external-agent-show-current"
-            } else {
-                alternate.archived = ArchiveFilter::Archived;
-                "external-agent-show-archived"
+            let filter = match page.archived {
+                ArchiveFilter::Unarchived => {
+                    alternate.archived = ArchiveFilter::Archived;
+                    "external-agent-show-archived"
+                }
+                ArchiveFilter::Archived => {
+                    alternate.archived = ArchiveFilter::All;
+                    "external-agent-show-all"
+                }
+                ArchiveFilter::All => {
+                    alternate.archived = ArchiveFilter::Unarchived;
+                    "external-agent-show-current"
+                }
             };
             rows.push(self.native_agent_row(filter, NativeAgentChoice::Browse(alternate)));
         }
@@ -360,7 +377,7 @@ impl App {
         archived: bool,
         fallback: Option<Overlay>,
     ) {
-        let (workspace, agent) = (page.workspace_id, page.agent);
+        let (workspace, agent) = (page.workspace_id, page.agent.clone());
         self.native_agent_request(
             "external-agent-browser",
             fallback,

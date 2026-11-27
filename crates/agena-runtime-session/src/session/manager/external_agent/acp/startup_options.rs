@@ -45,7 +45,7 @@ impl AcpClient {
         if caps.lifecycle.additional_directories && !directories.is_empty() {
             params["additionalDirectories"] = json!(directories);
         }
-        policy::apply_to_session(self.agent, &mut params);
+        policy::apply_to_session(&self.agent, &mut params);
         self.call("session/options", params, cancel).await.map(Some)
     }
 

@@ -96,7 +96,15 @@ impl SessionManager {
                     unavailable()
                 }
             })?;
-        response.await.map_err(|_| unavailable())?
+        tokio::time::timeout(std::time::Duration::from_secs(30), response)
+            .await
+            .map_err(|_| {
+                AppError::Config(
+                    "The external agent did not acknowledge the additional instruction in time."
+                        .into(),
+                )
+            })?
+            .map_err(|_| unavailable())?
     }
 }
 

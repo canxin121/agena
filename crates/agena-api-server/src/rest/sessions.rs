@@ -45,6 +45,15 @@ pub async fn list_sessions(
     AxumQuery(query): AxumQuery<SessionListQuery>,
     headers: HeaderMap,
 ) -> Result<impl IntoResponse, ServerError> {
+    if state.service().is_acp_scope() {
+        let page = state
+            .service()
+            .list_sessions(query)
+            .await
+            .map_err(server_error_from_application)?;
+        let bytes = crate::json_codec::encode_bytes(page).await?;
+        return Ok(crate::json_codec::bytes_response(bytes));
+    }
     if query.owner_bot_id.is_some()
         || query.owner_surface.is_some()
         || (query.parent_id.is_some() && query.workspace_id.is_none())
@@ -201,6 +210,19 @@ pub async fn replace_session_selection(
         state
             .update_session_selection(session_id, request.options)
             .await?,
+    ))
+}
+
+pub async fn list_external_agents(State(state): State<AppState>) -> Result<impl IntoResponse, ServerError> {
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(
+            state
+                .acp_application()?
+                .service()
+                .list_external_agents()
+                .await?,
+        ),
     ))
 }
 

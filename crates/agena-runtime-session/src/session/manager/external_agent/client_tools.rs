@@ -9,6 +9,7 @@ use super::*;
 
 const FILE_BYTES: usize = 1024 * 1024;
 const TERMINAL_BYTES: usize = 1024 * 1024;
+const MAX_HOSTED_TERMINALS: usize = 32;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Operation {
@@ -66,28 +67,32 @@ struct HeldTerminal {
 }
 
 impl ExternalTurn {
-    async fn invoke_client_tool(
+    async fn invoke_client_tool_outcome(
         &self,
         name: &str,
         input: Value,
         cancel: &CancellationToken,
-    ) -> Result<Option<Value>, AppError> {
+    ) -> Result<(ToolPhase, Option<Value>, Option<String>), AppError> {
         let arguments = StructuredObject::try_from(input.clone()).map_err(AppError::Config)?;
         let invocation = ToolInvocation::new(name.to_owned(), arguments);
         let (_, result) = self.invoke_tool(invocation, input, cancel).await?;
         if result.phase != ToolPhase::Succeeded {
-            return Ok(None);
+            let code = result.value["error"]["failure"]["code"]
+                .as_str()
+                .or_else(|| result.value["error"]["code"].as_str())
+                .map(str::to_owned);
+            return Ok((result.phase, None, code));
         }
         let raw: RawOutput = serde_json::from_value(result.value["raw_output"].clone())?;
         if let Some(payload) = raw.payload {
-            return Ok(Some(payload));
+            return Ok((result.phase, Some(payload), None));
         }
         let Some(field) = raw
             .fields
             .iter()
             .find(|field| field.pointer.is_empty() && field.format == ContentFormat::Json)
         else {
-            return Ok(Some(Value::Null));
+            return Ok((result.phase, Some(Value::Null), None));
         };
         let session = self.control.session;
         let reader = &self.manager.kernel().reader;
@@ -101,7 +106,19 @@ impl ExternalTurn {
         let text = read_text(reader, session, &head, &mut budget, None)
             .await
             .map_err(kernel_error)?;
-        Ok(Some(serde_json::from_str(&text)?))
+        Ok((result.phase, Some(serde_json::from_str(&text)?), None))
+    }
+
+    async fn invoke_client_tool(
+        &self,
+        name: &str,
+        input: Value,
+        cancel: &CancellationToken,
+    ) -> Result<Option<Value>, AppError> {
+        Ok(self
+            .invoke_client_tool_outcome(name, input, cancel)
+            .await?
+            .1)
     }
 
     async fn read_native_file(
@@ -152,9 +169,18 @@ impl ExternalTurn {
         let text = params["content"].as_str().ok_or_else(invalid)?;
         // A revision-checked fs.write can create a missing file without a
         // hash. Replacing a file requires an authorized and observed revision.
-        let stat = self
-            .invoke_client_tool("fs.stat", json!({"path": path}), cancel)
+        // If fs.stat was denied or cancelled by permission policy, do not fall
+        // through to fs.write as if the file were missing.
+        let (stat_phase, stat, stat_code) = self
+            .invoke_client_tool_outcome("fs.stat", json!({"path": path}), cancel)
             .await?;
+        if stat_phase == ToolPhase::Cancelled
+            || stat_code
+                .as_deref()
+                .is_some_and(|code| code.contains("permission") || code.contains("denied"))
+        {
+            return Err(denied());
+        }
         let input = json!({
             "path": path, "content": text, "create_parents": true,
             "expected_sha256": stat.as_ref().and_then(|stat| stat["sha256"].as_str()),
@@ -170,6 +196,11 @@ impl ExternalTurn {
         params: &Value,
         cancel: &CancellationToken,
     ) -> Result<Value, AppError> {
+        if self.terminals.hosted.lock().await.len() >= MAX_HOSTED_TERMINALS {
+            return Err(AppError::Config(
+                "Too many ACP client terminals are open in this turn.".into(),
+            ));
+        }
         let command = terminal_command(params)?;
         let cwd = match params.get("cwd").filter(|value| !value.is_null()) {
             Some(cwd) => absolute_path(cwd)?,
@@ -250,8 +281,8 @@ impl ExternalTurn {
                 Ok(json!({}))
             }
             Operation::ReleaseTerminal => {
-                self.read_terminal(terminal, true).await?;
                 self.terminals.hosted.lock().await.remove(id);
+                self.read_terminal(terminal, true).await?;
                 Ok(json!({}))
             }
             _ => Err(invalid()),
@@ -340,19 +371,21 @@ fn terminal_command(params: &Value) -> Result<String, AppError> {
         .as_str()
         .filter(|command| !command.is_empty())
         .ok_or_else(invalid)?;
+    let args = match params.get("args") {
+        None | Some(Value::Null) => &[][..],
+        Some(Value::Array(items)) => items.as_slice(),
+        Some(_) => return Err(invalid()),
+    };
     let argv = std::iter::once(Ok(command))
-        .chain(
-            params["args"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .map(|arg| arg.as_str().ok_or_else(invalid)),
-        )
+        .chain(args.iter().map(|arg| arg.as_str().ok_or_else(invalid)))
         .collect::<Result<Vec<_>, _>>()?;
-    let env = params["env"]
-        .as_array()
-        .into_iter()
-        .flatten()
+    let env_entries = match params.get("env") {
+        None | Some(Value::Null) => &[][..],
+        Some(Value::Array(items)) => items.as_slice(),
+        Some(_) => return Err(invalid()),
+    };
+    let env = env_entries
+        .iter()
         .map(|entry| {
             let name = entry["name"]
                 .as_str()
@@ -362,6 +395,7 @@ fn terminal_command(params: &Value) -> Result<String, AppError> {
                         .next()
                         .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
                         && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+                        && agena_domain::valid_terminal_environment_name(name)
                 })
                 .ok_or_else(invalid)?;
             let value = entry["value"].as_str().ok_or_else(invalid)?;
@@ -374,8 +408,19 @@ fn terminal_command(params: &Value) -> Result<String, AppError> {
         return Err(invalid());
     }
     let quote = |argument: &str| {
-        let escape = if cfg!(windows) { "''" } else { "'\\''" };
-        format!("'{}'", argument.replace('\'', escape))
+        if cfg!(windows) {
+            // PowerShell treats ASCII single quote and curly single quotes
+            // (U+2018..=U+201B) as string delimiters; double each to escape.
+            let escaped = argument
+                .replace('\'', "''")
+                .replace('\u{2018}', "\u{2018}\u{2018}")
+                .replace('\u{2019}', "\u{2019}\u{2019}")
+                .replace('\u{201A}', "\u{201A}\u{201A}")
+                .replace('\u{201B}', "\u{201B}\u{201B}");
+            format!("'{escaped}'")
+        } else {
+            format!("'{}'", argument.replace('\'', "'\\''"))
+        }
     };
     let mut invocation = String::new();
     for (name, value) in env {
@@ -400,4 +445,46 @@ fn denied() -> AppError {
     AppError::Config(
         "The ACP file or terminal operation was not completed by Agena's tools.".into(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_command_rejects_dangerous_env_non_array_args_and_nul_bytes() {
+        assert!(terminal_command(&json!({
+            "command": "echo",
+            "args": "not-an-array"
+        }))
+        .is_err());
+        assert!(terminal_command(&json!({
+            "command": "echo",
+            "env": {"FOO": "bar"}
+        }))
+        .is_err());
+        assert!(terminal_command(&json!({
+            "command": "echo",
+            "args": ["ok\0bad"]
+        }))
+        .is_err());
+        for blocked in ["PATH", "LD_PRELOAD", "NODE_OPTIONS", "AGENA_DATA_DIR", "HTTP_PROXY"] {
+            assert!(
+                terminal_command(&json!({
+                    "command": "echo",
+                    "env": [{"name": blocked, "value": "x"}]
+                }))
+                .is_err(),
+                "{blocked} should be rejected"
+            );
+        }
+        let ok = terminal_command(&json!({
+            "command": "echo",
+            "args": ["hello'world"],
+            "env": [{"name": "APP_MODE", "value": "test"}]
+        }))
+        .expect("safe command");
+        assert!(ok.contains("APP_MODE"));
+        assert!(ok.contains("echo"));
+    }
 }

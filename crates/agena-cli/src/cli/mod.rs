@@ -1151,8 +1151,8 @@ pub struct SessionCreateArgs {
     pub title: String,
     #[arg(long)]
     pub parent: Option<i64>,
-    /// Installed ACP agent to use for this session.
-    #[arg(long, value_name = "antigravity|claude-code")]
+    /// Installed ACP agent ID to use for this session (e.g. claude-code, antigravity, or a configured custom ID).
+    #[arg(long, value_name = "AGENT_ID")]
     pub external_agent: Option<agena_domain::ExternalAgent>,
     /// Named agent profile. An empty value uses the automatic main role.
     #[arg(long, env = "AGENA_PROFILE", value_name = "NAME")]
@@ -1184,6 +1184,8 @@ pub struct AgentSessionsArgs {
 
 #[derive(Debug, Clone, Subcommand)]
 pub enum AgentSessionsAction {
+    /// List configured ACP agents available on the server.
+    Agents,
     List {
         agent: agena_domain::ExternalAgent,
         #[arg(long)]
@@ -1223,6 +1225,14 @@ pub enum AgentSessionsAction {
         agent: agena_domain::ExternalAgent,
         #[arg(long)]
         wait_seconds: Option<u16>,
+    },
+    /// Preview saved text turns of a native conversation without opening a view.
+    PreviewHistory {
+        agent: agena_domain::ExternalAgent,
+        native_id: String,
+        /// Preview turns older than this 0-based turn index.
+        #[arg(long)]
+        before_turn: Option<u64>,
     },
 }
 
@@ -1285,17 +1295,20 @@ pub enum AgentSessionAction {
 pub struct SessionAgentOptionsArgs {
     pub session_id: i64,
     /// Read the Agent's advertised startup options and command preview.
-    #[arg(long, conflicts_with_all = ["model", "thinking", "option"])]
+    #[arg(long, conflicts_with_all = ["model", "thinking", "mode", "option"])]
     pub preview: bool,
     /// Select an advertised model. An empty value follows the agent's settings.
-    #[arg(long, conflicts_with = "thinking", value_name = "ID")]
+    #[arg(long, conflicts_with_all = ["thinking", "mode"], value_name = "ID")]
     pub model: Option<String>,
     /// Select an advertised thinking level. An empty value follows the agent's settings.
-    #[arg(long, value_name = "VALUE")]
+    #[arg(long, conflicts_with = "mode", value_name = "VALUE")]
     pub thinking: Option<String>,
+    /// Select an advertised mode. An empty value follows the agent's settings.
+    #[arg(long, value_name = "VALUE")]
+    pub mode: Option<String>,
     /// Set any advertised option by its kind key, for example config:fast=true.
     /// An empty value follows the agent's settings.
-    #[arg(long, conflicts_with_all = ["model", "thinking"], value_name = "KEY=VALUE")]
+    #[arg(long, conflicts_with_all = ["model", "thinking", "mode"], value_name = "KEY=VALUE")]
     pub option: Option<String>,
     #[arg(long, default_value = "json")]
     pub format: OutputFormat,

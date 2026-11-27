@@ -72,33 +72,19 @@ impl SessionManager {
     ) -> Result<ExternalAgentAuth, AppError> {
         let session = session_id(id)?;
         self.require_writable_bot_history(id).await?;
-        let configuration = read_with_busy_retry(session, "external_agent_auth", || {
-            self.kernel().reader.configuration(session)
-        })
-        .await?;
-        let agent = configuration
-            .external_agent
+        let agent = self
+            .external_agent(session)
+            .await?
             .ok_or_else(|| AppError::Config("This session has no external agent.".into()))?;
+        let spec = self.resolve_external_agent(&agent)?;
         let _permit = self.reserve_execution()?;
         let state = self.state_for_session(session).await?;
         let context = self
             .execution_context_for_execution(session, &state, None)
             .await?;
         let executor = state.executor.for_session_context_async(&context).await;
-        let cwd = executor.workspace_root();
-        if !cwd.is_absolute() {
-            return Err(AppError::Config(
-                "External agent sign-in requires a project workspace.".into(),
-            ));
-        }
-        let mut client = acp::AcpClient::spawn_profile(
-            agent,
-            cwd,
-            configuration
-                .external_agent_state
-                .antigravity_legacy_history,
-            &[],
-        )?;
+        let cwd = super::lifecycle::canonical_directory(executor.workspace_root()).await?;
+        let mut client = acp::AcpClient::spawn(spec.clone(), &cwd)?;
         let terminal = matches!(action, ExternalAgentAuthAction::Inspect { terminal: true });
         // Claude advertises its native methods when the client can reproduce
         // the invocation in a terminal. Web only receives methods it can run.
@@ -108,20 +94,13 @@ impl SessionManager {
         let cancel = self.shutdown.child_token();
         let result = async {
             let initialization = client.initialization(&cancel).await?.clone();
-            let mut methods: Vec<_> = initialization["authMethods"]
+            let methods: Vec<_> = initialization["authMethods"]
                 .as_array()
                 .into_iter()
                 .flatten()
                 .filter_map(|entry| parse_method(entry, terminal))
                 .take(32)
                 .collect();
-            for method in &mut methods {
-                if let ExternalAgentAuthFlow::Terminal { args, env } = &mut method.flow {
-                    args.extend_from_slice(client.agent_arguments());
-                    validate_external_agent_terminal_launch(args, env)
-                        .map_err(|error| AppError::Config(error.into()))?;
-                }
-            }
             let auth = &initialization[if client.uses_v2() {
                 "capabilities"
             } else {
@@ -129,9 +108,13 @@ impl SessionManager {
             }]["auth"];
             let status_supported = client.supports_auth_status();
             let logout_supported = if client.uses_v2() {
-                initialization["authMethods"]
-                    .as_array()
-                    .is_some_and(|methods| !methods.is_empty())
+                if let Some(explicit) = auth.get("logout") {
+                    supports(explicit)
+                } else {
+                    initialization["authMethods"]
+                        .as_array()
+                        .is_some_and(|methods| !methods.is_empty())
+                }
             } else {
                 supports(&auth["logout"])
             };
@@ -154,7 +137,7 @@ impl SessionManager {
                     let host = super::input_requests::Host::new(
                         self,
                         session,
-                        agent,
+                        agent.clone(),
                         None,
                         cancel.clone(),
                     );
@@ -193,8 +176,10 @@ impl SessionManager {
                 (Some(status.state), status.accounts)
             });
             Ok(ExternalAgentAuth {
-                agent,
+                agent: agent.clone(),
                 cwd: cwd.to_owned(),
+                command: Some(spec.command.clone()),
+                base_args: spec.args.clone(),
                 methods,
                 logout_supported,
                 state,

@@ -46,15 +46,35 @@ impl<'a> TurnInput<'a> {
         validate_document(document)?;
         let resume_anchor = message_index.and_then(|index| {
             // Failure notices attached after this same input are outside the
-            // native context. Preserve the original cut when retrying it.
+            // native context. Preserve the original cut when retrying it, and
+            // skip any earlier failed/cancelled user messages that never
+            // committed a native round.
             facts.entries[index + 1..]
                 .iter()
                 .all(|entry| {
                     entry.entry.message_id == execution.message_id
                         && matches!(entry.entry.payload, EntryPayload::Notice { .. })
                 })
-                .then(|| ExternalAgentHistoryAnchor {
-                    tail: facts.entries[..index].last().map(|entry| entry.entry.id),
+                .then(|| {
+                    let mut failed_users = BTreeSet::new();
+                    let tail = facts.entries[..index].iter().rev().find_map(|entry| {
+                        if matches!(entry.entry.payload, EntryPayload::Notice { .. })
+                            && failed_users.contains(&entry.entry.message_id)
+                        {
+                            return None;
+                        }
+                        if matches!(entry.entry.payload, EntryPayload::User { .. })
+                            && matches!(
+                                entry.entry.execution_phase,
+                                ExecutionPhase::Failed | ExecutionPhase::Cancelled
+                            )
+                        {
+                            failed_users.insert(entry.entry.id);
+                            return None;
+                        }
+                        Some(entry.entry.id)
+                    });
+                    ExternalAgentHistoryAnchor { tail }
                 })
         });
         Ok(Self {
@@ -277,8 +297,8 @@ impl<'a> TurnInput<'a> {
                     block
                 }
                 ActivityPayload::SkillReference(skill) => {
-                    if let Some(owner) = skill.external_agent {
-                        if owner != agent || !capabilities.skill {
+                    if let Some(owner) = &skill.external_agent {
+                        if owner != &agent || !capabilities.skill {
                             return Err(AppError::Config(
                                 "The current ACP agent does not accept this native Skill reference.".into(),
                             ));
@@ -322,26 +342,31 @@ pub(super) fn route_command(
     blocks: &mut Vec<Value>,
     commands: &[ExternalAgentCommand],
     capabilities: PromptCapabilities,
-) -> Result<(), AppError> {
-    let is_skill = |name: &str| {
+) -> Result<bool, AppError> {
+    let find_skill = |name: &str| {
         commands
             .iter()
-            .any(|entry| entry.skill && entry.name == name)
+            .find(|entry| entry.skill && entry.name.eq_ignore_ascii_case(name))
+            .map(|entry| entry.name.as_str())
     };
+    let mut routed_slash_command = false;
     if let Some(first) = blocks.first_mut().filter(|block| block["type"] == "text")
         && let Some(input) = first["text"]
             .as_str()
             .and_then(external_agent_command_input)
     {
         let (name, args) = input.split_once(char::is_whitespace).unwrap_or((input, ""));
-        if capabilities.skill && is_skill(name) {
+        if capabilities.skill
+            && let Some(canonical) = find_skill(name)
+        {
             let args = args.trim_start().to_owned();
-            *first = json!({"type": "skill", "name": name});
+            *first = json!({"type": "skill", "name": canonical});
             if !args.is_empty() {
                 blocks.insert(1, text_block(args));
             }
         } else {
             *first = text_block(format!("/{input}"));
+            routed_slash_command = true;
         }
     }
     for (index, block) in blocks
@@ -354,13 +379,16 @@ pub(super) fn route_command(
                 "This ACP agent accepts a single native Skill at the start of a prompt.".into(),
             ));
         }
-        if !block["name"].as_str().is_some_and(is_skill) {
+        if !block["name"]
+            .as_str()
+            .is_some_and(|name| find_skill(name).is_some())
+        {
             return Err(AppError::Config(
                 "A native Skill in the prompt is no longer advertised by the current agent.".into(),
             ));
         }
     }
-    Ok(())
+    Ok(routed_slash_command)
 }
 
 fn text_block(text: String) -> Value {

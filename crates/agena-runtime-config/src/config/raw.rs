@@ -159,6 +159,11 @@ pub fn validate_layered_config_text(
                 .into(),
         ));
     }
+    if workspace.acp.is_some() {
+        return Err(ConfigError::Validation(
+            "acp is instance-owned; edit it in global settings, not a workspace file".into(),
+        ));
+    }
     validate_global_agent_profile_scope(&global, global_path, env, &[])?;
     let global_prompts = global.prompts.clone().unwrap_or_default();
     let workspace_prompts = workspace.prompts.clone().unwrap_or_default();
@@ -382,6 +387,10 @@ pub struct RawConfig {
     /// Instance-owned identity and permission directory. Project layers cannot
     /// replace it, even when their ordinary execution permissions are editable.
     pub access_control: Option<agena_domain::AccessControlConfig>,
+    /// Instance-owned ACP external agent definitions. Project layers cannot
+    /// register or override external agent commands.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub acp: Option<agena_domain::AcpConfig>,
     pub plugins: Option<PluginConfig>,
     pub providers: RawProvidersConfig,
 }
@@ -516,6 +525,7 @@ impl<'de> Deserialize<'de> for RawConfig {
             permission: Option<agena_domain::PermissionConfig>,
             permission_profile: Option<String>,
             access_control: Option<agena_domain::AccessControlConfig>,
+            acp: Option<agena_domain::AcpConfig>,
             plugins: Option<PluginConfig>,
             providers: RawProvidersConfig,
         }
@@ -537,6 +547,7 @@ impl<'de> Deserialize<'de> for RawConfig {
             permission_profile: input.permission_profile,
             permission_overrides: None,
             access_control: input.access_control,
+            acp: input.acp,
             plugins: input.plugins,
             providers: input.providers,
         })
@@ -584,6 +595,7 @@ impl RawConfig {
             overlay.permission_overrides,
         );
         merge_option(&mut self.access_control, overlay.access_control);
+        merge_option(&mut self.acp, overlay.acp);
         merge_option_struct(&mut self.plugins, overlay.plugins);
         self.providers.merge_from(overlay.providers);
     }
@@ -630,6 +642,7 @@ impl RawConfig {
             && self.permission.is_none()
             && self.permission_profile.is_none()
             && self.access_control.is_none()
+            && self.acp.is_none()
             && self.plugins.is_none()
             && self.providers.is_empty()
     }
@@ -724,6 +737,7 @@ impl RawConfig {
             permission_profile: None,
             permission_overrides: None,
             access_control: None,
+            acp: None,
             plugins: None,
             providers: RawProvidersConfig::default(),
         })
@@ -771,6 +785,8 @@ impl RawConfig {
             .unwrap_or_default()
             .with_default_profile();
         access_control.validate().map_err(ConfigError::Validation)?;
+        let acp = self.acp.unwrap_or_default();
+        acp.validate().map_err(ConfigError::Validation)?;
         let use_custom = self.permission_profile.as_deref() == Some("");
         let mut permission_profile = self.permission_profile.filter(|id| !id.is_empty());
         let overlay = if permission_profile.is_some() {
@@ -851,6 +867,7 @@ impl RawConfig {
             permission,
             permission_profile,
             access_control,
+            acp,
             plugins,
             providers,
         };

@@ -80,6 +80,11 @@ where
                 "access_control is instance-owned; edit it in global settings, not a workspace file".into(),
             ));
         }
+        if project_file_state.config.acp.is_some() {
+            return Err(ConfigError::Validation(
+                "acp is instance-owned; edit it in global settings, not a workspace file".into(),
+            ));
+        }
         let environment_applied = !env_overlay.is_empty();
 
         if !global {

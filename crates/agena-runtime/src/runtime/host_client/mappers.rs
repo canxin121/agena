@@ -176,7 +176,7 @@ pub(super) fn session_resource_from_session(
         version: session.version,
         relation_kind: session.relation_kind,
         lifecycle_state: session.lifecycle_state,
-        external_agent: session.external_agent,
+        external_agent: session.external_agent.clone(),
         state: agena_session_api::resource::SessionState::default(),
         source_cutoff_seq_global: None,
         source_message_id: None,

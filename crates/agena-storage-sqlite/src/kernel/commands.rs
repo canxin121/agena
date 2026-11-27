@@ -1116,7 +1116,10 @@ async fn bind_external_agent_link(
     let metadata = reads::metadata(connection, scope.session).await?;
     let workspace = metadata.workspace_id.ok_or(KernelError::Ownership)?;
     let mut configuration = lifecycle::configuration(connection, scope.session).await?;
-    let agent = configuration.external_agent.ok_or(KernelError::Ownership)?;
+    let agent = configuration
+        .external_agent
+        .clone()
+        .ok_or(KernelError::Ownership)?;
     if link.resume_at.is_some()
         || link.incarnation.is_none()
         || pending.round != round
@@ -1238,7 +1241,7 @@ async fn set_external_agent_input(
             ids: Vec::new(),
         });
     if let Some(scope) = scope {
-        if configuration.external_agent != Some(scope.agent) {
+        if configuration.external_agent.as_ref() != Some(&scope.agent) {
             return Err(KernelError::Ownership);
         }
         if let Some(resume) = &scope.idle_resume {
@@ -1342,7 +1345,10 @@ async fn save_external_agent_resume(
         return Err(KernelError::Ownership);
     }
     let workspace = metadata.workspace_id.ok_or(KernelError::Ownership)?;
-    let agent = configuration.external_agent.ok_or(KernelError::Ownership)?;
+    let agent = configuration
+        .external_agent
+        .clone()
+        .ok_or(KernelError::Ownership)?;
     if super::external_agent::existing_link(connection, workspace, agent, &link)
         .await?
         .is_some_and(|owner| owner != scope.session)

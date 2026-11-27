@@ -161,8 +161,9 @@ impl App {
                 let name = command.qualified_name();
                 let key = format!("external:{name}");
                 let label = format!("/{name}");
-                let detail =
-                    crate::app_command_helpers::external_command_detail(&self.i18n, agent, command);
+                let detail = crate::app_command_helpers::external_command_detail(
+                    &self.i18n, &agent, command,
+                );
                 items.push(CommandPaletteItem::new(
                     key.clone(),
                     label.clone(),
@@ -230,7 +231,7 @@ impl App {
         }
         Some((
             session_id,
-            execution.session.external_agent?,
+            execution.session.external_agent.clone()?,
             &execution.execution.external_agent_commands,
         ))
     }
@@ -266,19 +267,29 @@ impl App {
     /// surface snapshot arrives the list is empty rather than a hand-written
     /// fallback.
     pub(crate) fn client_commands(&self) -> Vec<commands::ClientCommand> {
+        let external_agent = self.external_agent_commands().is_some();
         commands::client_commands(
             self.application.plugin_catalog().as_ref(),
             self.is_bot_session(),
         )
+        .into_iter()
+        .filter(|command| {
+            !external_agent || commands::command_applies_to_external_agent(command.action())
+        })
+        .collect()
     }
 
     /// Resolve `/name` to a built-in command this client can run.
     pub(crate) fn find_client_command(&self, name: &str) -> Option<commands::ClientCommand> {
+        let external_agent = self.external_agent_commands().is_some();
         commands::find_client_command(
             self.application.plugin_catalog().as_ref(),
             name,
             self.is_bot_session(),
         )
+        .filter(|command| {
+            !external_agent || commands::command_applies_to_external_agent(command.action())
+        })
     }
 
     /// The commands a server-owned target resolves, i.e. everything that is not

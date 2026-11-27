@@ -16,7 +16,7 @@ use super::fixture;
 
 fn transport_fixture(agent: ExternalAgent) -> Result<(tempfile::TempDir, TestAgenaBuilder)> {
     let bin = tempfile::tempdir()?;
-    let executable = bin.path().join(agent.command().0);
+    let executable = bin.path().join(agent.builtin_command().expect("builtin").0);
     std::fs::write(&executable, include_str!("plugins/fake_acp_transport.py"))?;
     std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755))?;
     let path = std::env::var_os("PATH").unwrap_or_default();
@@ -570,7 +570,7 @@ async fn withdraw_tool_requests(v1: bool) -> TestResult {
     let (_bin, builder) = if v1 {
         v1_callback_fixture()
     } else {
-        transport_fixture(agent)
+        transport_fixture(agent.clone())
     }?;
     builder
         .run(move |case| async move {

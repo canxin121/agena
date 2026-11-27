@@ -153,14 +153,16 @@ pub use execution_lifecycle::{ExecutionLifecycle, ExecutionTransitionError};
 pub use execution_selection::ExecutionSelection;
 pub use execution_status::{ExecutionStatus, ExecutionStatusTransitionError};
 pub use external_agent::{
-    ACP_INLINE_ATTACHMENT_PREFIX, ACP_SESSION_ID_START, EXTERNAL_AGENT_COMMAND_PREFIX,
+    ACP_INLINE_ATTACHMENT_PREFIX, ACP_SESSION_ID_START, AcpConfig, EXTERNAL_AGENT_COMMAND_PREFIX,
     EXTERNAL_AGENT_URL_INPUT_KIND, EXTERNAL_AGENT_URL_OPEN_OPTION, ExternalAgent,
     ExternalAgentAuth, ExternalAgentAuthAccount, ExternalAgentAuthAction, ExternalAgentAuthFlow,
-    ExternalAgentAuthMethod, ExternalAgentAuthStatus, ExternalAgentCommand, ExternalAgentOption,
-    ExternalAgentOptionChange, ExternalAgentOptionKind, ExternalAgentOptionType,
-    ExternalAgentOptionValue, ExternalAgentOptions, ExternalAgentProvider,
-    ExternalAgentProviderTarget, ExternalAgentProviders, ExternalAgentSelection,
+    ExternalAgentAuthMethod, ExternalAgentAuthStatus, ExternalAgentCatalogEntry,
+    ExternalAgentCommand, ExternalAgentConfig, ExternalAgentOption, ExternalAgentOptionChange,
+    ExternalAgentOptionKind, ExternalAgentOptionType, ExternalAgentOptionValue,
+    ExternalAgentOptions, ExternalAgentProvider, ExternalAgentProviderTarget,
+    ExternalAgentProviders, ExternalAgentSelection, ResolvedExternalAgent,
     external_agent_authorization_url, external_agent_command_input, is_acp_session_id,
+    valid_external_agent_id, valid_terminal_environment_name,
     validate_external_agent_terminal_launch,
 };
 pub use external_agent_details::{

@@ -16,7 +16,7 @@ import uuid
 PROGRAM = Path(sys.argv[0]).name
 assert PROGRAM in ("agy", "claude-agent-acp")
 assert "AGENA_TEST_NEVER_FORWARD" not in os.environ
-assert "CLAUDE_CODE_EXECUTABLE" not in os.environ
+assert os.environ.get("CLAUDE_CODE_EXECUTABLE") == "use bundled Claude Code instead"
 
 def record_exception(*error):
     Path(".acp-fixture-error").write_text("".join(traceback.format_exception(*error)))
@@ -25,27 +25,8 @@ def record_exception(*error):
 
 sys.excepthook = record_exception
 
-if PROGRAM == "agy" and sys.argv[1:2] == ["--resume"]:
-    _, resume, session, print_flag, prompt, output, output_format = sys.argv
-    assert (resume, print_flag, prompt, output, output_format) == (
-        "--resume", "--print", "/compact", "--output-format", "stream-json",
-    )
-    assert Path(f".acp-closed-{session}").is_file()
-    Path(f".acp-compacted-{session}").touch()
-    print(json.dumps({
-        "event": "step_update", "step_update": {
-            "conversation_id": session, "step_type": "checkpoint", "step_index": 4,
-            "state": "DONE",
-        },
-    }))
-    print(json.dumps({
-        "event": "result", "result": {"conversation_id": session, "status": "SUCCESS"},
-    }))
-    sys.exit(0)
 if PROGRAM == "agy":
-    assert sys.argv[1:3] == ["acp", "--process-per-session"]
-    assert "--gemini-dir" in sys.argv and "--agent" not in sys.argv
-    assert "--include-default-customizations=false" not in sys.argv
+    assert sys.argv[1:] == ["acp", "--process-per-session"], sys.argv
 else:
     assert sys.argv[1:] == []
 
@@ -179,11 +160,9 @@ def levels(current_model):
 
 session = None
 model, thinking = "fast", "low"
-probe = False
 resumed = False
 loaded = False
 cancel_request = None
-closed_for_compaction = None
 for line in sys.stdin:
     request = json.loads(line)
     identifier = request.get("id")
@@ -221,12 +200,22 @@ for line in sys.stdin:
     elif method in ("session/new", "session/resume", "session/load"):
         assert Path(params["cwd"]).resolve() == Path.cwd().resolve()
         if params["mcpServers"] == []:
-            assert method == "session/new"
-            probe = True
-            session = uuid.uuid4().hex
-            Path(".acp-options-opened").touch()
-            Path(f".acp-probe-{session}").touch()
-            send(id=identifier, result={"sessionId": session, "configOptions": config_options()})
+            if method == "session/resume" and PROGRAM == "claude-agent-acp":
+                send(id=identifier, error={"code": -32601, "message": "Use session/load"})
+                continue
+            resumed = method != "session/new"
+            loaded = method == "session/load"
+            if resumed:
+                session = params["sessionId"]
+                assert Path(f".acp-{session}").is_file()
+                send(id=identifier, result={"configOptions": config_options()})
+            else:
+                session = uuid.uuid4().hex
+                Path(".acp-options-opened").touch()
+                Path(f".acp-{session}").write_text("")
+                with Path(".acp-new-sessions").open("a") as log:
+                    log.write(session + "\n")
+                send(id=identifier, result={"sessionId": session, "configOptions": config_options()})
             continue
         assert len(params["mcpServers"]) == 1
         bridge = params["mcpServers"][0]
@@ -244,10 +233,7 @@ for line in sys.stdin:
         if resumed:
             session = params["sessionId"]
             assert Path(f".acp-{session}").is_file()
-            if authorization_digest == Path(f".acp-{session}").read_text():
-                assert PROGRAM == "agy" and closed_for_compaction == session
-                assert Path(f".acp-compacted-{session}").is_file()
-            closed_for_compaction = None
+            assert authorization_digest != Path(f".acp-{session}").read_text()
         else:
             session = uuid.uuid4().hex
         Path(f".acp-{session}").write_text(authorization_digest)
@@ -290,15 +276,9 @@ for line in sys.stdin:
     elif method in ("session/close", "session/delete"):
         assert params["sessionId"] == session
         if method == "session/delete":
-            assert probe, "deleted an actual conversation"
-            Path(f".acp-probe-{session}").unlink()
-        elif not probe:
-            assert PROGRAM == "agy" and Path(".acp-catalog").is_file()
-            closed_for_compaction = session
-            Path(f".acp-closed-{session}").touch()
+            raise AssertionError("options flow should not delete an actual conversation")
         result = {}
     elif method == "session/prompt":
-        assert not probe, "a configuration probe sent a prompt"
         assert params["sessionId"] == session
         assert not Path(".acp-no-image").exists(), "unsupported image reached the prompt"
         assert params["prompt"][0]["type"] == "text"
@@ -417,15 +397,24 @@ for line in sys.stdin:
         elif prompt == "check options":
             update(f"model {model}, thinking {thinking}")
         elif prompt == "/compact":
-            assert PROGRAM == "claude-agent-acp" and not resumed
-            send(method="session/update", params={
-                "sessionId": "another-session", "update": {
-                    "sessionUpdate": "available_commands_update",
-                    "availableCommands": [{"name": "foreign", "description": "Foreign catalog"}],
-                },
-            })
-            update("native compact received")
-            wait_fixture_file(".acp-catalog-visible")
+            if PROGRAM == "claude-agent-acp":
+                assert not resumed
+                send(method="session/update", params={
+                    "sessionId": "another-session", "update": {
+                        "sessionUpdate": "available_commands_update",
+                        "availableCommands": [{"name": "foreign", "description": "Foreign catalog"}],
+                    },
+                })
+                update("native compact received")
+                wait_fixture_file(".acp-catalog-visible")
+            else:
+                assert PROGRAM == "agy" and resumed
+                session_update(
+                    sessionUpdate="compaction_update",
+                    compactionId="acp-compact-1",
+                    status="completed",
+                )
+                update("antigravity native compact received")
         elif prompt == '/mcp:repo:review  "scope"  all':
             assert loaded, "the native conversation was not loaded"
             available_commands({"name": "review", "description": "Updated command"})
@@ -437,11 +426,11 @@ for line in sys.stdin:
         elif prompt == "/status":
             assert PROGRAM == "agy" and not resumed
             update("native status received")
-        elif prompt == "inspect after compacting":
-            assert resumed and Path(f".acp-compacted-{session}").is_file()
+        elif prompt == "/compact inspect after compacting":
+            assert PROGRAM == "agy" and resumed
             output = call_fixture("fs.read", {"file_path": "acp-input.txt"})
             assert "acp callback content" in json.dumps(output), output
-            update("read through Agena after checkpoint")
+            update("read through Agena during compact")
         elif prompt == "show project plan":
             session_update(sessionUpdate="plan", entries=[
                 {"content": "Legacy step", "priority": "low", "status": "pending"},
@@ -556,6 +545,14 @@ for line in sys.stdin:
         elif prompt == "check clear":
             assert not resumed and len(params["prompt"]) == 1
             update("cleared")
+        elif prompt == "long reply":
+            chunk = ("A" * 2048)
+            for idx in range(40):
+                session_update(
+                    sessionUpdate="agent_message_chunk",
+                    messageId="long-1",
+                    content={"type": "text", "text": f"[{idx:02d}]{chunk}"},
+                )
         elif prompt == "cancel this":
             Path(".acp-cancel-url").write_text(url)
             session_update(sessionUpdate="tool_call", toolCallId="waiting", title="Wait natively", status="in_progress")

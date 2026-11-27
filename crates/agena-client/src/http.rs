@@ -1354,6 +1354,12 @@ impl AgenaClient {
         .await
     }
 
+    pub async fn list_external_agents(
+        &self,
+    ) -> Result<Vec<agena_domain::ExternalAgentCatalogEntry>, ClientError> {
+        self.get_json("/api/v1/acp/agents").await
+    }
+
     pub async fn external_agent_options(
         &self,
         session_id: i64,

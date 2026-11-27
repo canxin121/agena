@@ -1,10 +1,11 @@
 use std::{
+    collections::BTreeMap,
     fs,
     io::Read,
     path::{Path, PathBuf},
 };
 
-use agena_domain::{ExternalAgent, NetworkAction, NetworkPermissionConfig};
+use agena_domain::{ExternalAgent, NetworkAction, NetworkPermissionConfig, ResolvedExternalAgent};
 use agena_process::sandbox::{self, SandboxNetwork, SandboxPolicy};
 use serde::Deserialize;
 use tokio::process::Command;
@@ -13,12 +14,7 @@ use super::{AppError, policy};
 
 const CONFIG_ENV: &str = "AGENA_ACP_SANDBOX_FILE";
 
-#[derive(Deserialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
-struct Config {
-    antigravity: Option<AgentConfig>,
-    claude_code: Option<AgentConfig>,
-}
+type Config = BTreeMap<ExternalAgent, AgentConfig>;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -40,29 +36,24 @@ impl Isolation {
     }
 }
 
-fn configured(agent: ExternalAgent) -> Result<Option<AgentConfig>, AppError> {
-    let Some(path) = std::env::var_os(CONFIG_ENV) else {
+fn configured(agent: &ExternalAgent) -> Result<Option<AgentConfig>, AppError> {
+    let Some(path) = std::env::var_os(CONFIG_ENV).filter(|path| !path.is_empty()) else {
         return Ok(None);
     };
     let file = fs::File::open(path)
         .map_err(|error| AppError::Config(format!("Could not open {CONFIG_ENV}: {error}")))?;
-    let config: Config = serde_json::from_reader(file.take(1024 * 1024))
+    let mut config: Config = serde_json::from_reader(file.take(1024 * 1024))
         .map_err(|error| AppError::Config(format!("Invalid {CONFIG_ENV}: {error}")))?;
-    Ok(match agent {
-        ExternalAgent::Antigravity => config.antigravity,
-        ExternalAgent::ClaudeCode => config.claude_code,
-    })
+    Ok(config.remove(agent))
 }
 
 pub(super) fn wrap(
     command: &mut Command,
-    agent: ExternalAgent,
+    spec: &ResolvedExternalAgent,
     cwd: &Path,
     additional_directories: &[PathBuf],
-    previous_history: bool,
-    private_home: Option<&Path>,
 ) -> Result<Option<Isolation>, AppError> {
-    let Some(config) = configured(agent)? else {
+    let Some(config) = configured(&spec.id)? else {
         return Ok(None);
     };
     if !sandbox::enabled() {
@@ -77,20 +68,43 @@ pub(super) fn wrap(
     network
         .validate_for_platform(std::env::consts::OS)
         .map_err(AppError::Config)?;
-    if !cfg!(target_os = "macos")
-        && network.egress.as_ref().and_then(|egress| egress.default) == Some(NetworkAction::Allow)
-    {
-        return Err(AppError::Config(
-            "ACP process isolation requires default-deny egress.".into(),
-        ));
+    if !cfg!(target_os = "macos") {
+        if network.egress.as_ref().and_then(|egress| egress.default) == Some(NetworkAction::Allow) {
+            return Err(AppError::Config(
+                "ACP process isolation requires default-deny egress.".into(),
+            ));
+        }
+        if network
+            .ingress
+            .as_ref()
+            .and_then(|ingress| ingress.host_loopback)
+            == Some(NetworkAction::Allow)
+        {
+            return Err(AppError::Config(
+                "ACP process isolation forbids host loopback access.".into(),
+            ));
+        }
+        let allows_any = network
+            .egress
+            .as_ref()
+            .and_then(|egress| egress.allow.as_ref())
+            .into_iter()
+            .flatten()
+            .flat_map(|rule| rule.to.iter().flatten())
+            .any(|peer| {
+                matches!(peer.cidr.trim(), "0.0.0.0/0" | "::/0") && peer.except.is_empty()
+            });
+        if allows_any {
+            return Err(AppError::Config(
+                "ACP process isolation requires scoped egress targets rather than unrestricted wildcard CIDRs."
+                    .into(),
+            ));
+        }
     }
     let mut writes = Vec::new();
-    match agent {
+    match &spec.id {
         ExternalAgent::Antigravity => {
-            writes.push(policy::antigravity_profile()?);
-            if previous_history {
-                writes.push(policy::previous_antigravity_store()?);
-            }
+            writes.push(policy::antigravity_store()?);
         }
         ExternalAgent::ClaudeCode => {
             let config = std::env::var_os("CLAUDE_CONFIG_DIR")
@@ -104,6 +118,12 @@ pub(super) fn wrap(
                 })?;
             command.env("CLAUDE_CONFIG_DIR", &config);
             writes.push(config);
+        }
+        ExternalAgent::Custom(_) => {}
+    }
+    for path in &spec.writable_paths {
+        if !writes.contains(path) {
+            writes.push(path.clone());
         }
     }
     let mut reads = vec![cwd.to_path_buf()];
@@ -141,16 +161,20 @@ pub(super) fn wrap(
         agena_mcp_server::stdio_relay::PIPE_PREFIX,
         uuid::Uuid::new_v4().simple()
     ));
-    if let Some(home) = private_home {
-        reads.push(home.to_owned());
-        private_paths.push(home.to_owned());
+    let mut denied_paths = Vec::new();
+    if let Some(data_dir) = std::env::var_os("AGENA_DATA_DIR")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+    {
+        denied_paths.push(data_dir);
     }
     let policy = SandboxPolicy {
         readonly_paths: reads,
         readwrite_paths: writes,
+        denied_paths,
         runtime_paths: config.runtime_paths,
         private_paths,
-        workload_home: private_home.map(Path::to_path_buf),
+        workload_home: None,
         network: SandboxNetwork::Native { policy: network },
         ..SandboxPolicy::default()
     };

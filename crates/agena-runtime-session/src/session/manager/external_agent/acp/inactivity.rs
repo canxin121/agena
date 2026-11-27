@@ -53,17 +53,7 @@ impl PromptIdle {
                 | "session_message"
                 | "session_message_chunk"
                 | "compaction_summary_chunk",
-            ) => update.get("content").is_some_and(|content| match content {
-                Value::Array(items) => !items.is_empty(),
-                Value::Object(block) => block.get("type").is_some_and(|kind| {
-                    kind != "text"
-                        || block
-                            .get("text")
-                            .and_then(Value::as_str)
-                            .is_some_and(|text| !text.is_empty())
-                }),
-                _ => false,
-            }),
+            ) => update.get("content").is_some_and(has_substantive_content),
             Some(
                 "tool_call"
                 | "tool_call_update"
@@ -101,7 +91,10 @@ impl PromptIdle {
                 biased;
                 update = mcp.activity.changed() => {
                     if update.is_err() {
-                        self.last_progress = self.last_progress.max(activity.finished_at.unwrap_or(self.last_progress));
+                        let final_activity = *mcp.activity.borrow();
+                        if let Some(finished_at) = final_activity.finished_at {
+                            self.last_progress = self.last_progress.max(finished_at);
+                        }
                         self.mcp = None;
                     }
                 }
@@ -117,10 +110,24 @@ impl PromptIdle {
         }
     }
 
-    pub(super) fn error(&self, agent: &'static str) -> AppError {
+    pub(super) fn error(&self, agent: &str) -> AppError {
         AppError::ExternalAgentPromptInactive {
-            agent,
+            agent: agent.to_owned(),
             seconds: self.interval.as_secs(),
         }
+    }
+}
+
+fn has_substantive_content(content: &Value) -> bool {
+    match content {
+        Value::Array(items) => items.iter().any(has_substantive_content),
+        Value::Object(block) => block.get("type").is_some_and(|kind| {
+            kind != "text"
+                || block
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| !text.is_empty())
+        }),
+        _ => false,
     }
 }

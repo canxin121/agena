@@ -24,6 +24,7 @@ fn page() -> NativeAgentPage {
         workspace_id: 9,
         workspace_path: "/test/project".into(),
         agent: ExternalAgent::ClaudeCode,
+        agent_name: "Claude Code".into(),
         archived: ArchiveFilter::Unarchived,
         cursors: Vec::new(),
     }
@@ -158,6 +159,8 @@ fn auth_menu_submits_agent_methods_and_exposes_supported_sign_out() {
         ExternalAgentAuth {
             agent: ExternalAgent::ClaudeCode,
             cwd: "/test/project".into(),
+            command: None,
+            base_args: Vec::new(),
             accounts: Vec::new(),
             state: Some("unauthenticated".into()),
             logout_supported: true,
@@ -198,4 +201,141 @@ fn auth_menu_submits_agent_methods_and_exposes_supported_sign_out() {
             ..
         }
     )));
+}
+
+#[test]
+fn external_agent_slash_command_filter_excludes_agena_session_commands_and_keeps_model() {
+    use agena_api::client_command::ClientCommandAction as Action;
+
+    for excluded in [
+        Action::Compact,
+        Action::Clear,
+        Action::Fork,
+        Action::Rewind,
+        Action::Rename,
+        Action::Btw,
+        Action::Side,
+        Action::Schedules,
+        Action::Integrations,
+    ] {
+        assert!(
+            !crate::commands::command_applies_to_external_agent(excluded),
+            "{excluded:?} should be hidden in ACP sessions"
+        );
+    }
+    for kept in [Action::Help, Action::Model, Action::Status, Action::Settings, Action::Copy] {
+        assert!(
+            crate::commands::command_applies_to_external_agent(kept),
+            "{kept:?} should stay available in ACP sessions"
+        );
+    }
+}
+
+#[test]
+fn archive_filter_cycles_unarchived_archived_all() {
+    let (_temp, mut app) = app();
+    let caps = ExternalAgentIndexCapabilities {
+        archive: true,
+        ..Default::default()
+    };
+
+    app.show_native_page(page(), vec![session().into()], None, caps);
+    assert!(choices(&app).values().any(|action| matches!(
+        action,
+        NativeAgentChoice::Browse(next) if next.archived == ArchiveFilter::Archived
+    )));
+
+    let mut archived_page = page();
+    archived_page.archived = ArchiveFilter::Archived;
+    app.show_native_page(archived_page, vec![session().into()], None, caps);
+    assert!(choices(&app).values().any(|action| matches!(
+        action,
+        NativeAgentChoice::Browse(next) if next.archived == ArchiveFilter::All
+    )));
+
+    let mut all_page = page();
+    all_page.archived = ArchiveFilter::All;
+    app.show_native_page(all_page, vec![session().into()], None, caps);
+    assert!(choices(&app).values().any(|action| matches!(
+        action,
+        NativeAgentChoice::Browse(next) if next.archived == ArchiveFilter::Unarchived
+    )));
+}
+
+#[test]
+fn providers_menu_renders_supported_routes_and_unconfigured_targets() {
+    let (_temp, mut app) = app();
+    let session_id = agena_domain::ACP_SESSION_ID_START + 2;
+    app.show_native_providers(
+        session_id,
+        agena_domain::ExternalAgentProviders {
+            supported: true,
+            providers: vec![
+                agena_domain::ExternalAgentProvider {
+                    provider_id: "main".into(),
+                    supported: vec!["anthropic".into()],
+                    required: true,
+                    current: Some(agena_domain::ExternalAgentProviderTarget {
+                        api_type: "anthropic".into(),
+                        base_url: "https://api.example.com".into(),
+                    }),
+                },
+                agena_domain::ExternalAgentProvider {
+                    provider_id: "fast".into(),
+                    supported: vec!["openai".into()],
+                    required: false,
+                    current: None,
+                },
+            ],
+        },
+    );
+    let Some(Overlay::Choice(dialog)) = &app.overlay else {
+        panic!("expected provider overlay")
+    };
+    let prompt = &dialog.presentation.prompt;
+    assert!(prompt.contains("main"));
+    assert!(prompt.contains("https://api.example.com"));
+    assert!(prompt.contains("fast"));
+    assert!(choices(&app).values().any(|action| matches!(
+        action,
+        NativeAgentChoice::Providers(id) if *id == session_id
+    )));
+}
+
+#[test]
+fn auth_menu_renders_live_connection_status_and_full_account_details() {
+    let (_temp, mut app) = app();
+    let session_id = agena_domain::ACP_SESSION_ID_START + 3;
+    app.show_native_auth_with_live(
+        session_id,
+        ExternalAgentAuth {
+            agent: ExternalAgent::ClaudeCode,
+            cwd: "/test/project".into(),
+            command: None,
+            base_args: Vec::new(),
+            accounts: Vec::new(),
+            state: Some("unauthenticated".into()),
+            logout_supported: true,
+            methods: Vec::new(),
+        },
+        Some(agena_domain::ExternalAgentAuthStatus {
+            state: "authenticated".into(),
+            accounts: vec![agena_domain::ExternalAgentAuthAccount {
+                label: "Work".into(),
+                active: true,
+                description: Some("Enterprise plan".into()),
+                name: Some("Alice".into()),
+                email: Some("alice@example.com".into()),
+                organization: Some("Acme".into()),
+            }],
+        }),
+    );
+    let Some(Overlay::Choice(dialog)) = &app.overlay else {
+        panic!("expected auth overlay")
+    };
+    let prompt = &dialog.presentation.prompt;
+    assert!(prompt.contains("Alice"));
+    assert!(prompt.contains("alice@example.com"));
+    assert!(prompt.contains("Acme"));
+    assert!(prompt.contains("Enterprise plan"));
 }

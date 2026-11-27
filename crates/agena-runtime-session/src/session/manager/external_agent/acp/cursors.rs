@@ -122,10 +122,10 @@ impl Tail {
             return;
         }
         match Entity::from_update(update) {
+            Some(entity) if self.seen.contains(&entity) => {}
             Some(entity) if self.seen.len() < 2048 => {
-                if self.seen.insert(entity.clone()) {
-                    self.latest = Some(entity);
-                }
+                self.seen.insert(entity.clone());
+                self.latest = Some(entity);
             }
             _ => self.latest = None,
         }
@@ -249,5 +249,41 @@ impl Book {
             fork: grant.fork,
             rewind: grant.rewind,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn tail_observe_preserves_latest_after_seen_cap_is_reached() {
+        let mut tail = Tail::default();
+        for i in 0..2048 {
+            tail.observe(&json!({
+                "sessionUpdate": "agent_message",
+                "messageId": format!("msg-{i}")
+            }));
+        }
+        assert_eq!(
+            tail.latest().map(|entity| entity.id),
+            Some("msg-2047".to_owned())
+        );
+        // Re-observing an already-seen entity at capacity must not wipe latest.
+        tail.observe(&json!({
+            "sessionUpdate": "agent_message_chunk",
+            "messageId": "msg-2047"
+        }));
+        assert_eq!(
+            tail.latest().map(|entity| entity.id),
+            Some("msg-2047".to_owned())
+        );
+        // An unseen 2049th entity exceeds the cap and safely clears latest.
+        tail.observe(&json!({
+            "sessionUpdate": "agent_message",
+            "messageId": "msg-2048"
+        }));
+        assert!(tail.latest().is_none());
     }
 }

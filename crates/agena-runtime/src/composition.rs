@@ -75,6 +75,7 @@ pub(crate) struct RuntimeSessionBuildConfig {
     pub(crate) auto_title: agena_runtime_config::SessionAutoTitleConfig,
     pub(crate) permission: agena_domain::PermissionConfig,
     pub(crate) access_control: agena_domain::AccessControlConfig,
+    pub(crate) acp: agena_domain::AcpConfig,
     pub(crate) sandbox: bool,
     pub(crate) resource_guard: bool,
     pub(crate) auto_compaction: agena_domain::SessionAutoCompactionConfig,
@@ -119,6 +120,7 @@ pub(crate) fn session_build_config_from_resolved(
         auto_title: config.session.auto_title.clone(),
         permission: config.permission.clone(),
         access_control: config.access_control.clone(),
+        acp: config.acp.clone(),
         sandbox: config.sandbox,
         resource_guard: config.resource_guard,
         auto_compaction: agena_domain::SessionAutoCompactionConfig {

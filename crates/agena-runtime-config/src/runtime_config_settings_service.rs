@@ -343,6 +343,11 @@ fn resolved_settings_layer_document(
                 "access_control is instance-owned; edit it in global settings, not a workspace file",
             ));
         }
+        if workspace.config.acp.is_some() {
+            return Err(RuntimeConfigSettingsError::invalid_input(
+                "acp is instance-owned; edit it in global settings, not a workspace file",
+            ));
+        }
         workspace_prompts = workspace.config.prompts.clone().unwrap_or_default();
         if !workspace_path.as_os_str().is_empty() {
             workspace_dir = workspace_path
@@ -625,6 +630,20 @@ pub(crate) fn normalize_settings_document(
             .validate()
             .map_err(RuntimeConfigSettingsError::invalid_input)?;
         document["access_control"] = serde_json::to_value(access_control)
+            .map_err(|error| RuntimeConfigSettingsError::invalid_input_error(&error))?;
+    }
+    if let Some(value) = document.get("acp").filter(|value| !value.is_null()) {
+        let acp: agena_domain::AcpConfig =
+            serde_path_to_error::deserialize(value.clone()).map_err(|error| {
+                RuntimeConfigSettingsError::invalid_input(format!(
+                    "acp.{}: {}",
+                    error.path(),
+                    error.inner()
+                ))
+            })?;
+        acp.validate()
+            .map_err(RuntimeConfigSettingsError::invalid_input)?;
+        document["acp"] = serde_json::to_value(acp)
             .map_err(|error| RuntimeConfigSettingsError::invalid_input_error(&error))?;
     }
     Ok(())

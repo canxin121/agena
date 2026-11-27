@@ -23,11 +23,6 @@
 //!
 //! ## 当前路由
 //!
-//! ### `activities`
-//!
-//! | Method | Path | Handlers |
-//! |---|---|---|
-//!
 //! ### `auth`
 //!
 //! | Method | Path | Handlers |
@@ -202,6 +197,12 @@
 //! |---|---|---|
 //! | POST | `/api/v1/project/git/init` | `init_git_repository()` |
 //!
+//! ### `prompts`
+//!
+//! | Method | Path | Handlers |
+//! |---|---|---|
+//! | GET | `/api/v1/prompts/builtins` | `get_builtin_prompts()` |
+//!
 //! ### `provider-studio`
 //!
 //! | Method | Path | Handlers |
@@ -247,12 +248,18 @@
 //! | GET | `/api/v1/runtime/tasks/{task_id}` | `get_runtime_background_task()` |
 //! | POST | `/api/v1/runtime/tasks/{task_id}/cancel` | `cancel_runtime_background_task()` |
 //!
-//! ### `sessions`
+//! ### `session-storage`
 //!
 //! | Method | Path | Handlers |
 //! |---|---|---|
 //! | GET | `/api/v1/session-storage` | `list_session_storage()` |
 //! | POST | `/api/v1/session-storage/reclaim-database` | `reclaim_database_storage()` |
+//!
+//! ### `sessions`
+//!
+//! | Method | Path | Handlers |
+//! |---|---|---|
+//! | GET,POST | `/api/v1/sessions/{session_id}/parts/{part_id}/mcp-app` | `get_mcp_app_document()`, `request_mcp_app()` |
 //! | GET | `/api/v1/sessions/{session_id}/storage` | `session_storage()` |
 //! | GET | `/api/v1/sessions/{session_id}/storage/operation` | `session_storage_operation()` |
 //! | POST | `/api/v1/sessions/{session_id}/storage/preview` | `preview_session_storage()` |
@@ -275,24 +282,20 @@
 //! | POST | `/api/v1/sessions/{session_id}/attachments` | `upload_session_file()` |
 //! | GET,POST | `/api/v1/sessions` | `list_sessions()`, `create_session()` |
 //! | GET | `/api/v1/sessions/overview` | `session_overview()` |
+//! | POST | `/api/v1/sessions/{session_id}/agent-session` | `external_agent_session()` |
 //! | GET,PUT,DELETE | `/api/v1/sessions/{session_id}` | `get_session()`, `replace_session()`, `delete_session()` |
 //! | GET | `/api/v1/sessions/{session_id}/state` | `get_session_state()` |
 //! | GET,DELETE | `/api/v1/sessions/{session_id}/executions/{execution_id}/attempts/{attempt_generation}` | `get_execution_attempt()`, `cancel_execution_attempt()` |
 //! | GET | `/api/v1/sessions/{session_id}/prompts/preview` | `get_session_prompt_preview()` |
-//! | GET | `/api/v1/prompts/builtins` | `get_builtin_prompts()` |
 //! | GET | `/api/v1/sessions/{session_id}/file-changes` | `get_session_file_changes()` |
 //! | GET | `/api/v1/sessions/{session_id}/plan` | `get_session_plan()` |
 //! | GET | `/api/v1/sessions/{session_id}/cost` | `get_session_cost()` |
 //! | PUT | `/api/v1/sessions/{session_id}/selection` | `replace_session_selection()` |
 //! | POST | `/api/v1/sessions/{session_id}/agent-options` | `external_agent_options()` |
-//! | POST | `/api/v1/workspaces/{workspace_id}/agent-sessions` | `external_agent_workspace()` |
-//! | POST | `/api/v1/sessions/{session_id}/agent-session` | `external_agent_session()` |
-//! | POST | `/api/v1/sessions/{session_id}/agent-auth` | `external_agent_auth()` |
-//! | GET | `/api/v1/sessions/{session_id}/agent-auth` | `external_agent_live_auth()` |
+//! | GET,POST | `/api/v1/sessions/{session_id}/agent-auth` | `external_agent_live_auth()`, `external_agent_auth()` |
 //! | GET | `/api/v1/sessions/{session_id}/agent-providers` | `external_agent_providers()` |
 //! | POST | `/api/v1/sessions/{session_id}/agent-steer` | `steer_external_agent()` |
-//! | GET | `/api/v1/sessions/{session_id}/agent-work` | `list_external_agent_work()` |
-//! | POST | `/api/v1/sessions/{session_id}/agent-work` | `cancel_external_agent_work()` |
+//! | GET,POST | `/api/v1/sessions/{session_id}/agent-work` | `list_external_agent_work()`, `cancel_external_agent_work()` |
 //! | PUT | `/api/v1/sessions/{session_id}/permission` | `replace_session_permission()` |
 //! | GET | `/api/v1/sessions/{session_id}/parts` | `list_session_parts()` |
 //! | GET | `/api/v1/sessions/{session_id}/content/{resource_id}` | `read_content()` |
@@ -361,6 +364,7 @@
 //!
 //! | Method | Path | Handlers |
 //! |---|---|---|
+//! | POST | `/api/v1/workspaces/{workspace_id}/agent-sessions` | `external_agent_workspace()` |
 //! | GET,POST | `/api/v1/workspaces` | `list_workspaces()`, `create_workspace()` |
 //! | POST | `/api/v1/workspaces/resolve` | `resolve_workspace()` |
 //! | GET | `/api/v1/workspaces/session-stats` | `workspace_session_stats()` |
@@ -374,4 +378,47 @@
 //! |---|---|---|
 //! | GET | `/api/v1/ws` | `ws()` |
 //! | GET | `/api/v1/ws` | `ws()` |
+//!
+//! ### `ws/sse`
+//!
+//! | Method | Path | Handlers |
+//! |---|---|---|
+//! | GET | `/agents` | `list_external_agents()` |
+//! | POST | `/workspaces/{workspace_id}/sessions` | `external_agent_workspace()` |
+//! | GET,POST | `/sessions` | `list_sessions()`, `create_session()` |
+//! | GET,PUT,DELETE | `/sessions/{session_id}` | `get_session()`, `replace_session()`, `delete_session()` |
+//! | GET | `/sessions/{session_id}/state` | `get_session_state()` |
+//! | GET,DELETE | `/sessions/{session_id}/executions/{execution_id}/attempts/{attempt_generation}` | `get_execution_attempt()`, `cancel_execution_attempt()` |
+//! | GET | `/sessions/{session_id}/prompts/preview` | `get_session_prompt_preview()` |
+//! | GET | `/sessions/{session_id}/parts` | `list_session_parts()` |
+//! | GET | `/sessions/{session_id}/runs` | `read_session_runs()` |
+//! | GET | `/sessions/{session_id}/plan` | `get_session_plan()` |
+//! | GET | `/sessions/{session_id}/cost` | `get_session_cost()` |
+//! | GET | `/sessions/{session_id}/file-changes` | `get_session_file_changes()` |
+//! | PUT | `/sessions/{session_id}/permission` | `replace_session_permission()` |
+//! | POST | `/sessions/{session_id}/agent-session` | `external_agent_session()` |
+//! | POST | `/sessions/{session_id}/agent-options` | `external_agent_options()` |
+//! | GET,POST | `/sessions/{session_id}/agent-auth` | `external_agent_live_auth()`, `external_agent_auth()` |
+//! | GET | `/sessions/{session_id}/agent-providers` | `external_agent_providers()` |
+//! | GET,POST | `/sessions/{session_id}/agent-work` | `list_external_agent_work()`, `cancel_external_agent_work()` |
+//! | POST | `/sessions/{session_id}/agent-steer` | `steer_external_agent()` |
+//! | POST | `/sessions/{session_id}/messages` | `submit_message()` |
+//! | POST | `/sessions/{session_id}/continue` | `continue_run()` |
+//! | POST | `/sessions/{session_id}/clear` | `clear_session()` |
+//! | POST | `/sessions/{session_id}/cancel` | `cancel_run()` |
+//! | GET,PUT,DELETE | `/sessions/{session_id}/queue/{execution_id}` | `queued_message_for_edit()`, `edit_queued_message()`, `delete_queued_message()` |
+//! | POST | `/sessions/{session_id}/queue/{execution_id}/take` | `take_queued_message()` |
+//! | POST | `/sessions/{session_id}/queue/pause` | `set_message_queue_paused()` |
+//! | POST | `/sessions/{session_id}/queue/clear` | `clear_message_queue()` |
+//! | POST | `/sessions/{session_id}/user-input-replies` | `reply_user_input()` |
+//! | POST | `/sessions/{session_id}/permission-replies` | `reply_permission()` |
+//! | POST | `/sessions/{session_id}/interactive/{request_id}/present` | `mark_interactive_request_presented()` |
+//! | GET | `/sessions/{session_id}/changes/stream` | `stream_session_changes()` |
+//! | GET | `/sessions/{session_id}/content/{resource_id}` | `read_content()` |
+//! | GET | `/sessions/{session_id}/content/{resource_id}/text` | `read_content_text()` |
+//! | GET | `/sessions/{session_id}/content/{resource_id}/stream` | `stream_content()` |
+//! | GET | `/sessions/{session_id}/parts/{part_id}/tool-sections/{section}` | `get_session_tool_detail()` |
+//! | GET | `/sessions/{session_id}/media` | `download_session_media_file()` |
+//! | POST | `/sessions/{session_id}/attachments` | `upload_session_file()` |
+//! | GET | `/changes/stream` | `crate()` |
 //!

@@ -239,15 +239,18 @@ impl Replay {
                 "subagent_update" | "terminal_update" | "terminal_output_chunk"
             )
         {
-            let historical = v2
-                && if source == root {
+            if self.preview.is_some() {
+                return Ok(());
+            }
+            let historical = !v2
+                || if source == root {
                     !self.complete
                 } else {
                     !self.complete_children.contains(source)
                 };
             if historical && kind == "subagent_update" && update.get("state").is_some() {
-                // The replay establishes the parent/child relationship. Its
-                // live work state is reported after the parent's marker.
+                // The replay establishes the parent/child relationship. Historical
+                // subagents must not retain stale running states after import.
                 let mut association = update.clone();
                 association
                     .as_object_mut()
@@ -618,24 +621,61 @@ impl Replay {
         for frame in self.entries {
             match frame.value {
                 Record::Blocks { key, blocks } if key.role != Role::Thought => {
-                    let output = if key.role == Role::User {
-                        turns.push(ExternalAgentHistoryPreviewTurn::default());
-                        &mut turns.last_mut().expect("new preview turn").user
-                    } else if let Some(turn) = turns.last_mut() {
-                        &mut turn.reply
-                    } else {
-                        omitted_content = true;
-                        continue;
-                    };
+                    let mut rendered = String::new();
+                    let mut block_omitted = false;
                     for block in blocks {
-                        let text = match block["type"].as_str() {
-                            Some("text") => block["text"].as_str(),
-                            Some("resource_link") => block["uri"].as_str(),
+                        let snippet = match block["type"].as_str() {
+                            Some("text") => block["text"].as_str().map(str::to_owned),
+                            Some("skill") => block["name"]
+                                .as_str()
+                                .filter(|name| !name.trim().is_empty())
+                                .map(|name| format!("/{name}")),
+                            Some("resource_link") => block["uri"].as_str().map(str::to_owned),
+                            Some("resource") => block["resource"]["text"]
+                                .as_str()
+                                .map(str::to_owned),
                             _ => None,
                         };
-                        if text.is_none_or(|text| !append_preview(output, text)) {
-                            omitted_content = true;
+                        match snippet {
+                            Some(text) => {
+                                if !rendered.is_empty()
+                                    && !rendered.ends_with('\n')
+                                    && !text.starts_with('\n')
+                                    && block["type"] != "text"
+                                {
+                                    let _ = append_preview(&mut rendered, "\n");
+                                }
+                                if !append_preview(&mut rendered, &text) {
+                                    block_omitted = true;
+                                }
+                            }
+                            None => block_omitted = true,
                         }
+                    }
+                    if key.role == Role::User {
+                        if rendered.is_empty() && !block_omitted {
+                            continue;
+                        }
+                        turns.push(ExternalAgentHistoryPreviewTurn {
+                            user: rendered,
+                            reply: String::new(),
+                        });
+                    } else if let Some(turn) = turns.last_mut() {
+                        if !turn.reply.is_empty()
+                            && !rendered.is_empty()
+                            && !turn.reply.ends_with('\n')
+                            && !rendered.starts_with('\n')
+                        {
+                            let _ = append_preview(&mut turn.reply, "\n");
+                        }
+                        if !append_preview(&mut turn.reply, &rendered) {
+                            block_omitted = true;
+                        }
+                    } else {
+                        block_omitted = true;
+                    }
+                    if block_omitted {
+                        omitted_content = true;
                     }
                 }
                 Record::Blocks { .. } | Record::Tool(_) | Record::Omitted => omitted_content = true,
@@ -655,6 +695,7 @@ impl Replay {
         agent: ExternalAgent,
         cwd: &Path,
     ) -> Result<(Vec<ExternalAgentHistoryTurn>, ExternalAgentState), AppError> {
+        let allow_media = recent_media_budget_flags(&self.entries);
         let mut projection = Projection {
             agent,
             cwd,
@@ -665,20 +706,14 @@ impl Replay {
         let mut turns = Vec::<ExternalAgentHistoryTurn>::new();
         let mut prelude = Vec::new();
         let mut preceding = None;
-        for frame in self.entries {
+        for (index, frame) in self.entries.into_iter().enumerate() {
+            let media_allowed = allow_media.get(index).copied().unwrap_or(true);
             match frame.value {
                 Record::Blocks { key, blocks } if key.role == Role::User => {
-                    let (document, blobs) = projection.user(blocks).await?;
+                    let (document, blobs) = projection.user(blocks, media_allowed).await?;
                     if !document.is_empty() {
-                        let mut cursor =
+                        let cursor =
                             self.cursors.for_user(key.id.as_deref(), preceding.as_ref());
-                        if !self.complete
-                            && let Some(cursor) = &mut cursor
-                        {
-                            cursor.fork = false;
-                            cursor.rewind = false;
-                            cursor.cursor_id = None;
-                        }
                         turns.push(ExternalAgentHistoryTurn {
                             user: document,
                             cursor,
@@ -695,12 +730,12 @@ impl Replay {
                         .last_mut()
                         .map_or(&mut prelude, |turn| &mut turn.response);
                     projection
-                        .reply(blocks, key.role == Role::Thought, output)
+                        .reply(blocks, key.role == Role::Thought, media_allowed, output)
                         .await?;
                 }
                 Record::Tool(tool) => {
                     preceding = Some(cursors::Entity::message("tool_call", &tool.id));
-                    let part = tool.finish(&mut projection).await?;
+                    let part = tool.finish(&mut projection, media_allowed).await?;
                     turns
                         .last_mut()
                         .map_or(&mut prelude, |turn| &mut turn.response)
@@ -856,7 +891,7 @@ impl ReplayTool {
             "rawInput",
             "rawOutput",
         ] {
-            if let Some(value) = update.get(key) {
+            if let Some(value) = update.get(key).filter(|value| !value.is_null()) {
                 self.fields.insert(key.into(), value.clone());
             }
         }
@@ -877,6 +912,7 @@ impl ReplayTool {
     async fn finish(
         self,
         projection: &mut Projection<'_>,
+        media_allowed: bool,
     ) -> Result<ExternalAgentHistoryPart, AppError> {
         let fields = Value::Object(self.fields);
         let title = bounded_string(&fields["title"], 512).unwrap_or_else(|| "Tool call".into());
@@ -897,18 +933,27 @@ impl ReplayTool {
         let mut items = Vec::new();
         let mut diff_remaining = TOOL_DIFF_BYTES;
         let mut adjacent = false;
+        const MAX_TOOL_TEXT_BYTES: usize = 256 * 1024;
         for (chunk, mut item) in self.content {
             match item["type"].as_str() {
                 Some("content") => match projection
-                    .block(item["content"].take(), blobs.len() < MAX_ENTRY_BLOBS)
+                    .block(
+                        item["content"].take(),
+                        media_allowed && blobs.len() < MAX_ENTRY_BLOBS,
+                    )
                     .await?
                 {
                     Block::Text(value) => {
-                        if !value.is_empty() {
+                        if !value.is_empty() && text.len() < MAX_TOOL_TEXT_BYTES {
                             if !text.is_empty() && !(chunk && adjacent) {
                                 text.push('\n');
                             }
-                            text.push_str(&value);
+                            let room = MAX_TOOL_TEXT_BYTES.saturating_sub(text.len());
+                            let end = value.floor_char_boundary(room);
+                            text.push_str(&value[..end]);
+                            if end < value.len() {
+                                projection.omitted_content = true;
+                            }
                             adjacent = true;
                             continue;
                         }
@@ -922,10 +967,27 @@ impl ReplayTool {
                 Some("diff") => {
                     if item["changes"].is_array() {
                         items.extend(capture_v2_diff(&item, &mut diff_remaining));
-                    } else if let Some(path) = bounded_string(&item["path"], 8192) {
+                    } else if let Some(path) = bounded_string(&item["path"], 8192)
+                        && diff_remaining > 0
+                    {
+                        let mut clip_field = |val: &Value, budget: &mut usize| -> Value {
+                            match val.as_str() {
+                                Some(s) => {
+                                    let end = s.floor_char_boundary(*budget);
+                                    *budget = budget.saturating_sub(end);
+                                    if end < s.len() {
+                                        projection.omitted_content = true;
+                                    }
+                                    json!(&s[..end])
+                                }
+                                None => val.clone(),
+                            }
+                        };
+                        let old_text = clip_field(&item["oldText"], &mut diff_remaining);
+                        let new_text = clip_field(&item["newText"], &mut diff_remaining);
                         items.push(json!({
                             "type":"diff", "path":path,
-                            "old_text":item["oldText"], "new_text":item["newText"]
+                            "old_text":old_text, "new_text":new_text
                         }));
                     }
                 }
@@ -956,7 +1018,7 @@ impl ReplayTool {
             _ => ToolPhase::Interrupted,
         };
         tool_part(
-            projection.agent,
+            projection.agent.clone(),
             format!("acp:{}", self.id),
             &title,
             input,
@@ -985,6 +1047,7 @@ impl Projection<'_> {
     async fn user(
         &mut self,
         blocks: Vec<Value>,
+        media_allowed: bool,
     ) -> Result<(ComposerDocument, Vec<ExternalAgentHistoryBlob>), AppError> {
         let mut document = ComposerDocument::default();
         let mut blobs = Vec::new();
@@ -995,7 +1058,7 @@ impl Projection<'_> {
                         id: ActivityId::new(),
                         payload: ActivityPayload::SkillReference(
                             agena_domain::SkillReferenceActivity::external(
-                                self.agent,
+                                self.agent.clone(),
                                 name.to_owned(),
                                 String::new(),
                             ),
@@ -1005,7 +1068,10 @@ impl Projection<'_> {
                 }
                 continue;
             }
-            let resource = match self.block(block, blobs.len() < MAX_ENTRY_BLOBS).await? {
+            let resource = match self
+                .block(block, media_allowed && blobs.len() < MAX_ENTRY_BLOBS)
+                .await?
+            {
                 Block::Text(text) => {
                     push_user_text(&mut document, text);
                     continue;
@@ -1086,11 +1152,12 @@ impl Projection<'_> {
         &mut self,
         blocks: Vec<Value>,
         reasoning: bool,
+        media_allowed: bool,
         output: &mut Vec<ExternalAgentHistoryPart>,
     ) -> Result<(), AppError> {
         let mut text = String::new();
         for value in blocks {
-            let (title, raw, blobs) = match self.block(value, true).await? {
+            let (title, raw, blobs) = match self.block(value, media_allowed).await? {
                 Block::Text(value) => {
                     text.push_str(&value);
                     continue;
@@ -1115,7 +1182,7 @@ impl Projection<'_> {
             push_reply_text(output, std::mem::take(&mut text), reasoning);
             self.sequence += 1;
             output.push(tool_part(
-                self.agent,
+                self.agent.clone(),
                 format!("acp-replay-resource:{}", self.sequence),
                 title,
                 json!({"agent":self.agent}),
@@ -1173,7 +1240,7 @@ impl Projection<'_> {
         self.media_bytes += prepared.bytes.len();
         let id = BlobId::new();
         let mut item = prepared.attachment(None);
-        bind_agent_attachment(self.agent, &mut item, id)?;
+        bind_agent_attachment(self.agent.clone(), &mut item, id)?;
         let descriptor = BlobDescriptor {
             id,
             byte_len: prepared.bytes.len() as u64,
@@ -1187,6 +1254,49 @@ impl Projection<'_> {
             },
         ))
     }
+}
+
+fn recent_media_budget_flags(entries: &VecDeque<BufferedRecord>) -> Vec<bool> {
+    let mut allowed = vec![false; entries.len()];
+    let mut remaining = MAX_EXTERNAL_AGENT_HISTORY_MEDIA_BYTES;
+    for (index, frame) in entries.iter().enumerate().rev() {
+        let mut entry_media = 0usize;
+        let mut counted = 0usize;
+        let mut add_block = |block: &Value| {
+            if counted >= MAX_ENTRY_BLOBS {
+                return;
+            }
+            if matches!(block["type"].as_str(), Some("resource" | "image" | "audio"))
+                && let Some(size) = encoded_media_size(block)
+                && size <= MAX_EXTERNAL_AGENT_HISTORY_MEDIA_BYTES
+            {
+                entry_media = entry_media.saturating_add(size);
+                counted += 1;
+            }
+        };
+        match &frame.value {
+            Record::Blocks { blocks, .. } => {
+                for block in blocks {
+                    add_block(block);
+                }
+            }
+            Record::Tool(tool) => {
+                for (_, item) in &tool.content {
+                    if item["type"] == "content" {
+                        add_block(&item["content"]);
+                    }
+                }
+            }
+            _ => {}
+        }
+        if entry_media == 0 {
+            allowed[index] = true;
+        } else if remaining > 0 {
+            remaining = remaining.saturating_sub(entry_media);
+            allowed[index] = true;
+        }
+    }
+    allowed
 }
 
 fn encoded_media_size(value: &Value) -> Option<usize> {

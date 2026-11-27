@@ -11,7 +11,7 @@ use anyhow::{Context as _, Result, ensure};
 fn configured_agents(version: &str) -> Result<(tempfile::TempDir, TestAgenaBuilder)> {
     let bin = tempfile::tempdir()?;
     for agent in [ExternalAgent::ClaudeCode, ExternalAgent::Antigravity] {
-        let executable = bin.path().join(agent.command().0);
+        let executable = bin.path().join(agent.builtin_command().expect("builtin").0);
         std::fs::write(&executable, include_str!("plugins/fake_acp_auth_work.py"))?;
         std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755))?;
     }

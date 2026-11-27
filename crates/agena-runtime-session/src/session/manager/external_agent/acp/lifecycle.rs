@@ -14,18 +14,6 @@ use super::*;
 mod replay;
 pub(super) use replay::Replay;
 
-const PREVIOUS_HISTORY_CURSOR: &str = "agena:antigravity-history:";
-
-fn native_auth_required(error: &AppError) -> bool {
-    matches!(
-        error,
-        AppError::ProviderClassified {
-            kind: ProviderErrorKind::Authentication,
-            ..
-        }
-    )
-}
-
 #[derive(Clone, Copy, Default)]
 enum SystemPromptSupport {
     #[default]
@@ -113,12 +101,6 @@ pub(in crate::session::manager::external_agent) struct NativePage {
 }
 
 impl AcpClient {
-    pub(in crate::session::manager::external_agent) fn has_previous_history(&self) -> bool {
-        self.agent == ExternalAgent::Antigravity
-            && !self.previous_antigravity_history
-            && policy::previous_antigravity_history_available()
-    }
-
     pub(in crate::session::manager::external_agent) async fn lifecycle_capabilities(
         &mut self,
         cancel: &CancellationToken,
@@ -137,7 +119,7 @@ impl AcpClient {
                 caps.lifecycle.system_prompt,
                 SystemPromptSupport::Unsupported
             ),
-            continue_conversation: !self.previous_antigravity_history || caps.resume || caps.load,
+            continue_conversation: true,
         })
     }
 
@@ -210,57 +192,7 @@ impl AcpClient {
         filter: ExternalAgentArchiveFilter,
         cancel: &CancellationToken,
     ) -> Result<NativePage, AppError> {
-        if !self.has_previous_history() {
-            return self.list_native(cwd, cursor, filter, cancel).await;
-        }
-        if let Some(cursor) = cursor.and_then(|cursor| cursor.strip_prefix(PREVIOUS_HISTORY_CURSOR))
-        {
-            return self
-                .list_previous_history(cwd, Some(cursor), filter, cancel)
-                .await;
-        }
-        let mut page = match self.list_native(cwd, cursor, filter, cancel).await {
-            Err(error) if cursor.is_none() && native_auth_required(&error) => {
-                return self.list_previous_history(cwd, None, filter, cancel).await;
-            }
-            result => result?,
-        };
-        if page.next_cursor.is_none() {
-            let previous = match self.list_previous_history(cwd, None, filter, cancel).await {
-                Err(error) if native_auth_required(&error) => return Ok(page),
-                result => result?,
-            };
-            let seen: BTreeSet<_> = page
-                .sessions
-                .iter()
-                .map(|row| row.session.native_id.clone())
-                .collect();
-            page.sessions.extend(
-                previous
-                    .sessions
-                    .into_iter()
-                    .filter(|row| !seen.contains(&row.session.native_id)),
-            );
-            page.next_cursor = previous.next_cursor;
-        }
-        Ok(page)
-    }
-
-    async fn list_previous_history(
-        &self,
-        cwd: &Path,
-        cursor: Option<&str>,
-        filter: ExternalAgentArchiveFilter,
-        cancel: &CancellationToken,
-    ) -> Result<NativePage, AppError> {
-        let mut client = Self::spawn_profile(self.agent, cwd, true, &self.additional_directories)?;
-        let result = client.list_native(cwd, cursor, filter, cancel).await;
-        client.close().await;
-        let mut page = result?;
-        page.next_cursor = page
-            .next_cursor
-            .map(|cursor| format!("{PREVIOUS_HISTORY_CURSOR}{cursor}"));
-        Ok(page)
+        self.list_native(cwd, cursor, filter, cancel).await
     }
 
     pub(in crate::session::manager::external_agent) async fn find_workspace_native(
@@ -270,30 +202,7 @@ impl AcpClient {
         filter: ExternalAgentArchiveFilter,
         cancel: &CancellationToken,
     ) -> Result<Option<ExternalAgentIndexedSession>, AppError> {
-        let direct = self.find_native(cwd, native_id, filter, cancel).await;
-        if !self.has_previous_history() {
-            return direct;
-        }
-        match &direct {
-            Ok(None) => {}
-            Err(error) if native_auth_required(error) => {}
-            _ => return direct,
-        }
-        let mut client = Self::spawn_profile(self.agent, cwd, true, &self.additional_directories)?;
-        match client.find_native(cwd, native_id, filter, cancel).await {
-            Ok(Some(row)) => {
-                std::mem::replace(self, client).close().await;
-                Ok(Some(row))
-            }
-            result => {
-                client.close().await;
-                match result {
-                    Ok(None) => direct,
-                    Err(error) if native_auth_required(&error) && direct.is_ok() => direct,
-                    other => other,
-                }
-            }
-        }
+        self.find_native(cwd, native_id, filter, cancel).await
     }
 
     pub(in crate::session::manager::external_agent) async fn find_native(
@@ -379,9 +288,7 @@ impl AcpClient {
         let replay = self
             .collect_native_replay(cwd, native_id, context, Replay::default(), cancel)
             .await?;
-        let (turns, mut state) = replay.finish(self.agent, cwd).await?;
-        state.antigravity_legacy_history = self.previous_antigravity_history;
-        Ok((turns, state))
+        replay.finish(self.agent.clone(), cwd).await
     }
 
     pub(in crate::session::manager::external_agent) async fn preview_native_history(
@@ -416,7 +323,7 @@ impl AcpClient {
         replay.allow_rewind = capabilities.air_rewind;
         let mut params = json!({"cwd": cwd, "sessionId": native_id, "mcpServers": []});
         context.apply(&mut params, capabilities.lifecycle)?;
-        policy::apply_to_session(self.agent, &mut params);
+        policy::apply_to_session(&self.agent, &mut params);
         let method = if self.uses_v2() {
             params["replayFrom"] = json!({"type": "start"});
             "session/resume"
@@ -452,7 +359,9 @@ impl AcpClient {
         context: &SessionContext,
         cancel: &CancellationToken,
     ) -> Result<String, AppError> {
-        let caps = self.initialize(cancel).await?.lifecycle;
+        let initialized = self.initialize(cancel).await?;
+        let caps = initialized.lifecycle;
+        let delete_supported = initialized.delete;
         if !caps.fork {
             return Err(self.unsupported_lifecycle("forking conversations"));
         }
@@ -461,21 +370,26 @@ impl AcpClient {
             params["cursorId"] = json!(cursor);
         }
         context.apply(&mut params, caps)?;
-        policy::apply_to_session(self.agent, &mut params);
+        policy::apply_to_session(&self.agent, &mut params);
         self.prepare_provider_routes(cancel).await?;
         self.apply_initial_config_options(cwd, &mut params, context, cancel)
             .await?;
-        let verify = params.get("configOptions").is_some();
+        let mut states = OpeningStates::new();
         let response = self
-            .lifecycle_request("session/fork", params, SessionUpdates::Ignore, cancel)
+            .lifecycle_request(
+                "session/fork",
+                params,
+                SessionUpdates::Opening(&mut states, None),
+                cancel,
+            )
             .await?;
         let id = bounded_string(&response["sessionId"], 4096)
             .filter(|id| id != native_id)
             .ok_or_else(|| {
                 AppError::Internal("The external agent returned an invalid fork ID.".into())
             })?;
-        if verify {
-            let mut state = ExternalAgentState::default();
+        if !context.selected_options.is_empty() {
+            let mut state = states.remove(&id).unwrap_or_default().state;
             super::super::state::apply_setup_response(&mut state, &response, self.uses_v2());
             let mut opened = OpenedSession {
                 id: id.clone(),
@@ -490,7 +404,11 @@ impl AcpClient {
             };
             for (kind, value) in &context.selected_options {
                 if let Err(error) = self.set_option(&mut opened, kind, value, cancel).await {
-                    self.close_native_session_if_supported(&id).await;
+                    if delete_supported {
+                        let _ = self.release_native(&id, true, cancel).await;
+                    } else {
+                        self.close_native_session_if_supported(&id).await;
+                    }
                     return Err(error);
                 }
             }
@@ -538,7 +456,7 @@ impl AcpClient {
         };
         let mut params = json!({"cwd": cwd, "sessionId": native_id, "mcpServers": []});
         context.apply(&mut params, caps.lifecycle)?;
-        policy::apply_to_session(self.agent, &mut params);
+        policy::apply_to_session(&self.agent, &mut params);
         self.prepare_provider_routes(cancel).await?;
         self.lifecycle_request(method, params, SessionUpdates::Ignore, cancel)
             .await?;
@@ -627,18 +545,16 @@ impl AcpClient {
         updates: SessionUpdates<'_>,
         cancel: &CancellationToken,
     ) -> Result<Value, AppError> {
-        let agent = self.agent;
+        let label = self.agent_label().to_owned();
         self.request_for(STARTUP_TIMEOUT, method, params, updates, cancel)
             .await
-            .map_err(|_| {
-                AppError::Config(format!("{} timed out during {method}.", agent.label()))
-            })?
+            .map_err(|_| AppError::Config(format!("{label} timed out during {method}.")))?
     }
 
     fn unsupported_lifecycle(&self, operation: &str) -> AppError {
         AppError::Config(format!(
             "{} does not support {operation} over ACP.",
-            self.agent.label()
+            self.agent_label()
         ))
     }
 }

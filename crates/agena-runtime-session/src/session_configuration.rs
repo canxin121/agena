@@ -17,6 +17,7 @@ pub struct RuntimeSessionManagerConfig {
     pub auto_title: agena_runtime_config::SessionAutoTitleConfig,
     pub permission: PermissionConfig,
     pub access_control: agena_domain::AccessControlConfig,
+    pub acp: agena_domain::AcpConfig,
     /// Resolved settings flag used for configuration validation, independent
     /// of trusted invocation bypasses and task-local execution scopes.
     pub sandbox_enabled: bool,
@@ -39,6 +40,7 @@ impl Default for RuntimeSessionManagerConfig {
             auto_title: Default::default(),
             permission: Default::default(),
             access_control: Default::default(),
+            acp: Default::default(),
             sandbox_enabled: true,
             auto_compaction: Default::default(),
             max_concurrent_tools: 32,

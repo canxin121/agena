@@ -1,6 +1,5 @@
 use std::{collections::HashSet, time::Duration};
 
-use agena_domain::ExternalAgent;
 use agena_provider::CompletionUsage;
 use agena_storage::kernel::{ExternalAgentCursorEntity, ExternalAgentNativeCursor};
 use serde_json::{Value, json};
@@ -8,7 +7,7 @@ use tokio::time::Instant;
 
 use super::{MAX_CURSOR_BYTES, bounded_string, cursors};
 
-const MAX_PROMPT_CURSORS: usize = 64;
+const MAX_PROMPT_CURSORS: usize = 256;
 const MAX_PENDING_USER_IDS: usize = 64;
 const FOREGROUND_FOLLOWUP_GRACE: Duration = Duration::from_millis(250);
 
@@ -19,11 +18,9 @@ pub(super) enum Version {
 }
 
 impl Version {
-    pub(super) fn initialize_params(self, agent: ExternalAgent, terminal_auth: bool) -> Value {
+    pub(super) fn initialize_params(self, client_tools: bool, terminal_auth: bool) -> Value {
         let info = json!({"name": "agena", "title": "Agena", "version": env!("CARGO_PKG_VERSION")});
         let elicitation = json!({"form": {}, "url": {}});
-        // Antigravity advertises its file and shell tools when the client leaves these operations to it.
-        let client_tools = agent != ExternalAgent::Antigravity;
         let mut params = match self {
             Self::V1 => json!({
                 "protocolVersion": 1,
@@ -167,6 +164,7 @@ struct InheritedForeground {
 pub(super) struct PromptLifecycle {
     pub(super) replayed_users: Option<super::ReplayedUsers>,
     message_id: Option<String>,
+    observed_user_id: Option<String>,
     cursors: cursors::Book,
     preceding: Option<cursors::Entity>,
     tail: cursors::Tail,
@@ -206,6 +204,33 @@ impl PromptLifecycle {
         self.message_id = Some(message_id);
     }
 
+    /// Record the native user message identity for a v1 prompt once the turn
+    /// response arrives so `before user_message` cursors and first-turn cursors
+    /// can be matched and persisted.
+    pub(super) fn acknowledge_v1(&mut self, response_message_id: Option<String>) {
+        if self.message_id.is_none() {
+            self.message_id = response_message_id.or_else(|| self.observed_user_id.clone());
+        }
+    }
+
+    /// A steering prompt accepted by a v2 peer starts or extends foreground
+    /// work. Clear any previously latched foreground completion so the loop
+    /// waits for the steered work instead of settling during a grace window.
+    pub(super) fn note_steering_accepted(&mut self, message_id: Option<String>) {
+        self.stop = None;
+        self.quiet_after = None;
+        if self.activity.foreground == ForegroundState::Idle {
+            let mut inherited = self.inherited.take().unwrap_or_default();
+            if let Some(id) = message_id
+                && inherited.inserted_users.len() < MAX_PENDING_USER_IDS
+            {
+                inherited.inserted_users.insert(id);
+            }
+            self.inherited = Some(inherited);
+            self.started = false;
+        }
+    }
+
     pub(super) fn observe(&mut self, update: &Value) {
         if update["sessionUpdate"] == "cursor_update" {
             self.cursors
@@ -213,16 +238,20 @@ impl PromptLifecycle {
             return;
         }
         self.tail.observe(update);
-        if let Some(inherited) = &mut self.inherited
-            && self.activity.foreground == ForegroundState::Active
-            && matches!(
-                update["sessionUpdate"].as_str(),
-                Some("user_message" | "user_message_chunk")
-            )
-            && inherited.inserted_users.len() < MAX_PENDING_USER_IDS
-            && let Some(id) = bounded_string(&update["messageId"], MAX_CURSOR_BYTES)
+        if matches!(
+            update["sessionUpdate"].as_str(),
+            Some("user_message" | "user_message_chunk")
+        ) && let Some(id) = bounded_string(&update["messageId"], MAX_CURSOR_BYTES)
         {
-            inherited.inserted_users.insert(id);
+            if self.observed_user_id.is_none() {
+                self.observed_user_id = Some(id.clone());
+            }
+            if let Some(inherited) = &mut self.inherited
+                && self.activity.foreground == ForegroundState::Active
+                && inherited.inserted_users.len() < MAX_PENDING_USER_IDS
+            {
+                inherited.inserted_users.insert(id);
+            }
         }
         let previous = self.activity.foreground;
         let previous_background = self.activity.background;
@@ -526,5 +555,54 @@ mod tests {
         let position = turn.into_fork_cursor().unwrap();
         assert_eq!(position.cursor_id.as_deref(), Some("opaque"));
         assert!(!position.fork);
+    }
+
+    #[test]
+    fn v2_steering_acceptance_clears_latched_stop_and_grace_window() {
+        let mut turn = PromptLifecycle::default();
+        turn.acknowledge("prompt-1".into());
+        turn.observe(&json!({"sessionUpdate": "state_update", "state": "running"}));
+        turn.observe(&json!({
+            "sessionUpdate": "state_update", "state": "idle", "stopReason": "end_turn",
+            "background": [{"type": "tool_call", "toolCallId": "bg-1"}]
+        }));
+        turn.observe(&json!({"sessionUpdate": "state_update", "state": "idle", "background": []}));
+        assert!(turn.completion_deadline(false).is_some());
+
+        turn.note_steering_accepted(Some("steer-1".into()));
+        assert!(turn.take_result(false).is_none());
+        assert!(turn.completion_deadline(false).is_none());
+
+        turn.observe(&json!({"sessionUpdate": "state_update", "state": "running"}));
+        turn.observe(&json!({
+            "sessionUpdate": "state_update", "state": "idle", "stopReason": "end_turn",
+        }));
+        assert_eq!(turn.take_result(false).unwrap()["stopReason"], "end_turn");
+    }
+
+    #[test]
+    fn v1_acknowledge_records_observed_user_message_cursor() {
+        let mut turn = PromptLifecycle::default();
+        turn.observe(&json!({
+            "sessionUpdate": "user_message",
+            "messageId": "v1-user-1",
+            "content": [{"type": "text", "text": "Hello"}]
+        }));
+        turn.observe(&json!({
+            "sessionUpdate": "cursor_update",
+            "cursorId": "v1-cursor-before",
+            "capabilities": {"fork": {}},
+            "anchor": {"type": "user_message", "messageId": "v1-user-1", "position": "before"}
+        }));
+        turn.acknowledge_v1(None);
+        assert_eq!(
+            turn.into_fork_cursor(),
+            Some(ExternalAgentNativeCursor {
+                message_id: "v1-user-1".into(),
+                cursor_id: Some("v1-cursor-before".into()),
+                fork: true,
+                rewind: false,
+            })
+        );
     }
 }

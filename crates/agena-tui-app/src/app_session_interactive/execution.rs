@@ -115,8 +115,12 @@ impl App {
         }
         let draft = self.current_composer_draft();
         let text = draft.text();
-        if text.trim().is_empty() || draft.activities().next().is_some() {
+        if text.trim().is_empty() {
             return false;
+        }
+        if draft.activities().next().is_some() {
+            self.flash_warning(self.i18n.text("external-agent-steer-text-only"));
+            return true;
         }
         let submitted = text.clone();
         self.dispatch_backend_operation(

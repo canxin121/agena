@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
 use agena_domain::{
-    ExternalAgentAuth, ExternalAgentAuthFlow, ExternalAgentSessionResult as SessionResult,
+    ExternalAgentAuth, ExternalAgentAuthFlow, ExternalAgentAuthStatus, ExternalAgentProviders,
+    ExternalAgentSessionResult as SessionResult,
 };
 use agena_tui_components::{EditorDialogKeyResult, EditorDialogState, drive_editor_dialog_key};
 use crossterm::event::KeyEvent;
@@ -141,10 +142,78 @@ impl App {
             ));
         }
         rows.push(self.native_agent_row(
+            "external-agent-providers",
+            NativeAgentChoice::Providers(session_id),
+        ));
+        rows.push(self.native_agent_row(
             "external-agent-refresh",
             NativeAgentChoice::Manage(session_id),
         ));
         self.open_native_agent_menu("external-agent-manage", description, rows, None);
+    }
+
+    pub(super) fn open_native_agent_providers(&mut self, session_id: i64) {
+        if self.current_or_selected_session_id() != Some(session_id) {
+            return;
+        }
+        self.native_agent_request(
+            "external-agent-providers",
+            None,
+            move |backend| async move {
+                Ok(backend
+                    .client()
+                    .external_agent_providers(session_id)
+                    .await?)
+            },
+            move |app, providers| app.show_native_providers(session_id, providers),
+        );
+    }
+
+    pub(super) fn show_native_providers(
+        &mut self,
+        session_id: i64,
+        providers: ExternalAgentProviders,
+    ) {
+        let mut description = if !providers.supported {
+            self.i18n.text("external-agent-providers-unsupported")
+        } else if providers.providers.is_empty() {
+            self.i18n.text("external-agent-providers-empty")
+        } else {
+            providers
+                .providers
+                .iter()
+                .map(|provider| {
+                    let mut header = provider.provider_id.clone();
+                    if provider.required {
+                        header.push_str(&format!(
+                            " ({})",
+                            self.i18n.text("external-agent-provider-required")
+                        ));
+                    }
+                    let target = match &provider.current {
+                        Some(current) => format!("{} · {}", current.api_type, current.base_url),
+                        None => self.i18n.text("external-agent-provider-unconfigured"),
+                    };
+                    if provider.supported.is_empty() {
+                        format!("{header}: {target}")
+                    } else {
+                        format!(
+                            "{header} [{}]: {target}",
+                            provider.supported.join(", ")
+                        )
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        if description.is_empty() {
+            description = self.i18n.text("external-agent-providers-empty");
+        }
+        let rows = vec![self.native_agent_row(
+            "external-agent-refresh",
+            NativeAgentChoice::Providers(session_id),
+        )];
+        self.open_native_agent_menu("external-agent-providers", description, rows, None);
     }
 
     pub(crate) fn change_native_management(
@@ -321,26 +390,72 @@ impl App {
                 "external-agent-auth",
                 None,
                 move |backend| async move {
-                    Ok(backend
-                        .client()
-                        .external_agent_auth(session_id, action)
-                        .await?)
+                    let client = backend.client();
+                    let auth = client.external_agent_auth(session_id, action).await?;
+                    let live = client
+                        .external_agent_live_auth(session_id)
+                        .await
+                        .ok()
+                        .flatten();
+                    Ok((auth, live))
                 },
-                move |app, auth| app.show_native_auth(session_id, auth),
+                move |app, (auth, live)| app.show_native_auth_with_live(session_id, auth, live),
             );
         }
     }
 
     pub(super) fn show_native_auth(&mut self, session_id: i64, auth: ExternalAgentAuth) {
-        let state = self.i18n.text(match auth.state.as_deref() {
+        self.show_native_auth_with_live(session_id, auth, None);
+    }
+
+    pub(super) fn show_native_auth_with_live(
+        &mut self,
+        session_id: i64,
+        auth: ExternalAgentAuth,
+        live: Option<ExternalAgentAuthStatus>,
+    ) {
+        let state_str = live
+            .as_ref()
+            .map(|status| status.state.as_str())
+            .or(auth.state.as_deref());
+        let state = self.i18n.text(match state_str {
             Some("authenticated") => "external-agent-auth-signed-in",
             Some("unauthenticated") => "external-agent-auth-required",
             Some("not_required") => "external-agent-auth-not-required",
             _ => "external-agent-auth-unknown",
         });
-        let mut description = format!("{} · {state}", auth.agent.label());
-        for account in auth.accounts.iter().filter(|account| account.active) {
-            description.push_str(&format!("\n{}", account.label));
+        let mut description = if live.is_some() {
+            format!(
+                "{} · {} · {state}",
+                auth.agent.label(),
+                self.i18n.text("external-agent-auth-connection")
+            )
+        } else {
+            format!("{} · {state}", auth.agent.label())
+        };
+        let accounts = live
+            .as_ref()
+            .map(|status| status.accounts.as_slice())
+            .filter(|accounts| !accounts.is_empty())
+            .unwrap_or(auth.accounts.as_slice());
+        for account in accounts.iter().filter(|account| account.active || live.is_some()) {
+            let line = [
+                Some(account.label.as_str()),
+                account.name.as_deref(),
+                account.email.as_deref(),
+                account.organization.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            .filter(|value| !value.is_empty())
+            .collect::<Vec<_>>()
+            .join(" · ");
+            if !line.is_empty() {
+                description.push_str(&format!("\n{line}"));
+            }
+            if let Some(detail) = account.description.as_deref().filter(|d| !d.is_empty()) {
+                description.push_str(&format!("\n{detail}"));
+            }
         }
         description.push('\n');
         description.push_str(&self.i18n.text_args(

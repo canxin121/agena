@@ -73,7 +73,7 @@ pub enum AppError {
     )]
     ExternalAgentPromptAlreadyAccepted,
     #[error("{agent} sent no ACP prompt progress for {seconds} seconds")]
-    ExternalAgentPromptInactive { agent: &'static str, seconds: u64 },
+    ExternalAgentPromptInactive { agent: String, seconds: u64 },
     #[error("operation blocked by permission policy: {}", .0.reason)]
     PolicyDenied(Box<agena_domain::PolicyDeniedResult>),
     #[error("permission request declined by user")]

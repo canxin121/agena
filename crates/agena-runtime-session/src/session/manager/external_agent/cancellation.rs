@@ -252,10 +252,25 @@ impl Work {
             if parent != source {
                 return;
             }
-        } else if self.children.len() < MAX_CHILDREN {
-            self.children.insert(child.into(), source.into());
         } else {
-            return;
+            if self.children.len() >= MAX_CHILDREN {
+                let Some(evict) = self
+                    .children
+                    .keys()
+                    .find(|id| {
+                        self.items
+                            .get(&Target::child(id))
+                            .is_none_or(|item| !item.active)
+                    })
+                    .cloned()
+                else {
+                    return;
+                };
+                self.children.remove(&evict);
+                self.background.remove(&evict);
+                self.items.retain(|target, _| target.session != evict);
+            }
+            self.children.insert(child.into(), source.into());
         }
         if let Some(item) = self.item(Target::child(child)) {
             item.update(update.get("title"), cancel_capability(update), None);
@@ -276,36 +291,38 @@ impl Work {
             };
             item.update(None, None, active);
         }
-        let Some(items) = state["background"].as_array() else {
-            return;
-        };
-        let next: BTreeSet<_> = items
-            .iter()
-            .take(MAX_WORK_ITEMS)
-            .filter_map(|item| match item["type"].as_str()? {
-                "tool_call" => Target::item(source, item, Kind::ToolCall, "toolCallId"),
-                "terminal" => Target::item(source, item, Kind::Terminal, "terminalId"),
-                _ => None,
-            })
-            .collect();
+        let next: Option<BTreeSet<_>> = state["background"].as_array().map(|items| {
+            items
+                .iter()
+                .take(MAX_WORK_ITEMS)
+                .filter_map(|item| match item["type"].as_str()? {
+                    "tool_call" => Target::item(source, item, Kind::ToolCall, "toolCallId"),
+                    "terminal" => Target::item(source, item, Kind::Terminal, "terminalId"),
+                    _ => None,
+                })
+                .collect()
+        });
         if state["state"] == "idle" {
+            let active_background = next.as_ref().or_else(|| self.background.get(source));
             for (target, item) in &mut self.items {
                 if target.session == source
-                    && target.kind != Kind::Subagent
-                    && !next.contains(target)
+                    && !matches!(target.kind, Kind::Subagent | Kind::AsyncTask)
+                    && !active_background.is_some_and(|bg| bg.contains(target))
                 {
                     item.update(None, None, Some(false));
                 }
             }
         }
-        if let Some(previous) = self.background.remove(source) {
-            for stopped in previous.difference(&next) {
-                if let Some(item) = self.items.get_mut(stopped) {
-                    item.update(None, None, Some(false));
+        if let Some(next) = next {
+            if let Some(previous) = self.background.remove(source) {
+                for stopped in previous.difference(&next) {
+                    if let Some(item) = self.items.get_mut(stopped) {
+                        item.update(None, None, Some(false));
+                    }
                 }
             }
+            self.background.insert(source.into(), next);
         }
-        self.background.insert(source.into(), next);
     }
 }
 
@@ -481,5 +498,72 @@ impl SessionManager {
             .unwrap_or_else(|error| error.into_inner())
             .upgrade()
             .filter(|registry| !registry.requests.is_closed())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn children_evicts_inactive_child_beyond_max_children() {
+        let mut work = Work {
+            root: Some("root".into()),
+            ..Default::default()
+        };
+        for i in 0..MAX_CHILDREN {
+            let id = format!("child-{i}");
+            work.observe(
+                "root",
+                &json!({
+                    "sessionUpdate": "subagent_update",
+                    "sessionId": id,
+                    "title": format!("Worker {i}"),
+                    "capabilities": {"cancel": {}},
+                    "state": {"state": if i == 0 { "idle" } else { "running" }}
+                }),
+            );
+        }
+        assert_eq!(work.children.len(), MAX_CHILDREN);
+        // A 25th subagent should evict idle child-0 rather than being dropped.
+        work.observe(
+            "root",
+            &json!({
+                "sessionUpdate": "subagent_update",
+                "sessionId": "child-24",
+                "title": "Worker 24",
+                "capabilities": {"cancel": {}},
+                "state": {"state": "running"}
+            }),
+        );
+        assert!(work.children.contains_key("child-24"));
+        assert!(!work.children.contains_key("child-0"));
+    }
+
+    #[test]
+    fn idle_state_without_background_still_clears_finished_foreground() {
+        let mut work = Work {
+            root: Some("root".into()),
+            ..Default::default()
+        };
+        work.observe(
+            "root",
+            &json!({
+                "sessionUpdate": "tool_call",
+                "toolCallId": "tool-1",
+                "title": "Run check",
+                "capabilities": {"cancel": {}}
+            }),
+        );
+        assert_eq!(work.items.len(), 1);
+        assert!(work.items.values().all(|item| item.active && item.cancel_id.is_some()));
+        work.observe(
+            "root",
+            &json!({
+                "sessionUpdate": "state_update",
+                "state": "idle"
+            }),
+        );
+        assert!(work.items.values().all(|item| !item.active && item.cancel_id.is_none()));
     }
 }

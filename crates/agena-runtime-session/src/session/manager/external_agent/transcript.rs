@@ -58,6 +58,9 @@ impl Transcript {
         if &self.state != previous {
             self.persist_state(&turn.round).await?;
         }
+        self.messages
+            .flush(MessageTarget::Round(turn, &link))
+            .await?;
         self.link = Some(link);
         Ok(())
     }
@@ -214,6 +217,7 @@ impl Transcript {
             tool.native.patch(update);
         } else if !self.tools.contains_key(&key) {
             if child.is_none() {
+                self.flush_messages(turn).await?;
                 self.finish_text().await?;
             }
             let name = update["name"].as_str().or_else(|| {
@@ -244,7 +248,7 @@ impl Transcript {
                 }
                 None => format!("acp:{id}"),
             };
-            let native = NativeToolBody::new(turn.agent, &label, title, child, update);
+            let native = NativeToolBody::new(turn.agent.clone(), &label, title, child, update);
             let command = RequestId::new();
             let call = ToolStart {
                 call_id,
@@ -295,6 +299,15 @@ impl Transcript {
         Ok(())
     }
 
+    pub(super) async fn flush_messages(&mut self, turn: &ExternalTurn) -> Result<(), AppError> {
+        if let Some(link) = &self.link {
+            self.messages
+                .flush(MessageTarget::Round(turn, link))
+                .await?;
+        }
+        Ok(())
+    }
+
     pub(super) async fn finish_text(&mut self) -> Result<(), AppError> {
         if let Some((_, output)) = self.output.take() {
             let command = RequestId::new();
@@ -306,6 +319,7 @@ impl Transcript {
     }
 
     pub(super) async fn finish_turn(&mut self, turn: &ExternalTurn) -> Result<(), AppError> {
+        self.flush_messages(turn).await?;
         self.finish_text().await?;
         for tool in std::mem::take(&mut self.tools).into_values().flatten() {
             tool.finish(turn, &self.state.details, ToolPhase::Interrupted)
@@ -827,7 +841,7 @@ async fn materialize_media(
             .prepare_immutable_blob(RequestId::new(), turn.control.session, &prepared.bytes)
             .await?;
         attachments.push(agent_attachment(
-            turn.agent,
+            turn.agent.clone(),
             &prepared,
             blob.descriptor().id,
         )?);

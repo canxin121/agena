@@ -88,6 +88,10 @@ pub trait SessionExecutionCommandService: Send + Sync {
         use_default: bool,
     ) -> Result<agena_storage::kernel::SessionConfiguration, SessionExecutionCommandError>;
 
+    async fn list_external_agents(
+        &self,
+    ) -> Result<Vec<agena_domain::ExternalAgentCatalogEntry>, SessionExecutionCommandError>;
+
     async fn external_agent_options(
         &self,
         session_id: i64,

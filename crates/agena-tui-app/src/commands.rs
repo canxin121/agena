@@ -155,6 +155,31 @@ fn command_applies_to_session(entry: &CommandCatalogItem, is_bot_session: bool) 
     entry.command.applies_to.contains(kind)
 }
 
+/// Built-in commands owned by Agena sessions that do not apply to native ACP
+/// conversations (which expose their own lifecycle/management menus and
+/// `/agent:*` slash commands). Note that `/model` remains available in TUI so
+/// users can jump directly to the external agent options picker.
+pub(crate) fn command_applies_to_external_agent(action: ClientCommandAction) -> bool {
+    !matches!(
+        action,
+        ClientCommandAction::Rewind
+            | ClientCommandAction::Rename
+            | ClientCommandAction::Integrations
+            | ClientCommandAction::Assistant
+            | ClientCommandAction::Compact
+            | ClientCommandAction::Clear
+            | ClientCommandAction::Favorite
+            | ClientCommandAction::Hub
+            | ClientCommandAction::Lineage
+            | ClientCommandAction::Fork
+            | ClientCommandAction::Side
+            | ClientCommandAction::Btw
+            | ClientCommandAction::Children
+            | ClientCommandAction::Parent
+            | ClientCommandAction::Schedules
+    )
+}
+
 /// Every declared command, reduced to the ones this client can run in the
 /// conversation it is rendering.
 ///

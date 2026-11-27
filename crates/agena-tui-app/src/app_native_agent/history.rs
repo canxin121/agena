@@ -119,7 +119,7 @@ impl App {
     ) {
         let native_id = target.session.native_id.clone();
         let workspace = target.workspace;
-        let agent = target.agent;
+        let agent = target.agent.clone();
         let before_turn = cursors.last().copied();
         self.native_agent_request(
             "external-agent-preview-history",

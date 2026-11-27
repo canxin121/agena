@@ -19,7 +19,7 @@ async fn exercise_turn(
     disconnect: bool,
 ) -> TestResult {
     let bin = tempfile::tempdir()?;
-    let executable = bin.path().join(agent.command().0);
+    let executable = bin.path().join(agent.builtin_command().expect("builtin").0);
     std::fs::write(&executable, include_str!("plugins/fake_acp_mcp.py"))?;
     std::fs::set_permissions(executable, std::fs::Permissions::from_mode(0o755))?;
     let path = std::env::var_os("PATH").unwrap_or_default();

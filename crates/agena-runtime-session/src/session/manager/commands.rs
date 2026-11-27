@@ -16,10 +16,11 @@ impl SessionManager {
         requested: Option<String>,
         use_default: bool,
     ) -> Result<SessionConfiguration, AppError> {
-        if configuration.external_agent.is_some() {
+        if let Some(agent) = configuration.external_agent.as_ref() {
             if !self.is_acp_scope() {
                 return Err(AppError::Config("Open this agent in ACP sessions.".into()));
             }
+            self.resolve_external_agent(agent)?;
             let workspace = workspace_id.ok_or_else(|| {
                 AppError::Config("ACP sessions require a project workspace.".into())
             })?;
@@ -1249,10 +1250,10 @@ impl SessionManager {
                 .await?;
         }
         let decision = match reply.kind {
-            UserInputReplyKind::Submit => {
+            UserInputReplyKind::Submit | UserInputReplyKind::Timeout => {
                 InteractionDecision::Input(serde_json::to_string(&reply)?)
             }
-            UserInputReplyKind::Cancel | UserInputReplyKind::Timeout => InteractionDecision::Cancel,
+            UserInputReplyKind::Cancel => InteractionDecision::Cancel,
         };
         self.kernel()
             .sessions
@@ -1320,6 +1321,12 @@ impl SessionExecutionCommandService for SessionManager {
         )
         .await
         .map_err(command_error)
+    }
+
+    async fn list_external_agents(
+        &self,
+    ) -> Result<Vec<agena_domain::ExternalAgentCatalogEntry>, SessionExecutionCommandError> {
+        Ok(self.list_external_agents())
     }
 
     async fn external_agent_options(

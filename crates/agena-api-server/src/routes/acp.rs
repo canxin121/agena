@@ -8,16 +8,26 @@ use crate::{AppState, rest};
 
 pub(crate) fn routes() -> Router<AppState> {
     let router = Router::new()
+        .route("/agents", get(rest::list_external_agents))
         .route(
             "/workspaces/{workspace_id}/sessions",
             post(rest::external_agent_workspace).layer(DefaultBodyLimit::max(16 * 1024)),
         )
-        .route("/sessions", post(rest::create_session))
+        .route(
+            "/sessions",
+            get(rest::list_sessions).post(rest::create_session),
+        )
         .route(
             "/sessions/{session_id}",
-            get(rest::get_session).delete(rest::delete_session),
+            get(rest::get_session)
+                .put(rest::replace_session)
+                .delete(rest::delete_session),
         )
         .route("/sessions/{session_id}/state", get(rest::get_session_state))
+        .route(
+            "/sessions/{session_id}/executions/{execution_id}/attempts/{attempt_generation}",
+            get(rest::get_execution_attempt).delete(rest::cancel_execution_attempt),
+        )
         .route(
             "/sessions/{session_id}/prompts/preview",
             get(rest::get_session_prompt_preview),
@@ -39,15 +49,17 @@ pub(crate) fn routes() -> Router<AppState> {
         )
         .route(
             "/sessions/{session_id}/agent-session",
-            post(rest::external_agent_session),
+            post(rest::external_agent_session).layer(DefaultBodyLimit::max(32 * 1024)),
         )
         .route(
             "/sessions/{session_id}/agent-options",
-            post(rest::external_agent_options),
+            post(rest::external_agent_options).layer(DefaultBodyLimit::max(16 * 1024)),
         )
         .route(
             "/sessions/{session_id}/agent-auth",
-            get(rest::external_agent_live_auth).post(rest::external_agent_auth),
+            get(rest::external_agent_live_auth)
+                .post(rest::external_agent_auth)
+                .layer(DefaultBodyLimit::max(16 * 1024)),
         )
         .route(
             "/sessions/{session_id}/agent-providers",
@@ -55,17 +67,20 @@ pub(crate) fn routes() -> Router<AppState> {
         )
         .route(
             "/sessions/{session_id}/agent-work",
-            get(rest::list_external_agent_work).post(rest::cancel_external_agent_work),
+            get(rest::list_external_agent_work)
+                .post(rest::cancel_external_agent_work)
+                .layer(DefaultBodyLimit::max(1024)),
         )
         .route(
             "/sessions/{session_id}/agent-steer",
-            post(rest::steer_external_agent),
+            post(rest::steer_external_agent).layer(DefaultBodyLimit::max(256 * 1024)),
         )
         .route(
             "/sessions/{session_id}/messages",
             post(rest::submit_message).layer(DefaultBodyLimit::max(96 * 1024 * 1024)),
         )
         .route("/sessions/{session_id}/continue", post(rest::continue_run))
+        .route("/sessions/{session_id}/clear", post(rest::clear_session))
         .route("/sessions/{session_id}/cancel", post(rest::cancel_run))
         .route(
             "/sessions/{session_id}/queue/{execution_id}",

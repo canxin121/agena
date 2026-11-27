@@ -199,8 +199,8 @@ pub(super) async fn import(
     if title.trim().is_empty() || title.len() > 4096 || title.chars().any(char::is_control) {
         return Err(invalid("invalid native session title"));
     }
-    let previous = if let Some(existing) = existing_link(connection, workspace, agent, link).await?
-    {
+    let previous =
+        if let Some(existing) = existing_link(connection, workspace, agent.clone(), link).await? {
         if replace_view != Some(existing) {
             return Ok(Mutation::Session(Box::new(
                 reads::metadata(connection, existing).await?,
@@ -245,7 +245,7 @@ pub(super) async fn import(
     let mut link = link.clone();
     let record_cursors = turns.iter().any(|turn| turn.cursor.is_some());
     for turn in turns {
-        if let Some(round) = import_turn(connection, &created, now, turn, agent, &link).await?
+        if let Some(round) = import_turn(connection, &created, now, turn, &agent, &link).await?
             && record_cursors
             && link.incarnation.is_none()
         {
@@ -303,7 +303,7 @@ async fn import_turn(
     metadata: &SessionMetadata,
     now: i64,
     turn: &ExternalAgentHistoryTurn,
-    agent: ExternalAgent,
+    agent: &ExternalAgent,
     link: &ExternalAgentLink,
 ) -> Result<Option<RoundId>> {
     if turn.user.is_empty() {

@@ -341,7 +341,16 @@ fn external_agent_activity(
         );
     }
     for notice in &details.notices {
-        let _ = writeln!(text, "{} · {}", notice.severity, notice.title);
+        if let Some(session_id) = &notice.session_id {
+            let agent = details
+                .subagents
+                .get(session_id)
+                .and_then(|child| child.title.as_deref())
+                .unwrap_or(session_id);
+            let _ = writeln!(text, "{agent} · {} · {}", notice.severity, notice.title);
+        } else {
+            let _ = writeln!(text, "{} · {}", notice.severity, notice.title);
+        }
         if let Some(description) = &notice.description {
             let _ = writeln!(text, "{description}");
         }
@@ -367,17 +376,26 @@ fn external_agent_activity(
             if message.text.is_empty() {
                 continue;
             }
-            let label = message
-                .sender_id
-                .as_deref()
-                .and_then(|id| {
-                    details
-                        .subagents
-                        .get(id)
-                        .and_then(|child| child.title.as_deref())
-                        .or(Some(id))
-                })
-                .unwrap_or(&message.role);
+            let label = if let Some(sender) = message.sender_id.as_deref() {
+                details
+                    .subagents
+                    .get(sender)
+                    .and_then(|child| child.title.as_deref())
+                    .unwrap_or(sender)
+                    .to_owned()
+            } else if let Some(recipient) = message.recipient_id.as_deref() {
+                let name = details
+                    .subagents
+                    .get(recipient)
+                    .and_then(|child| child.title.as_deref())
+                    .unwrap_or(recipient);
+                i18n.text_args(
+                    "external-agent-message-to",
+                    &agena_tui::fl_args!("name" => name.to_owned()),
+                )
+            } else {
+                message.role.clone()
+            };
             let _ = writeln!(text, "{label}\n{}\n", message.text);
         }
     };

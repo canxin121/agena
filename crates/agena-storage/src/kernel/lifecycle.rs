@@ -509,8 +509,12 @@ pub struct SessionConfigurationChange {
     pub relation_kind: Option<SessionRelationKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_agent: Option<agena_domain::ExternalAgent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_agent_link: Option<ExternalAgentLink>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_agent_selection: Option<ExternalAgentSelectionChange>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_agent_options: Option<Vec<agena_domain::ExternalAgentOption>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_agent_directories: Option<Vec<PathBuf>>,
     pub conversation: Option<Option<SessionConversation>>,

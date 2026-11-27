@@ -36,7 +36,7 @@ impl Application {
             .configuration(id)
             .await
             .map_err(crate::kernel_error)?;
-        if let Some(agent) = config.external_agent
+        if let Some(agent) = config.external_agent.clone()
             && !config.external_agent_state.plans.is_empty()
         {
             return Ok(external_agent_plan::response(

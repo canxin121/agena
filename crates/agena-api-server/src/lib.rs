@@ -99,7 +99,12 @@ pub fn router(state: AppState) -> Router {
 
     #[cfg(feature = "http")]
     let router = if let Ok(acp) = state.acp_state() {
-        router.nest("/api/v1/acp", routes::acp::routes().with_state(acp))
+        router.nest(
+            "/api/v1/acp",
+            routes::acp::routes()
+                .layer(middleware::from_fn(count_request))
+                .with_state(acp),
+        )
     } else {
         router
     };

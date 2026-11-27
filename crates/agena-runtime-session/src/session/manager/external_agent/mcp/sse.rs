@@ -20,7 +20,7 @@ use uuid::Uuid;
 use super::*;
 
 const MAX_CONNECTIONS: usize = 16;
-const MESSAGE_QUEUE: usize = 8;
+const MESSAGE_QUEUE: usize = 64;
 
 type Sessions = Arc<Mutex<HashMap<Uuid, mpsc::Sender<ClientJsonRpcMessage>>>>;
 
@@ -120,9 +120,9 @@ async fn receive(
     let Some(sender) = server.sessions.lock().get(&query.session_id).cloned() else {
         return StatusCode::NOT_FOUND;
     };
-    match sender.try_send(message) {
-        Ok(()) => StatusCode::ACCEPTED,
-        Err(mpsc::error::TrySendError::Full(_)) => StatusCode::TOO_MANY_REQUESTS,
-        Err(mpsc::error::TrySendError::Closed(_)) => StatusCode::NOT_FOUND,
+    match tokio::time::timeout(Duration::from_secs(2), sender.send(message)).await {
+        Ok(Ok(())) => StatusCode::ACCEPTED,
+        Ok(Err(_)) => StatusCode::NOT_FOUND,
+        Err(_) => StatusCode::TOO_MANY_REQUESTS,
     }
 }

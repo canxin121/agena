@@ -85,9 +85,7 @@ for line in sys.stdin:
         if turns < 2:
             label = ["first", "second"][turns]
             assert f"ACP instruction {label}" in text, text
-        assert params["_meta"]["claudeCode"]["options"]["systemPrompt"] == {
-            "type": "preset", "preset": "claude_code", "append": text, "snapshot": False,
-        }
+        assert params["_meta"]["claudeCode"]["options"] == {"allowedTools": ["mcp__agena__*"]}
         if method == "session/new":
             result = {"sessionId": NATIVE_ID}
     elif method == "session/prompt":

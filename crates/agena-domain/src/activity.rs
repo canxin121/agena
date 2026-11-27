@@ -157,7 +157,7 @@ impl SkillReferenceActivity {
 
     /// Project a selected skill's identity so the model can load its instructions on demand.
     pub fn model_context_text(&self) -> String {
-        if let Some(agent) = self.external_agent {
+        if let Some(agent) = &self.external_agent {
             return format!("[{} Skill: {}]", agent.label(), self.name);
         }
         let mut skill = serde_json::json!({

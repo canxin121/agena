@@ -280,7 +280,7 @@ impl SessionManager {
             version: metadata.metadata_version.get(),
             relation_kind: configuration.relation_kind,
             lifecycle_state: agena_domain::SessionLifecycleState::Ready,
-            external_agent: configuration.external_agent,
+            external_agent: configuration.external_agent.clone(),
             agent_name: agent.map(|t| t.name.clone()),
             created_at: timestamp(summary.created_at_ms),
             updated_at: timestamp(summary.updated_at_ms),

@@ -10,6 +10,18 @@ use agena_storage::kernel::{
 };
 
 impl ApplicationService {
+    pub async fn list_external_agents(
+        &self,
+    ) -> ApplicationResult<Vec<agena_domain::ExternalAgentCatalogEntry>> {
+        let commands = self.session_commands.as_ref().ok_or_else(|| {
+            ApplicationError::internal("Session execution commands are unavailable.")
+        })?;
+        commands
+            .list_external_agents()
+            .await
+            .map_err(|error| ApplicationError::from_failure(error.failure))
+    }
+
     pub async fn external_agent_workspace(
         &self,
         workspace_id: i64,
@@ -434,7 +446,7 @@ pub(crate) fn session_resource_from_kernel_summary(
         root_id: summary.root_session_id.get(),
         workspace_id: summary.workspace_id,
         title: summary.title.clone(),
-        external_agent: summary.external_agent,
+        external_agent: summary.external_agent.clone(),
         owner_bot_id: summary.owner_bot_id.clone(),
         owner_surface: summary.owner_surface.clone(),
         favorite: summary.favorite,

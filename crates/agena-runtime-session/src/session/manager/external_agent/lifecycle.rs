@@ -16,16 +16,16 @@ use crate::session::manager::session_prompt::external_agent_system_prompt;
 mod index;
 
 static NATIVE_REPLAYS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
-type NativeReplayKey = (PathBuf, &'static str, String);
+type NativeReplayKey = (PathBuf, String, String);
 type NativeReplayLocks = StdMutex<HashMap<NativeReplayKey, Weak<tokio::sync::Mutex<()>>>>;
 static NATIVE_REPLAY_LOCKS: LazyLock<NativeReplayLocks> = LazyLock::new(Default::default);
 
 fn native_replay_lock(
     cwd: &Path,
-    agent: ExternalAgent,
+    agent: &ExternalAgent,
     native_id: &str,
 ) -> Arc<tokio::sync::Mutex<()>> {
-    let key = (cwd.to_owned(), agent.id(), native_id.to_owned());
+    let key = (cwd.to_owned(), agent.id().to_owned(), native_id.to_owned());
     let mut locks = NATIVE_REPLAY_LOCKS
         .lock()
         .unwrap_or_else(|error| error.into_inner());
@@ -114,7 +114,7 @@ pub(super) async fn directories_for_agent(
     Ok(resolved)
 }
 
-async fn canonical_directory(path: &Path) -> Result<PathBuf, AppError> {
+pub(super) async fn canonical_directory(path: &Path) -> Result<PathBuf, AppError> {
     let canonical = tokio::fs::canonicalize(path).await.map_err(|error| {
         AppError::Config(format!(
             "Could not open workspace directory {}: {error}",
@@ -170,7 +170,7 @@ impl SessionManager {
         };
         if cursor
             .as_ref()
-            .is_some_and(|cursor| cursor.len() > acp::MAX_CURSOR_BYTES)
+            .is_some_and(|cursor| cursor.len() > acp::MAX_CURSOR_BYTES + 64)
             || native
                 .as_ref()
                 .is_some_and(|(id, _)| invalid_native_string(id))
@@ -179,13 +179,14 @@ impl SessionManager {
                 "Invalid external agent conversation ID or cursor.".into(),
             ));
         }
+        let spec = self.resolve_external_agent(&agent)?;
         let cwd = canonical_directory(&self.workspace_root_by_id(workspace_id).await?).await?;
         let _permit = self.reserve_execution()?;
         let cancel = self.shutdown.child_token();
         let _native_replay = if let Some((native_id, _)) = native.as_ref() {
             // Serialize even the first replay, before a local session ID
             // exists to coordinate clicks from different clients.
-            let lock = native_replay_lock(&cwd, agent, native_id);
+            let lock = native_replay_lock(&cwd, &agent, native_id);
             Some(tokio::select! {
                 biased;
                 _ = cancel.cancelled() => return Err(AppError::Cancelled),
@@ -203,7 +204,7 @@ impl SessionManager {
             };
             let existing = self
                 .kernel_runtime
-                .acp_view(workspace_id, agent, &link)
+                .acp_view(workspace_id, agent.clone(), &link)
                 .await
                 .map_err(kernel_error)?;
             if let Some(id) = existing
@@ -262,12 +263,12 @@ impl SessionManager {
                 .await?;
             let executor = state.executor.for_session_context_async(&context).await;
             let directories = directories_for_agent(&executor, &cwd, directories).await?;
-            session_context(agent, *id, &executor, &state, &context, directories, None).await
+            session_context(agent.clone(), *id, &executor, &state, &context, directories, None).await
         } else {
             acp::SessionContext::default()
         };
         let mut client = acp::AcpClient::spawn_with_directories(
-            agent,
+            spec.clone(),
             &cwd,
             &replay_context.additional_directories,
         )?;
@@ -293,18 +294,31 @@ impl SessionManager {
             };
             let record = match client
                 .find_workspace_native(&cwd, &native_id, filter, &cancel)
-                .await?
+                .await
             {
-                Some(row) => row.session,
-                None if filter == ExternalAgentArchiveFilter::Unarchived => {
-                    self.index_import_record(agent, &cwd, &native_id, &cancel)
+                Ok(Some(row)) => row.session,
+                Ok(None) if filter == ExternalAgentArchiveFilter::Unarchived => {
+                    self.index_import_record(&spec, &cwd, &native_id, &cancel)
                         .await?
                 }
-                None => {
+                Err(error)
+                    if filter == ExternalAgentArchiveFilter::Unarchived
+                        && !matches!(error, AppError::Cancelled) =>
+                {
+                    match self
+                        .index_import_record(&spec, &cwd, &native_id, &cancel)
+                        .await
+                    {
+                        Ok(row) => row,
+                        Err(_) => return Err(error),
+                    }
+                }
+                Ok(None) => {
                     return Err(AppError::Config(
                         "That native conversation is not listed in this workspace.".into(),
                     ));
                 }
+                Err(error) => return Err(error),
             };
             if let Some((id, _, _, _)) = &held {
                 // Browsing needs the connection slot. A session/close would
@@ -325,7 +339,7 @@ impl SessionManager {
                 .title
                 .clone()
                 .or_else(|| record.title.clone())
-                .unwrap_or_else(|| format!("{} conversation", agent.label()));
+                .unwrap_or_else(|| format!("{} conversation", spec.name));
             state.metadata.title = state.metadata.title.or(record.title);
             state.metadata.updated_at = state.metadata.updated_at.or(record.updated_at);
             let link = ExternalAgentLink {
@@ -389,7 +403,9 @@ impl SessionManager {
         let configuration = &snapshot.configuration;
         let agent = configuration
             .external_agent
+            .clone()
             .ok_or_else(|| AppError::Config("This session has no external agent.".into()))?;
+        let spec = self.resolve_external_agent(&agent)?;
         let running = snapshot.summary.running_executions != 0;
         let mutation = !matches!(action, ExternalAgentSessionAction::Status);
         if mutation && (running || snapshot.summary.queued_executions != 0) {
@@ -426,20 +442,13 @@ impl SessionManager {
         } else {
             Vec::new()
         };
-        let mut client = acp::AcpClient::spawn_with_directories(agent, &cwd, &native_directories)?;
+        let mut client =
+            acp::AcpClient::spawn_with_directories(spec, &cwd, &native_directories)?;
         if matches!(action, ExternalAgentSessionAction::Delete) {
             // Claude v1 maps Delete to Archive on legacy AIR connections.
             client.use_plain_delete();
         }
         let outcome = async {
-            if client.has_previous_history() && let Some(link) = link.as_ref().filter(|link| link.cwd == cwd) {
-                let filter = if client.supports_native_archive(&cancel).await? {
-                    ExternalAgentArchiveFilter::All
-                } else {
-                    ExternalAgentArchiveFilter::Unarchived
-                };
-                client.find_workspace_native(&cwd, &link.native_id, filter, &cancel).await?;
-            }
             let capabilities = client.lifecycle_capabilities(&cancel).await?;
             if matches!(action, ExternalAgentSessionAction::Status) {
                 let native_status = match &link {
@@ -574,7 +583,7 @@ impl SessionManager {
                         }
                         None
                     };
-                    let mut context = session_context(agent, session, &executor, &state, &context, native_directories, None).await;
+                    let mut context = session_context(agent.clone(), session, &executor, &state, &context, native_directories, None).await;
                     context.selected_options.clone_from(&configuration.external_agent_selection);
                     if capabilities.fork {
                         self.close_idle_external_agent(session).await;
@@ -595,7 +604,13 @@ impl SessionManager {
                     };
                     let result = persist(|| self.kernel().sessions.fork_external_agent(request, session, through, fork.clone()))
                         .await.map_err(kernel_error);
-                    if capabilities.close {
+                    if result.is_err() {
+                        if capabilities.delete {
+                            let _ = client.release_native(&new_id, true, &cancel).await;
+                        } else if capabilities.close {
+                            let _ = client.release_native(&new_id, false, &cancel).await;
+                        }
+                    } else if capabilities.close {
                         let _ = client.release_native(&new_id, false, &cancel).await;
                     }
                     Ok(ExternalAgentSessionResult::Forked { session_id: result?.value.id.get() })

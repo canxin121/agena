@@ -74,14 +74,14 @@ fn index_row(row: &Value, cwd: &Path) -> Option<ExternalAgentIndexedSession> {
 
 impl AcpClient {
     pub(in crate::session::manager::external_agent) async fn open_index(
-        agent: ExternalAgent,
+        spec: ResolvedExternalAgent,
         cwd: &Path,
         cancel: &CancellationToken,
     ) -> Result<Option<(Self, ExternalAgentIndexCapabilities)>, AppError> {
-        if agent != ExternalAgent::ClaudeCode {
+        if spec.id != ExternalAgent::ClaudeCode {
             return Ok(None);
         }
-        let mut client = Self::spawn(agent, cwd)?;
+        let mut client = Self::spawn(spec, cwd)?;
         client.air_index = true;
         let initialized = client.initialization(cancel).await;
         let result = initialized.map(|response| {

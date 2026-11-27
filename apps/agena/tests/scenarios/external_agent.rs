@@ -661,12 +661,13 @@ async fn external_agent_commands_follow_their_native_conversation() -> TestResul
                 .workspace_id
                 .context("workspace id")?;
             let create = |agent: ExternalAgent| {
+                let title = agent.label().into();
                 ordinary
                     .client()
                     .create_session_configured(CreateSessionParams {
                         external_agent: Some(agent),
                         workspace_id,
-                        title: agent.label().into(),
+                        title,
                         parent_id: None,
                         auto_title: false,
                         profile: None,
@@ -760,6 +761,7 @@ async fn external_agent_commands_follow_their_native_conversation() -> TestResul
                 .wait_settled()
                 .await?;
             run.assert_succeeded()?;
+            run.assert_assistant_text("antigravity native compact received")?;
             ensure!(
                 antigravity
                     .snapshot()
@@ -768,7 +770,7 @@ async fn external_agent_commands_follow_their_native_conversation() -> TestResul
                     .external_agent_details
                     .compactions
                     .iter()
-                    .any(|item| item.id == "agy-checkpoint-4" && item.status == "completed")
+                    .any(|item| item.id == "acp-compact-1" && item.status == "completed")
             );
             read_policy(
                 &antigravity,
@@ -782,7 +784,7 @@ async fn external_agent_commands_follow_their_native_conversation() -> TestResul
                 .wait_settled()
                 .await?;
             followup.assert_succeeded()?;
-            followup.assert_assistant_text("read through Agena after checkpoint")?;
+            followup.assert_assistant_text("read through Agena during compact")?;
             ensure!(claude.snapshot().await?.execution.external_agent_commands == commands);
 
             let claude = case.user().attach_session(claude_id).await?;
@@ -915,14 +917,12 @@ async fn external_agent_options_validate_model_and_thinking_before_the_first_pro
                 .await?;
             ensure!(options.selection.get(&thought).map(String::as_str) == Some("high"));
             ensure!(user.parts().await?.is_empty());
-            for entry in std::fs::read_dir(case.workspace())? {
-                ensure!(
-                    !entry?
-                        .file_name()
-                        .to_string_lossy()
-                        .starts_with(".acp-probe-")
-                );
-            }
+            let created_sessions =
+                tokio::fs::read_to_string(case.workspace().join(".acp-new-sessions")).await?;
+            ensure!(
+                created_sessions.lines().count() == 1,
+                "expected a single bound native session across option checks: {created_sessions}"
+            );
 
             let user = case.user().attach_session(created.id).await?;
             let run = user.send("check options").await?.wait_settled().await?;
@@ -937,6 +937,12 @@ async fn external_agent_options_validate_model_and_thinking_before_the_first_pro
             let run = user.send("check options").await?.wait_settled().await?;
             run.assert_succeeded()?;
             run.assert_assistant_text("model fast, thinking low")?;
+            let created_sessions =
+                tokio::fs::read_to_string(case.workspace().join(".acp-new-sessions")).await?;
+            ensure!(
+                created_sessions.lines().count() == 1,
+                "expected prompts and later option updates to reuse the same native session: {created_sessions}"
+            );
             ensure!(case.model().requests().is_empty());
             Ok(())
         })
@@ -1169,6 +1175,293 @@ async fn claude_code_loads_sessions_and_projects_native_tools_and_composer_input
                         message.contains("does not support image input over ACP")
                     })
             }));
+            ensure!(case.model().requests().is_empty());
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn acp_rest_parity_mode_cli_and_long_streamed_reply_succeed() -> TestResult {
+    let (_bin, builder) = peers()?;
+    builder
+        .run(|case| async move {
+            let ordinary = case.user().new_session().await?;
+            let workspace_id = ordinary
+                .snapshot()
+                .await?
+                .session
+                .workspace_id
+                .context("workspace id")?;
+            let created = ordinary
+                .client()
+                .create_session_configured(CreateSessionParams {
+                    external_agent: Some(ExternalAgent::ClaudeCode),
+                    workspace_id,
+                    title: "Initial ACP View".into(),
+                    parent_id: None,
+                    auto_title: false,
+                    profile: None,
+                    prompts: None,
+                })
+                .await?;
+            let acp_id = created.id;
+            let server = case.http().await;
+
+            // GET /api/v1/acp/sessions lists ephemeral ACP views for the workspace.
+            let list_resp = server
+                .get(&format!("/api/v1/acp/sessions?workspace_id={workspace_id}"))
+                .await?;
+            ensure!(
+                list_resp.status.is_success(),
+                "list status {}",
+                list_resp.status
+            );
+            let listed: Value = list_resp.json()?;
+            ensure!(
+                listed["items"]
+                    .as_array()
+                    .is_some_and(|items| items.iter().any(|item| item["id"] == acp_id)),
+                "{listed}"
+            );
+
+            // PUT /api/v1/acp/sessions/{id} updates the view instead of returning 405.
+            let put_resp = server
+                .send_json(
+                    reqwest::Method::PUT,
+                    &format!("/api/v1/acp/sessions/{acp_id}"),
+                    &json!({"title": "Renamed ACP View"}),
+                )
+                .await?;
+            ensure!(
+                put_resp.status.is_success(),
+                "put status {}",
+                put_resp.status
+            );
+            let updated: Value = put_resp.json()?;
+            ensure!(updated["title"] == "Renamed ACP View", "{updated}");
+
+            // DefaultBodyLimit rejects oversized /agent-work payloads with 413.
+            let oversized = "x".repeat(2048);
+            let limit_resp = server
+                .send_json(
+                    reqwest::Method::POST,
+                    &format!("/api/v1/acp/sessions/{acp_id}/agent-work"),
+                    &json!({"cancel_id": oversized}),
+                )
+                .await?;
+            ensure!(
+                limit_resp.status == reqwest::StatusCode::PAYLOAD_TOO_LARGE,
+                "expected 413, got {}",
+                limit_resp.status
+            );
+
+            // CLI --mode flag selects the advertised mode option.
+            let mode_cli = case
+                .run_cli([
+                    "sessions",
+                    "agent-options",
+                    &acp_id.to_string(),
+                    "--mode",
+                    "default",
+                ])
+                .await?;
+            let mode_json: Value = serde_json::from_str(&mode_cli.require_success()?.stdout)?;
+            ensure!(mode_json["selection"]["mode"] == "default", "{mode_json}");
+
+            // Streamed reply exceeding 64 KiB (80+ KiB) is preserved intact without truncation.
+            let user = case.user().attach_session(acp_id).await?;
+            let run = user.send("long reply").await?.wait_settled().await?;
+            run.assert_succeeded()?;
+            let reply_part = run
+                .parts
+                .iter()
+                .rev()
+                .find(|part| part.role == "assistant" && part.kind == "text")
+                .context("long assistant text part")?;
+            let mut text = Vec::new();
+            user.client()
+                .write_part_text(acp_id, reply_part, &mut text)
+                .await?;
+            let text = String::from_utf8(text)?;
+            ensure!(
+                text.len() > 80 * 1024 && text.contains("[00]") && text.contains("[39]"),
+                "expected >80 KiB reply with all 40 chunks, got {} bytes",
+                text.len()
+            );
+            ensure!(
+                !text.contains("[ACP message truncated.]"),
+                "long reply should not be truncated under the 512 KiB document cap"
+            );
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn custom_generic_acp_agent_catalog_and_execution() -> TestResult {
+    let host = tempfile::tempdir()?;
+    let custom_bin = host.path().join("my-custom-acp");
+    std::fs::write(&custom_bin, include_str!("plugins/fake_acp_custom.py"))?;
+    std::fs::set_permissions(&custom_bin, std::fs::Permissions::from_mode(0o755))?;
+    let state_dir = host.path().join("custom-state");
+    std::fs::create_dir_all(&state_dir)?;
+    let routes = host.path().join("providers.json");
+    std::fs::write(
+        &routes,
+        serde_json::to_vec(&json!({
+            "codex-custom": [
+                {
+                    "action": "set",
+                    "providerId": "main",
+                    "apiType": "openai",
+                    "baseUrl": "https://custom-acp.example.invalid/v1"
+                }
+            ]
+        }))?,
+    )?;
+    let custom_bin_str = custom_bin.to_string_lossy().into_owned();
+    let state_dir_str = state_dir.to_string_lossy().into_owned();
+    let expected_bin = custom_bin_str.clone();
+    fixture()
+        .configure_global(move |config| {
+            config["sandbox"] = json!(false);
+            config["acp"] = json!({
+                "agents": {
+                    "codex-custom": {
+                        "name": "Codex Custom",
+                        "command": custom_bin_str,
+                        "args": ["--acp-stdio", "--profile", "smoke"],
+                        "env": {
+                            "CUSTOM_ACP_TOKEN": "custom-secret-123"
+                        },
+                        "client_tools": false,
+                        "writable_paths": [state_dir_str]
+                    },
+                    "antigravity": {
+                        "disabled": true
+                    }
+                }
+            });
+        })
+        .env("AGENA_ACP_PROVIDERS_FILE", routes)
+        .env("AGENA_TEST_NEVER_FORWARD", "must-not-leak")
+        .expect_plugin("agena.fs")
+        .seed_file("workspace/acp-input.txt", b"acp callback content\n".to_vec())
+        .run(move |case| async move {
+            let ordinary = case.user().new_session().await?;
+            let workspace_id = ordinary
+                .snapshot()
+                .await?
+                .session
+                .workspace_id
+                .context("workspace id")?;
+            let server = case.http().await;
+
+            // GET /api/v1/acp/agents lists enabled built-ins + custom agents and omits env/writable_paths.
+            let catalog_resp = server.get("/api/v1/acp/agents").await?;
+            ensure!(
+                catalog_resp.status.is_success(),
+                "catalog status {}",
+                catalog_resp.status
+            );
+            let catalog_raw = String::from_utf8_lossy(&catalog_resp.body).into_owned();
+            ensure!(!catalog_raw.contains("CUSTOM_ACP_TOKEN"), "{catalog_raw}");
+            ensure!(!catalog_raw.contains("custom-secret-123"), "{catalog_raw}");
+            ensure!(!catalog_raw.contains("custom-state"), "{catalog_raw}");
+            let catalog: Vec<agena_domain::ExternalAgentCatalogEntry> = catalog_resp.json()?;
+            let ids: Vec<&str> = catalog.iter().map(|entry| entry.id.id()).collect();
+            ensure!(ids == vec!["claude-code", "codex-custom"], "{ids:?}");
+            let custom = &catalog[1];
+            ensure!(
+                custom.name == "Codex Custom"
+                    && !custom.builtin
+                    && custom.command == expected_bin
+                    && custom.args == vec!["--acp-stdio", "--profile", "smoke"],
+                "{custom:?}"
+            );
+
+            // CLI `agena sessions agent-sessions agents` returns the same dynamic catalog.
+            let cli_agents = case
+                .run_cli(["sessions", "agent-sessions", "agents"])
+                .await?;
+            let cli_catalog: Vec<agena_domain::ExternalAgentCatalogEntry> =
+                serde_json::from_str(&cli_agents.require_success()?.stdout)?;
+            ensure!(cli_catalog == catalog, "{cli_catalog:?} vs {catalog:?}");
+
+            // Disabled built-in and unconfigured custom IDs are rejected on session creation.
+            for rejected in ["antigravity", "unknown-acp"] {
+                let resp = server
+                    .send_json(
+                        reqwest::Method::POST,
+                        "/api/v1/acp/sessions",
+                        &json!({
+                            "workspace_id": workspace_id,
+                            "title": "Rejected",
+                            "external_agent": rejected
+                        }),
+                    )
+                    .await?;
+                ensure!(
+                    !resp.status.is_success(),
+                    "expected {rejected} to be rejected, got {}",
+                    resp.status
+                );
+            }
+
+            // Create and execute a custom ACP session via CLI + REST.
+            let workspace = case.workspace().to_str().context("workspace str")?;
+            let created = case
+                .run_cli([
+                    "sessions",
+                    "create",
+                    "--workspace",
+                    workspace,
+                    "--external-agent",
+                    "codex-custom",
+                ])
+                .await?;
+            let state: Value = serde_json::from_str(&created.require_success()?.stdout)?;
+            ensure!(
+                state["session"]["external_agent"] == "codex-custom",
+                "{state}"
+            );
+            let session_id = state["session"]["id"].as_i64().context("session id")?;
+            let user = case.user().attach_session(session_id).await?;
+
+            // AGENA_ACP_PROVIDERS_FILE keyed by custom agent ID applies before opening sessions.
+            let providers = user.client().external_agent_providers(session_id).await?;
+            ensure!(providers.supported && providers.providers.len() == 1);
+            let current = providers.providers[0]
+                .current
+                .as_ref()
+                .context("provider route")?;
+            ensure!(
+                current.api_type == "openai"
+                    && current.base_url == "https://custom-acp.example.invalid/v1"
+            );
+
+            // Auth inspection reports the custom agent's configured command and base_args.
+            let auth = user
+                .client()
+                .external_agent_auth(
+                    session_id,
+                    agena_domain::ExternalAgentAuthAction::Inspect { terminal: true },
+                )
+                .await?;
+            ensure!(auth.agent == ExternalAgent::Custom("codex-custom".into()));
+            ensure!(auth.command.as_deref() == Some(expected_bin.as_str()));
+            ensure!(auth.base_args == vec!["--acp-stdio", "--profile", "smoke"]);
+
+            // Prompt runs pure standard ACP without vendor _meta and accesses Agena MCP tools.
+            read_policy(&user, case.workspace().join("acp-input.txt"), "readonly").await?;
+            let run = user
+                .send("check custom acp")
+                .await?
+                .wait_settled()
+                .await?;
+            run.assert_succeeded()?;
+            run.assert_text_contains("custom acp ok: acp callback content")?;
             ensure!(case.model().requests().is_empty());
             Ok(())
         })

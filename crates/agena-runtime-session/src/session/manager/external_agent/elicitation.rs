@@ -11,6 +11,8 @@ use super::*;
 pub(in crate::session::manager) const FORM_INPUT_KIND: &str = "external_agent_form";
 const FORM_TOOL: &str = "external_agent_input";
 const URL_TOOL: &str = "external_agent_authorization";
+const MAX_FORM_SCHEMA_BYTES: usize = 64 * 1024;
+const MAX_PATTERN_BYTES: usize = 256;
 
 impl ExternalTurn {
     pub(super) async fn interaction_agent_label(&self, params: &Value) -> String {
@@ -43,7 +45,7 @@ impl ExternalTurn {
         let Some((input, form)) = form_input(params, &agent_label) else {
             return Ok(None);
         };
-        if withdrawal.is_cancelled() {
+        if withdrawal.is_cancelled() || self.control.cancel.is_cancelled() {
             return Ok(Some(json!({"action": "cancel"})));
         }
         let title = input.title.clone();
@@ -57,7 +59,7 @@ impl ExternalTurn {
                 }),
             )
             .await?;
-        let answer = self
+        let answer = match self
             .manager
             .request_input_for_tool(
                 &tool,
@@ -66,8 +68,23 @@ impl ExternalTurn {
                 input,
                 Some(withdrawal),
             )
-            .await?;
-        let (result, phase, summary) = if withdrawal.is_cancelled() || answer.timed_out {
+            .await
+        {
+            Ok(answer) => answer,
+            Err(error) => {
+                let outcome = ToolResult {
+                    phase: ToolPhase::Cancelled,
+                    value: json!({"title": title, "summary": "Question cancelled"}),
+                };
+                let command = RequestId::new();
+                let _ = persist(|| tool.complete(command, outcome.clone())).await;
+                return Err(error);
+            }
+        };
+        let (result, phase, summary) = if withdrawal.is_cancelled()
+            || self.control.cancel.is_cancelled()
+            || answer.timed_out
+        {
             (
                 json!({"action": "cancel"}),
                 ToolPhase::Cancelled,
@@ -111,10 +128,21 @@ impl ExternalTurn {
         }
 
         let title = input.title.clone();
+        let audit_host = params["url"]
+            .as_str()
+            .and_then(external_agent_authorization_url)
+            .and_then(|url| url.host_str().map(str::to_owned));
         let tool = self
-            .begin_tool(URL_TOOL.into(), json!({"agent": self.agent}))
+            .begin_tool(
+                URL_TOOL.into(),
+                json!({
+                    "agent": self.agent,
+                    "elicitation_id": elicitation_id(params),
+                    "host": audit_host,
+                }),
+            )
             .await?;
-        let answer = self
+        let answer = match self
             .manager
             .request_input_for_tool(
                 &tool,
@@ -123,7 +151,19 @@ impl ExternalTurn {
                 input,
                 Some(withdrawal),
             )
-            .await?;
+            .await
+        {
+            Ok(answer) => answer,
+            Err(error) => {
+                let outcome = ToolResult {
+                    phase: ToolPhase::Cancelled,
+                    value: json!({"title": title, "summary": "Authorization cancelled"}),
+                };
+                let command = RequestId::new();
+                let _ = persist(|| tool.complete(command, outcome.clone())).await;
+                return Err(error);
+            }
+        };
         let action = if answer.timed_out
             || withdrawal.is_cancelled()
             || self.control.cancel.is_cancelled()
@@ -269,6 +309,13 @@ impl Form {
         if !schema.is_object() || !(schema["type"].is_null() || schema["type"] == "object") {
             return Err(invalid_schema());
         }
+        if serde_json::to_vec(schema)
+            .map(|bytes| bytes.len())
+            .unwrap_or(usize::MAX)
+            > MAX_FORM_SCHEMA_BYTES
+        {
+            return Err(invalid_schema());
+        }
         let required: Vec<String> = if schema["required"].is_null() {
             Vec::new()
         } else {
@@ -367,12 +414,26 @@ impl Field {
         };
         let keywords: &[&str] = match kind {
             "string" => &["minLength", "maxLength", "pattern", "format"],
-            "integer" | "number" => &["minimum", "maximum"],
+            "integer" | "number" => &[
+                "minimum",
+                "maximum",
+                "exclusiveMinimum",
+                "exclusiveMaximum",
+                "multipleOf",
+            ],
             "array" => &["minItems", "maxItems"],
             _ => &[],
         };
         for &keyword in keywords {
             if !property[keyword].is_null() {
+                if keyword == "pattern" {
+                    let Some(pat) = property[keyword].as_str() else {
+                        return Err(invalid_schema());
+                    };
+                    if pat.len() > MAX_PATTERN_BYTES || has_nested_quantifier(pat) {
+                        return Err(invalid_schema());
+                    }
+                }
                 rules[keyword] = property[keyword].clone();
             }
         }
@@ -460,6 +521,7 @@ fn choices(
         .as_array()
         .filter(|entries| !entries.is_empty())
         .ok_or_else(invalid_schema)?;
+    let enum_names = schema["enumNames"].as_array();
     let mut labels = HashSet::new();
     entries
         .iter()
@@ -471,7 +533,19 @@ fn choices(
                 entry.as_str()
             }
             .ok_or_else(invalid_schema)?;
-            let mut title = label(entry, "title").unwrap_or(value.trim()).to_owned();
+            let legacy_name = if !titled {
+                enum_names
+                    .and_then(|names| names.get(index))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+            } else {
+                None
+            };
+            let mut title = label(entry, "title")
+                .or(legacy_name)
+                .unwrap_or(value.trim())
+                .to_owned();
             if title.is_empty() {
                 title = format!("{value:?}");
             }
@@ -505,4 +579,130 @@ fn option(label: &str, description: &str, custom: bool) -> UserInputOption {
 
 fn invalid_schema() -> AppError {
     AppError::Config("Invalid ACP elicitation form schema.".into())
+}
+
+/// Reject obvious catastrophic backtracking constructs (nested quantifiers
+/// like `(a+)+`, `(a*)*`, `(a|aa)+`) before passing untrusted patterns to the
+/// regex engine on an async worker thread.
+fn has_nested_quantifier(pattern: &str) -> bool {
+    let mut escaped = false;
+    let mut in_class = false;
+    let mut stack: Vec<bool> = Vec::new();
+    let mut closed_quantified = false;
+    for ch in pattern.chars() {
+        if escaped {
+            escaped = false;
+            closed_quantified = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if in_class {
+            if ch == ']' {
+                in_class = false;
+            }
+            continue;
+        }
+        match ch {
+            '[' => {
+                in_class = true;
+                closed_quantified = false;
+            }
+            '(' => {
+                stack.push(false);
+                closed_quantified = false;
+            }
+            ')' => {
+                closed_quantified = stack.pop().unwrap_or(false);
+                if closed_quantified
+                    && let Some(parent) = stack.last_mut()
+                {
+                    *parent = true;
+                }
+            }
+            '+' | '*' | '{' => {
+                if closed_quantified {
+                    return true;
+                }
+                if let Some(current) = stack.last_mut() {
+                    *current = true;
+                }
+                closed_quantified = false;
+            }
+            _ => {
+                closed_quantified = false;
+            }
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nested_quantifier_guard_flags_redos_patterns_and_allows_ordinary_regex() {
+        assert!(has_nested_quantifier("(a+)+"));
+        assert!(has_nested_quantifier("(a*)*"));
+        assert!(has_nested_quantifier("([a-z]+){2,5}"));
+        assert!(has_nested_quantifier("((a|aa)+)+"));
+        assert!(!has_nested_quantifier("^[a-z0-9._-]+@[a-z0-9.-]+\\.[a-z]{2,}$"));
+        assert!(!has_nested_quantifier("^v\\d+\\.\\d+\\.\\d+$"));
+        assert!(!has_nested_quantifier("[a+]+"));
+    }
+
+    #[test]
+    fn form_schema_rejects_oversized_payload_and_supports_enum_names_and_numeric_bounds() {
+        let huge = "x".repeat(MAX_FORM_SCHEMA_BYTES + 128);
+        assert!(
+            Form::parse(&json!({
+                "type": "object",
+                "properties": {
+                    "field": {"type": "string", "description": huge}
+                }
+            }))
+            .is_err()
+        );
+
+        let spec = Form::parse(&json!({
+            "type": "object",
+            "required": ["env", "count"],
+            "properties": {
+                "env": {
+                    "type": "string",
+                    "enum": ["prod", "staging"],
+                    "enumNames": ["Production", "Staging"]
+                },
+                "count": {
+                    "type": "number",
+                    "exclusiveMinimum": 0,
+                    "exclusiveMaximum": 10,
+                    "multipleOf": 2.5
+                }
+            }
+        }))
+        .expect("valid form schema");
+        let answers_ok = BTreeMap::from([
+            ("0".into(), vec!["Production".into()]),
+            ("1".into(), vec!["5".into()]),
+        ]);
+        assert_eq!(
+            spec.content(&answers_ok).expect("valid answers"),
+            json!({"env": "prod", "count": 5})
+        );
+        // Exclusive boundary (0) and non-multiple (3) must be rejected.
+        for bad in ["0", "10", "3"] {
+            let bad_answers = BTreeMap::from([
+                ("0".into(), vec!["Production".into()]),
+                ("1".into(), vec![bad.into()]),
+            ]);
+            assert!(
+                spec.content(&bad_answers).is_err(),
+                "value {bad} should violate exclusive bounds or multipleOf"
+            );
+        }
+    }
 }

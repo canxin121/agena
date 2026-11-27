@@ -124,9 +124,23 @@ async fn run_external_agent_auth(
     validate_external_agent_terminal_launch(extra, env)
         .map_err(|error| AppError::Config(error.into()))?;
 
-    let (program, base_args) = inspection.agent.command();
-    let status = tokio::process::Command::new(program)
-        .args(base_args)
+    let (program, base_args): (String, Vec<String>) = match inspection.command.as_deref() {
+        Some(command) => (command.to_owned(), inspection.base_args.clone()),
+        None => {
+            let (program, args) = inspection.agent.builtin_command().ok_or_else(|| {
+                AppError::Config(format!(
+                    "Server did not report a launch command for external agent `{}`.",
+                    inspection.agent.id()
+                ))
+            })?;
+            (
+                program.to_owned(),
+                args.iter().map(|arg| (*arg).to_owned()).collect(),
+            )
+        }
+    };
+    let status = tokio::process::Command::new(&program)
+        .args(&base_args)
         .args(extra)
         .envs(env)
         .current_dir(&inspection.cwd)
@@ -1621,6 +1635,7 @@ impl AgenaCli {
                         args.thinking
                             .map(|value| (ExternalAgentOptionKind::ThoughtLevel, value))
                     })
+                    .or_else(|| args.mode.map(|value| (ExternalAgentOptionKind::Mode, value)))
                     .or(generic)
                     .map(|(kind, value)| ExternalAgentOptionChange {
                         kind,
@@ -1701,52 +1716,71 @@ impl AgenaCli {
             SessionsSubcommand::AgentSessions(args) => {
                 use super::AgentSessionsAction as Action;
                 use agena_domain::ExternalAgentWorkspaceAction as Request;
-                let action = match args.action {
-                    Action::List {
-                        agent,
-                        cursor,
-                        archived: Some(archived),
-                    } => Request::IndexList {
-                        agent,
-                        cursor,
-                        archived: archived.into(),
-                    },
-                    Action::List {
-                        agent,
-                        cursor,
-                        archived: None,
-                    } => Request::List { agent, cursor },
-                    Action::Open { agent, native_id } => Request::Open { agent, native_id },
-                    Action::Import { agent, native_id } => Request::Import { agent, native_id },
-                    Action::BatchGet { agent, native_ids } => {
-                        Request::BatchGet { agent, native_ids }
-                    }
-                    Action::Archive { agent, native_id } => Request::SetArchived {
-                        agent,
-                        native_id,
-                        archived: true,
-                    },
-                    Action::Unarchive { agent, native_id } => Request::SetArchived {
-                        agent,
-                        native_id,
-                        archived: false,
-                    },
-                    Action::Watch {
-                        agent,
-                        wait_seconds,
-                    } => Request::Watch {
-                        agent,
-                        wait_seconds,
-                    },
-                };
-                let result = server
-                    .client
-                    .external_agent_workspace(server.workspace_id, action)
-                    .await
-                    .map_err(|error| {
-                        client_error("failed to manage native conversations", error)
-                    })?;
-                render_serialized(args.format, &result)
+                if matches!(args.action, Action::Agents) {
+                    let agents = server
+                        .client
+                        .list_external_agents()
+                        .await
+                        .map_err(|error| client_error("failed to list ACP agents", error))?;
+                    render_serialized(args.format, &agents)
+                } else {
+                    let action = match args.action {
+                        Action::Agents => unreachable!(),
+                        Action::List {
+                            agent,
+                            cursor,
+                            archived: Some(archived),
+                        } => Request::IndexList {
+                            agent,
+                            cursor,
+                            archived: archived.into(),
+                        },
+                        Action::List {
+                            agent,
+                            cursor,
+                            archived: None,
+                        } => Request::List { agent, cursor },
+                        Action::Open { agent, native_id } => Request::Open { agent, native_id },
+                        Action::Import { agent, native_id } => Request::Import { agent, native_id },
+                        Action::BatchGet { agent, native_ids } => {
+                            Request::BatchGet { agent, native_ids }
+                        }
+                        Action::Archive { agent, native_id } => Request::SetArchived {
+                            agent,
+                            native_id,
+                            archived: true,
+                        },
+                        Action::Unarchive { agent, native_id } => Request::SetArchived {
+                            agent,
+                            native_id,
+                            archived: false,
+                        },
+                        Action::Watch {
+                            agent,
+                            wait_seconds,
+                        } => Request::Watch {
+                            agent,
+                            wait_seconds,
+                        },
+                        Action::PreviewHistory {
+                            agent,
+                            native_id,
+                            before_turn,
+                        } => Request::PreviewHistory {
+                            agent,
+                            native_id,
+                            before_turn,
+                        },
+                    };
+                    let result = server
+                        .client
+                        .external_agent_workspace(server.workspace_id, action)
+                        .await
+                        .map_err(|error| {
+                            client_error("failed to manage native conversations", error)
+                        })?;
+                    render_serialized(args.format, &result)
+                }
             }
             SessionsSubcommand::AgentSession(args) => {
                 use agena_domain::ExternalAgentSessionAction;

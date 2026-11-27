@@ -751,11 +751,11 @@ async fn v2_replay_uses_a_successful_response_and_preserves_the_view_on_failure(
             ensure!(!old_parts.is_empty());
             let marker = case.workspace().join(".native-replay-override");
             let open = || WorkspaceAction::Open {
-                agent,
+                agent: agent.clone(),
                 native_id: native_id.clone(),
             };
             let preview = || WorkspaceAction::PreviewHistory {
-                agent,
+                agent: agent.clone(),
                 native_id: native_id.clone(),
                 before_turn: None,
             };
@@ -1055,21 +1055,21 @@ async fn exercise_native_lifecycle(version: &'static str) -> TestResult {
             let client = ordinary.client();
             let agent = ExternalAgent::ClaudeCode;
             let WorkspaceResult::Page { sessions, next_cursor } = client
-                .external_agent_workspace(workspace, WorkspaceAction::List { agent, cursor: None })
+                .external_agent_workspace(workspace, WorkspaceAction::List { agent: agent.clone(), cursor: None })
                 .await?
             else {
                 anyhow::bail!("expected native history");
             };
             let expected_cursor = if version == "2" { "" } else { "page2" };
             ensure!(sessions.is_empty() && next_cursor.as_deref() == Some(expected_cursor));
-            let next = client.external_agent_workspace(workspace, WorkspaceAction::List { agent, cursor: next_cursor }).await?;
+            let next = client.external_agent_workspace(workspace, WorkspaceAction::List { agent: agent.clone(), cursor: next_cursor }).await?;
             ensure!(matches!(next, WorkspaceResult::Page { sessions, next_cursor: None } if sessions.len() == 1));
             ensure!(client.external_agent_workspace(workspace, WorkspaceAction::Import {
-                agent, native_id: "foreign".into(),
+                agent: agent.clone(), native_id: "foreign".into(),
             }).await.is_err());
 
             let import = || client.external_agent_workspace(workspace, WorkspaceAction::Import {
-                agent, native_id: "native-project".into(),
+                agent: agent.clone(), native_id: "native-project".into(),
             });
             let WorkspaceResult::Imported { session_id } = import().await? else {
                 anyhow::bail!("expected imported session");
@@ -1398,16 +1398,16 @@ fn archive_fixture(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn antigravity_continues_previous_history_using_v1_load() -> TestResult {
-    exercise_previous_antigravity_history(false).await
+async fn antigravity_continues_native_history_using_v1_load() -> TestResult {
+    exercise_native_antigravity_history(false).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn antigravity_continues_and_compacts_previous_history() -> TestResult {
-    exercise_previous_antigravity_history(true).await
+async fn antigravity_continues_and_compacts_native_history() -> TestResult {
+    exercise_native_antigravity_history(true).await
 }
 
-async fn exercise_previous_antigravity_history(supports_resume: bool) -> TestResult {
+async fn exercise_native_antigravity_history(supports_resume: bool) -> TestResult {
     let (_bin, builder) = archive_fixture("agy", "1")?;
     let builder = if supports_resume {
         builder.seed_file("workspace/.antigravity-supports-resume", Vec::new())
@@ -1415,59 +1415,45 @@ async fn exercise_previous_antigravity_history(supports_resume: bool) -> TestRes
         builder
     };
     builder
-        .seed_file("workspace/.split-antigravity-history", Vec::new())
+        .seed_file("workspace/.antigravity-native-history", Vec::new())
         .seed_file("home/.gemini/antigravity-cli/conversations/fixture", Vec::new())
-        .seed_file("home/.gemini/agena-acp/config/hooks.json", serde_json::to_vec(&json!({
+        .seed_file("home/.gemini/config/hooks.json", serde_json::to_vec(&json!({
             "workspace-check": {"PreToolUse": []},
-            "agena-acp-tools": {"PreToolUse": [{
-                "matcher": "*",
-                "hooks": [{
-                    "type": "command",
-                    "command": "'/old/agena' --internal-acp-antigravity-tool-guard",
-                    "timeout": 10,
-                }],
-            }]},
         }))?)
         .run(|case| async move {
             let ordinary = case.user().new_session().await?;
             let workspace = ordinary.snapshot().await?.session.workspace_id.context("workspace")?;
             let client = ordinary.client();
             let agent = ExternalAgent::Antigravity;
-            let list = || client.external_agent_workspace(workspace, WorkspaceAction::List { agent, cursor: None });
-            ensure!(matches!(list().await?, WorkspaceResult::Page { sessions, .. }
+            let list = |cursor| client.external_agent_workspace(workspace, WorkspaceAction::List { agent: agent.clone(), cursor });
+            ensure!(matches!(list(None).await?, WorkspaceResult::Page { sessions, .. }
                 if sessions.len() == 1 && sessions[0].native_id == "ready"));
             let WorkspaceResult::Opened { session_id } = client.external_agent_workspace(workspace,
-                WorkspaceAction::Open { agent, native_id: "ready".into() }).await?
-            else { anyhow::bail!("expected previous Antigravity history"); };
-            let legacy = case.user().attach_session(session_id).await?;
-            ensure!(legacy.parts().await?.iter().any(|part| part.role == "user"));
-            tokio::fs::write(case.workspace().join(".managed-signed-in"), b"").await?;
+                WorkspaceAction::Open { agent: agent.clone(), native_id: "ready".into() }).await?
+            else { anyhow::bail!("expected native Antigravity history"); };
+            let native_session = case.user().attach_session(session_id).await?;
+            ensure!(native_session.parts().await?.iter().any(|part| part.role == "user"));
             let SessionResult::Status { capabilities, session: native, .. } =
                 client.external_agent_session(session_id, SessionAction::Status).await?
             else { anyhow::bail!("expected native session status"); };
             ensure!(capabilities.continue_conversation);
             ensure!(native.context("native ID")?.native_id == "ready");
-            let run = legacy.send("Continue the legacy conversation").await?.wait_settled().await?;
+            let run = native_session.send("Continue the native conversation").await?.wait_settled().await?;
             run.assert_succeeded()?;
             run.assert_assistant_text("Native Antigravity")?;
-            legacy.send("/agent:compact Continue after native compaction")
+            native_session.send("/agent:compact Keep API context")
                 .await?.wait_settled().await?.assert_succeeded()?;
             let wire = tokio::fs::read_to_string(case.workspace().join(".archive-wire")).await?;
-            ensure!(wire.matches("legacy-continuation ready").count() == 3, "{wire}");
+            ensure!(wire.matches("native-continuation ready").count() == 2, "{wire}");
             ensure!(wire.matches("session/prompt ready").count() == 2, "{wire}");
-            ensure!(
-                wire.find("compact-cli ready")
-                    .zip(wire.find("compact-followup ready"))
-                    .is_some_and(|(compact, followup)| compact < followup),
-                "{wire}",
-            );
+            ensure!(wire.contains("compact-acp ready"), "{wire}");
             let native_config = case.workspace().join(".agents/mcp_config.json");
             tokio::fs::create_dir_all(native_config.parent().context("MCP config directory")?).await?;
             tokio::fs::write(&native_config, b"{}").await?;
-            legacy.send("Continue with workspace MCP configured").await?.wait_settled().await?.assert_succeeded()?;
+            native_session.send("Continue with workspace MCP configured").await?.wait_settled().await?.assert_succeeded()?;
             let created: agena_api::resource::SessionResource = case.http().await
                 .send_json(Method::POST, "/api/v1/acp/sessions", &json!({
-                    "workspace_id": workspace, "title": "Managed connection", "external_agent": "antigravity",
+                    "workspace_id": workspace, "title": "Native connection", "external_agent": "antigravity",
                 }))
                 .await?.require_success()?.json()?;
             let session_id = created.id;
@@ -1488,13 +1474,23 @@ async fn exercise_previous_antigravity_history(supports_resume: bool) -> TestRes
                 run.assert_succeeded()?;
                 run.assert_assistant_text("Native Antigravity")?;
             }
-            ensure!(matches!(list().await?, WorkspaceResult::Page { sessions, .. }
-                if sessions.iter().map(|session| session.native_id.as_str()).collect::<Vec<_>>() == ["managed-run", "ready"]));
+            let WorkspaceResult::Page { sessions: first_page, next_cursor } = list(None).await?
+            else { anyhow::bail!("expected first page"); };
+            let WorkspaceResult::Page { sessions: second_page, next_cursor: end } = list(next_cursor).await?
+            else { anyhow::bail!("expected second page"); };
+            ensure!(end.is_none());
+            let listed: Vec<_> = first_page
+                .into_iter()
+                .chain(second_page)
+                .map(|session| session.native_id)
+                .collect();
+            ensure!(listed == ["ready", "managed-run"], "{listed:?}");
             let wire = tokio::fs::read_to_string(case.workspace().join(".archive-wire")).await?;
-            ensure!(wire.contains("history-port previous") && wire.contains("session/prompt managed-run"), "{wire}");
+            ensure!(wire.contains("session/prompt managed-run"), "{wire}");
             ensure!(wire.matches("session/prompt ready").count() == 3, "{wire}");
             ensure!(wire.contains(&format!("session/new-system-prompt {initial_prompt}")), "{wire}");
-            ensure!(wire.contains(&format!("session/resume-system-prompt {updated_prompt}")), "{wire}");
+            let continue_method = if supports_resume { "session/resume" } else { "session/load" };
+            ensure!(wire.contains(&format!("{continue_method}-system-prompt {updated_prompt}")), "{wire}");
             Ok(())
         })
         .await
@@ -1514,9 +1510,9 @@ async fn exercise_standard_archive(
             let workspace = ordinary.snapshot().await?.session.workspace_id.context("workspace")?;
             let client = ordinary.client();
             let list = |archived, cursor| client.external_agent_workspace(workspace,
-                WorkspaceAction::IndexList { agent, archived, cursor });
+                WorkspaceAction::IndexList { agent: agent.clone(), archived, cursor });
             let archive = |native_id: &str, archived| client.external_agent_workspace(workspace,
-                WorkspaceAction::SetArchived { agent, native_id: native_id.to_owned(), archived });
+                WorkspaceAction::SetArchived { agent: agent.clone(), native_id: native_id.to_owned(), archived });
 
             let WorkspaceResult::IndexPage { sessions, next_cursor, capabilities } = list(Filter::All, None).await?
             else { anyhow::bail!("expected archive-capable history"); };
@@ -1525,7 +1521,7 @@ async fn exercise_standard_archive(
             ensure!(next_cursor.as_deref() == Some(if version == "2" { "" } else { "second/include" }));
             ensure!(matches!(list(Filter::All, next_cursor).await?, WorkspaceResult::IndexPage { sessions, next_cursor: None, .. }
                 if sessions.len() == 1 && sessions[0].session.native_id == "ready" && sessions[0].archived == Some(false)));
-            ensure!(matches!(client.external_agent_workspace(workspace, WorkspaceAction::List { agent, cursor: None }).await?,
+            ensure!(matches!(client.external_agent_workspace(workspace, WorkspaceAction::List { agent: agent.clone(), cursor: None }).await?,
                 WorkspaceResult::Page { sessions, next_cursor: None } if sessions.len() == 1 && sessions[0].native_id == "ready"));
 
             ensure!(archive("foreign", false).await.is_err());
@@ -1545,7 +1541,7 @@ async fn exercise_standard_archive(
                 if sessions.len() == 1 && sessions[0].session.native_id == "ready" && sessions[0].archived == Some(false)));
 
             let WorkspaceResult::Imported { session_id } = client.external_agent_workspace(workspace,
-                WorkspaceAction::Import { agent, native_id: "saved".into() }).await?
+                WorkspaceAction::Import { agent: agent.clone(), native_id: "saved".into() }).await?
             else { anyhow::bail!("expected archived conversation import"); };
             let imported = case.user().attach_session(session_id).await?;
             ensure!(imported.parts().await?.iter().any(|part| part.role == "user"));
@@ -1599,13 +1595,13 @@ async fn claude_history_index_scopes_archive_batches_and_notifications() -> Test
             let client = ordinary.client();
             let agent = ExternalAgent::ClaudeCode;
             let list = |archived, cursor| client.external_agent_workspace(workspace,
-                WorkspaceAction::IndexList { agent, archived, cursor });
+                WorkspaceAction::IndexList { agent: agent.clone(), archived, cursor });
             let batch = |native_ids: &[&str]| client.external_agent_workspace(workspace,
-                WorkspaceAction::BatchGet { agent, native_ids: native_ids.iter().map(|id| (*id).into()).collect() });
+                WorkspaceAction::BatchGet { agent: agent.clone(), native_ids: native_ids.iter().map(|id| (*id).into()).collect() });
             let archive = |native_id: &str, archived| client.external_agent_workspace(workspace,
-                WorkspaceAction::SetArchived { agent, native_id: native_id.into(), archived });
+                WorkspaceAction::SetArchived { agent: agent.clone(), native_id: native_id.into(), archived });
             let watch = || client.external_agent_workspace(workspace,
-                WorkspaceAction::Watch { agent, wait_seconds: Some(1) });
+                WorkspaceAction::Watch { agent: agent.clone(), wait_seconds: Some(1) });
 
             let WorkspaceResult::IndexPage { sessions, next_cursor, capabilities } = list(Filter::All, None).await?
             else { anyhow::bail!("expected indexed page"); };
@@ -1638,7 +1634,7 @@ async fn claude_history_index_scopes_archive_batches_and_notifications() -> Test
             ensure!(matches!(watch().await?, WorkspaceResult::Watch { supported: true, changed: false }));
 
             let WorkspaceResult::Imported { session_id } = client.external_agent_workspace(workspace,
-                WorkspaceAction::Import { agent, native_id: "archived".into() }).await?
+                WorkspaceAction::Import { agent: agent.clone(), native_id: "archived".into() }).await?
             else { anyhow::bail!("expected archived conversation import"); };
             ensure!(matches!(client.external_agent_session(session_id, SessionAction::Delete).await?,
                 SessionResult::Deleted));
@@ -1662,17 +1658,50 @@ async fn claude_index_absence_falls_back_to_ordinary_configured_protocol() -> Te
         let client = ordinary.client();
         let agent = ExternalAgent::ClaudeCode;
         let request = |action| client.external_agent_workspace(workspace, action);
-        let fallback = request(WorkspaceAction::IndexList { agent, archived: Filter::Unarchived, cursor: None }).await?;
+        let fallback = request(WorkspaceAction::IndexList { agent: agent.clone(), archived: Filter::Unarchived, cursor: None }).await?;
         ensure!(matches!(fallback, WorkspaceResult::IndexPage { sessions, capabilities, .. }
             if !capabilities.index && !capabilities.archive && !capabilities.batch_get && !capabilities.watch
                 && sessions.len() == 1 && sessions[0].session.native_id == "active" && sessions[0].archived.is_none()));
-        ensure!(request(WorkspaceAction::IndexList { agent, archived: Filter::Archived, cursor: None }).await.is_err());
-        ensure!(request(WorkspaceAction::BatchGet { agent, native_ids: vec!["active".into()] }).await.is_err());
-        ensure!(request(WorkspaceAction::SetArchived { agent, native_id: "active".into(), archived: true }).await.is_err());
-        ensure!(matches!(request(WorkspaceAction::Watch { agent, wait_seconds: Some(1) }).await?,
+        ensure!(request(WorkspaceAction::IndexList { agent: agent.clone(), archived: Filter::Archived, cursor: None }).await.is_err());
+        ensure!(request(WorkspaceAction::BatchGet { agent: agent.clone(), native_ids: vec!["active".into()] }).await.is_err());
+        ensure!(request(WorkspaceAction::SetArchived { agent: agent.clone(), native_id: "active".into(), archived: true }).await.is_err());
+        ensure!(matches!(request(WorkspaceAction::Watch { agent: agent.clone(), wait_seconds: Some(1) }).await?,
             WorkspaceResult::Watch { supported: false, changed: false }));
         let wire = tokio::fs::read_to_string(case.workspace().join(".index-wire")).await?;
         ensure!(wire.contains("ordinary session/list") && !wire.contains("_session/"), "{wire}");
         Ok(())
     }).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cli_preview_history_subcommand_returns_saved_turns() -> TestResult {
+    let (_bin, builder) = lifecycle_fixture("2")?;
+    builder
+        .run(|case| async move {
+            let workspace = case
+                .workspace()
+                .to_str()
+                .context("non-UTF-8 workspace path")?;
+            let out = case
+                .run_cli([
+                    "sessions",
+                    "agent-sessions",
+                    "--workspace",
+                    workspace,
+                    "preview-history",
+                    "claude-code",
+                    "native-project",
+                ])
+                .await?;
+            let parsed: serde_json::Value = serde_json::from_str(&out.require_success()?.stdout)?;
+            ensure!(
+                parsed["kind"] == "history_preview"
+                    && parsed["preview"]["turns"]
+                        .as_array()
+                        .is_some_and(|turns| !turns.is_empty()),
+                "{parsed}"
+            );
+            Ok(())
+        })
+        .await
 }

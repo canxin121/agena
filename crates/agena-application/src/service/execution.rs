@@ -47,7 +47,7 @@ impl ApplicationService {
             .configuration(crate::kernel_session_id(session_id)?)
             .await
             .map_err(crate::kernel_error)?;
-        if let Some(agent) = configuration.external_agent {
+        if let Some(agent) = configuration.external_agent.clone() {
             return Ok(agena_runtime::SessionRunOptions {
                 system: request.system,
                 ..agena_runtime::SessionRunOptions::for_external_agent(agent)

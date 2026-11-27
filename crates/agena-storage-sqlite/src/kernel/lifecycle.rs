@@ -162,8 +162,8 @@ async fn configure(
         }
         next.relation_kind = relation;
     }
-    if let Some(agent) = change.external_agent
-        && original.external_agent != Some(agent)
+    if let Some(agent) = change.external_agent.as_ref()
+        && original.external_agent.as_ref() != Some(agent)
     {
         let metadata = reads::metadata(connection, session).await?;
         let has_history: bool = sqlx::query_scalar(
@@ -178,7 +178,31 @@ async fn configure(
                 "the external agent is fixed when a project session is created",
             ));
         }
-        next.external_agent = Some(agent);
+        next.external_agent = Some(agent.clone());
+    }
+    if let Some(link) = &change.external_agent_link {
+        let agent = next
+            .external_agent
+            .clone()
+            .ok_or_else(|| invalid("this session has no external agent"))?;
+        super::external_agent::validate_link(link)?;
+        super::external_agent::require_idle(connection, session).await?;
+        let metadata = reads::metadata(connection, session).await?;
+        let workspace = metadata.workspace_id.ok_or(KernelError::Ownership)?;
+        if original.native_session_link().is_some() {
+            return Err(KernelError::Conflict(
+                "session is already linked to a native conversation".into(),
+            ));
+        }
+        if super::external_agent::existing_link(connection, workspace, agent, link)
+            .await?
+            .is_some_and(|owner| owner != session)
+        {
+            return Err(KernelError::Conflict(
+                "this native conversation is already linked".into(),
+            ));
+        }
+        next.external_agent_link = Some(link.clone());
     }
     if let Some(selection) = &change.external_agent_selection {
         if next.external_agent.is_none() {
@@ -190,6 +214,13 @@ async fn configure(
             ));
         }
         next.external_agent_selection = selection.selection.clone();
+    }
+    if let Some(options) = &change.external_agent_options {
+        if next.external_agent.is_none() {
+            return Err(invalid("this session has no external agent"));
+        }
+        next.external_agent_state.options = options.clone();
+        super::external_agent::bound_configuration_state(&mut next)?;
     }
     if let Some(directories) = &change.external_agent_directories {
         if next.external_agent.is_none()
@@ -694,7 +725,7 @@ async fn fork(
             || conversation_mode.is_some()
             || metadata.membership_generation != native.expected_membership
             || latest != Some(native.expected_head.get())
-            || config.external_agent != Some(native.expected_agent)
+            || config.external_agent.as_ref() != Some(&native.expected_agent)
             || config.native_session_link().as_ref() != Some(&native.expected_native)
         {
             return Err(KernelError::Conflict("native fork source changed".into()));
@@ -746,7 +777,10 @@ async fn fork(
             resume_at: Some(ExternalAgentHistoryAnchor { tail }),
         };
         super::external_agent::validate_link(&link)?;
-        let agent = config.external_agent.ok_or(KernelError::Ownership)?;
+        let agent = config
+            .external_agent
+            .clone()
+            .ok_or(KernelError::Ownership)?;
         let workspace = metadata.workspace_id.ok_or(KernelError::Ownership)?;
         if super::external_agent::existing_link(connection, workspace, agent, &link)
             .await?
@@ -758,10 +792,13 @@ async fn fork(
         }
         native_link = Some(link);
     }
+    let previous_antigravity_history =
+        external_agent.is_some() && config.external_agent_state.antigravity_legacy_history;
     config.external_agent_resume = None;
     config.external_agent_link = native_link;
     config.external_agent_pending_turn = None;
     config.external_agent_state = Default::default();
+    config.external_agent_state.antigravity_legacy_history = previous_antigravity_history;
     config.external_agent_inputs = None;
     config.parent_session_id = Some(session);
     config.relation_kind = if rewind {
@@ -1696,7 +1733,8 @@ pub(super) async fn apply(
                     message_queue_paused: Some(config.message_queue_paused),
                     parent_session_id: config.parent_session_id,
                     relation_kind: Some(config.relation_kind),
-                    external_agent: config.external_agent,
+                    external_agent: config.external_agent.clone(),
+                    external_agent_link: None,
                     external_agent_directories: (!config.external_agent_directories.is_empty())
                         .then(|| config.external_agent_directories.clone()),
                     external_agent_selection: (!config.external_agent_selection.is_empty()).then(
@@ -1705,6 +1743,7 @@ pub(super) async fn apply(
                             selection: config.external_agent_selection.clone(),
                         },
                     ),
+                    external_agent_options: None,
                     conversation: Some(config.conversation.clone()),
                     prompts: Some(config.prompts.clone()),
                     profile: Some(config.profile.clone()),
@@ -1852,7 +1891,7 @@ pub(super) async fn apply(
             super::external_agent::import(
                 connection,
                 *workspace_id,
-                *agent,
+                agent.clone(),
                 title,
                 link,
                 turns,

@@ -99,7 +99,7 @@ impl SessionManager {
                     options,
                     compact,
                     state,
-                    external_agent,
+                    external_agent.clone(),
                 ))
                 .catch_unwind()
                 .await
@@ -204,7 +204,7 @@ impl SessionManager {
                     .await?;
                 let mut options = request.run.options;
                 let external = manager.external_agent(session).await?;
-                if let Some(agent) = external {
+                if let Some(agent) = external.clone() {
                     super::external_agent::require_direct_user(author.as_ref(), origin.as_ref())?;
                     options = SessionRunOptions {
                         system: options.system,
@@ -230,7 +230,7 @@ impl SessionManager {
                         .submit_hook(session, request.document, &state)
                         .await?
                 };
-                let media_target = external.map_or(
+                let media_target = external.clone().map_or(
                     super::media::MediaTarget::Provider(options.model.clone()),
                     super::media::MediaTarget::ExternalAgent,
                 );
@@ -1472,7 +1472,7 @@ impl SessionManager {
             self.kernel().reader.configuration(session)
         })
         .await?;
-        if let Some(agent) = configuration.external_agent {
+        if let Some(agent) = configuration.external_agent.clone() {
             return Ok(SessionRunOptions::for_external_agent(agent));
         }
         let profile = self.conversation_profile(&configuration, &state).await?;

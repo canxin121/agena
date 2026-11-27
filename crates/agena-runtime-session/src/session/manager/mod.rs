@@ -483,6 +483,9 @@ impl SessionManager {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .retain(|_, weak| weak.strong_count() > 0);
+        if let Some(acp) = self.acp_scope.get() {
+            Box::pin(acp.maintenance_tick()).await?;
+        }
         Ok(())
     }
     pub fn broadcast_active_session_end(

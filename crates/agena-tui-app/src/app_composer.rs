@@ -1020,11 +1020,16 @@ impl App {
         let query = query.trim().to_ascii_lowercase();
         let mut items = Vec::new();
         let mut actions = BTreeMap::new();
+        let external_agent = self.external_agent_commands().is_some();
         for command in commands::client_command_suggestions(
             self.application.plugin_catalog().as_ref(),
             query.as_str(),
             self.is_bot_session(),
-        ) {
+        )
+        .into_iter()
+        .filter(|command| {
+            !external_agent || commands::command_applies_to_external_agent(command.action())
+        }) {
             let name = command.name();
             let key = format!("command:{}", command.id());
             actions.insert(
@@ -1068,8 +1073,9 @@ impl App {
         if let Some((_, agent, commands)) = self.external_agent_command_catalog() {
             for command in commands {
                 let slash_name = command.qualified_name();
-                let detail =
-                    crate::app_command_helpers::external_command_detail(&self.i18n, agent, command);
+                let detail = crate::app_command_helpers::external_command_detail(
+                    &self.i18n, &agent, command,
+                );
                 if !format!("{slash_name} {detail}")
                     .to_ascii_lowercase()
                     .contains(&query)

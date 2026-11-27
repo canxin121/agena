@@ -254,6 +254,8 @@ pub struct ResolvedConfig {
         skip_serializing_if = "agena_domain::AccessControlConfig::is_empty"
     )]
     pub access_control: agena_domain::AccessControlConfig,
+    #[serde(default, skip_serializing_if = "agena_domain::AcpConfig::is_empty")]
+    pub acp: agena_domain::AcpConfig,
     pub plugins: PluginConfig,
     pub providers: BTreeMap<String, ResolvedProviderConfig>,
 }

@@ -2,12 +2,13 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     path::{Path, PathBuf},
     process::Stdio,
-    sync::{Arc, Weak},
+    sync::{Arc, Mutex, Weak},
     time::Duration,
 };
 
 use agena_domain::{
     ExternalAgent, ExternalAgentAuthStatus, ExternalAgentOption, ExternalAgentOptionKind,
+    ResolvedExternalAgent,
 };
 use agena_process::ManagedChild;
 use agena_provider::{CompletionUsage, ProviderErrorKind};
@@ -15,10 +16,10 @@ use agena_storage::kernel::ExternalAgentNativeCursor;
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 use tokio::{
-    io::AsyncWriteExt,
-    process::{ChildStdin, ChildStdout, Command},
+    io::{AsyncReadExt, AsyncWriteExt},
+    process::{ChildStderr, ChildStdin, ChildStdout, Command},
     sync::mpsc,
-    task::{JoinError, JoinSet},
+    task::{AbortHandle, JoinError, JoinSet},
     time::Instant,
 };
 use tokio_util::{
@@ -36,7 +37,6 @@ use super::{
     transcript::message::{MessageTarget, MessageUpdate, NativeMessages},
 };
 
-mod antigravity;
 mod cursors;
 mod inactivity;
 mod index;
@@ -59,7 +59,81 @@ const MAX_OPENING_SESSIONS: usize = 8;
 const MAX_OPENING_MESSAGE_UPDATES: usize = 256;
 const MAX_REPLAYED_USERS: usize = 6_000;
 const MAX_PEER_REQUESTS: usize = 128;
+const MAX_STDERR_TAIL_BYTES: usize = 8 * 1024;
 pub(super) const MAX_CURSOR_BYTES: usize = 4096;
+
+struct StderrCapture {
+    tail: Arc<Mutex<VecDeque<u8>>>,
+    reader: AbortHandle,
+}
+
+impl StderrCapture {
+    fn spawn(agent: ExternalAgent, mut stderr: ChildStderr) -> Self {
+        let tail = Arc::new(Mutex::new(VecDeque::with_capacity(1024)));
+        let captured = Arc::clone(&tail);
+        let reader = tokio::spawn(async move {
+            let mut buf = [0u8; 2048];
+            loop {
+                match stderr.read(&mut buf).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        let chunk = &buf[..n];
+                        {
+                            let mut guard = captured.lock().unwrap_or_else(|e| e.into_inner());
+                            if chunk.len() >= MAX_STDERR_TAIL_BYTES {
+                                guard.clear();
+                                guard.extend(&chunk[chunk.len() - MAX_STDERR_TAIL_BYTES..]);
+                            } else {
+                                let overflow =
+                                    (guard.len() + chunk.len()).saturating_sub(MAX_STDERR_TAIL_BYTES);
+                                guard.drain(..overflow);
+                                guard.extend(chunk);
+                            }
+                        }
+                        let text = sanitize_diagnostic(&String::from_utf8_lossy(chunk), 512);
+                        if !text.is_empty() {
+                            tracing::debug!(agent = agent.id(), stderr = %text, "external agent stderr");
+                        }
+                    }
+                }
+            }
+        })
+        .abort_handle();
+        Self { tail, reader }
+    }
+
+    fn summary(&self) -> String {
+        let guard = self.tail.lock().unwrap_or_else(|e| e.into_inner());
+        let bytes: Vec<u8> = guard.iter().copied().collect();
+        sanitize_diagnostic(&String::from_utf8_lossy(&bytes), 512)
+    }
+}
+
+impl Drop for StderrCapture {
+    fn drop(&mut self) {
+        self.reader.abort();
+    }
+}
+
+fn sanitize_diagnostic(raw: &str, max_bytes: usize) -> String {
+    let cleaned: String = raw
+        .chars()
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect();
+    let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    let lower = collapsed.to_ascii_lowercase();
+    if lower.contains("http://")
+        || lower.contains("https://")
+        || lower.contains("bearer ")
+        || lower.contains("sk-")
+        || lower.contains("token=")
+        || lower.contains("api_key")
+    {
+        return String::new();
+    }
+    let end = collapsed.floor_char_boundary(max_bytes);
+    collapsed[..end].to_owned()
+}
 
 type PeerReplies = JoinSet<Result<(Value, Reply), AppError>>;
 
@@ -77,14 +151,14 @@ async fn abandoned_steering(requests: &mut HashMap<u64, steering::Request>) -> u
 
 pub(super) struct AcpClient {
     agent: ExternalAgent,
+    spec: ResolvedExternalAgent,
     cwd: PathBuf,
     additional_directories: Vec<PathBuf>,
-    previous_antigravity_history: bool,
-    agent_arguments: Vec<String>,
     isolation: Option<isolation::Isolation>,
     child: ManagedChild,
     input: ChildStdin,
     output: FramedRead<ChildStdout, LinesCodec>,
+    stderr: Option<StderrCapture>,
     next_id: u64,
     active_request: Option<ActiveRequest>,
     incomplete_write: bool,
@@ -233,7 +307,6 @@ impl ReplayedUsers {
 pub(super) enum OpenPurpose {
     Prompt,
     RetryPrompt,
-    Compact,
 }
 
 #[derive(Clone, Copy)]
@@ -382,104 +455,55 @@ impl OpenedSession {
 }
 
 fn agent_environment(command: &mut Command) {
-    // Preserve the user's native configuration and network settings. Do
-    // not give a coding agent the Agena server's environment or credentials.
-    command
-        .env_clear()
-        .envs(std::env::vars_os().filter(|(key, _)| {
-            let key = key.to_string_lossy();
-            matches!(
-                key.to_ascii_uppercase().as_str(),
-                "PATH"
-                    | "HOME"
-                    | "USER"
-                    | "LOGNAME"
-                    | "SHELL"
-                    | "LANG"
-                    | "LANGUAGE"
-                    | "TZ"
-                    | "TMPDIR"
-                    | "TMP"
-                    | "TEMP"
-                    | "SYSTEMROOT"
-                    | "WINDIR"
-                    | "COMSPEC"
-                    | "PATHEXT"
-                    | "USERPROFILE"
-                    | "APPDATA"
-                    | "LOCALAPPDATA"
-                    | "HOMEDRIVE"
-                    | "HOMEPATH"
-                    | "SSL_CERT_FILE"
-                    | "SSL_CERT_DIR"
-                    | "NODE_EXTRA_CA_CERTS"
-                    | "HTTP_PROXY"
-                    | "HTTPS_PROXY"
-                    | "ALL_PROXY"
-                    | "NO_PROXY"
-                    | "CLAUDE_CONFIG_DIR"
-                    | "DBUS_SESSION_BUS_ADDRESS"
-            ) || key.starts_with("XDG_")
-                || key.starts_with("LC_")
-        }));
-    let no_proxy = std::env::var("no_proxy")
-        .or_else(|_| std::env::var("NO_PROXY"))
-        .unwrap_or_default();
-    let no_proxy = format!("{no_proxy},127.0.0.1,localhost,::1");
+    // Inherit the user's native environment and strip only Agena's own variables.
+    command.env_clear().envs(
+        std::env::vars_os().filter(|(key, _)| {
+            !key.to_string_lossy()
+                .to_ascii_uppercase()
+                .starts_with("AGENA_")
+        }),
+    );
+    let no_proxy = match std::env::var("no_proxy").or_else(|_| std::env::var("NO_PROXY")) {
+        Ok(existing) if !existing.trim().is_empty() => format!("{existing},127.0.0.1,localhost,::1"),
+        _ => "127.0.0.1,localhost,::1".into(),
+    };
     command
         .env("NO_PROXY", &no_proxy)
         .env("no_proxy", &no_proxy);
 }
 
 impl AcpClient {
-    pub(super) fn spawn(agent: ExternalAgent, cwd: &Path) -> Result<Self, AppError> {
-        Self::spawn_with_directories(agent, cwd, &[])
+    pub(super) fn spawn(spec: ResolvedExternalAgent, cwd: &Path) -> Result<Self, AppError> {
+        Self::spawn_with_directories(spec, cwd, &[])
     }
 
     pub(super) fn spawn_with_directories(
-        agent: ExternalAgent,
+        spec: ResolvedExternalAgent,
         cwd: &Path,
         directories: &[PathBuf],
     ) -> Result<Self, AppError> {
-        Self::spawn_profile(agent, cwd, false, directories)
-    }
-
-    pub(super) fn spawn_profile(
-        agent: ExternalAgent,
-        cwd: &Path,
-        previous_antigravity_history: bool,
-        directories: &[PathBuf],
-    ) -> Result<Self, AppError> {
-        let (program, arguments) = agent.command();
-        let agent_arguments = match agent {
-            ExternalAgent::Antigravity => {
-                policy::antigravity_arguments(previous_antigravity_history)?
-            }
-            ExternalAgent::ClaudeCode => Vec::new(),
-        };
-        let mut command = Command::new(program);
-        command.args(arguments).args(&agent_arguments);
+        let mut command = Command::new(&spec.command);
+        command.args(&spec.args);
         agent_environment(&mut command);
+        command.envs(&spec.env);
         command.current_dir(cwd);
-        let isolation = isolation::wrap(
-            &mut command,
-            agent,
-            cwd,
-            directories,
-            previous_antigravity_history,
-            None,
-        )?;
+        let isolation = isolation::wrap(&mut command, &spec, cwd, directories)?;
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+            .stderr(Stdio::piped());
 
         let mut child = agena_process::spawn(command).map_err(|error| {
-            let setup = match agent {
-                ExternalAgent::Antigravity => "Install the official Antigravity CLI with ACP support and sign in from the ACP session.",
-                ExternalAgent::ClaudeCode => "Install Claude Code and the claude-agent-acp adapter on the server's PATH, then sign in using claude.",
+            let setup = match &spec.id {
+                ExternalAgent::Antigravity => "Install the official Antigravity CLI with ACP support and sign in from the ACP session.".to_owned(),
+                ExternalAgent::ClaudeCode => "Install Claude Code and the claude-agent-acp adapter on the server's PATH, then sign in using claude.".to_owned(),
+                ExternalAgent::Custom(_) => format!(
+                    "Check that `{}` is installed on the server's PATH or configured with an absolute path under acp.agents.{}.",
+                    spec.command,
+                    spec.id.id()
+                ),
             };
-            AppError::Config(format!("Could not start {}: {error}. {setup}", agent.label()))
+            AppError::Config(format!("Could not start {}: {error}. {setup}", spec.name))
         })?;
         let input = child
             .stdin()
@@ -489,16 +513,21 @@ impl AcpClient {
             .stdout()
             .take()
             .ok_or_else(|| AppError::Internal("external agent did not provide stdout".into()))?;
+        let stderr = child
+            .stderr()
+            .take()
+            .map(|pipe| StderrCapture::spawn(spec.id.clone(), pipe));
+        let agent = spec.id.clone();
         Ok(Self {
             agent,
+            spec,
             cwd: cwd.to_owned(),
             additional_directories: directories.to_vec(),
-            previous_antigravity_history,
-            agent_arguments,
             isolation,
             child,
             input,
             output: FramedRead::new(output, LinesCodec::new_with_max_length(MAX_FRAME_BYTES)),
+            stderr,
             next_id: 0,
             active_request: None,
             incomplete_write: false,
@@ -535,7 +564,7 @@ impl AcpClient {
             Version::V2
         };
         let (initialized, version) = loop {
-            let mut params = requested.initialize_params(self.agent, self.terminal_auth);
+            let mut params = requested.initialize_params(self.spec.client_tools, self.terminal_auth);
             if requested == Version::V1
                 && self.agent == ExternalAgent::ClaudeCode
                 && !self.air_index
@@ -559,9 +588,17 @@ impl AcpClient {
                 )
                 .await
                 .unwrap_or_else(|_| {
+                    let stderr = self
+                        .stderr
+                        .as_ref()
+                        .map(StderrCapture::summary)
+                        .unwrap_or_default();
+                    if !stderr.is_empty() {
+                        tracing::warn!(agent = self.agent.id(), %stderr, "ACP initialize timed out");
+                    }
                     Err(AppError::Config(format!(
                         "{} did not answer ACP initialization.",
-                        self.agent.label(),
+                        self.agent_label(),
                     )))
                 });
             if requested == Version::V2 {
@@ -574,12 +611,19 @@ impl AcpClient {
                         if cancel.is_cancelled() {
                             return Err(AppError::Cancelled);
                         }
-                        let mut replacement = Self::spawn_profile(
-                            self.agent,
+                        let had_isolation = self.isolation.is_some();
+                        let mut replacement = Self::spawn_with_directories(
+                            self.spec.clone(),
                             &self.cwd,
-                            self.previous_antigravity_history,
                             &self.additional_directories,
                         )?;
+                        if had_isolation && replacement.isolation.is_none() {
+                            replacement.close().await;
+                            return Err(AppError::Config(format!(
+                                "{} ACP process isolation became unavailable during protocol fallback.",
+                                self.agent_label()
+                            )));
+                        }
                         replacement.terminal_auth = self.terminal_auth;
                         replacement.plain_delete = self.plain_delete;
                         replacement.live_auth = self.live_auth.take();
@@ -593,7 +637,7 @@ impl AcpClient {
             let version = requested.negotiated(&value).ok_or_else(|| {
                 AppError::Config(format!(
                     "{} selected an unsupported ACP protocol version.",
-                    self.agent.label()
+                    self.agent_label()
                 ))
             })?;
             break (value, version);
@@ -604,7 +648,7 @@ impl AcpClient {
         if v2 && !v2_session.is_object() {
             return Err(AppError::Config(format!(
                 "{} does not provide ACP sessions.",
-                self.agent.label()
+                self.agent_label()
             )));
         }
         let (session, mcp, prompt) = if v2 {
@@ -686,12 +730,12 @@ impl AcpClient {
             .is_some_and(|caps| caps.version == Version::V2)
     }
 
-    pub(super) fn agent(&self) -> ExternalAgent {
-        self.agent
+    pub(super) fn agent(&self) -> &ExternalAgent {
+        &self.agent
     }
 
-    pub(super) fn agent_arguments(&self) -> &[String] {
-        &self.agent_arguments
+    pub(super) fn agent_label(&self) -> &str {
+        &self.spec.name
     }
 
     pub(super) fn enable_terminal_auth(&mut self) {
@@ -805,7 +849,7 @@ impl AcpClient {
                 kind: "external_agent_mcp_unavailable".into(),
                 summary: format!(
                     "{} did not advertise an MCP transport compatible with Agena. Agena tools are unavailable for this turn.",
-                    self.agent.label(),
+                    self.agent_label(),
                 ),
                 detail: None,
                 title: Some("Agena tools unavailable".into()),
@@ -826,26 +870,9 @@ impl AcpClient {
         Ok(Some(bridge))
     }
 
-    pub(super) async fn start_probe(
-        &mut self,
-        cwd: &Path,
-        additional_directories: Vec<PathBuf>,
-        cancel: &CancellationToken,
-    ) -> Result<OpenedSession, AppError> {
-        let context = SessionContext {
-            additional_directories,
-            ..Default::default()
-        };
-        self.start_with_context(
-            cwd,
-            None,
-            None,
-            false,
-            OpenPurpose::Prompt,
-            &context,
-            cancel,
-        )
-        .await
+    pub(super) fn can_reopen_session(&self) -> bool {
+        self.capabilities
+            .is_some_and(|caps| caps.resume || caps.load)
     }
 
     pub(super) async fn start_with_context(
@@ -859,15 +886,12 @@ impl AcpClient {
         cancel: &CancellationToken,
     ) -> Result<OpenedSession, AppError> {
         self.prepare_provider_routes(cancel).await?;
-        if self.previous_antigravity_history && previous.is_none() {
-            return Err(AppError::ExternalAgentResumeUnavailable);
-        }
         let setup = async {
             let capabilities = self.initialize(cancel).await?;
             if has_images && !capabilities.image {
                 return Err(AppError::Config(format!(
                     "{} does not support image input over ACP. Send the image as a project file reference.",
-                    self.agent.label()
+                    self.agent_label()
                 )));
             }
             let opened = |id: String,
@@ -899,7 +923,7 @@ impl AcpClient {
             let mcp_servers = Vec::from_iter(mcp);
             let mut params = json!({"cwd": cwd, "mcpServers": mcp_servers});
             context.apply(&mut params, capabilities.lifecycle)?;
-            policy::apply_to_session(self.agent, &mut params);
+            policy::apply_to_session(&self.agent, &mut params);
             let mut missing_previous = false;
             if let Some((previous, state)) = previous {
                 let mut resume = params.clone();
@@ -983,16 +1007,8 @@ impl AcpClient {
                     return Err(AppError::ExternalAgentResumeUnavailable);
                 }
             }
-            if self.previous_antigravity_history {
-                return Err(AppError::ExternalAgentResumeUnavailable);
-            }
             if purpose == OpenPurpose::RetryPrompt {
                 return Err(AppError::ExternalAgentPromptUncertain);
-            }
-            if purpose == OpenPurpose::Compact {
-                return Err(AppError::Config(
-                    "Antigravity could not resume the existing conversation to compact.".into(),
-                ));
             }
             let mut states = OpeningStates::new();
             if let Some(work) = &self.native_work {
@@ -1042,7 +1058,7 @@ impl AcpClient {
             &option.kind == kind && option.choices.iter().any(|choice| choice.value == value)
         }).ok_or_else(|| AppError::Config(format!(
             "{} no longer offers the selected {}. Open its options and choose an available value.",
-            self.agent.label(),
+            self.agent_label(),
             kind.label(),
         )))?;
         if option.current_value == value {
@@ -1112,15 +1128,15 @@ impl AcpClient {
         {
             return Err(AppError::Config(format!(
                 "{} did not confirm the selected {}.",
-                self.agent.label(),
+                self.agent_label(),
                 kind.label(),
             )));
         }
         Ok(())
     }
 
-    /// Release a disposable session opened only to read and validate options.
-    pub(super) async fn close_probe(
+    /// Release an unbound session that cannot be kept or reused.
+    pub(super) async fn close_ephemeral(
         &mut self,
         session: &OpenedSession,
         cancel: &CancellationToken,
@@ -1392,6 +1408,7 @@ impl AcpClient {
             let background_only = !steering_pending
                 && (v1_result.is_some()
                     || (v2 && prompt.as_ref().is_some_and(|p| p.waiting_for_background())));
+            self.prune_expired_url_elicitations();
             let authorizing_until = self.url_elicitations.values().copied().max();
             let line = tokio::select! {
                 biased;
@@ -1437,7 +1454,11 @@ impl AcpClient {
                         cancel,
                     ).await;
                     if let Err(error) = send {
-                        let _ = request.answer.send(Err(error));
+                        let stream_broken = self.incomplete_write;
+                        let _ = request.answer.send(Err(AppError::Internal(error.to_string())));
+                        if stream_broken {
+                            return Err(error);
+                        }
                     } else {
                         steering_requests.insert(request_id, request);
                     }
@@ -1453,10 +1474,10 @@ impl AcpClient {
                     if startup {
                         return Err(AppError::Config(format!(
                             "{} timed out during {method}.",
-                            self.agent.label(),
+                            self.agent_label(),
                         )));
                     }
-                    return Err(inactivity.as_ref().expect("enabled for a prompt").error(self.agent.label()));
+                    return Err(inactivity.as_ref().expect("enabled for a prompt").error(self.agent_label()));
                 }
                 line = self.output.next() => line,
                 _ = async { tokio::time::sleep_until(completion_deadline.expect("completion is pending")).await }, if completion_deadline.is_some() => {
@@ -1465,6 +1486,14 @@ impl AcpClient {
             };
             let line = line
                 .ok_or_else(|| {
+                    let stderr = self
+                        .stderr
+                        .as_ref()
+                        .map(StderrCapture::summary)
+                        .unwrap_or_default();
+                    if !stderr.is_empty() {
+                        tracing::warn!(agent = self.agent.id(), %method, %stderr, "ACP connection closed unexpectedly");
+                    }
                     let hint = if self.isolation.is_some() {
                         "Check the MXC prerequisites, ACP sandbox policy, and agent installation."
                     } else {
@@ -1472,7 +1501,7 @@ impl AcpClient {
                     };
                     AppError::Config(format!(
                         "{} closed its ACP connection during {method}. {hint}",
-                        self.agent.label()
+                        self.agent_label()
                     ))
                 })?
                 .map_err(|error| AppError::Internal(format!("invalid ACP frame: {error}")))?;
@@ -1537,10 +1566,11 @@ impl AcpClient {
                     if let Some(host) = request_input
                         && kind == InteractionKind::Form
                         && params["sessionId"].is_null()
-                        && params["requestId"].as_u64() == Some(id)
+                        && (params["requestId"].as_u64() == Some(id)
+                            || (!v2 && params["requestId"].is_null()))
                     {
                         let input =
-                            input_requests::NativeInput::elicitation(params, self.agent.label());
+                            input_requests::NativeInput::elicitation(params, self.agent_label());
                         self.begin_passive_input(
                             peer_id, kind, params, input, host, replies, cancel,
                         )
@@ -1582,12 +1612,16 @@ impl AcpClient {
                     };
                     if v2
                         && kind == InteractionKind::Permission
-                        && let SessionUpdates::Turn { session: root, .. } = &updates
                         && let Some(source) = params["sessionId"].as_str()
                         && let Some(update) = protocol::permission_tool_update(params)
                     {
-                        self.observe_native_work(source, &update);
-                        turn.update_native(root, source, &update).await?;
+                        if let SessionUpdates::Turn { session: root, .. } = &updates {
+                            self.observe_native_work(source, &update);
+                            turn.update_native(root, source, &update).await?;
+                        } else if let Some(root) = opening_session {
+                            self.observe_native_work(source, &update);
+                            let _ = turn.update_native(root, source, &update).await;
+                        }
                     }
                     let url_elicitation = match self.pending_url(kind, params) {
                         Ok(url) => url,
@@ -1692,18 +1726,26 @@ impl AcpClient {
                             {
                                 inactivity.observe_update(true, &update);
                             }
-                            if let Some(state) = states.get_mut(session) {
-                                state.observe(session, session, &update);
-                            } else if let Some((root, state)) =
-                                states.iter_mut().find(|(_, state)| {
-                                    state.state.details.subagents.contains_key(session)
-                                })
-                            {
-                                state.observe(root, session, &update);
-                            } else if states.len() < MAX_OPENING_SESSIONS {
-                                let mut state = OpeningState::default();
-                                if state.observe(session, session, &update) {
-                                    states.insert(session.to_owned(), state);
+                            let replaying_history = messages.as_ref().is_some_and(|(_, captured)| {
+                                captured
+                                    .replayed_users
+                                    .as_ref()
+                                    .is_some_and(|replay| !replay.complete)
+                            });
+                            if !replaying_history {
+                                if let Some(state) = states.get_mut(session) {
+                                    state.observe(session, session, &update);
+                                } else if let Some((root, state)) =
+                                    states.iter_mut().find(|(_, state)| {
+                                        state.state.details.subagents.contains_key(session)
+                                    })
+                                {
+                                    state.observe(root, session, &update);
+                                } else if states.len() < MAX_OPENING_SESSIONS {
+                                    let mut state = OpeningState::default();
+                                    if state.observe(session, session, &update) {
+                                        states.insert(session.to_owned(), state);
+                                    }
                                 }
                             }
                             if v2
@@ -1732,15 +1774,16 @@ impl AcpClient {
                 let Some((turn, _)) = turn else {
                     unreachable!("steering reply without prompt")
                 };
+                let steer_message_id =
+                    bounded_string(&message["result"]["messageId"], MAX_CURSOR_BYTES);
                 let result = if let Some(error) = message.get("error") {
                     Err(self.peer_error("steering", error))
                 } else if message["result"]["outcome"] == "promptRequired" {
                     Err(AppError::Config("The external turn ended before it could accept the additional instruction.".into()))
-                } else if message.get("result").is_some()
-                    && (!v2
-                        || bounded_string(&message["result"]["messageId"], MAX_CURSOR_BYTES)
-                            .is_some())
-                {
+                } else if message.get("result").is_some() && (!v2 || steer_message_id.is_some()) {
+                    if v2 && let Some(lifecycle) = &mut prompt {
+                        lifecycle.note_steering_accepted(steer_message_id);
+                    }
                     turn.record_steer(&request).await
                 } else {
                     Err(AppError::Internal(
@@ -1772,7 +1815,7 @@ impl AcpClient {
                     && (v2
                         || matches!(
                             error["code"].as_i64(),
-                            Some(-32600 | -32601 | -32602 | -32000)
+                            Some(-32600 | -32601 | -32602 | -32000 | -32001)
                         ))
                     && !prompt
                         .as_ref()
@@ -1831,6 +1874,9 @@ impl AcpClient {
                 continue;
             }
             if turn.is_some() && method == "session/prompt" {
+                if let Some(prompt) = &mut prompt {
+                    prompt.acknowledge_v1(bounded_string(&result["messageId"], MAX_CURSOR_BYTES));
+                }
                 v1_result = Some(result);
                 continue;
             }
@@ -1845,10 +1891,16 @@ impl AcpClient {
         }
     }
 
-    fn pending_url(&self, kind: InteractionKind, params: &Value) -> Result<Option<String>, Reply> {
+    fn prune_expired_url_elicitations(&mut self) {
+        let now = Instant::now();
+        self.url_elicitations.retain(|_, deadline| *deadline > now);
+    }
+
+    fn pending_url(&mut self, kind: InteractionKind, params: &Value) -> Result<Option<String>, Reply> {
         if kind != InteractionKind::Form || params["mode"] != "url" {
             return Ok(None);
         }
+        self.prune_expired_url_elicitations();
         let id =
             elicitation_id(params).ok_or(Reply::Error(-32602, "Invalid ACP elicitation ID"))?;
         if self.url_elicitations.contains_key(id)
@@ -1923,7 +1975,9 @@ impl AcpClient {
                 .iter()
                 .find_map(|(&id, (request, _))| request.is_none().then_some(id))
             {
-                work.pending.remove(&id);
+                if let Some((_, evicted)) = work.pending.remove(&id) {
+                    work.reoffer(&evicted);
+                }
             } else {
                 let _ = request.answer.send(Err(cancellation::busy()));
                 return;
@@ -1947,8 +2001,19 @@ impl AcpClient {
                     .pending
                     .insert(id, (Some(request), target));
             }
-            (result, _) => {
-                let _ = request.answer.send(result);
+            (Ok(()), None) => {
+                // Subagent session/cancel is a notification; re-offer until the
+                // subagent actually reports an idle state update.
+                if let Some(work) = &self.native_work {
+                    work.reoffer(&target);
+                }
+                let _ = request.answer.send(Ok(()));
+            }
+            (Err(error), _) => {
+                if let Some(work) = &self.native_work {
+                    work.reoffer(&target);
+                }
+                let _ = request.answer.send(Err(error));
             }
         }
     }
@@ -2055,7 +2120,7 @@ impl AcpClient {
         // The agent's error payload can carry authentication URLs or tokens.
         if matches!(code, -32000 | -32001) {
             return AppError::ProviderClassified {
-                provider: self.agent.label().into(),
+                provider: self.agent_label().into(),
                 message: format!(
                     "Rejected {method} (ACP error {code}). Check the agent's native sign-in."
                 ),
@@ -2063,9 +2128,23 @@ impl AcpClient {
                 retryable: false,
             };
         }
+        let diagnostic = error
+            .get("message")
+            .and_then(Value::as_str)
+            .map(|msg| sanitize_diagnostic(msg, 256))
+            .unwrap_or_default();
+        if !diagnostic.is_empty() {
+            tracing::warn!(
+                agent = self.agent.id(),
+                %method,
+                code,
+                detail = %diagnostic,
+                "external agent rejected ACP request"
+            );
+        }
         AppError::Config(format!(
             "{} rejected {method} (ACP error {code}).",
-            self.agent.label()
+            self.agent_label()
         ))
     }
 
@@ -2148,11 +2227,28 @@ impl AcpClient {
             .await?;
             let mut awaiting: HashSet<_> = steering_ids.collect();
             if !v2 {
-                // v1 requires a cancellation reply for pending permission requests.
-                self.cancel_peer_requests(&cancel).await?;
-                for &id in &awaiting {
-                    self.write_cancel_request(id, &cancel).await?;
+                // v1 requires a cancellation reply for pending permission/form
+                // requests. Withdraw tool/MCP tasks without prematurely claiming
+                // -32800 before their local executor settles.
+                self.withdraw_interactions();
+                let mut interactive = Vec::new();
+                self.pending.retain(|id, request| {
+                    if matches!(
+                        request.kind,
+                        InteractionKind::Permission | InteractionKind::Form
+                    ) {
+                        interactive.push((id.clone(), request.kind));
+                        false
+                    } else {
+                        true
+                    }
+                });
+                for (id, kind) in interactive {
+                    self.write(&kind.cancelled().message(&id), &cancel).await?;
                 }
+            }
+            for &id in &awaiting {
+                self.write_cancel_request(id, &cancel).await?;
             }
             if main.awaiting_reply {
                 awaiting.insert(main.id);
@@ -2174,8 +2270,13 @@ impl AcpClient {
                             && let Some(request) = self.pending.remove(id)
                         {
                             request.withdrawal.cancel();
-                            self.write(&request.kind.cancelled().message(id), &cancel)
-                                .await?;
+                            if matches!(
+                                request.kind,
+                                InteractionKind::Permission | InteractionKind::Form
+                            ) {
+                                self.write(&request.kind.cancelled().message(id), &cancel)
+                                    .await?;
+                            }
                         }
                     }
                     Some("session/request_permission") if !v2 => {
@@ -2302,7 +2403,9 @@ impl AcpClient {
         let (id, reply) = completed.map_err(|error| {
             AppError::Internal(format!("ACP interaction task stopped: {error}"))
         })??;
-        let pending = &self.pending[&id];
+        let Some(pending) = self.pending.get(&id) else {
+            return Ok(());
+        };
         // A tool can commit before the withdrawal reaches its executor.
         // Return the actual outcome instead of implying it did not execute.
         let reply = if pending.withdrawal.is_cancelled()
@@ -2349,7 +2452,7 @@ impl AcpClient {
                 biased;
                 _ = cancel.cancelled() => return Err(AppError::Cancelled),
                 _ = &mut deadline => return Err(AppError::Config(format!(
-                    "{} did not read an ACP message in time.", self.agent.label()
+                    "{} did not read an ACP message in time.", self.agent_label()
                 ))),
                 result = self.input.write(&frame[written..]) => result.map_err(|error|
                     AppError::Internal(format!("could not write the ACP connection: {error}")))?,
@@ -2403,7 +2506,11 @@ impl AcpClient {
                 .map_err(super::kernel_error)?;
             Ok::<_, AppError>(current.external_agent_resume.as_ref() == Some(resume))
         };
-        let mut ownership = tokio::time::interval(Duration::from_secs(15));
+        let mut ownership = tokio::time::interval_at(
+            Instant::now() + Duration::from_secs(15),
+            Duration::from_secs(15),
+        );
+        ownership.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut messages = NativeMessages::default();
         loop {
             let next = tokio::select! {
@@ -2466,8 +2573,8 @@ impl AcpClient {
                         .get(session)
                         .and_then(|child| child.title.as_ref())
                         .map_or_else(
-                            || self.agent.label().to_owned(),
-                            |child| format!("{} · {child}", self.agent.label()),
+                            || self.agent_label().to_owned(),
+                            |child| format!("{} · {child}", self.agent_label()),
                         );
                     let input = match method {
                         "elicitation/create" => Some((
@@ -2521,7 +2628,7 @@ impl AcpClient {
                             "sessionUpdate": "notice",
                             "severity": "info",
                             "title": "Authorization completed",
-                            "description": self.agent.label(),
+                            "description": self.agent_label(),
                         }),
                     )
                 }
@@ -2561,7 +2668,7 @@ impl AcpClient {
                         let applied = tokio::select! {
                             biased;
                             _ = cancel.cancelled() => return Ok(()),
-                            result = messages.apply(MessageTarget::Parked(kernel, resume, self.agent), message, false) => result?,
+                            result = messages.apply(MessageTarget::Parked(kernel, resume, self.agent.clone()), message, false) => result?,
                         };
                         if applied {
                             continue;
@@ -2608,28 +2715,12 @@ impl AcpClient {
         }
     }
 
-    pub(super) async fn compact_antigravity(
-        &mut self,
-        native_id: &str,
-        cancel: &CancellationToken,
-    ) -> Result<u64, AppError> {
-        self.release_native(native_id, false, cancel).await?;
-        antigravity::compact(
-            &self.cwd,
-            &self.additional_directories,
-            native_id,
-            self.previous_antigravity_history,
-            self.isolation.is_some(),
-            cancel,
-        )
-        .await
-    }
-
     pub(super) async fn close(mut self) {
         self.native_work = None;
         self.live_auth = None;
         self.abandon_request().await;
         while self.opening_replies.join_next().await.is_some() {}
+        drop(self.stderr.take());
         drop(self.input);
         if tokio::time::timeout(Duration::from_millis(300), self.child.wait())
             .await

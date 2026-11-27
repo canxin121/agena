@@ -11,14 +11,7 @@ use super::*;
 const ROUTES_FILE_ENV: &str = "AGENA_ACP_PROVIDERS_FILE";
 const MAX_CONFIG_BYTES: usize = 256 * 1024;
 
-#[derive(Deserialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
-struct Config {
-    #[serde(default)]
-    antigravity: Vec<Route>,
-    #[serde(default)]
-    claude_code: Vec<Route>,
-}
+type Config = BTreeMap<ExternalAgent, Vec<Route>>;
 
 #[derive(Deserialize)]
 #[serde(
@@ -78,12 +71,12 @@ impl AcpClient {
         if self.providers_prepared {
             return Ok(());
         }
-        let routes = read_routes(self.agent, cancel).await?;
+        let routes = read_routes(&self.agent, cancel).await?;
         if !routes.is_empty() {
             if !self.supports_provider_routes(cancel).await? {
                 return Err(AppError::Config(format!(
                     "{} did not advertise ACP provider configuration.",
-                    self.agent.label(),
+                    self.agent_label(),
                 )));
             }
             let offered = self.read_providers(cancel).await?;
@@ -141,10 +134,10 @@ impl AcpClient {
         } else {
             "agentCapabilities"
         };
-        Ok(self
-            .initialization
-            .as_ref()
-            .is_some_and(|value| value[key]["providers"].is_object()))
+        Ok(self.initialization.as_ref().is_some_and(|value| {
+            let cap = &value[key]["providers"];
+            cap.is_object() || (!v2 && cap == &Value::Bool(true))
+        }))
     }
 
     async fn read_providers(
@@ -153,11 +146,15 @@ impl AcpClient {
     ) -> Result<Vec<ExternalAgentProvider>, AppError> {
         let value = self.call("providers/list", json!({}), cancel).await?;
         let catalog: WireCatalog = serde_json::from_value(value).map_err(|_| bad_catalog())?;
+        if catalog.providers.len() > 64 {
+            return Err(bad_catalog());
+        }
         let mut ids = HashSet::new();
         let mut providers = Vec::with_capacity(catalog.providers.len());
         for row in catalog.providers {
             if !valid_identifier(&row.provider_id)
                 || !ids.insert(row.provider_id.clone())
+                || row.supported.len() > 32
                 || row
                     .supported
                     .iter()
@@ -247,10 +244,10 @@ impl WireTarget {
 }
 
 async fn read_routes(
-    agent: ExternalAgent,
+    agent: &ExternalAgent,
     cancel: &CancellationToken,
 ) -> Result<Vec<Route>, AppError> {
-    let Some(path) = std::env::var_os(ROUTES_FILE_ENV) else {
+    let Some(path) = std::env::var_os(ROUTES_FILE_ENV).filter(|path| !path.is_empty()) else {
         return Ok(Vec::new());
     };
     let read = async {
@@ -279,15 +276,12 @@ async fn read_routes(
             "The ACP provider configuration exceeds 256 KiB.".into(),
         ));
     }
-    let config: Config = serde_json::from_slice(&input).map_err(|_| {
+    let mut config: Config = serde_json::from_slice(&input).map_err(|_| {
         AppError::Config(
             "Invalid ACP provider configuration. Check the JSON fields and action names.".into(),
         )
     })?;
-    Ok(match agent {
-        ExternalAgent::Antigravity => config.antigravity,
-        ExternalAgent::ClaudeCode => config.claude_code,
-    })
+    Ok(config.remove(agent).unwrap_or_default())
 }
 
 fn resolve_headers(

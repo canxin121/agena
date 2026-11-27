@@ -29,11 +29,7 @@ session = "native-mcp"
 antigravity = Path(sys.argv[0]).name == "agy"
 
 if antigravity:
-    arguments = sys.argv[1:]
-    assert "--process-per-session" in arguments
-    assert "--agent" not in arguments and "--include-default-customizations=false" not in arguments
-    profile = Path(arguments[arguments.index("--gemini-dir") + 1])
-    assert profile.parent == Path.home() / ".gemini"
+    assert sys.argv[1:] == ["acp", "--process-per-session"], sys.argv
 
 
 def send(**message):
@@ -310,10 +306,10 @@ for line in sys.stdin:
             assert params["_meta"]["antigravity"]["eagerMcpServers"] == ["agena"]
             assert servers[0]["_meta"]["antigravity"]["forceAllToolsEager"] is True
         else:
-            options = params["_meta"]["claudeCode"]["options"]
-            assert not {"tools", "disallowedTools", "strictMcpConfig", "settingSources", "extraArgs", "env"} & options.keys()
-            assert options.get("allowedTools") == (["mcp__agena__*"] if servers else None)
-            assert options["allowDangerouslySkipPermissions"] is False
+            if servers:
+                assert params["_meta"]["claudeCode"]["options"] == {"allowedTools": ["mcp__agena__*"]}
+            else:
+                assert "_meta" not in params
         if transport == "none":
             assert not servers
         else:

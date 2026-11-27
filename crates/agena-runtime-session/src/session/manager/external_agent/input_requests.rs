@@ -35,7 +35,7 @@ impl Pending {
         self.response.is_some()
             && !self.stop.is_cancelled()
             && !self.withdrawal.is_cancelled()
-            && configuration.external_agent == Some(self.scope.agent)
+            && configuration.external_agent.as_ref() == Some(&self.scope.agent)
             && self
                 .scope
                 .idle_resume
@@ -254,10 +254,10 @@ impl Host {
         let answer = if publication.is_ok() {
             tokio::select! {
                 biased;
+                answer = answer => answer.unwrap_or(fallback),
                 _ = self.stop.cancelled() => fallback,
                 _ = withdrawal.cancelled() => fallback,
                 _ = tokio::time::sleep(INPUT_TIMEOUT) => fallback,
-                answer = answer => answer.unwrap_or(fallback),
             }
         } else {
             fallback

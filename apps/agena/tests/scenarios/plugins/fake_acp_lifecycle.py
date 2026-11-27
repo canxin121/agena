@@ -114,8 +114,9 @@ for raw in sys.stdin:
             send(id=req["id"], error={"code": -32603, "message": "Native session is active elsewhere"})
             continue
     if method in {"session/new", "session/load", "session/resume", "session/fork"}:
-        options = params["_meta"]["claudeCode"]["options"]
-        assert not {"tools", "disallowedTools", "strictMcpConfig", "settingSources", "extraArgs"} & options.keys()
+        options = params.get("_meta", {}).get("claudeCode", {}).get("options", {})
+        has_agena = any(server.get("name") == "agena" for server in params.get("mcpServers", []))
+        assert options == ({"allowedTools": ["mcp__agena__*"]} if has_agena else {}), options
     if method == "initialize":
         if version == 1 and params["protocolVersion"] == 2:
             send(id=req["id"], result={"protocolVersion": 1})
@@ -337,27 +338,32 @@ for raw in sys.stdin:
     elif method in {"session/resume", "session/load"}:
         assert session in {"native-project", "native-fork", "native-fork-imported", "native-fork-live"}
         assert Path(params["cwd"]) == cwd
-        assert len(params["mcpServers"]) == 1
-        if resume_errors:
-            error = (cwd / ".native-resume-errors").read_text().strip()
-            if error:
-                if error == "transient":
-                    code, data = -32603, {}
-                else:
-                    code = -32002
-                    data = {"sessionId": session if error == "missing" else "different-native-id"}
-                send(id=req["id"], error={"code": code, "message": "Fixture refuses resume", "data": data})
-                continue
-        if session == "native-project" and not (historical_fork or native_skills or resume_errors or history_window is not None):
-            assert params["additionalDirectories"] == [str(cwd / "extra")], params
-            system_prompt = params["systemPrompt"]
-            assert system_prompt["mode"] == "append"
-            assert any(
-                block["type"] == "text" and "Use the workspace lifecycle instructions." in block["text"]
-                for block in system_prompt["content"]
-            )
-        current = session
-        result = {"availableCommands": commands} if native_skills else model_options() if view_settings else {}
+        if view_settings and not params["mcpServers"]:
+            assert session == "native-project"
+            current = session
+            result = model_options()
+        else:
+            assert len(params["mcpServers"]) == 1
+            if resume_errors:
+                error = (cwd / ".native-resume-errors").read_text().strip()
+                if error:
+                    if error == "transient":
+                        code, data = -32603, {}
+                    else:
+                        code = -32002
+                        data = {"sessionId": session if error == "missing" else "different-native-id"}
+                    send(id=req["id"], error={"code": code, "message": "Fixture refuses resume", "data": data})
+                    continue
+            if session == "native-project" and not (historical_fork or native_skills or resume_errors or history_window is not None):
+                assert params["additionalDirectories"] == [str(cwd / "extra")], params
+                system_prompt = params["systemPrompt"]
+                assert system_prompt["mode"] == "append"
+                assert any(
+                    block["type"] == "text" and "Use the workspace lifecycle instructions." in block["text"]
+                    for block in system_prompt["content"]
+                )
+            current = session
+            result = {"availableCommands": commands} if native_skills else model_options() if view_settings else {}
     elif method == "session/new":
         current = "native-new"
         result = {"sessionId": current, **(model_options() if view_settings else {})}
@@ -438,7 +444,7 @@ for raw in sys.stdin:
                 fcntl.flock(lease, fcntl.LOCK_UN)
         result = {}
     elif method == "session/delete":
-        assert session == "native-fork" or (view_settings and session == "native-new")
+        assert session == "native-fork"
         result = {}
     else:
         raise AssertionError(f"Unexpected ACP method: {method}")

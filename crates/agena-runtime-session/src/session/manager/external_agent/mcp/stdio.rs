@@ -135,7 +135,14 @@ async fn serve(
             _ = closing.cancelled() => return Ok(()),
             _ = connections.join_next(), if !connections.is_empty() => {}
             client = listener.accept() => {
-                let socket = client?;
+                let socket = match client {
+                    Ok(socket) => socket,
+                    Err(error) => {
+                        tracing::warn!(%error, "transient error accepting ACP stdio MCP connection");
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                        continue;
+                    }
+                };
                 if connections.len() < MAX_CONNECTIONS {
                     let backend = backend.clone();
                     let token = token.clone();
@@ -178,6 +185,16 @@ async fn connect<T: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
         read,
         JsonRpcMessageCodec::<ClientJsonRpcMessage>::new_with_max_length(MAX_MESSAGE_BYTES),
     )
+    .take_while(|message| {
+        let ok = match message {
+            Ok(_) => true,
+            Err(error) => {
+                tracing::debug!(%error, "closing ACP stdio MCP connection after invalid frame");
+                false
+            }
+        };
+        std::future::ready(ok)
+    })
     .filter_map(|message| std::future::ready(message.ok()));
     let outgoing = FramedWrite::new(write, JsonRpcMessageCodec::<ServerJsonRpcMessage>::new());
     if let Err(error) =

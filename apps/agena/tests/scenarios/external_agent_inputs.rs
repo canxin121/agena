@@ -9,7 +9,7 @@ use anyhow::{Context as _, ensure};
 async fn request_authentication_and_idle_interactions_use_the_normal_input_channel() -> TestResult {
     let bin = tempfile::tempdir()?;
     let agent = ExternalAgent::ClaudeCode;
-    let executable = bin.path().join(agent.command().0);
+    let executable = bin.path().join(agent.builtin_command().expect("builtin").0);
     std::fs::write(&executable, include_str!("plugins/fake_acp_inputs.py"))?;
     std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755))?;
     let path = std::env::var_os("PATH").unwrap_or_default();

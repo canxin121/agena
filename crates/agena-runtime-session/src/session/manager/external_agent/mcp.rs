@@ -125,6 +125,7 @@ impl AcpEndpoint {
             return Ok(error(-32602, "MCP-over-ACP requires MCP 2026-07-28"));
         }
         let result = match method {
+            "ping" => Ok(json!({})),
             "server/discover" => Ok(json!({
                 "supportedVersions": [REVISION],
                 "capabilities": {"tools": {}},
@@ -155,9 +156,21 @@ impl AcpEndpoint {
                 value["resultType"] = json!("complete");
                 json!({"result": value})
             }
-            Err(McpServerError::InvalidParams(_) | McpServerError::NotFound(_)) => {
-                error(-32602, "Invalid MCP tool request")
+            Err(McpServerError::InvalidParams(detail)) => {
+                let cleaned: String = detail
+                    .chars()
+                    .map(|ch| if ch.is_control() { ' ' } else { ch })
+                    .collect();
+                let trimmed = cleaned.trim();
+                let end = trimmed.floor_char_boundary(512);
+                let msg = if trimmed.is_empty() {
+                    "Invalid MCP tool request"
+                } else {
+                    &trimmed[..end]
+                };
+                error(-32602, msg)
             }
+            Err(McpServerError::NotFound(_)) => error(-32602, "Requested MCP tool was not found"),
             Err(McpServerError::Cancelled) => return Err(AppError::Cancelled),
             Err(_) => error(-32603, "Agena could not complete the MCP request"),
         })
@@ -407,7 +420,7 @@ impl ExternalTurn {
                 self.executor.clone(),
                 self.control.clone(),
                 self.control.state.clone(),
-                super::super::media::MediaTarget::ExternalAgent(self.agent),
+                super::super::media::MediaTarget::ExternalAgent(self.agent.clone()),
                 Some(cancel.clone()),
             )
             .await?;

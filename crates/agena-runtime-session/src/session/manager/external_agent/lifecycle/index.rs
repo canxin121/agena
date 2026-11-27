@@ -17,13 +17,13 @@ impl SessionManager {
             Action::IndexList { agent, cursor, .. } => {
                 if cursor
                     .as_ref()
-                    .is_some_and(|value| value.len() > acp::MAX_CURSOR_BYTES)
+                    .is_some_and(|value| value.len() > acp::MAX_CURSOR_BYTES + 64)
                 {
                     return Err(AppError::Config(
                         "Invalid external agent history cursor.".into(),
                     ));
                 }
-                *agent
+                agent.clone()
             }
             Action::BatchGet { agent, native_ids } => {
                 if native_ids.is_empty()
@@ -36,7 +36,7 @@ impl SessionManager {
                         acp::MAX_BATCH_IDS,
                     )));
                 }
-                *agent
+                agent.clone()
             }
             Action::SetArchived {
                 agent, native_id, ..
@@ -46,7 +46,7 @@ impl SessionManager {
                         "Invalid external agent conversation ID.".into(),
                     ));
                 }
-                *agent
+                agent.clone()
             }
             Action::Watch {
                 agent,
@@ -60,7 +60,7 @@ impl SessionManager {
                 }
                 let cwd = canonical_directory(&self.workspace_root_by_id(workspace).await?).await?;
                 return self
-                    .watch_native_index(agent.to_owned(), cwd, Duration::from_secs(wait.into()))
+                    .watch_native_index(agent.clone(), cwd, Duration::from_secs(wait.into()))
                     .await;
             }
             Action::List { .. }
@@ -70,9 +70,54 @@ impl SessionManager {
                 unreachable!("ordinary native lifecycle request")
             }
         };
+        let spec = self.resolve_external_agent(&agent)?;
         let cwd = canonical_directory(&self.workspace_root_by_id(workspace).await?).await?;
         let _permit = self.reserve_execution()?;
         let cancel = self.shutdown.child_token();
+        let _archive_lock = if let Action::SetArchived { native_id, .. } = &action {
+            let lock = native_replay_lock(&cwd, &agent, native_id);
+            let held = tokio::select! {
+                biased;
+                _ = cancel.cancelled() => return Err(AppError::Cancelled),
+                held = lock.lock_owned() => held,
+            };
+            let link = ExternalAgentLink {
+                native_id: native_id.clone(),
+                cwd: cwd.clone(),
+                incarnation: None,
+                resume_at: None,
+            };
+            if let Some(id) = self
+                .kernel_runtime
+                .acp_view(workspace, agent.clone(), &link)
+                .await
+                .map_err(kernel_error)?
+            {
+                let dispatch = self.session_dispatch(id);
+                let _submission = dispatch.submission.try_lock().map_err(|_| {
+                    AppError::Config(
+                        "Finish or stop the active turn before changing archive state.".into(),
+                    )
+                })?;
+                let _execution = dispatch.execution.try_lock().map_err(|_| {
+                    AppError::Config(
+                        "Finish or stop the active turn before changing archive state.".into(),
+                    )
+                })?;
+                if let Ok(snapshot) = self.kernel().reader.control_snapshot(id, 0).await
+                    && (snapshot.summary.running_executions != 0
+                        || snapshot.summary.queued_executions != 0)
+                {
+                    return Err(AppError::Config(
+                        "Finish or stop the active turn before changing archive state.".into(),
+                    ));
+                }
+                self.close_idle_external_agent(id).await;
+            }
+            Some(held)
+        } else {
+            None
+        };
         let fallback = matches!(
             action,
             Action::IndexList {
@@ -82,7 +127,7 @@ impl SessionManager {
         );
         let mut standard = match &action {
             Action::IndexList { .. } | Action::SetArchived { .. } => {
-                Some(acp::AcpClient::spawn(agent, &cwd)?)
+                Some(acp::AcpClient::spawn(spec.clone(), &cwd)?)
             }
             _ => None,
         };
@@ -91,17 +136,26 @@ impl SessionManager {
             if let Some(client) = standard.as_mut() {
                 match client.supports_native_archive(&cancel).await {
                     Ok(true) => return standard_history(client, &cwd, action, &cancel).await,
-                    Ok(false) => {}
+                    Ok(false) => {
+                        if !fallback
+                            && let Some(client) = standard.take()
+                        {
+                            client.close().await;
+                        }
+                    }
                     Err(error)
                         if agent == ExternalAgent::ClaudeCode
                             && !matches!(error, AppError::Cancelled) =>
                     {
                         negotiation_error = Some(error);
+                        if let Some(client) = standard.take() {
+                            client.close().await;
+                        }
                     }
                     Err(error) => return Err(error),
                 }
             }
-            let opened = match acp::AcpClient::open_index(agent, &cwd, &cancel).await {
+            let opened = match acp::AcpClient::open_index(spec.clone(), &cwd, &cancel).await {
                 Ok(opened) => opened,
                 Err(error) if fallback && !matches!(error, AppError::Cancelled) => {
                     tracing::debug!(%error, "could not negotiate optional Claude session index");
@@ -175,7 +229,7 @@ impl SessionManager {
 
     pub(super) async fn index_import_record(
         &self,
-        agent: ExternalAgent,
+        spec: &agena_domain::ResolvedExternalAgent,
         cwd: &Path,
         native_id: &str,
         cancel: &CancellationToken,
@@ -185,7 +239,7 @@ impl SessionManager {
         if invalid_index_id(native_id) {
             return Err(not_found());
         }
-        let opened = match acp::AcpClient::open_index(agent, cwd, cancel).await {
+        let opened = match acp::AcpClient::open_index(spec.clone(), cwd, cancel).await {
             Ok(opened) => opened,
             Err(AppError::Cancelled) => return Err(AppError::Cancelled),
             Err(error) => {
@@ -213,6 +267,7 @@ impl SessionManager {
         cwd: PathBuf,
         wait: Duration,
     ) -> Result<ExternalAgentWorkspaceResult, AppError> {
+        let spec = self.resolve_external_agent(&agent)?;
         if agent != ExternalAgent::ClaudeCode {
             return Ok(ExternalAgentWorkspaceResult::Watch {
                 supported: false,
@@ -228,7 +283,7 @@ impl SessionManager {
             .spawn(async move {
                 let _permit = permit;
                 let Some((mut client, capabilities)) =
-                    acp::AcpClient::open_index(agent, &cwd, &cancel).await?
+                    acp::AcpClient::open_index(spec, &cwd, &cancel).await?
                 else {
                     return Ok(ExternalAgentWorkspaceResult::Watch {
                         supported: false,

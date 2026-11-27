@@ -179,12 +179,27 @@ export function sessionStateNeedsAttention(state: SessionState | null | undefine
   )
 }
 
-export const externalAgentLabels = {
+export type ExternalAgent = string
+
+export type ExternalAgentCatalogEntry = {
+  id: ExternalAgent
+  name: string
+  builtin: boolean
+  command: string
+  args?: string[]
+}
+
+export const externalAgentLabels: Record<string, string> = {
   antigravity: 'Antigravity',
   'claude-code': 'Claude Code',
 }
 
-export type ExternalAgent = keyof typeof externalAgentLabels
+export function formatExternalAgentLabel(
+  agent: ExternalAgent,
+  catalog?: readonly ExternalAgentCatalogEntry[],
+): string {
+  return catalog?.find((entry) => entry.id === agent)?.name || externalAgentLabels[agent] || agent
+}
 
 export type ExternalAgentOptions = {
   selection: Record<string, string | undefined>

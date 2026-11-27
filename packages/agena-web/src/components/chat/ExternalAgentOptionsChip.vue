@@ -7,6 +7,10 @@ import { useI18n } from 'vue-i18n'
 import SessionChip from './SessionChip.vue'
 import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
+import {
+  getExternalAgentProviders,
+  type ExternalAgentProviders,
+} from '@/features/sessions/api/nativeAgentSessions'
 import { apiJson } from '@/lib/api'
 import type { ExternalAgentAuthStatus, ExternalAgentOptions } from '@/types/chat'
 
@@ -26,6 +30,10 @@ const authBusy = ref(false)
 const authError = ref('')
 const auth = ref<AgentAuth>()
 const liveAuth = ref<ExternalAgentAuthStatus | null>(null)
+const providersOpen = ref(false)
+const providersBusy = ref(false)
+const providersError = ref('')
+const providers = ref<ExternalAgentProviders | null>(null)
 const displayedAuth = computed(() => liveAuth.value ?? auth.value)
 const authPath = `${sessionApiPath(props.sessionId)}/agent-auth`
 const authStateKey = computed(() => ({
@@ -113,6 +121,24 @@ async function runAuth(action: AuthAction = { action: 'inspect' }) {
 function toggleAuth() {
   authOpen.value = !authOpen.value
   if (authOpen.value) void runAuth()
+}
+
+async function loadProviders() {
+  if (providersBusy.value) return
+  providersBusy.value = true
+  providersError.value = ''
+  try {
+    providers.value = await getExternalAgentProviders(props.sessionId)
+  } catch (reason) {
+    providersError.value = reason instanceof Error ? reason.message : String(reason)
+  } finally {
+    providersBusy.value = false
+  }
+}
+
+function toggleProviders() {
+  providersOpen.value = !providersOpen.value
+  if (providersOpen.value) void loadProviders()
 }
 
 watch([open, authOpen], ([panel, account], _previous, onCleanup) => {
@@ -227,6 +253,47 @@ watch([open, authOpen], ([panel, account], _previous, onCleanup) => {
               {{ t('chat.composer.picker.agentTerminalSignIn') }}
               <code>agena sessions agent-auth {{ sessionId }} --terminal</code>
             </p>
+          </template>
+        </div>
+      </div>
+      <div class="grid gap-2 border-t border-border pt-2">
+        <Button size="sm" variant="outline" class="justify-self-start" :aria-expanded="providersOpen" @click="toggleProviders">
+          {{ t('chat.composer.picker.agentProviders') }}
+        </Button>
+        <div v-if="providersOpen" class="grid gap-2" :aria-busy="providersBusy">
+          <p v-if="providersError" role="alert" class="whitespace-pre-wrap text-destructive">{{ providersError }}</p>
+          <p v-else-if="providersBusy" role="status" class="text-muted-foreground">{{ t('chat.composer.status.loading') }}</p>
+          <template v-else-if="providers">
+            <p v-if="!providers.supported" class="text-muted-foreground">
+              {{ t('chat.composer.picker.agentProvidersUnsupported') }}
+            </p>
+            <p v-else-if="!providers.providers.length" class="text-muted-foreground">
+              {{ t('chat.composer.picker.agentProvidersEmpty') }}
+            </p>
+            <ul v-else class="grid gap-1.5">
+              <li
+                v-for="provider in providers.providers"
+                :key="provider.provider_id"
+                class="rounded border border-border p-2"
+              >
+                <p class="break-words font-medium">
+                  {{ provider.provider_id }}
+                  <span v-if="provider.required" class="ml-1 text-muted-foreground">
+                    ({{ t('chat.composer.picker.agentProviderRequired') }})
+                  </span>
+                </p>
+                <p v-if="provider.supported.length" class="break-words text-muted-foreground">
+                  {{ provider.supported.join(', ') }}
+                </p>
+                <p class="break-all font-mono text-muted-foreground">
+                  {{
+                    provider.current
+                      ? `${provider.current.api_type} · ${provider.current.base_url}`
+                      : t('chat.composer.picker.agentProviderUnconfigured')
+                  }}
+                </p>
+              </li>
+            </ul>
           </template>
         </div>
       </div>

@@ -15,9 +15,9 @@ import {
   type NativeIndexedSession,
   type NativeIndexCapabilities,
 } from '@/features/sessions/api/nativeAgentSessions'
-import { externalAgentLabels, type ExternalAgent } from '@/types/chat'
+import { formatExternalAgentLabel, type ExternalAgent } from '@/types/chat'
 
-const props = defineProps<{ workspace: number; agent: ExternalAgent }>()
+const props = defineProps<{ workspace: number; agent: ExternalAgent; agentLabel?: string }>()
 const emit = defineEmits<{
   (event: 'opened', session: number): void
 }>()
@@ -215,7 +215,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="space-y-3">
     <h3 class="text-xs font-medium text-muted-foreground">
-      {{ t('chat.nativeAgent.history', { agent: externalAgentLabels[agent] }) }}
+      {{ t('chat.nativeAgent.history', { agent: agentLabel || formatExternalAgentLabel(agent) }) }}
     </h3>
     <label v-if="capabilities?.archive" class="flex flex-wrap items-center gap-2 text-sm">
       <span>{{ t('chat.nativeAgent.archiveFilter') }}</span>
@@ -239,8 +239,11 @@ onBeforeUnmount(() => {
       <li v-for="session in sessions" :key="session.native_id" class="flex flex-wrap items-center gap-2 py-2.5">
         <div class="min-w-0 flex-1 basis-28">
           <p class="truncate text-sm font-medium">{{ session.title || session.native_id }}</p>
-          <p v-if="dateLabel(session.updated_at)" class="truncate text-xs text-muted-foreground">
-            {{ dateLabel(session.updated_at) }}
+          <p
+            v-if="session.model || session.state || dateLabel(session.updated_at)"
+            class="truncate text-xs text-muted-foreground"
+          >
+            {{ [session.model, session.state, dateLabel(session.updated_at)].filter(Boolean).join(' · ') }}
           </p>
         </div>
         <Button size="sm" variant="ghost" :disabled="mutation !== null" @click="showPreview(session)">

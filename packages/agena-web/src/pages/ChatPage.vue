@@ -78,7 +78,8 @@ import { deriveSendRunConfig } from './chat/modelSendDefaults'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import type { TranscriptDisplayPart } from '@/components/chat/messageList.types'
-import { externalAgentLabels, type ExternalAgentCommand, type ExternalAgentOptions, type ExternalAgentSuggestion, type MessageFold } from '@/types/chat'
+import { listExternalAgents, useExternalAgentCatalog } from '@/features/sessions/api/nativeAgentSessions'
+import { formatExternalAgentLabel, type ExternalAgentCommand, type ExternalAgentOptions, type ExternalAgentSuggestion, type MessageFold } from '@/types/chat'
 import { isAcpSessionId, sessionApiPath } from '@/lib/acpSession'
 import type { JsonObject, JsonValue } from '@/types/json'
 import type { PluginCommandResult } from '@/lib/pluginOperations'
@@ -493,10 +494,20 @@ function returnFromSide() {
   if (sideParentId.value) void chat.selectSession(sideParentId.value)
 }
 
+const externalAgentCatalog = useExternalAgentCatalog()
 const externalAgentLabel = computed(() => {
   const agent = chat.selectedSession?.external_agent
-  return agent ? externalAgentLabels[agent] : undefined
+  return agent ? formatExternalAgentLabel(agent, externalAgentCatalog.value) : undefined
 })
+watch(
+  () => chat.selectedSession?.external_agent,
+  (agent) => {
+    if (agent && !externalAgentCatalog.value.some((entry) => entry.id === agent)) {
+      void listExternalAgents().catch(() => {})
+    }
+  },
+  { immediate: true },
+)
 
 const modelTriggerRef = ref<HTMLElement | null>(null)
 const profileTriggerRef = ref<HTMLElement | null>(null)

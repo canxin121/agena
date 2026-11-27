@@ -1,11 +1,17 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 
 import { readSessionIdFromQuery } from '@/app/navigation/sessionQuery'
 import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
 import Button from '@/components/ui/Button.vue'
+import {
+  listExternalAgents,
+  listOpenAcpSessions,
+  useExternalAgentCatalog,
+  type OpenAcpSession,
+} from '@/features/sessions/api/nativeAgentSessions'
 import type { DirectoryEntry } from '@/features/sessions/model/types'
 import { isAcpSessionId } from '@/lib/acpSession'
 import { useChatStoreUnscoped } from '@/stores/chat'
@@ -13,7 +19,7 @@ import { createSession } from '@/stores/chat/api'
 import { useDirectoryStore } from '@/stores/directory'
 import { fetchAgenaWorkspaces } from '@/stores/directorySessionStore'
 import { useUiStore } from '@/stores/ui'
-import { externalAgentLabels, type ExternalAgent } from '@/types/chat'
+import { formatExternalAgentLabel, type ExternalAgent } from '@/types/chat'
 import ExternalAgentHistoryList from './ExternalAgentHistoryList.vue'
 import ExternalAgentSessionDialog from './chatSidebar/components/ExternalAgentSessionDialog.vue'
 
@@ -25,15 +31,47 @@ const directory = useDirectoryStore()
 const navigation = useWorkspaceNavigation()
 const projects = ref<DirectoryEntry[]>([])
 const project = ref('')
-const agent = ref<ExternalAgent>('claude-code')
+const agents = useExternalAgentCatalog()
+const agent = ref<ExternalAgent>(agents.value[0]?.id || 'claude-code')
 const creating = ref(false)
 const loading = ref(true)
 const error = ref('')
 const managed = ref('')
 const historyRevision = ref(0)
+const openViews = ref<OpenAcpSession[]>([])
 const lifetime = new AbortController()
+let openViewsRequest: AbortController | undefined
 const currentId = computed(() => readSessionIdFromQuery(route.query))
 const current = computed(() => (isAcpSessionId(currentId.value) ? chat.getSessionById(currentId.value) : null))
+const agentLabel = (id: ExternalAgent) => formatExternalAgentLabel(id, agents.value)
+
+async function loadAgents() {
+  try {
+    const items = await listExternalAgents(lifetime.signal)
+    if (lifetime.signal.aborted) return
+    if (items.length && !items.some((entry) => entry.id === agent.value)) {
+      agent.value = items[0].id
+    }
+  } catch {
+    // Keep built-in defaults if the catalog request fails.
+  }
+}
+
+async function loadOpenViews() {
+  openViewsRequest?.abort()
+  if (!project.value) {
+    openViews.value = []
+    return
+  }
+  const request = new AbortController()
+  openViewsRequest = request
+  try {
+    const items = await listOpenAcpSessions(Number(project.value), request.signal)
+    if (!request.signal.aborted && !lifetime.signal.aborted) openViews.value = items
+  } catch {
+    if (!request.signal.aborted && !lifetime.signal.aborted) openViews.value = []
+  }
+}
 
 async function loadProjects() {
   error.value = ''
@@ -71,6 +109,7 @@ async function openView(id?: string | number) {
     replace: true,
   })
   if (id) ui.setSessionSwitcherOpen(false)
+  void loadOpenViews()
 }
 
 async function newConversation() {
@@ -81,7 +120,8 @@ async function newConversation() {
     const session = await createSession({
       workspaceId: Number(project.value),
       externalAgent: agent.value,
-      title: externalAgentLabels[agent.value],
+      title: agentLabel(agent.value),
+      autoTitle: true,
     })
     await openView(session.id)
   } catch (failure) {
@@ -91,8 +131,15 @@ async function newConversation() {
   }
 }
 
-onMounted(() => void loadProjects())
-onBeforeUnmount(() => lifetime.abort())
+watch([project, historyRevision], () => void loadOpenViews())
+onMounted(() => {
+  void loadAgents()
+  void loadProjects()
+})
+onBeforeUnmount(() => {
+  openViewsRequest?.abort()
+  lifetime.abort()
+})
 </script>
 
 <template>
@@ -118,13 +165,13 @@ onBeforeUnmount(() => lifetime.abort())
           v-model="agent"
           :aria-label="t('chat.nativeAgent.agent')"
           class="rounded-md border border-input bg-background px-2 py-1.5 text-sm"
-          :disabled="creating"
+          :disabled="creating || !agents.length"
         >
-          <option v-for="(label, value) in externalAgentLabels" :key="value" :value="value">{{ label }}</option>
+          <option v-for="entry in agents" :key="entry.id" :value="entry.id">{{ entry.name }}</option>
         </select>
       </label>
       <div class="flex flex-wrap gap-2">
-        <Button size="sm" :disabled="!project || creating" @click="newConversation">
+        <Button size="sm" :disabled="!project || creating || !agents.length" @click="newConversation">
           {{ t(creating ? 'common.working' : 'chat.sidebar.directoryActions.newSession.label') }}
         </Button>
         <Button v-if="current" size="sm" variant="outline" @click="managed = current.id">
@@ -140,12 +187,31 @@ onBeforeUnmount(() => lifetime.abort())
         {{ t('chat.nativeAgent.noProjects') }}
       </p>
     </div>
-    <div class="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+    <div class="min-h-0 flex-1 overflow-y-auto px-4 py-3 space-y-4">
+      <section v-if="openViews.length" class="space-y-1.5" :aria-label="t('chat.nativeAgent.openViews')">
+        <h3 class="text-xs font-medium text-muted-foreground">{{ t('chat.nativeAgent.openViews') }}</h3>
+        <ul class="space-y-1">
+          <li v-for="view in openViews" :key="view.id">
+            <button
+              type="button"
+              class="flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-sidebar-accent"
+              :class="String(view.id) === currentId ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground' : ''"
+              @click="openView(view.id)"
+            >
+              <span class="min-w-0 truncate">{{ view.title || `#${view.id}` }}</span>
+              <span v-if="view.external_agent" class="shrink-0 text-[11px] text-muted-foreground">
+                {{ agentLabel(view.external_agent) }}
+              </span>
+            </button>
+          </li>
+        </ul>
+      </section>
       <ExternalAgentHistoryList
-        v-if="project"
+        v-if="project && agent"
         :key="`${project}:${agent}:${historyRevision}`"
         :workspace="Number(project)"
         :agent="agent"
+        :agent-label="agentLabel(agent)"
         @opened="openView"
       />
     </div>

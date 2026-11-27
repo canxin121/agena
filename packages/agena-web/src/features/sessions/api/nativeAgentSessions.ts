@@ -1,7 +1,26 @@
+import { ref } from 'vue'
+
 import { apiJson } from '@/lib/api'
 import { sessionApiPath } from '@/lib/acpSession'
 import { invalidateResources } from '@/lib/resourceSync'
-import type { ExternalAgent } from '@/types/chat'
+import type { ExternalAgent, ExternalAgentCatalogEntry } from '@/types/chat'
+
+const externalAgentCatalog = ref<ExternalAgentCatalogEntry[]>([
+  { id: 'claude-code', name: 'Claude Code', builtin: true, command: 'claude-agent-acp' },
+  { id: 'antigravity', name: 'Antigravity', builtin: true, command: 'agy', args: ['acp', '--process-per-session'] },
+])
+
+export function useExternalAgentCatalog() {
+  return externalAgentCatalog
+}
+
+export async function listExternalAgents(signal?: AbortSignal): Promise<ExternalAgentCatalogEntry[]> {
+  const entries = await apiJson<ExternalAgentCatalogEntry[]>('/api/v1/acp/agents', { signal })
+  if (Array.isArray(entries)) {
+    externalAgentCatalog.value = entries
+  }
+  return externalAgentCatalog.value
+}
 
 export type NativeAgentSession = {
   native_id: string
@@ -144,6 +163,43 @@ export async function previewNativeAgentHistory(
     },
   )
   return result.preview
+}
+
+export type ExternalAgentProviderTarget = {
+  api_type: string
+  base_url: string
+}
+
+export type ExternalAgentProvider = {
+  provider_id: string
+  supported: string[]
+  required: boolean
+  current: ExternalAgentProviderTarget | null
+}
+
+export type ExternalAgentProviders = {
+  supported: boolean
+  providers: ExternalAgentProvider[]
+}
+
+export type OpenAcpSession = {
+  id: number
+  workspace_id?: number
+  title?: string
+  external_agent?: ExternalAgent
+  updated_at?: string
+}
+
+export async function listOpenAcpSessions(workspace: number, signal?: AbortSignal): Promise<OpenAcpSession[]> {
+  const page = await apiJson<{ items?: OpenAcpSession[] }>(
+    `/api/v1/acp/sessions?workspace_id=${encodeURIComponent(String(workspace))}&limit=50`,
+    { signal },
+  )
+  return Array.isArray(page.items) ? page.items : []
+}
+
+export function getExternalAgentProviders(id: string, signal?: AbortSignal) {
+  return apiJson<ExternalAgentProviders>(`${sessionApiPath(id)}/agent-providers`, { signal })
 }
 
 export async function manageNativeAgentSession(id: string, action: NativeSessionAction, signal?: AbortSignal) {

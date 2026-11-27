@@ -2,12 +2,14 @@
 """Standard ACP archive capability, paginated workspace listing, and persistence."""
 import json
 from pathlib import Path
+import subprocess
 import sys
 
 
 directory = Path.cwd()
 version = int(Path(".archive-version").read_text())
 split_history = Path(".split-antigravity-history").is_file()
+guarded_history = Path(".guarded-antigravity-history").is_file()
 previous = "--app-data-dir" in sys.argv
 state_file = Path(".archive-state")
 sessions = json.loads(state_file.read_text()) if state_file.is_file() else {
@@ -28,6 +30,33 @@ def log(method, detail=""):
         output.write(f"{method} {detail}\n")
 
 
+if "--print" in sys.argv:
+    assert guarded_history and sys.argv[sys.argv.index("--resume") + 1] == "ready"
+    assert sys.argv[sys.argv.index("--print") + 1] == "/compact"
+    assert (Path.home() / ".gemini/antigravity-cli/conversations/fixture").is_file()
+    assert (Path.home() / ".gemini/config/hooks.json").is_file()
+    log("compact-cli", "ready")
+    print(json.dumps({"event": "init", "conversation_id": "ready"}))
+    print(json.dumps({"event": "step_update", "step_update": {
+        "conversation_id": "ready", "step_type": "checkpoint", "state": "DONE", "step_index": 9,
+    }}))
+    print(json.dumps({"event": "result", "result": {"conversation_id": "ready", "status": "SUCCESS"}}))
+    sys.exit(0)
+
+
+def check_guard():
+    profile = Path(sys.argv[sys.argv.index("--gemini-dir") + 1])
+    hooks = json.loads((profile / "config/hooks.json").read_text())
+    [gate] = hooks["agena-acp-tools"]["PreToolUse"]
+    assert gate["matcher"] == "*"
+    [handler] = gate["hooks"]
+    for name, expected in (("write_file", "deny"), ("run_command", "deny"), ("search_web", "deny"),
+                           ("mcp_other_tool", "deny"), ("mcp_agena_tool", "allow")):
+        checked = subprocess.run(handler["command"], shell=True, capture_output=True, text=True,
+                                 input=json.dumps({"toolCall": {"name": name}}), timeout=10, check=True)
+        assert json.loads(checked.stdout)["decision"] == expected
+
+
 for line in sys.stdin:
     request = json.loads(line)
     if "id" not in request:
@@ -46,11 +75,13 @@ for line in sys.stdin:
             result = {"protocolVersion": 1, "agentCapabilities": {
                 "sessionCapabilities": capabilities, "loadSession": True,
             }}
-            if split_history and not previous:
+            if split_history and (not previous or guarded_history):
                 capabilities["resume"] = {}
                 result["agentCapabilities"]["_meta"] = {
                     "antigravity": {"systemPrompt": {"append": True}},
                 }
+            if guarded_history:
+                result["agentInfo"] = {"name": "Antigravity ACP Server", "version": "1.5.18"}
         else:
             result = {"protocolVersion": 2, "capabilities": {"session": capabilities}}
     elif method == "session/list":
@@ -106,6 +137,15 @@ for line in sys.stdin:
         else:
             log(method, native_id)
             result = {}
+    elif method == "session/resume" and guarded_history and previous:
+        assert native_id == "ready" and params["mcpServers"][0]["name"] == "agena"
+        check_guard()
+        log("legacy-resume", native_id)
+        send(method="session/update", params={"sessionId": native_id, "update": {
+            "sessionUpdate": "available_commands_update",
+            "availableCommands": [{"name": "compact", "description": "Compact with optional summary guidance"}],
+        }})
+        result = {}
     elif method in {"session/load", "session/resume"}:
         if split_history:
             log("history-port", "previous" if previous else "managed")
@@ -123,8 +163,15 @@ for line in sys.stdin:
             send(method="session/update", params={"sessionId": native_id, "update": {"sessionUpdate": "replay_complete"}})
         result = {}
     elif method == "session/prompt" and split_history:
-        assert not previous and native_id == "managed-run"
+        assert (not previous and native_id == "managed-run") or (
+            guarded_history and previous and native_id == "ready"
+        )
         log(method, native_id)
+        if guarded_history and previous:
+            text = params["prompt"][0]["text"]
+            assert not text.startswith("/compact"), text
+            if text == "Continue after native compaction":
+                log("compact-followup", native_id)
         send(method="session/update", params={"sessionId": native_id, "update": {
             "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Restricted Antigravity"},
         }})

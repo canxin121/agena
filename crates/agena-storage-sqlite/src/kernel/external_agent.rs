@@ -277,6 +277,7 @@ pub(super) async fn import(
     configuration.external_agent_link = Some(link);
     configuration.external_agent_state = state.clone();
     configuration.external_agent_resume = None;
+    configuration.external_agent_pending_turn = None;
     configuration.external_agent_inputs = None;
     configuration.parent_session_id = None;
     configuration.relation_kind = SessionRelationKind::Root;

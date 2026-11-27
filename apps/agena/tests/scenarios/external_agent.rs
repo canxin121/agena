@@ -68,6 +68,147 @@ fn composer() -> Result<ComposerDocument> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn acp_v1_interruption_preserves_the_native_link_without_resubmitting() -> TestResult {
+    recover_interrupted_acp_prompt("1", "before-response", "external_agent.prompt_uncertain", 1)
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn acp_v2_retries_an_uninserted_prompt_with_its_original_key() -> TestResult {
+    recover_interrupted_acp_prompt("2", "before-insertion", "", 2).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn acp_v2_reconciles_a_lost_acknowledgment_in_native_history() -> TestResult {
+    recover_interrupted_acp_prompt("2", "before-response", "external_agent.prompt_accepted", 2)
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn acp_v2_reconciles_a_lost_acknowledgment_after_a_successful_markerless_replay() -> TestResult
+{
+    recover_interrupted_acp_prompt(
+        "2",
+        "markerless-replay",
+        "external_agent.prompt_accepted",
+        2,
+    )
+    .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn acp_v2_retains_an_acknowledged_prompt_without_resubmitting() -> TestResult {
+    recover_interrupted_acp_prompt("2", "after-response", "external_agent.prompt_accepted", 1).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn acp_v1_retries_after_an_explicit_preflight_rejection() -> TestResult {
+    recover_interrupted_acp_prompt("1", "explicit-rejection", "", 2).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn acp_v2_retries_after_an_explicit_preflight_rejection_without_replay() -> TestResult {
+    recover_interrupted_acp_prompt("2", "explicit-rejection", "", 2).await
+}
+
+async fn recover_interrupted_acp_prompt(
+    version: &'static str,
+    mode: &'static str,
+    retry_error: &'static str,
+    submissions: usize,
+) -> TestResult {
+    let bin = tempfile::tempdir()?;
+    let peer = bin.path().join("claude-agent-acp");
+    std::fs::write(&peer, include_str!("plugins/fake_acp_recovery.py"))?;
+    std::fs::set_permissions(&peer, std::fs::Permissions::from_mode(0o755))?;
+    let path = std::env::join_paths(std::iter::once(bin.path().to_path_buf()).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))?;
+    fixture()
+        .env("PATH", path)
+        .seed_file("workspace/.recovery-version", version.as_bytes().to_vec())
+        .seed_file("workspace/.recovery-mode", mode.as_bytes().to_vec())
+        .run(|case| async move {
+            let ordinary = case.user().new_session().await?;
+            let workspace_id = ordinary
+                .snapshot()
+                .await?
+                .session
+                .workspace_id
+                .context("workspace ID")?;
+            let created = ordinary
+                .client()
+                .create_session_configured(CreateSessionParams {
+                    external_agent: Some(ExternalAgent::ClaudeCode),
+                    workspace_id,
+                    title: "Recover native submission".into(),
+                    parent_id: None,
+                    auto_title: false,
+                    profile: None,
+                    prompts: None,
+                })
+                .await?;
+            let user = case.user().attach_session(created.id).await?;
+            user.send("warm up")
+                .await?
+                .wait_settled()
+                .await?
+                .assert_succeeded()?;
+            let failed = user
+                .send("interrupted prompt")
+                .await?
+                .wait_settled()
+                .await?;
+            failed.assert_failed()?;
+            let retry = user
+                .continue_run(Default::default())
+                .await?
+                .wait_settled()
+                .await?;
+            if retry_error.is_empty() {
+                retry.assert_succeeded()?;
+            } else {
+                retry.assert_failed()?;
+                let parts = user.parts().await?;
+                ensure!(
+                    parts.iter().any(|part| part.kind == "error"
+                        && part.message_id == Some(retry.status.message_id)
+                        && part.content["problem"]["code"] == retry_error),
+                    "{parts:?}"
+                );
+            }
+            ensure!(retry.status.message_id == failed.status.message_id);
+            let followup = user.send("follow up").await?.wait_settled().await?;
+            followup.assert_succeeded()?;
+            followup.assert_assistant_text("Continued on the original conversation")?;
+            let wire =
+                tokio::fs::read_to_string(case.workspace().join(".recovery-wire.jsonl")).await?;
+            let requests = wire
+                .lines()
+                .map(serde_json::from_str::<Value>)
+                .collect::<Result<Vec<_>, _>>()?;
+            ensure!(
+                requests
+                    .iter()
+                    .all(|request| request["id"] == "recovery-native")
+            );
+            let retries = requests
+                .iter()
+                .filter(|request| request["input"] == "interrupted prompt")
+                .collect::<Vec<_>>();
+            ensure!(retries.len() == submissions, "{wire}");
+            ensure!(
+                retries
+                    .iter()
+                    .all(|request| request["key"] == retries[0]["key"])
+            );
+            ensure!(retries[0]["key"].is_string() == (version == "2"));
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn turn_request_limit_preserves_native_continuation() -> TestResult {
     let (_bin, builder) = peers()?;
     builder
@@ -629,6 +770,19 @@ async fn external_agent_commands_follow_their_native_conversation() -> TestResul
                     .iter()
                     .any(|item| item.id == "agy-checkpoint-4" && item.status == "completed")
             );
+            read_policy(
+                &antigravity,
+                case.workspace().join("acp-input.txt"),
+                "readonly",
+            )
+            .await?;
+            let followup = antigravity
+                .send("/agent:compact inspect after compacting")
+                .await?
+                .wait_settled()
+                .await?;
+            followup.assert_succeeded()?;
+            followup.assert_assistant_text("read through Agena after checkpoint")?;
             ensure!(claude.snapshot().await?.execution.external_agent_commands == commands);
 
             let claude = case.user().attach_session(claude_id).await?;
@@ -790,8 +944,7 @@ async fn external_agent_options_validate_model_and_thinking_before_the_first_pro
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn antigravity_runs_mcp_tools_with_project_policy_and_fences_cancelled_history() -> TestResult
-{
+async fn antigravity_fences_cancelled_tools_and_keeps_native_history() -> TestResult {
     let (_bin, builder) = peers()?;
     builder
         .run(|case| async move {
@@ -874,13 +1027,13 @@ async fn antigravity_runs_mcp_tools_with_project_policy_and_fences_cancelled_his
 
             let user = case.user().attach_session(created.id).await?;
             let recovered = user
-                .send("check fresh context")
+                .send("continue after cancellation")
                 .await?
                 .wait_settled()
                 .await?;
             recovered.assert_succeeded()?;
-            recovered.assert_text_contains("fresh context")?;
-            ensure!(recovered.parts.iter().any(|part| part.kind == "notice"
+            recovered.assert_text_contains("continued after cancellation")?;
+            ensure!(!recovered.parts.iter().any(|part| part.kind == "notice"
                 && part.content["kind"] == "external_agent_context_reset"));
 
             let next = user.send("check resume").await?.wait_settled().await?;
@@ -968,7 +1121,10 @@ async fn claude_code_loads_sessions_and_projects_native_tools_and_composer_input
             let loaded = user.send("check load").await?.wait_settled().await?;
             loaded.assert_succeeded()?;
             loaded.assert_assistant_text("loaded")?;
-            ensure!(!loaded.parts.iter().any(|part| part.kind == "notice"));
+            ensure!(loaded.parts.iter().any(|part| part.kind == "notice"
+                && part.content["kind"] == "external_agent_system_prompt_unavailable"));
+            ensure!(!loaded.parts.iter().any(|part| part.kind == "notice"
+                && part.content["kind"] == "external_agent_context_reset"));
             read_policy(&user, case.workspace().join("acp-input.txt"), "readonly").await?;
             let mcp = user.send("read fixture").await?.wait_settled().await?;
             mcp.assert_succeeded()?;

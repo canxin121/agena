@@ -760,6 +760,7 @@ async fn fork(
     }
     config.external_agent_resume = None;
     config.external_agent_link = native_link;
+    config.external_agent_pending_turn = None;
     config.external_agent_state = Default::default();
     config.external_agent_inputs = None;
     config.parent_session_id = Some(session);
@@ -949,7 +950,7 @@ async fn truncate(
             resume_at: Some(ExternalAgentHistoryAnchor { tail }),
             ..native.expected_native.clone()
         };
-        sqlx::query("UPDATE agena_sessions SET configuration_json=json_set(configuration_json,'$.external_agent_link',json(?)) WHERE id=?")
+        sqlx::query("UPDATE agena_sessions SET configuration_json=json_set(json_remove(configuration_json,'$.external_agent_resume','$.external_agent_pending_turn'),'$.external_agent_link',json(?)) WHERE id=?")
             .bind(encode(&link)?)
             .bind(session.get())
             .execute(&mut *connection)
@@ -1082,7 +1083,7 @@ async fn reset_external_agent(connection: &mut SqliteConnection, session: Sessio
     sqlx::query(
         "UPDATE agena_sessions SET configuration_json=json_remove(
             configuration_json,'$.external_agent_resume','$.external_agent_link',
-            '$.external_agent_state','$.external_agent_inputs')
+            '$.external_agent_state','$.external_agent_inputs','$.external_agent_pending_turn')
          WHERE id=? AND json_extract(configuration_json,'$.external_agent') IS NOT NULL",
     )
     .bind(session.get())

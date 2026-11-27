@@ -11,6 +11,9 @@ use tokio::{
 };
 use tokio_util::codec::{FramedRead, FramedWrite};
 
+#[cfg(windows)]
+use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
+
 use super::*;
 
 const MAX_CONNECTIONS: usize = 16;
@@ -20,20 +23,35 @@ enum Listener {
     Loopback(TcpListener),
     #[cfg(unix)]
     Unix(tokio::net::UnixListener),
+    #[cfg(windows)]
+    Pipe {
+        name: String,
+        server: NamedPipeServer,
+    },
 }
 
 enum Socket {
     Loopback(TcpStream),
     #[cfg(unix)]
     Unix(tokio::net::UnixStream),
+    #[cfg(windows)]
+    Pipe(NamedPipeServer),
 }
 
 impl Listener {
-    async fn accept(&self) -> std::io::Result<Socket> {
+    async fn accept(&mut self) -> std::io::Result<Socket> {
         match self {
             Self::Loopback(listener) => Ok(Socket::Loopback(listener.accept().await?.0)),
             #[cfg(unix)]
             Self::Unix(listener) => Ok(Socket::Unix(listener.accept().await?.0)),
+            #[cfg(windows)]
+            Self::Pipe { name, server } => {
+                server.connect().await?;
+                let next = ServerOptions::new()
+                    .reject_remote_clients(true)
+                    .create(name)?;
+                Ok(Socket::Pipe(std::mem::replace(server, next)))
+            }
         }
     }
 }
@@ -61,10 +79,27 @@ pub(super) async fn start(
                 format!("{}{address}", agena_mcp_server::stdio_relay::UNIX_PREFIX),
             )
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
+        Some(path) => {
+            let name = path
+                .to_str()
+                .ok_or_else(|| AppError::Config("The ACP MCP named pipe must be UTF-8.".into()))?;
+            let server = ServerOptions::new()
+                .first_pipe_instance(true)
+                .reject_remote_clients(true)
+                .create(name)?;
+            (
+                Listener::Pipe {
+                    name: name.to_owned(),
+                    server,
+                },
+                name.to_owned(),
+            )
+        }
+        #[cfg(not(any(unix, windows)))]
         Some(_) => {
             return Err(AppError::Config(
-                "The ACP MCP path relay requires Unix sockets.".into(),
+                "The ACP MCP path relay needs a supported local IPC transport.".into(),
             ));
         }
         None => {
@@ -88,7 +123,7 @@ pub(super) async fn start(
 }
 
 async fn serve(
-    listener: Listener,
+    mut listener: Listener,
     backend: Backend,
     token: String,
     closing: CancellationToken,
@@ -111,6 +146,10 @@ async fn serve(
                         }
                         #[cfg(unix)]
                         Socket::Unix(socket) => {
+                            connections.spawn(connect(socket, backend, token, closing));
+                        }
+                        #[cfg(windows)]
+                        Socket::Pipe(socket) => {
                             connections.spawn(connect(socket, backend, token, closing));
                         }
                     }

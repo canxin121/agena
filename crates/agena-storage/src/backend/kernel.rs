@@ -407,6 +407,12 @@ pub enum Command {
         scope: Scope,
         round: RoundId,
         link: ExternalAgentLink,
+        pending: ExternalAgentPendingTurn,
+    },
+    RecordExternalAgentPromptDelivery {
+        scope: Scope,
+        round: RoundId,
+        delivery: ExternalAgentPromptDelivery,
     },
     SealContent {
         scope: OutputScope,
@@ -576,6 +582,8 @@ pub enum Mutation {
         previous: Option<ExternalAgentResume>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         link: Option<ExternalAgentLink>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pending: Option<ExternalAgentPendingTurn>,
         #[serde(default)]
         selection: agena_domain::ExternalAgentSelection,
         #[serde(default, skip_serializing_if = "ExternalAgentState::is_empty")]

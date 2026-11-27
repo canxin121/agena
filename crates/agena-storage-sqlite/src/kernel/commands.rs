@@ -473,12 +473,31 @@ pub(super) async fn apply(
                 ));
             }
             let link = config.native_session_link();
+            let mut pending = config.external_agent_pending_turn;
+            if let Some(prior) = pending.as_mut().filter(|prior| {
+                prior.message == execution.message_id
+                    && matches!(prior.delivery, ExternalAgentPromptDelivery::Keyed { .. })
+            }) {
+                // Keys deduplicate inserted prompts. A tool that began before
+                // acknowledgment can have effects even without an insertion.
+                let tools_started: bool = sqlx::query_scalar(
+                    "SELECT EXISTS(SELECT 1 FROM agena_tool_calls WHERE round_id=?)",
+                )
+                .bind(prior.round.get())
+                .fetch_one(&mut *connection)
+                .await
+                .map_err(sql_error)?;
+                if tools_started {
+                    prior.delivery = ExternalAgentPromptDelivery::Unconfirmed;
+                }
+            }
             Ok(Mutation::ExternalAgentRound {
                 round,
                 previous: config
                     .external_agent_resume
                     .filter(|resume| resume.session == scope.session),
                 link,
+                pending,
                 selection: config.external_agent_selection,
                 state: Box::new(config.external_agent_state),
             })
@@ -510,9 +529,17 @@ pub(super) async fn apply(
             sync_external_agent_title(connection, scope.session, state).await?;
             Ok(Mutation::Round(*round))
         }
-        Command::BindExternalAgentLink { scope, round, link } => {
-            bind_external_agent_link(connection, *scope, *round, link).await
-        }
+        Command::BindExternalAgentLink {
+            scope,
+            round,
+            link,
+            pending,
+        } => bind_external_agent_link(connection, *scope, *round, link, pending).await,
+        Command::RecordExternalAgentPromptDelivery {
+            scope,
+            round,
+            delivery,
+        } => record_external_agent_prompt_delivery(connection, *scope, *round, *delivery).await,
         Command::RefreshIdleExternalAgentState {
             session,
             round,
@@ -1081,21 +1108,33 @@ async fn bind_external_agent_link(
     scope: Scope,
     round: RoundId,
     link: &ExternalAgentLink,
+    pending: &ExternalAgentPendingTurn,
 ) -> Result<Mutation> {
-    check_scope(connection, scope, true).await?;
+    let view = check_scope(connection, scope, true).await?;
     check_round(connection, scope, round).await?;
     super::external_agent::validate_link(link)?;
     let metadata = reads::metadata(connection, scope.session).await?;
     let workspace = metadata.workspace_id.ok_or(KernelError::Ownership)?;
     let mut configuration = lifecycle::configuration(connection, scope.session).await?;
     let agent = configuration.external_agent.ok_or(KernelError::Ownership)?;
-    if link.resume_at.is_some() || link.incarnation.is_none() {
+    if link.resume_at.is_some()
+        || link.incarnation.is_none()
+        || pending.round != round
+        || pending.message != view.message_id
+    {
         return Err(KernelError::Ownership);
     }
     let current = configuration.native_session_link();
     let same_link = current.as_ref() == Some(link);
-    if same_link && configuration.external_agent_resume.is_none() {
-        return Ok(Mutation::Round(round));
+    let prior_delivery = configuration
+        .external_agent_pending_turn
+        .as_ref()
+        .filter(|prior| {
+            same_link && prior.message == pending.message && prior.input == pending.input
+        })
+        .map_or(ExternalAgentPromptDelivery::Unsent, |prior| prior.delivery);
+    if pending.delivery != prior_delivery {
+        return Err(KernelError::Ownership);
     }
     let resumes_import = current.as_ref().is_some_and(|current| {
         current.resume_at.is_some()
@@ -1121,6 +1160,7 @@ async fn bind_external_agent_link(
     let state = std::mem::take(&mut configuration.external_agent_state);
     configuration.external_agent_resume = None;
     configuration.external_agent_link = Some(link.clone());
+    configuration.external_agent_pending_turn = Some(pending.clone());
     let base_bytes = encode(&configuration)?.len();
     configuration.external_agent_state =
         state.bounded_snapshot(super::external_agent::state_budget(base_bytes));
@@ -1130,6 +1170,53 @@ async fn bind_external_agent_link(
         .execute(connection)
         .await
         .map_err(sql_error)?;
+    Ok(Mutation::Round(round))
+}
+
+async fn record_external_agent_prompt_delivery(
+    connection: &mut SqliteConnection,
+    scope: Scope,
+    round: RoundId,
+    delivery: ExternalAgentPromptDelivery,
+) -> Result<Mutation> {
+    use ExternalAgentPromptDelivery::{Accepted, Keyed, Unconfirmed, Unsent};
+
+    let view = check_scope(connection, scope, true).await?;
+    check_round(connection, scope, round).await?;
+    let configuration = lifecycle::configuration(connection, scope.session).await?;
+    let pending = configuration
+        .external_agent_pending_turn
+        .filter(|pending| pending.round == round && pending.message == view.message_id)
+        .ok_or(KernelError::Ownership)?;
+    if pending.delivery == delivery {
+        return Ok(Mutation::Round(round));
+    }
+    if !matches!(
+        (pending.delivery, delivery),
+        (Unsent, Unconfirmed | Keyed { .. }) | (Unconfirmed | Keyed { .. }, Accepted | Unsent)
+    ) {
+        return Err(KernelError::Ownership);
+    }
+    if delivery == Unsent {
+        let tools_started: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM agena_tool_calls WHERE round_id=?)")
+                .bind(round.get())
+                .fetch_one(&mut *connection)
+                .await
+                .map_err(sql_error)?;
+        if tools_started {
+            return Ok(Mutation::Round(round));
+        }
+    }
+    sqlx::query(
+        "UPDATE agena_sessions SET configuration_json=json_set(
+            configuration_json,'$.external_agent_pending_turn.delivery',json(?)) WHERE id=?",
+    )
+    .bind(encode(&delivery)?)
+    .bind(scope.session.get())
+    .execute(connection)
+    .await
+    .map_err(sql_error)?;
     Ok(Mutation::Round(round))
 }
 
@@ -1265,7 +1352,7 @@ async fn save_external_agent_resume(
         ));
     }
     let base: String = sqlx::query_scalar(
-        "SELECT json_set(json_remove(configuration_json,'$.external_agent_state'),
+        "SELECT json_set(json_remove(configuration_json,'$.external_agent_state','$.external_agent_pending_turn'),
                 '$.external_agent_resume',json(?),'$.external_agent_link',json(?))
          FROM agena_sessions WHERE id=?",
     )
@@ -1317,7 +1404,12 @@ pub(super) async fn finish(
     if phase != ExecutionPhase::Succeeded {
         settle_children(connection, &view, now).await?;
         if view.phase == ExecutionPhase::Running {
-            sqlx::query("UPDATE agena_sessions SET configuration_json=json_remove(configuration_json,'$.external_agent_state')
+            sqlx::query("UPDATE agena_sessions SET configuration_json=CASE
+                    WHEN json_extract(configuration_json,'$.external_agent_state.antigravity_legacy_history')=1
+                    THEN json_set(configuration_json,'$.external_agent_state',json_object(
+                        'antigravity_legacy_history',json('true'),
+                        'history_read_only',json(CASE WHEN json_extract(configuration_json,'$.external_agent_state.history_read_only')=1 THEN 'true' ELSE 'false' END)))
+                    ELSE json_remove(configuration_json,'$.external_agent_state') END
                 WHERE id=? AND json_type(configuration_json,'$.external_agent_state') IS NOT NULL
                     AND json_extract(configuration_json,'$.external_agent_resume') IS NULL")
                 .bind(view.session_id.get())

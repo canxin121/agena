@@ -99,7 +99,11 @@ impl ModelHookProbe {
     #[hook(chat.message, summary = "Observe message projection", help = "Records the direction and session of each actual projected message.")]
     async fn message(&self, input: ChatMessageInput) -> Option<ChatMessagePatch> {
         self.seen.record("chat.message", &input);
-        None
+        let text = input.message.text()?.strip_prefix("acp-hook-original-")?;
+        Some(ChatMessagePatch {
+            message: Some(ChatMessage::user(format!("acp-hook-rewritten-{text}"))),
+            ..Default::default()
+        })
     }
 
     #[hook(chat.messages, summary = "Add transient context", help = "Injects a synthetic system message into the outgoing model projection.")]
@@ -201,6 +205,154 @@ fn assert_counts(seen: &Observations, expected: &[(&str, usize)]) -> anyhow::Res
         );
     }
     Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn acp_input_hooks_transform_only_the_current_turn() -> TestResult {
+    use agena_api::commands::CreateSessionParams;
+    use agena_domain::ExternalAgent;
+    use agena_storage::{MemoryKind, MemoryStore, NewMemory};
+    use agena_storage_layout::StorageLayout;
+    use std::os::unix::fs::PermissionsExt;
+
+    let bin = tempfile::tempdir()?;
+    let agent = bin.path().join("claude-agent-acp");
+    std::fs::write(&agent, include_str!("fake_acp_input_hooks.py"))?;
+    std::fs::set_permissions(agent, std::fs::Permissions::from_mode(0o755))?;
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let path = std::env::join_paths(
+        std::iter::once(bin.path().to_owned()).chain(std::env::split_paths(&path)),
+    )?;
+    let seen = Arc::new(Observations::default());
+    hooked_fixture(seen.clone())
+        // Exercise callback routing on hosts that cannot start an MXC worker.
+        .configure_global(|config| config["sandbox"] = json!(false))
+        .expect_plugin("agena.memory")
+        .env("PATH", path)
+        .run(move |case| async move {
+            let ordinary = case.user().new_session().await?;
+            let workspace = ordinary
+                .snapshot()
+                .await?
+                .session
+                .workspace_id
+                .context("workspace")?;
+            let layout = StorageLayout::new(&case.paths().data_dir);
+            MemoryStore::at(layout.memory_dir(case.workspace()))
+                .save_with_options(
+                    NewMemory {
+                        name: "acp-hook-rewritten".into(),
+                        description: "Workspace ACP recall fixture".into(),
+                        kind: MemoryKind::Fact,
+                        body: "acp-hook-rewritten-first and acp-hook-rewritten-second both use SAVED_ACP_MEMORY_FIXTURE".into(),
+                    },
+                    None,
+                    Default::default(),
+                )
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            let session = ordinary
+                .client()
+                .create_session_configured(CreateSessionParams {
+                    workspace_id: workspace,
+                    title: "ACP input hook parity".into(),
+                    external_agent: Some(ExternalAgent::ClaudeCode),
+                    auto_title: false,
+                    parent_id: None,
+                    profile: None,
+                    prompts: None,
+                })
+                .await?;
+            let user = case.user().attach_session(session.id).await?;
+            user.client()
+                .set_session_permission(
+                    user.id(),
+                    serde_json::from_value(json!({"path":{"workspace":"readonly"}}))?,
+                )
+                .await?;
+            for label in ["first", "second"] {
+                let run = user.send_with(
+                    &format!("acp-hook-original-{label}"),
+                    RunOptions {
+                        system: Some(format!("ACP instruction {label}")),
+                        ..Default::default()
+                    },
+                )
+                .await?
+                .wait_settled()
+                .await?;
+                if let Err(error) = run.assert_succeeded() {
+                    let peer = tokio::fs::read_to_string(case.workspace().join(".acp-input-hook-error"))
+                        .await
+                        .unwrap_or_default();
+                    anyhow::bail!("{error}\n{peer}");
+                }
+                run.assert_assistant_text("ACP fixture accepted the input hooks")?;
+            }
+            user.send("/agent:status")
+                .await?
+                .wait_settled()
+                .await?
+                .assert_assistant_text("ACP fixture kept the native command")?;
+
+            let events = seen.events();
+            for (index, label) in ["first", "second"].into_iter().enumerate() {
+                let event = events
+                    .iter()
+                    .filter(|event| event.name == "chat.messages")
+                    .nth(index)
+                    .context("batch hook")?;
+                ensure!(event.input["session_id"] == session.id);
+                ensure!(
+                    event.input["workspace_root"] == case.workspace().to_string_lossy().as_ref()
+                );
+                let messages = event.input["messages"].as_array().context("messages")?;
+                let turns: Vec<_> = messages
+                    .iter()
+                    .filter(|message| message["role"] != "system")
+                    .cloned()
+                    .collect();
+                ensure!(
+                    turns
+                        == vec![
+                            json!({"role":"user","content":format!("acp-hook-rewritten-{label}")})
+                        ],
+                    "{:?}",
+                    event.input
+                );
+            }
+            assert_counts(
+                &seen,
+                &[
+                    ("chat.system", 3),
+                    ("chat.message", 2),
+                    ("chat.messages", 2),
+                ],
+            )?;
+            let parts = user.parts().await?;
+            let texts: Vec<_> = parts
+                .iter()
+                .filter(|part| part.role == "user")
+                .map(|part| part.content.to_string())
+                .collect();
+            ensure!(
+                texts
+                    .iter()
+                    .any(|text| text.contains("acp-hook-original-first"))
+            );
+            ensure!(
+                texts
+                    .iter()
+                    .any(|text| text.contains("acp-hook-original-second"))
+            );
+            ensure!(
+                !texts.iter().any(|text| text.contains("acp-hook-rewritten-")
+                    || text.contains("MEMORY HOOK MARKER"))
+            );
+            ensure!(case.model().requests().is_empty());
+            Ok(())
+        })
+        .await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

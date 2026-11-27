@@ -6,7 +6,9 @@ use agena_domain::{
     ActivityPayload, ExternalAgent, MessageAuthor, MessageOrigin, ResourceDelivery, ResourceKind,
     ResourceReference, UserInputOption, UserInputQuestion,
 };
+use agena_storage::kernel::{ExternalAgentPendingTurn, ExternalAgentPromptDelivery};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 
 mod acp;
 pub(super) mod auth;
@@ -190,7 +192,7 @@ impl SessionManager {
         .await?;
         if configuration.external_agent_state.history_read_only {
             return Err(AppError::Config(
-                "This native Antigravity conversation uses its original tools. Start a new ACP conversation to continue with Agena's restricted tools.".into(),
+                "Continuing this Antigravity history requires a verified adapter and process isolation for native workspace MCP or hooks.".into(),
             ));
         }
         let directories = lifecycle::directories_for_agent(
@@ -223,6 +225,21 @@ impl SessionManager {
             read_with_busy_retry(control.session, "external_agent_prompt", || round.prompt())
                 .await?;
         let input = prompt::TurnInput::new(&facts, execution)?;
+        let retry = opened
+            .pending
+            .as_ref()
+            .filter(|prior| prior.message == execution.message_id);
+        let delivery = retry.map_or(ExternalAgentPromptDelivery::Unsent, |prior| prior.delivery);
+        let keyed_retry = match delivery {
+            ExternalAgentPromptDelivery::Accepted => {
+                return Err(AppError::ExternalAgentPromptAlreadyAccepted);
+            }
+            ExternalAgentPromptDelivery::Unconfirmed => {
+                return Err(AppError::ExternalAgentPromptUncertain);
+            }
+            ExternalAgentPromptDelivery::Keyed { prompt } => Some(prompt),
+            ExternalAgentPromptDelivery::Unsent => None,
+        };
         let previous = opened
             .previous
             .filter(|prior| prior.cwd == cwd && input.can_resume(prior));
@@ -235,20 +252,31 @@ impl SessionManager {
                     .as_ref()
                     .filter(|link| {
                         link.cwd == cwd
-                            && link
-                                .resume_at
+                            && (opened
+                                .pending
                                 .as_ref()
-                                .is_some_and(|anchor| input.can_resume_anchor(anchor))
+                                .is_some_and(|pending| input.can_resume_pending(pending))
+                                || link
+                                    .resume_at
+                                    .as_ref()
+                                    .is_some_and(|anchor| input.can_resume_anchor(anchor)))
                     })
                     .map(|link| link.native_id.as_str())
             });
-        let mut client = acp::AcpClient::spawn_with_directories(
+        if keyed_retry.is_some() && native_resume.is_none() {
+            return Err(AppError::ExternalAgentPromptUncertain);
+        }
+        let mut client = acp::AcpClient::spawn_profile(
             agent,
             &cwd,
+            opened.state.antigravity_legacy_history && native_resume.is_some(),
             &session_context.additional_directories,
         )?;
         client.track_auth_status(auth::LiveStatus::register(self, control.session));
         let capabilities = client.prompt_capabilities(&control.cancel).await?;
+        if keyed_retry.is_some() && !client.uses_v2() {
+            return Err(AppError::ExternalAgentPromptUncertain);
+        }
         let (mut blocks, media_leases) = input
             .blocks_with_capabilities(
                 &self.kernel().reader,
@@ -267,11 +295,48 @@ impl SessionManager {
         let antigravity_compact = agent == ExternalAgent::Antigravity
             && native_command
                 .is_some_and(|command| command.split_whitespace().next() == Some("compact"));
-        let bare_compact = native_command == Some("compact") && blocks.len() == 1;
+        let compact_followup = native_command
+            .filter(|_| antigravity_compact)
+            .and_then(|command| command.split_once(char::is_whitespace))
+            .map(|(_, followup)| followup.trim_start())
+            .filter(|followup| !followup.is_empty())
+            .map(str::to_owned);
+        let bare_compact = compact_followup.is_none() && blocks.len() == 1;
         if antigravity_compact && native_resume.is_none() {
             return Err(AppError::Config(
                 "Antigravity needs an existing conversation to compact.".into(),
             ));
+        }
+        let is_native_command = native_command.is_some();
+        prompt::apply_input_hooks(
+            &state.processor,
+            control.session,
+            &cwd,
+            &mut session_context.system_prompt,
+            &mut blocks,
+            is_native_command,
+            &control.cancel,
+        )
+        .await?;
+        if !session_context.system_prompt.trim().is_empty()
+            && !client
+                .lifecycle_capabilities(&control.cancel)
+                .await?
+                .system_prompt
+        {
+            let notice = serde_json::to_string(&agena_runtime_contracts::NoticePart {
+                kind: "external_agent_system_prompt_unavailable".into(),
+                summary: format!(
+                    "{} cannot accept Agena's additional system instructions in this session.",
+                    agent.label()
+                ),
+                detail: None,
+                title: Some("Agena system instructions unavailable".into()),
+            })?;
+            let request = RequestId::new();
+            persist(|| attempt.notice(request, notice.clone()))
+                .await
+                .map_err(kernel_error)?;
         }
         let has_images = blocks.iter().any(|block| block["type"] == "image");
         let turn = Arc::new(ExternalTurn {
@@ -294,22 +359,27 @@ impl SessionManager {
                     bridge.as_ref().map(mcp::Bridge::descriptor),
                     native_resume.map(|id| (id, &opened.state)),
                     has_images,
-                    antigravity_compact,
+                    if keyed_retry.is_some() {
+                        acp::OpenPurpose::RetryPrompt
+                    } else if antigravity_compact {
+                        acp::OpenPurpose::Compact
+                    } else {
+                        acp::OpenPurpose::Prompt
+                    },
                     &session_context,
                     &control.cancel,
                 )
                 .await?;
+            // Antigravity's ACP command can interpret trailing text as
+            // summary instructions and omit a checkpoint notification.
+            // Print mode confirms the checkpoint before an ACP follow-up.
             let compact_via_cli = antigravity_compact
-                && !session
-                    .state
-                    .commands
-                    .iter()
-                    .any(|command| command.name == "compact");
-            if compact_via_cli && !bare_compact {
-                return Err(AppError::Config(
-                    "Send /agent:compact on its own in this Antigravity session.".into(),
-                ));
-            }
+                && (session.close_supported
+                    || !session
+                        .state
+                        .commands
+                        .iter()
+                        .any(|command| command.name == "compact"));
             let incarnation = opened
                 .link
                 .as_ref()
@@ -323,7 +393,8 @@ impl SessionManager {
                 resume_at: None,
             });
             let command = RequestId::new();
-            persist(|| round.bind_external_agent_link(command, link.clone()))
+            let pending = input.pending_turn(round.id(), delivery)?;
+            persist(|| round.bind_external_agent_link(command, link.clone(), pending.clone()))
                 .await
                 .map_err(kernel_error)?;
             for (kind, value) in &opened.selection {
@@ -332,6 +403,17 @@ impl SessionManager {
                     .await?;
             }
             prompt::route_command(&mut blocks, &session.state.commands, capabilities)?;
+            let delivery = if client.uses_v2() && !is_native_command {
+                let prompt = Sha256::digest(serde_json::to_vec(&blocks)?).into();
+                if keyed_retry.is_some_and(|previous| prompt != previous) {
+                    return Err(AppError::ExternalAgentPromptUncertain);
+                }
+                ExternalAgentPromptDelivery::Keyed { prompt }
+            } else {
+                ExternalAgentPromptDelivery::Unconfirmed
+            };
+            let replayed_users = session.replacements.take_replayed_users();
+            let mut activity = session.activity;
             session.state.options = session.options.clone();
             turn.transcript
                 .lock()
@@ -370,6 +452,7 @@ impl SessionManager {
                     .map_err(kernel_error)?;
             }
             control.phase(agena_domain::ExecutionPhase::StreamingModel);
+            turn.record_prompt_delivery(delivery).await?;
             if compact_via_cli {
                 let checkpoint = client
                     .compact_antigravity(&link.native_id, &control.cancel)
@@ -389,14 +472,52 @@ impl SessionManager {
                         }),
                     )
                     .await?;
-                return Ok(acp::PromptResult {
-                    stop_reason: Some("end_turn".into()),
-                    usage: None,
-                    fork_cursor: None,
-                });
+                if bare_compact {
+                    return Ok(acp::PromptResult {
+                        stop_reason: Some("end_turn".into()),
+                        usage: None,
+                        fork_cursor: None,
+                    });
+                }
+                // Print mode performed only the checkpoint. Send the follow-up
+                // through ACP, where the Agena tool grant and approvals apply.
+                blocks.remove(0);
+                if let Some(followup) = compact_followup {
+                    blocks.insert(0, json!({"type": "text", "text": followup}));
+                }
+                let current = turn.transcript.lock().await.snapshot_state();
+                let mut reopened = client
+                    .start_with_context(
+                        &cwd,
+                        bridge.as_ref().map(mcp::Bridge::descriptor),
+                        Some((&link.native_id, &current)),
+                        has_images,
+                        acp::OpenPurpose::Compact,
+                        &session_context,
+                        &control.cancel,
+                    )
+                    .await?;
+                for (kind, value) in &opened.selection {
+                    client
+                        .set_option(&mut reopened, kind, value, &control.cancel)
+                        .await?;
+                }
+                activity = reopened.activity;
+                turn.transcript
+                    .lock()
+                    .await
+                    .start_native_session(
+                        &turn,
+                        link.clone(),
+                        &current,
+                        reopened.state,
+                        reopened.replacements.into_updates(),
+                    )
+                    .await?;
+                used_compaction_cli = false;
             }
             client
-                .prompt(&link.native_id, blocks, session.activity, &turn)
+                .prompt(&link.native_id, blocks, activity, replayed_users, &turn)
                 .await
         }
         .await;
@@ -507,6 +628,19 @@ struct ExternalTurn {
 }
 
 impl ExternalTurn {
+    async fn record_prompt_delivery(
+        &self,
+        delivery: ExternalAgentPromptDelivery,
+    ) -> Result<(), AppError> {
+        let command = RequestId::new();
+        persist(|| {
+            self.round
+                .record_external_agent_prompt_delivery(command, delivery)
+        })
+        .await
+        .map_err(kernel_error)
+    }
+
     async fn update_native(
         &self,
         root: &str,

@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Native lifecycle exercised through Agena's real ACP stdin/stdout connection."""
 import base64
+import fcntl
 import json
 from pathlib import Path
 import sys
+from time import monotonic, sleep
 import uuid
 import traceback
 
@@ -24,8 +26,8 @@ def post_block(session, role, content, message_id):
     update(
         session,
         sessionUpdate=f"{role}_message_chunk",
-        messageId=message_id,
         content=content,
+        **({"messageId": message_id} if message_id is not None else {}),
     )
 
 
@@ -72,8 +74,10 @@ historical_fork = (cwd / ".historical-fork-support").is_file()
 native_skills = (cwd / ".native-skills").is_file()
 view_settings = (cwd / ".native-view-settings").is_file()
 resume_errors = (cwd / ".native-resume-errors").is_file()
-history_window = (cwd / ".native-history-window").is_file()
+window_path = cwd / ".native-history-window"
+history_window = window_path.read_text().strip() if window_path.is_file() else None
 skills_disabled = (cwd / ".native-disable-skills").is_file()
+lease = (cwd / ".native-single-connection").open("a") if (cwd / ".native-single-connection").exists() else None
 skill_name = "summarize-fixture"
 skill_path = cwd / ".agents" / "skills" / skill_name / "SKILL.md"
 skill = {"type": "skill", "name": skill_name, "description": "Summarize the fixture", "path": str(skill_path)}
@@ -103,6 +107,12 @@ for raw in sys.stdin:
         continue
     session = params.get("sessionId", "")
     log(method, session)
+    if lease is not None and method in {"session/load", "session/resume"}:
+        try:
+            fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            send(id=req["id"], error={"code": -32603, "message": "Native session is active elsewhere"})
+            continue
     if method in {"session/new", "session/load", "session/resume", "session/fork"}:
         options = params["_meta"]["claudeCode"]["options"]
         assert options["tools"] == [] and options["strictMcpConfig"] is True
@@ -165,6 +175,27 @@ for raw in sys.stdin:
         assert method == ("session/load" if version == 1 else "session/resume"), params
         assert session == "native-project" and Path(params["cwd"]) == cwd
         assert params["mcpServers"] == []
+        started = cwd / ".native-first-replay-started"
+        if (cwd / ".native-hold-first-replay").is_file() and not started.is_file():
+            started.touch()
+            deadline = monotonic() + 20
+            while not (cwd / ".native-release-replay").is_file():
+                assert monotonic() < deadline, "timed out waiting to release native replay"
+                sleep(0.02)
+        replay_override = cwd / ".native-replay-override"
+        if replay_override.is_file():
+            assert version == 2
+            mode = replay_override.read_text()
+            post_text(session, "user", "Markerless native history", "markerless")
+            if mode == "eof":
+                break
+            if mode == "error":
+                send(id=req["id"], error={"code": -32603, "message": "Replay interrupted"})
+            else:
+                assert mode == "success"
+                update(session, sessionUpdate="state_update", state="idle")
+                send(id=req["id"], result={})
+            continue
         if view_settings and (cwd / ".native-expect-reopen-settings").is_file():
             assert params["additionalDirectories"] == [str(cwd / "extra")]
             assert any("Retain my custom Agena prompt" in block.get("text", "")
@@ -244,12 +275,51 @@ for raw in sys.stdin:
         if outside.is_file():
             post_text(session, "user", "From the agent CLI", "outside-user")
             post_text(session, "agent", outside.read_text(), "outside-answer")
-        if history_window:
-            for number in range(1, 4):
+        if history_window in {"", "wire"}:
+            count = 5 if history_window == "wire" else 3
+            for number in range(1, count + 1):
                 user_id = f"window-user-{number}"
                 fork_cursor(session, user_id, f"fixture/window/{number}")
                 post_text(session, "user", f"Window turn {number}", user_id)
                 post_text(session, "agent", str(number) * (6 * 1024 * 1024), f"window-answer-{number}")
+            if history_window == "wire":
+                update(session, sessionUpdate="agent_message", messageId="window-answer-1",
+                       content=[{"type": "text", "text": "Late evicted reply"}])
+                update(session, sessionUpdate="tool_call_update", toolCallId="edit", title="Late evicted tool")
+        elif history_window in {"records", "updates"}:
+            user_id = "over-limit-user" if version == 2 else None
+            post_text(session, "user", "Oversized native turn", user_id)
+            if history_window == "records":
+                for number in range(6100):
+                    post_text(session, "agent", "x", f"over-limit-{number}")
+            else:
+                for _ in range(65800):
+                    post_text(session, "agent", "x", None)
+            user_id = "latest-user" if version == 2 else None
+            answer_id = "latest-answer" if version == 2 else None
+            post_text(session, "user", "Latest native turn", user_id)
+            post_text(session, "agent", "Latest native reply", answer_id)
+        elif history_window == "latest":
+            post_text(session, "user", "Newest native question", "newest-user")
+            post_text(session, "agent", "Old beginning\n" + '\t"你' * 2500000 + "\nNewest native answer", "newest-answer")
+            update(session, sessionUpdate="tool_call", toolCallId="newest-tool", title="Newest native tool",
+                   status="completed")
+        elif history_window == "media":
+            update(session, sessionUpdate="user_message", messageId="media-user", content=[
+                {"type": "text", "text": "Attachment overflow"},
+                {"type": "resource", "resource": {"uri": "mcp://fixture/large.txt", "text": "x" * (9 * 1024 * 1024)}},
+                *[user_resources[-1]] * 17,
+            ])
+            post_text(session, "agent", "Reply survives attachment omission", "media-answer")
+        elif history_window == "preview":
+            for number in range(1, 13):
+                user_id = f"preview-user-{number}" if version == 2 else None
+                answer_id = f"preview-answer-{number}" if version == 2 else None
+                post_text(session, "user", f"Preview turn {number}", user_id)
+                post_text(session, "agent", f"Preview answer {number}", answer_id)
+            if version == 2:
+                update(session, sessionUpdate="agent_message", messageId="preview-answer-4",
+                       content=[{"type": "text", "text": "Updated earlier answer"}])
         if version == 2:
             update(session, sessionUpdate="replay_complete")
             post_text(nested, "agent", "Descendant history", "assistant-1")
@@ -281,7 +351,7 @@ for raw in sys.stdin:
                     data = {"sessionId": session if error == "missing" else "different-native-id"}
                 send(id=req["id"], error={"code": code, "message": "Fixture refuses resume", "data": data})
                 continue
-        if session == "native-project" and not (historical_fork or native_skills or resume_errors or history_window):
+        if session == "native-project" and not (historical_fork or native_skills or resume_errors or history_window is not None):
             assert params["additionalDirectories"] == [str(cwd / "extra")], params
             system_prompt = params["systemPrompt"]
             assert system_prompt["mode"] == "append"
@@ -363,9 +433,12 @@ for raw in sys.stdin:
         result = {"title": f"Remote {params['title']}"}
     elif method == "session/close":
         assert session in {"native-project", "native-fork", "native-new", "native-fork-imported", "native-fork-live"}
-        if current == session and prompted:
-            log("close-prompted", session)
+        if current == session:
+            if prompted:
+                log("close-prompted", session)
             current = None
+            if lease is not None:
+                fcntl.flock(lease, fcntl.LOCK_UN)
         result = {}
     elif method == "session/delete":
         assert session == "native-fork" or (view_settings and session == "native-new")

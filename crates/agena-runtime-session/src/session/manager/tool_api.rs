@@ -146,6 +146,7 @@ impl SessionManager {
                         control,
                         state,
                         super::media::MediaTarget::Provider(model),
+                        None,
                     )
                     .await
                     .map(|_| ());

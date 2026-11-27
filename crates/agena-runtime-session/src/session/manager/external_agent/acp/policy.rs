@@ -5,7 +5,7 @@ use std::{
 };
 
 use agena_domain::ExternalAgent;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use super::AppError;
 
@@ -76,6 +76,64 @@ pub(super) fn antigravity_profile() -> Result<PathBuf, AppError> {
         .ok_or_else(|| AppError::Config("Antigravity ACP requires a server home directory.".into()))
 }
 
+pub(super) fn native_antigravity_customizations(
+    cwd: &Path,
+    directories: &[PathBuf],
+) -> Result<Vec<PathBuf>, AppError> {
+    let mut paths = vec![antigravity_profile()?.join("config/mcp_config.json")];
+    for directory in std::iter::once(cwd).chain(directories.iter().map(PathBuf::as_path)) {
+        let config = directory.join(".agents");
+        paths.push(config.join("mcp_config.json"));
+        paths.push(config.join("hooks.json"));
+    }
+    paths.retain(|path| match fs::symlink_metadata(path) {
+        Ok(_) => true,
+        Err(error) => error.kind() != ErrorKind::NotFound,
+    });
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
+pub(super) fn install_antigravity_guard() -> Result<bool, AppError> {
+    if !cfg!(unix) {
+        return Ok(false);
+    }
+    let path = antigravity_profile()?.join("config/hooks.json");
+    let mut hooks: Map<String, Value> = match fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice(&bytes)?,
+        Err(error) if error.kind() == ErrorKind::NotFound => Map::new(),
+        Err(error) => return Err(error.into()),
+    };
+    let program = std::env::current_exe()?;
+    let program = program.to_str().ok_or_else(|| {
+        AppError::Config("The Antigravity tool guard needs a UTF-8 Agena path.".into())
+    })?;
+    let command = format!(
+        "'{}' {}",
+        program.replace('\'', "'\"'\"'"),
+        agena_mcp_server::antigravity_guard::WORKER_ARG,
+    );
+    let hook = json!({
+        "PreToolUse": [{
+            "matcher": "*",
+            "hooks": [{"type": "command", "command": command, "timeout": 10}]
+        }],
+    });
+    if hooks.get("agena-acp-tools") != Some(&hook) {
+        hooks.insert("agena-acp-tools".into(), hook);
+        agena_runtime_tools::atomic_write_file(&path, &serde_json::to_vec_pretty(&hooks)?)?;
+    }
+    Ok(true)
+}
+
+pub(super) fn antigravity_guard_supported(initialized: &Value) -> bool {
+    // Legacy sessions have a saved tool catalog. Require a release in which
+    // PreToolUse denies the native tools and blocks when its command fails.
+    initialized["agentInfo"]["name"] == "Antigravity ACP Server"
+        && initialized["agentInfo"]["version"] == "1.5.18"
+}
+
 pub(super) fn antigravity_agent_name(profile: &Path) -> Result<String, AppError> {
     let path = profile.join("agena-agent-id");
     // Workspace Agent definitions take precedence by name. Keep an
@@ -105,11 +163,20 @@ pub(super) fn antigravity_agent_name(profile: &Path) -> Result<String, AppError>
 pub(super) fn apply_to_session(agent: ExternalAgent, params: &mut Value) {
     match agent {
         ExternalAgent::ClaudeCode => {
+            // The ACP adapter forwards typed SDK options. Rebuild the prompt
+            // on resume so current Agena instructions take effect immediately.
+            let mut system_prompt = json!({
+                "type": "preset", "preset": "claude_code", "snapshot": false
+            });
+            if let Some(append) = params.pointer("/systemPrompt/content/0/text") {
+                system_prompt["append"] = append.clone();
+            }
             params["_meta"]["claudeCode"]["options"] = json!({
                 "tools": [],
                 "strictMcpConfig": true,
                 "settingSources": [],
                 "allowDangerouslySkipPermissions": false,
+                "systemPrompt": system_prompt,
                 "env": {"ENABLE_TOOL_SEARCH": "false"},
                 "extraArgs": {"restricted": null},
                 // The bridge enforces Agena's permissions for every invocation.

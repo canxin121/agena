@@ -19,6 +19,12 @@ pub enum ExternalAgentWorkspaceAction {
         agent: ExternalAgent,
         native_id: String,
     },
+    PreviewHistory {
+        agent: ExternalAgent,
+        native_id: String,
+        /// Exclusive one-based turn boundary returned by the previous page.
+        before_turn: Option<u64>,
+    },
     IndexList {
         agent: ExternalAgent,
         cursor: Option<String>,
@@ -53,6 +59,9 @@ pub enum ExternalAgentWorkspaceResult {
     Opened {
         session_id: i64,
     },
+    HistoryPreview {
+        preview: ExternalAgentHistoryPreview,
+    },
     IndexPage {
         sessions: Vec<ExternalAgentIndexedSession>,
         next_cursor: Option<String>,
@@ -69,6 +78,19 @@ pub enum ExternalAgentWorkspaceResult {
         supported: bool,
         changed: bool,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExternalAgentHistoryPreview {
+    pub turns: Vec<ExternalAgentHistoryPreviewTurn>,
+    pub next_before_turn: Option<u64>,
+    pub omitted_content: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ExternalAgentHistoryPreviewTurn {
+    pub user: String,
+    pub reply: String,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

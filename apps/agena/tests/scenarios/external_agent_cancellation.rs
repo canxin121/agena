@@ -90,6 +90,7 @@ async fn external_agent_v2_aborts_the_single_pending_setup_rpc() -> TestResult {
 async fn external_agent_v2_timeout_withdraws_only_the_outgoing_rpc() -> TestResult {
     let (_bin, builder) = configured_peer("2")?;
     builder
+        .env("AGENA_ACP_PROMPT_IDLE_TIMEOUT_SECS", "2")
         .run(|case| async move {
             let ordinary = case.user().new_session().await?;
             let session = create_agent_session(&ordinary).await?;
@@ -115,6 +116,66 @@ async fn external_agent_v2_timeout_withdraws_only_the_outgoing_rpc() -> TestResu
             let result = execution.wait_settled().await?;
             result.assert_succeeded()?;
             result.assert_assistant_text("Independent work continued")?;
+            Ok(())
+        })
+        .await
+}
+
+async fn settle_inactive_prompt(version: &'static str) -> TestResult {
+    let (_bin, builder) = configured_peer(version)?;
+    builder
+        .env("AGENA_ACP_PROMPT_IDLE_TIMEOUT_SECS", "2")
+        .run(|case| async move {
+            let ordinary = case.user().new_session().await?;
+            let session = create_agent_session(&ordinary).await?;
+            let user = case.user().attach_session(session).await?;
+            let result = user
+                .send("stop sending response updates")
+                .await?
+                .wait_settled()
+                .await?;
+            result.assert_failed()?;
+            let parts = user.parts().await?;
+            ensure!(
+                parts.iter().any(|part| part.kind == "error"
+                    && part.message_id == Some(result.status.message_id)
+                    && part.content["problem"]["code"] == "external_agent.prompt_inactive"
+                    && part.content["problem"]["recovery"] == "refresh"),
+                "{parts:?}"
+            );
+            wait_for_marker(case.workspace(), ".acp-inactive-prompt-stopped").await?;
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn external_agent_v1_cancels_an_inactive_prompt_and_reports_timeout() -> TestResult {
+    settle_inactive_prompt("1").await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn external_agent_v2_cancels_an_inactive_accepted_prompt_and_reports_timeout() -> TestResult {
+    settle_inactive_prompt("2").await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn external_agent_v2_keeps_silent_background_work_and_its_foreground_followup() -> TestResult
+{
+    let (_bin, builder) = configured_peer("2")?;
+    builder
+        .env("AGENA_ACP_PROMPT_IDLE_TIMEOUT_SECS", "1")
+        .run(|case| async move {
+            let ordinary = case.user().new_session().await?;
+            let session = create_agent_session(&ordinary).await?;
+            let user = case.user().attach_session(session).await?;
+            let result = user
+                .send("wait for silent background")
+                .await?
+                .wait_settled()
+                .await?;
+            result.assert_succeeded()?;
+            result.assert_assistant_text("Background follow-up completed")?;
             Ok(())
         })
         .await

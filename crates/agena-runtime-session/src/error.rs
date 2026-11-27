@@ -64,6 +64,16 @@ pub enum AppError {
         "The external agent could not resume the linked conversation. Check the agent and retry this message."
     )]
     ExternalAgentResumeUnavailable,
+    #[error(
+        "The external agent may already have received this message. Reopen its native history to check, or send a new message to continue the same conversation."
+    )]
+    ExternalAgentPromptUncertain,
+    #[error(
+        "The external agent already accepted this message. Reopen its native history to see any saved output, or send a new message to continue the same conversation."
+    )]
+    ExternalAgentPromptAlreadyAccepted,
+    #[error("{agent} sent no ACP prompt progress for {seconds} seconds")]
+    ExternalAgentPromptInactive { agent: &'static str, seconds: u64 },
     #[error("operation blocked by permission policy: {}", .0.reason)]
     PolicyDenied(Box<agena_domain::PolicyDeniedResult>),
     #[error("permission request declined by user")]
@@ -197,6 +207,15 @@ impl AppError {
             Self::Cancelled => "Response cancelled.",
             Self::ExternalAgentResumeUnavailable => {
                 "The external agent could not resume the linked conversation. Check the agent and retry this message."
+            }
+            Self::ExternalAgentPromptUncertain => {
+                "The external agent may already have received this message. Reopen its native history to check, or send a new message to continue the same conversation."
+            }
+            Self::ExternalAgentPromptAlreadyAccepted => {
+                "The external agent already accepted this message. Reopen its native history to see any saved output, or send a new message to continue the same conversation."
+            }
+            Self::ExternalAgentPromptInactive { .. } => {
+                "The external agent stopped sending updates. Reopen the native conversation to check its latest state."
             }
             Self::AutoApproveClassifyFailed(_) => {
                 "Automatic approval could not classify this request. Choose an option below."
@@ -522,6 +541,27 @@ impl AppError {
                 Responsibility::Dependency,
                 Retry::Backoff,
                 Recovery::Retry,
+            ),
+            Self::ExternalAgentPromptUncertain => (
+                "external_agent.prompt_uncertain",
+                Category::DependencyUnavailable,
+                Responsibility::Dependency,
+                Retry::Never,
+                Recovery::Refresh,
+            ),
+            Self::ExternalAgentPromptAlreadyAccepted => (
+                "external_agent.prompt_accepted",
+                Category::Conflict,
+                Responsibility::Dependency,
+                Retry::Never,
+                Recovery::Refresh,
+            ),
+            Self::ExternalAgentPromptInactive { .. } => (
+                "external_agent.prompt_inactive",
+                Category::Timeout,
+                Responsibility::Dependency,
+                Retry::AfterRefresh,
+                Recovery::Refresh,
             ),
             Self::Cancelled => (
                 // Cancellation is a terminal outcome. If it reaches a

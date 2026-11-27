@@ -75,12 +75,17 @@ def continuation():
     ]
 
 
-def ask(method, params, *, expect_error=False):
+def start_request(method, params):
     global request_id
     request_id += 1
     send(id=request_id, method=method, params=params)
+    return request_id
+
+
+def ask(method, params, *, expect_error=False):
+    identifier = start_request(method, params)
     response = receive()
-    assert response["id"] == request_id, response
+    assert response["id"] == identifier, response
     if expect_error:
         assert "error" in response, response
         return response["error"]
@@ -91,14 +96,18 @@ def ask(method, params, *, expect_error=False):
 revision = {"io.modelcontextprotocol/protocolVersion": "2026-07-28"}
 
 
-def mcp(descriptor, method, params=None, **scope):
-    return ask("mcp/message", {
+def mcp_params(descriptor, method, params, **scope):
+    return {
         "serverId": descriptor["serverId"],
         "requestId": f"test:{request_id + 1}",
         "method": method,
         "params": {**(params or {}), "_meta": revision},
         **scope,
-    })
+    }
+
+
+def mcp(descriptor, method, params=None, **scope):
+    return ask("mcp/message", mcp_params(descriptor, method, params, **scope))
 
 
 def wait(path):
@@ -108,10 +117,61 @@ def wait(path):
         time.sleep(0.01)
 
 
+def withdraw(identifier):
+    send(method="$/cancel_request", params={"requestId": identifier})
+    response = receive()
+    assert response["id"] == identifier and response["error"]["code"] == -32800, response
+
+
+def withdraw_tools(descriptor, prompt_id):
+    file = str(Path("native.txt").resolve())
+    scope = {"sessionId": session}
+    if version == 2:
+        send(id=prompt_id, result={"messageId": "withdraw-tool-request"})
+        update("state_update", state="running")
+        write = start_request("mcp/message", mcp_params(descriptor, "tools/call", {
+            "name": "fs_write", "arguments": {"path": file, "content": "Unexpected write"},
+        }, **scope))
+    else:
+        write = start_request("fs/write_text_file", {**scope, "path": file, "content": "Unexpected write"})
+    wait(".acp-withdraw-permission")
+    withdraw(write)
+    assert Path(file).read_text().startswith("native fixture first line")
+    if version == 2:
+        shell = start_request("mcp/message", mcp_params(descriptor, "tools/call", {
+            "name": "shell_exec", "arguments": {
+                "command": "touch .acp-shell-started; while [ ! -e .acp-shell-release ]; do sleep .05; done; touch .acp-shell-effect",
+                "reads": [".acp-shell-release"],
+                "writes": [".acp-shell-started", ".acp-shell-effect"],
+            },
+        }, **scope))
+        wait(".acp-shell-started")
+        withdraw(shell)
+        Path(".acp-shell-release").touch()
+        read = mcp(descriptor, "tools/call", {
+            "name": "fs_read", "arguments": {"file_path": file},
+        }, **scope)["result"]
+        assert "native fixture first line" in json.dumps(read), read
+    else:
+        read = ask("fs/read_text_file", {**scope, "path": file})
+        assert read["content"].startswith("native fixture first line"), read
+    say("Another tool completed after the withdrawals", "kept-working")
+    if version == 2:
+        update("state_update", state="idle", stopReason="end_turn")
+    else:
+        send(id=prompt_id, result={"stopReason": "end_turn"})
+
+
 resumed = False
 setup_authorization = Path(".acp-setup-authorization").is_file()
+resume_callbacks = Path(".acp-resume-callbacks").is_file()
+resume_permission = None
+resume_answer = None
 for line in sys.stdin:
     message = json.loads(line)
+    if resume_permission is not None and message.get("id") == resume_permission and "method" not in message:
+        resume_answer = message
+        continue
     method = message["method"]
     params = message["params"]
     identifier = message.get("id")
@@ -167,7 +227,26 @@ for line in sys.stdin:
                 update("agent_message_chunk", messageId="answer",
                        content={"type": "text", "text": "Appended during resume"})
                 foreign_reply()
-            update("state_update", state="running" if resuming_edit else "idle")
+            if resume_callbacks:
+                call = {"name": "fs_read", "arguments": {"file_path": "native.txt"}}
+                blocked = ask("mcp/message", {
+                    "serverId": descriptor["serverId"], "requestId": "resume-foreign",
+                    "method": "tools/call", "sessionId": "another-session",
+                    "params": {**call, "_meta": revision},
+                }, expect_error=True)
+                assert blocked["code"] == -32602
+                result = mcp(descriptor, "tools/call", call, sessionId=session)["result"]
+                assert "native fixture first line" in json.dumps(result), result
+                update("state_update", state="requires_action")
+                resume_permission = "resume-permission"
+                send(id=resume_permission, method="session/request_permission", params={
+                    "sessionId": session,
+                    "title": "Approve recovered native work?",
+                    "subject": {"type": "tool_call", "toolCall": {"toolCallId": "recovering-tool"}},
+                    "options": [{"kind": "allow_once", "name": "Allow", "optionId": "resume-allow"}],
+                })
+            else:
+                update("state_update", state="running" if resuming_edit else "idle")
             send(id=identifier, result={})
         else:
             if version == 2:
@@ -199,8 +278,38 @@ for line in sys.stdin:
     elif method == "session/prompt":
         assert params["sessionId"] == session
         prompt = params["prompt"][0]["text"]
+        if prompt == "withdraw tool requests":
+            withdraw_tools(descriptor, identifier)
+            continue
+        if prompt == "disconnect during a client write":
+            assert version == 1
+            start_request("fs/write_text_file", {
+                "sessionId": session, "path": str(Path("native.txt").resolve()),
+                "content": "Unexpected write",
+            })
+            wait(".acp-disconnect")
+            sys.exit(0)
         if version == 2:
             assert params["idempotencyKey"], params
+            if resume_callbacks:
+                if resumed:
+                    assert prompt == "continue recovered work"
+                    answer = resume_answer if resume_answer is not None else receive()
+                    assert answer == {
+                        "jsonrpc": "2.0", "id": resume_permission,
+                        "result": {"outcome": {"outcome": "selected", "optionId": "resume-allow"}},
+                    }, answer
+                else:
+                    assert prompt == "start work to recover"
+                # A resumed workflow may emit its final foreground state before
+                # the reply to the prompt it accepted during that work.
+                message_id = "recovered-user" if resumed else "priming-user"
+                update("state_update", state="running")
+                update("user_message", messageId=message_id, content=params["prompt"])
+                say("Returned from resumed callbacks" if resumed else "Ready to resume", f"reply:{message_id}")
+                update("state_update", state="idle", stopReason="end_turn")
+                send(id=identifier, result={"messageId": message_id})
+                continue
             if prompt == "resume edited message":
                 update("state_update", state="running")
                 update("state_update", state="idle", stopReason="max_tokens")

@@ -34,6 +34,7 @@ if PROGRAM == "agy" and sys.argv[1:2] == ["--agent"]:
     profile = Path.home() / ".gemini"
     definition = (profile / "config" / "agents" / f"{agent}.md").read_text()
     assert "tools: []" in definition and "inheritMcp: false" in definition
+    Path(f".acp-compacted-{session}").touch()
     print(json.dumps({
         "event": "step_update", "step_update": {
             "conversation_id": session, "step_type": "checkpoint", "step_index": 4,
@@ -106,7 +107,11 @@ def request_permission(identifier):
     })
 
 
+mcp_session = None
+
+
 def mcp(method, params, *, authorized=True, request_id=1):
+    global mcp_session
     body = {"jsonrpc": "2.0", "method": method, "params": params}
     if request_id is not None:
         body["id"] = request_id
@@ -116,16 +121,21 @@ def mcp(method, params, *, authorized=True, request_id=1):
     }
     if method != "initialize":
         headers["MCP-Protocol-Version"] = "2025-11-25"
+        if mcp_session:
+            headers["Mcp-Session-Id"] = mcp_session
     if authorized:
         headers.update(bridge_headers)
     request = urllib.request.Request(url, data=json.dumps(body).encode(), headers=headers)
     with client.open(request, timeout=30) as response:
+        if method == "initialize":
+            mcp_session = response.headers["Mcp-Session-Id"]
         if request_id is None:
             assert response.status == 202, response.status
             return None
         payload = response.read().decode()
         if response.headers.get_content_type() == "text/event-stream":
-            payload = next(line[5:].strip() for line in payload.splitlines() if line.startswith("data:"))
+            payload = next(line[5:].strip() for line in payload.splitlines()
+                           if line.startswith("data:") and line[5:].strip())
         return json.loads(payload)
 
 
@@ -178,6 +188,7 @@ probe = False
 resumed = False
 loaded = False
 cancel_request = None
+closed_for_compaction = None
 for line in sys.stdin:
     request = json.loads(line)
     identifier = request.get("id")
@@ -238,7 +249,10 @@ for line in sys.stdin:
         if resumed:
             session = params["sessionId"]
             assert Path(f".acp-{session}").is_file()
-            assert authorization_digest != Path(f".acp-{session}").read_text()
+            if authorization_digest == Path(f".acp-{session}").read_text():
+                assert PROGRAM == "agy" and closed_for_compaction == session
+                assert Path(f".acp-compacted-{session}").is_file()
+            closed_for_compaction = None
         else:
             session = uuid.uuid4().hex
         Path(f".acp-{session}").write_text(authorization_digest)
@@ -285,6 +299,7 @@ for line in sys.stdin:
             Path(f".acp-probe-{session}").unlink()
         elif not probe:
             assert PROGRAM == "agy" and Path(".acp-catalog").is_file()
+            closed_for_compaction = session
             Path(f".acp-closed-{session}").touch()
         result = {}
     elif method == "session/prompt":
@@ -427,6 +442,11 @@ for line in sys.stdin:
         elif prompt == "/status":
             assert PROGRAM == "agy" and not resumed
             update("native status received")
+        elif prompt == "inspect after compacting":
+            assert resumed and Path(f".acp-compacted-{session}").is_file()
+            output = call_fixture("fs_read", {"file_path": "acp-input.txt"})
+            assert "acp callback content" in json.dumps(output), output
+            update("read through Agena after checkpoint")
         elif prompt == "show project plan":
             session_update(sessionUpdate="plan", entries=[
                 {"content": "Legacy step", "priority": "low", "status": "pending"},
@@ -534,9 +554,10 @@ for line in sys.stdin:
                                    "data": base64.b64encode(Path("acp-image.png").read_bytes()).decode()}},
                            ])
             update("rich projection accepted")
-        elif prompt == "check fresh context":
-            assert not resumed, "reused a native session after cancellation"
-            update("fresh context")
+        elif prompt == "continue after cancellation":
+            assert resumed, "lost the native session after cancellation"
+            assert len(params["prompt"]) == 1, "resent a cancelled prompt"
+            update("continued after cancellation")
         elif prompt == "check clear":
             assert not resumed and len(params["prompt"]) == 1
             update("cleared")

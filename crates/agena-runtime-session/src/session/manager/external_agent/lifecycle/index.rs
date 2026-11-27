@@ -63,7 +63,10 @@ impl SessionManager {
                     .watch_native_index(agent.to_owned(), cwd, Duration::from_secs(wait.into()))
                     .await;
             }
-            Action::List { .. } | Action::Import { .. } | Action::Open { .. } => {
+            Action::List { .. }
+            | Action::Import { .. }
+            | Action::Open { .. }
+            | Action::PreviewHistory { .. } => {
                 unreachable!("ordinary native lifecycle request")
             }
         };

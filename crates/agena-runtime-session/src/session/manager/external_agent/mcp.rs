@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::net::Ipv4Addr;
 
 use agena_domain::{AttachmentKind, ContentKind, RawOutput, StructuredObject, ToolInvocation};
+use agena_mcp_server::antigravity_guard::TOOL as ANTIGRAVITY_TOOL;
 use agena_mcp_server::{
     CallToolParams, CallToolResult, ContentBlock, McpServerBackend, McpServerError, ToolDescriptor,
     text_error, text_result,
@@ -15,7 +16,12 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use sha2::{Digest, Sha256};
-use tokio::{net::TcpListener, sync::RwLock, task::JoinHandle};
+use tokio::{
+    net::TcpListener,
+    sync::{RwLock, watch},
+    task::JoinHandle,
+    time::Instant,
+};
 use tokio_util::sync::DropGuard;
 
 use super::*;
@@ -26,7 +32,6 @@ mod stdio;
 
 const RESULT_BYTES: usize = 50 * 1024;
 const MCP_NAME_BYTES: usize = 52; // Leave room for Claude's mcp__agena__ prefix.
-const ANTIGRAVITY_TOOL: &str = "tool";
 
 struct Tool {
     target: String,
@@ -38,6 +43,41 @@ struct Scope {
     turn: Arc<ExternalTurn>,
     closing: CancellationToken,
     calls: Arc<RwLock<()>>,
+    activity: watch::Sender<ToolActivity>,
+}
+
+#[derive(Clone, Copy, Default)]
+pub(super) struct ToolActivity {
+    pub(super) active: usize,
+    pub(super) finished_at: Option<Instant>,
+}
+
+struct ActiveCall(watch::Sender<ToolActivity>);
+
+impl Drop for ActiveCall {
+    fn drop(&mut self) {
+        self.0.send_modify(|activity| {
+            activity.active -= 1;
+            activity.finished_at = Some(Instant::now());
+        });
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct ToolProgress {
+    pub(super) activity: watch::Receiver<ToolActivity>,
+    calls: Arc<RwLock<()>>,
+    closing: CancellationToken,
+}
+
+impl ToolProgress {
+    pub(super) fn revoke_if_idle(&self) -> bool {
+        let Ok(_exclusive) = self.calls.try_write() else {
+            return false;
+        };
+        self.closing.cancel();
+        true
+    }
 }
 
 pub(super) struct Bridge {
@@ -73,16 +113,24 @@ impl AcpEndpoint {
         id.as_str() == Some(self.id.as_str())
     }
 
-    pub(super) async fn respond(&self, method: &str, params: Value) -> Value {
+    pub(super) async fn respond(
+        &self,
+        method: &str,
+        params: Value,
+        withdrawal: CancellationToken,
+    ) -> Result<Value, AppError> {
         const REVISION: &str = "2026-07-28";
         let error = |code, message: &str| json!({"error":{"code":code,"message":message}});
+        if withdrawal.is_cancelled() {
+            return Err(AppError::Cancelled);
+        }
         if method != "server/discover"
             && params
                 .pointer("/_meta/io.modelcontextprotocol~1protocolVersion")
                 .and_then(Value::as_str)
                 != Some(REVISION)
         {
-            return error(-32602, "MCP-over-ACP requires MCP 2026-07-28");
+            return Ok(error(-32602, "MCP-over-ACP requires MCP 2026-07-28"));
         }
         let result = match method {
             "server/discover" => Ok(json!({
@@ -101,16 +149,16 @@ impl AcpEndpoint {
                 .map(|tools| json!({"tools": tools})),
             "tools/call" => {
                 let Ok(params) = serde_json::from_value::<CallToolParams>(params) else {
-                    return error(-32602, "Invalid MCP tool arguments");
+                    return Ok(error(-32602, "Invalid MCP tool arguments"));
                 };
                 self.backend
-                    .call_tool(params)
+                    .call_tool_with_cancellation(params, withdrawal)
                     .await
                     .and_then(|result| Ok(serde_json::to_value(result)?))
             }
-            _ => return error(-32601, "MCP method not found"),
+            _ => return Ok(error(-32601, "MCP method not found")),
         };
-        match result {
+        Ok(match result {
             Ok(mut value) => {
                 value["resultType"] = json!("complete");
                 json!({"result": value})
@@ -118,8 +166,9 @@ impl AcpEndpoint {
             Err(McpServerError::InvalidParams(_) | McpServerError::NotFound(_)) => {
                 error(-32602, "Invalid MCP tool request")
             }
+            Err(McpServerError::Cancelled) => return Err(AppError::Cancelled),
             Err(_) => error(-32603, "Agena could not complete the MCP request"),
-        }
+        })
     }
 }
 
@@ -177,6 +226,7 @@ impl Bridge {
             closing: turn.control.cancel.child_token(),
             turn,
             calls: Default::default(),
+            activity: watch::Sender::new(ToolActivity::default()),
         };
         let backend = Backend {
             scope: scope.clone(),
@@ -210,7 +260,6 @@ impl Bridge {
             (sse::router(backend, scope.closing.clone()), "sse", "/sse")
         } else {
             let config = rmcp::transport::StreamableHttpServerConfig::default()
-                .with_legacy_session_mode(false)
                 .with_json_response(true)
                 .with_allowed_origins([origin.clone()])
                 .with_cancellation_token(scope.closing.clone());
@@ -250,15 +299,20 @@ impl Bridge {
         }
     }
 
+    pub(super) fn tool_progress(&self) -> ToolProgress {
+        ToolProgress {
+            activity: self.scope.activity.subscribe(),
+            calls: self.scope.calls.clone(),
+            closing: self.scope.closing.clone(),
+        }
+    }
+
     pub(super) async fn close(mut self) {
         self.scope.closing.cancel();
         // An ACP prompt normally stops after consuming all its tool results.
         // If the child exits early, cancel and drain accepted effects before
         // the attempt loses ownership. A dropped HTTP waiter cannot skip this.
-        if self.scope.calls.try_write().is_err() {
-            self.scope.turn.control.cancel.cancel();
-            let _drained = self.scope.calls.write().await;
-        }
+        drop(self.scope.calls.write().await);
         if let Transport::Local { server, .. } = &mut self.transport
             && tokio::time::timeout(Duration::from_millis(500), &mut *server)
                 .await
@@ -343,8 +397,32 @@ impl McpServerBackend for Backend {
     }
 
     async fn call_tool(&self, params: CallToolParams) -> Result<CallToolResult, McpServerError> {
+        self.call_tool_scoped(params, None).await
+    }
+
+    async fn call_tool_with_cancellation(
+        &self,
+        params: CallToolParams,
+        cancel: CancellationToken,
+    ) -> Result<CallToolResult, McpServerError> {
+        self.call_tool_scoped(params, Some(cancel)).await
+    }
+}
+
+impl Backend {
+    async fn call_tool_scoped(
+        &self,
+        params: CallToolParams,
+        request_cancel: Option<CancellationToken>,
+    ) -> Result<CallToolResult, McpServerError> {
         let turn = self.scope.turn.clone();
         let guard = self.scope.calls.clone().read_owned().await;
+        if request_cancel
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+        {
+            return Err(McpServerError::Cancelled);
+        }
         if self.scope.closing.is_cancelled() {
             return Ok(text_error("The Agena turn has ended."));
         }
@@ -391,15 +469,41 @@ impl McpServerBackend for Backend {
         let arguments =
             StructuredObject::try_from(input.clone()).map_err(McpServerError::InvalidParams)?;
         let invocation = ToolInvocation::new(target.target.clone(), arguments);
+        self.scope
+            .activity
+            .send_modify(|activity| activity.active += 1);
+        let active = ActiveCall(self.scope.activity.clone());
+        if self.scope.closing.is_cancelled() {
+            return Ok(text_error("The Agena turn has ended."));
+        }
         // The accepted call outlives transport disconnects. The bridge holds
         // the attempt open until this call has committed or been cancelled.
+        let cancel = self.scope.closing.child_token();
         let result = tokio::spawn(async move {
             let _guard = guard;
-            turn.call_tool(invocation, input).await
+            let _active = active;
+            let call = turn.call_tool(invocation, input, &cancel);
+            tokio::pin!(call);
+            if let Some(request_cancel) = request_cancel {
+                tokio::select! {
+                    biased;
+                    _ = request_cancel.cancelled() => {
+                        cancel.cancel();
+                        call.await
+                    }
+                    result = &mut call => result,
+                }
+            } else {
+                call.await
+            }
         })
         .await
         .map_err(|error| McpServerError::Backend(error.to_string()))?;
-        Ok(result.unwrap_or_else(|error| text_error(error.public_message())))
+        match result {
+            Ok(result) => Ok(result),
+            Err(AppError::Cancelled) => Err(McpServerError::Cancelled),
+            Err(error) => Ok(text_error(error.public_message())),
+        }
     }
 }
 
@@ -408,8 +512,9 @@ impl ExternalTurn {
         &self,
         invocation: ToolInvocation,
         input: Value,
+        cancel: &CancellationToken,
     ) -> Result<(ToolHandle, ToolResult), AppError> {
-        if self.control.cancel.is_cancelled() {
+        if cancel.is_cancelled() {
             return Err(AppError::Cancelled);
         }
         let tool = self.begin_tool(invocation.name.clone(), input).await?;
@@ -424,6 +529,7 @@ impl ExternalTurn {
                 self.control.clone(),
                 self.control.state.clone(),
                 super::super::media::MediaTarget::ExternalAgent(self.agent),
+                Some(cancel.clone()),
             )
             .await?;
         if self.control.cancel.is_cancelled() {
@@ -431,6 +537,9 @@ impl ExternalTurn {
         }
         self.control
             .phase(agena_domain::ExecutionPhase::StreamingModel);
+        if result.phase == ToolPhase::Cancelled && cancel.is_cancelled() {
+            return Err(AppError::Cancelled);
+        }
         Ok((tool, result))
     }
 
@@ -438,8 +547,9 @@ impl ExternalTurn {
         &self,
         invocation: ToolInvocation,
         input: Value,
+        cancel: &CancellationToken,
     ) -> Result<CallToolResult, AppError> {
-        let (tool, result) = self.invoke_tool(invocation.clone(), input).await?;
+        let (tool, result) = self.invoke_tool(invocation.clone(), input, cancel).await?;
         if result.phase != ToolPhase::Succeeded {
             let message = result
                 .value

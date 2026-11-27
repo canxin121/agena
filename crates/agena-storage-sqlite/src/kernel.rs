@@ -2512,6 +2512,7 @@ fn previous_list_session(command: &Command) -> Option<SessionId> {
         | Command::OpenText { scope, .. }
         | Command::OpenEvents { scope, .. }
         | Command::BindExternalAgentLink { scope, .. }
+        | Command::RecordExternalAgentPromptDelivery { scope, .. }
         | Command::BeginActivity { scope, .. }
         | Command::CompleteTool { scope, .. }
         | Command::PrepareStop { scope, .. }
@@ -2670,7 +2671,8 @@ fn change_target(command: &Command, mutation: &Mutation) -> (SessionId, ChangeKi
                 ChangeKind::Membership
             },
         ),
-        Command::BindExternalAgentLink { scope, .. } => {
+        Command::BindExternalAgentLink { scope, .. }
+        | Command::RecordExternalAgentPromptDelivery { scope, .. } => {
             (scope.session, ChangeKind::ExternalAgentState)
         }
         Command::SealContent { scope, .. } => (scope.session(), ChangeKind::Content),

@@ -4,8 +4,8 @@ use std::{
 };
 
 use agena_domain::{
-    ExternalAgentArchiveFilter, ExternalAgentIndexedSession, ExternalAgentSessionCapabilities,
-    ExternalAgentSessionInfo,
+    ExternalAgentArchiveFilter, ExternalAgentHistoryPreview, ExternalAgentIndexedSession,
+    ExternalAgentSessionCapabilities, ExternalAgentSessionInfo,
 };
 use agena_storage::kernel::ExternalAgentHistoryTurn;
 
@@ -115,6 +115,11 @@ pub(in crate::session::manager::external_agent) struct NativePage {
 impl AcpClient {
     pub(in crate::session::manager::external_agent) fn history_read_only(&self) -> bool {
         self.previous_antigravity_history
+            && !(self.antigravity_guard_installed
+                && self
+                    .initialization
+                    .as_ref()
+                    .is_some_and(policy::antigravity_guard_supported))
     }
 
     pub(in crate::session::manager::external_agent) fn has_previous_history(&self) -> bool {
@@ -380,7 +385,45 @@ impl AcpClient {
         context: &SessionContext,
         cancel: &CancellationToken,
     ) -> Result<(Vec<ExternalAgentHistoryTurn>, ExternalAgentState), AppError> {
+        let replay = self
+            .collect_native_replay(cwd, native_id, context, Replay::default(), cancel)
+            .await?;
+        let (turns, mut state) = replay.finish(self.agent, cwd).await?;
+        state.antigravity_legacy_history = self.previous_antigravity_history;
+        state.history_read_only = self.history_read_only();
+        Ok((turns, state))
+    }
+
+    pub(in crate::session::manager::external_agent) async fn preview_native_history(
+        &mut self,
+        cwd: &Path,
+        native_id: &str,
+        context: &SessionContext,
+        before_turn: Option<u64>,
+        cancel: &CancellationToken,
+    ) -> Result<ExternalAgentHistoryPreview, AppError> {
+        let replay = self
+            .collect_native_replay(
+                cwd,
+                native_id,
+                context,
+                Replay::preview(before_turn),
+                cancel,
+            )
+            .await?;
+        Ok(replay.finish_preview())
+    }
+
+    async fn collect_native_replay(
+        &mut self,
+        cwd: &Path,
+        native_id: &str,
+        context: &SessionContext,
+        mut replay: Replay,
+        cancel: &CancellationToken,
+    ) -> Result<Replay, AppError> {
         let capabilities = self.initialize(cancel).await?;
+        replay.allow_rewind = capabilities.air_rewind;
         let mut params = json!({"cwd": cwd, "sessionId": native_id, "mcpServers": []});
         context.apply(&mut params, capabilities.lifecycle)?;
         policy::apply_to_session(self.agent, &mut params);
@@ -393,7 +436,6 @@ impl AcpClient {
             return Err(self.unsupported_lifecycle("reading conversation history"));
         };
         self.prepare_provider_routes(cancel).await?;
-        let mut replay = Replay::new(capabilities.air_rewind);
         let response = self
             .lifecycle_request(
                 method,
@@ -405,14 +447,11 @@ impl AcpClient {
         if self.uses_v2() && !replay.complete {
             tracing::debug!("ACP v2 resume succeeded without a replay_complete update");
         }
-        if !self.uses_v2() {
-            // A successful v1 load response ends the historical range.
-            replay.complete = true;
-        }
+        // A successful response also confirms the replay when a peer omits
+        // the v2 marker. Errors and EOF return before publishing any history.
+        replay.complete = true;
         replay.apply_setup_response(&response, self.uses_v2());
-        let (turns, mut state) = replay.finish(self.agent, cwd).await?;
-        state.history_read_only = self.history_read_only();
-        Ok((turns, state))
+        Ok(replay)
     }
 
     pub(in crate::session::manager::external_agent) async fn fork_native(

@@ -1,4 +1,5 @@
 use std::os::unix::fs::PermissionsExt;
+use std::time::Duration;
 
 use agena_api::{live::ToolDetailSection, part::PartResource};
 use agena_domain::{
@@ -6,7 +7,7 @@ use agena_domain::{
     ExternalAgentSessionResult as SessionResult, ExternalAgentWorkspaceAction as WorkspaceAction,
     ExternalAgentWorkspaceResult as WorkspaceResult,
 };
-use agena_testkit::TestResult;
+use agena_testkit::{TestCase, TestResult, UserSession};
 use anyhow::{Context, ensure};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use reqwest::{Method, StatusCode};
@@ -429,48 +430,75 @@ async fn acp_views_reload_native_history_and_leave_the_database_untouched() -> T
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn acp_views_keep_recent_complete_turns_above_the_projection_budget() -> TestResult {
+    exercise_complete_turn_window("", ["Window turn 2", "Window turn 3"], "latest 2 of 4").await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn acp_views_roll_complete_turns_above_the_wire_budget() -> TestResult {
+    exercise_complete_turn_window("wire", ["Window turn 4", "Window turn 5"], "latest 2 of 6").await
+}
+
+async fn open_fixture_history(case: &TestCase) -> TestResult<UserSession> {
+    let ordinary = case.user().new_session().await?;
+    let workspace = ordinary
+        .snapshot()
+        .await?
+        .session
+        .workspace_id
+        .context("workspace")?;
+    let WorkspaceResult::Opened { session_id } = ordinary
+        .client()
+        .external_agent_workspace(
+            workspace,
+            WorkspaceAction::Open {
+                agent: ExternalAgent::ClaudeCode,
+                native_id: "native-project".into(),
+            },
+        )
+        .await?
+    else {
+        anyhow::bail!("expected a bounded native history view");
+    };
+    case.user().attach_session(session_id).await
+}
+
+async fn exercise_complete_turn_window(
+    mode: &'static str,
+    expected_users: [&'static str; 2],
+    window_summary: &'static str,
+) -> TestResult {
     let (_bin, builder) = lifecycle_fixture("2")?;
     builder
-        .seed_file("workspace/.native-history-window", Vec::new())
+        .seed_file("workspace/.native-history-window", mode.as_bytes().to_vec())
         .run(|case| async move {
-            let ordinary = case.user().new_session().await?;
-            let workspace = ordinary
-                .snapshot()
-                .await?
-                .session
-                .workspace_id
-                .context("workspace")?;
-            let client = ordinary.client();
-            let WorkspaceResult::Opened { session_id } = client
-                .external_agent_workspace(
-                    workspace,
-                    WorkspaceAction::Open {
-                        agent: ExternalAgent::ClaudeCode,
-                        native_id: "native-project".into(),
-                    },
-                )
-                .await?
-            else {
-                anyhow::bail!("expected a bounded native history view");
-            };
-            let user = case.user().attach_session(session_id).await?;
+            let user = open_fixture_history(&case).await?;
+            let client = user.client();
+            let session_id = user.id();
             let parts = user.parts().await?;
             let retained = parts
                 .iter()
                 .filter(|part| part.role == "user")
                 .collect::<Vec<_>>();
             ensure!(retained.len() == 2);
-            for (part, expected) in retained.iter().zip(["Window turn 2", "Window turn 3"]) {
+            for (part, expected) in retained.iter().zip(expected_users) {
                 let mut text = Vec::new();
                 client.write_part_text(session_id, part, &mut text).await?;
                 ensure!(text == expected.as_bytes());
             }
+            ensure!(
+                parts
+                    .iter()
+                    .filter(|part| part.role == "assistant" && part.kind == "text")
+                    .count()
+                    == 2
+            );
+            ensure!(parts.iter().all(|part| part.kind != "tool_call"));
             ensure!(parts.iter().any(|part| {
                 part.kind == "notice"
                     && part.content["kind"] == "external_agent_history_window"
                     && part.content["summary"]
                         .as_str()
-                        .is_some_and(|summary| summary.contains("latest 2 of 4"))
+                        .is_some_and(|summary| summary.contains(window_summary))
             }));
             let SessionResult::Status { fork_points, .. } = client
                 .external_agent_session(session_id, SessionAction::Status)
@@ -504,6 +532,416 @@ async fn acp_views_keep_recent_complete_turns_above_the_projection_budget() -> T
             Ok(())
         })
         .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn acp_views_clip_single_turns_at_the_record_and_update_budgets() -> TestResult {
+    for (version, mode) in [("2", "records"), ("1", "updates")] {
+        let (_bin, builder) = lifecycle_fixture(version)?;
+        builder
+            .seed_file("workspace/.native-history-window", mode.as_bytes().to_vec())
+            .run(|case| async move {
+                let user = open_fixture_history(&case).await?;
+                let parts = user.parts().await?;
+                let mut users = Vec::new();
+                let mut reply = Vec::new();
+                for part in &parts {
+                    if part.role == "user" {
+                        let mut input = Vec::new();
+                        user.client()
+                            .write_part_text(user.id(), part, &mut input)
+                            .await?;
+                        users.push(String::from_utf8(input)?);
+                    } else if part.role == "assistant" && part.kind == "text" {
+                        user.client()
+                            .write_part_text(user.id(), part, &mut reply)
+                            .await?;
+                    }
+                }
+                ensure!(
+                    users == ["Oversized native turn", "Latest native turn"],
+                    "{mode}: {users:?}"
+                );
+                ensure!(
+                    reply == b"Latest native reply",
+                    "{mode}: retained an incomplete reply"
+                );
+                ensure!(parts.iter().any(|part| {
+                    part.kind == "notice"
+                        && part.content["summary"].as_str().is_some_and(|summary| {
+                            summary.contains("latest 2 of 3")
+                                && summary.contains("content exceeded")
+                        })
+                }));
+                let continued = user
+                    .send("Continue clipped history")
+                    .await?
+                    .wait_settled()
+                    .await?;
+                continued.assert_succeeded()?;
+                continued.assert_assistant_text("Reply from native-project")?;
+                Ok(())
+            })
+            .await?;
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn acp_views_keep_a_suffix_when_the_newest_turn_exceeds_projection() -> TestResult {
+    let (_bin, builder) = lifecycle_fixture("2")?;
+    builder
+        .seed_file("workspace/.native-history-window", b"latest".to_vec())
+        .run(|case| async move {
+            let user = open_fixture_history(&case).await?;
+            let parts = user.parts().await?;
+            let [question] = parts
+                .iter()
+                .filter(|part| part.role == "user")
+                .collect::<Vec<_>>()[..]
+            else {
+                anyhow::bail!("expected just the newest turn");
+            };
+            let mut input = Vec::new();
+            user.client()
+                .write_part_text(user.id(), question, &mut input)
+                .await?;
+            ensure!(input == b"Newest native question");
+            let reply = parts
+                .iter()
+                .find(|part| part.role == "assistant" && part.kind == "text")
+                .context("retained reply")?;
+            let mut text = Vec::new();
+            user.client()
+                .write_part_text(user.id(), reply, &mut text)
+                .await?;
+            let text = String::from_utf8(text)?;
+            ensure!(text.ends_with("\nNewest native answer") && !text.contains("Old beginning"));
+            ensure!(
+                parts
+                    .iter()
+                    .any(|part| part.content["name"] == "Claude Code · Newest native tool")
+            );
+            ensure!(parts.iter().any(|part| {
+                part.kind == "notice"
+                    && part.content["summary"].as_str().is_some_and(|summary| {
+                        summary.contains("latest 1 of 2") && summary.contains("content exceeded")
+                    })
+            }));
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn acp_views_replace_excess_attachments_with_visible_omissions() -> TestResult {
+    let (_bin, builder) = lifecycle_fixture("2")?;
+    builder
+        .seed_file("workspace/.native-history-window", b"media".to_vec())
+        .run(|case| async move {
+            let user = open_fixture_history(&case).await?;
+            let parts = user.parts().await?;
+            let input = parts
+                .iter()
+                .rev()
+                .find(|part| part.role == "user")
+                .context("attachment prompt")?;
+            let document = input.content["document"]
+                .as_array()
+                .context("attachment document")?;
+            let blobs = document
+                .iter()
+                .filter_map(|node| {
+                    node.pointer("/activity/payload/reference/uri")
+                        .and_then(serde_json::Value::as_str)
+                })
+                .collect::<Vec<_>>();
+            ensure!(blobs.len() == 16);
+            let (_, bytes) = user
+                .client()
+                .download_session_media_file_with_limit(user.id(), blobs[0], 4096)
+                .await?;
+            ensure!(bytes == b"\x00\xff\x01");
+            let mut text = Vec::new();
+            user.client()
+                .write_part_text(user.id(), input, &mut text)
+                .await?;
+            let text = String::from_utf8(text)?;
+            ensure!(
+                text.starts_with("Attachment overflow")
+                    && text.matches("Native attachment omitted").count() == 2
+            );
+            let reply = parts
+                .iter()
+                .rev()
+                .find(|part| part.role == "assistant" && part.kind == "text")
+                .context("attachment reply")?;
+            let mut text = Vec::new();
+            user.client()
+                .write_part_text(user.id(), reply, &mut text)
+                .await?;
+            ensure!(text == b"Reply survives attachment omission");
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn concurrent_native_history_open_and_preview_share_the_replay_slot() -> TestResult {
+    let (_bin, builder) = lifecycle_fixture("2")?;
+    builder
+        .seed_file("workspace/.native-single-connection", Vec::new())
+        .seed_file("workspace/.native-hold-first-replay", Vec::new())
+        .run(|case| async move {
+            let ordinary = case.user().new_session().await?;
+            let workspace = ordinary.snapshot().await?.session.workspace_id.context("workspace")?;
+            let client = ordinary.client();
+            let open = async {
+                Ok::<_, anyhow::Error>(client.external_agent_workspace(workspace, WorkspaceAction::Open {
+                    agent: ExternalAgent::ClaudeCode,
+                    native_id: "native-project".into(),
+                }).await?)
+            };
+            let preview = async {
+                let started = case.workspace().join(".native-first-replay-started");
+                tokio::time::timeout(Duration::from_secs(10), async {
+                    while !started.is_file() {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                }).await.context("first replay did not start")?;
+                let preview = client.external_agent_workspace(workspace, WorkspaceAction::PreviewHistory {
+                    agent: ExternalAgent::ClaudeCode,
+                    native_id: "native-project".into(),
+                    before_turn: None,
+                });
+                let release = async {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+                    tokio::fs::write(case.workspace().join(".native-release-replay"), "").await
+                };
+                let (preview, released) = tokio::join!(preview, release);
+                released?;
+                Ok::<_, anyhow::Error>(preview?)
+            };
+            let (opened, preview) = tokio::try_join!(open, preview)?;
+            ensure!(matches!(opened, WorkspaceResult::Opened { .. }));
+            ensure!(matches!(preview, WorkspaceResult::HistoryPreview { preview } if !preview.turns.is_empty()));
+            let wire = tokio::fs::read_to_string(case.workspace().join(".native-protocol.log")).await?;
+            ensure!(!wire.contains("session/new") && !wire.contains("session/prompt"), "{wire}");
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v2_replay_uses_a_successful_response_and_preserves_the_view_on_failure() -> TestResult {
+    let (_bin, builder) = lifecycle_fixture("2")?;
+    builder
+        .run(|case| async move {
+            let user = open_fixture_history(&case).await?;
+            let workspace = user
+                .snapshot()
+                .await?
+                .session
+                .workspace_id
+                .context("workspace")?;
+            let client = user.client();
+            let agent = ExternalAgent::ClaudeCode;
+            let native_id = "native-project".to_owned();
+            let old_parts = user.parts().await?;
+            ensure!(!old_parts.is_empty());
+            let marker = case.workspace().join(".native-replay-override");
+            let open = || WorkspaceAction::Open {
+                agent,
+                native_id: native_id.clone(),
+            };
+            let preview = || WorkspaceAction::PreviewHistory {
+                agent,
+                native_id: native_id.clone(),
+                before_turn: None,
+            };
+            for (mode, message) in [
+                ("error", "rejected session/resume"),
+                ("eof", "closed its ACP connection"),
+            ] {
+                tokio::fs::write(&marker, mode).await?;
+                for action in [open(), preview()] {
+                    let outcome = client.external_agent_workspace(workspace, action).await;
+                    let error = outcome.expect_err("an interrupted ACP v2 replay must fail");
+                    ensure!(error.to_string().contains(message), "{error}");
+                }
+            }
+            ensure!(
+                user.parts()
+                    .await?
+                    .into_iter()
+                    .map(|part| part.part_id)
+                    .eq(old_parts.into_iter().map(|part| part.part_id))
+            );
+            tokio::fs::write(&marker, "success").await?;
+            let WorkspaceResult::HistoryPreview { preview } = client
+                .external_agent_workspace(workspace, preview())
+                .await?
+            else {
+                anyhow::bail!("expected a preview after successful markerless replay");
+            };
+            ensure!(
+                preview.turns.len() == 1 && preview.turns[0].user == "Markerless native history"
+            );
+            let WorkspaceResult::Opened { session_id } =
+                client.external_agent_workspace(workspace, open()).await?
+            else {
+                anyhow::bail!("expected a refreshed ACP view after successful markerless replay");
+            };
+            ensure!(session_id != user.id());
+            let refreshed = case.user().attach_session(session_id).await?;
+            let mut text = Vec::new();
+            for part in refreshed
+                .parts()
+                .await?
+                .iter()
+                .filter(|part| part.kind == "text")
+            {
+                refreshed
+                    .client()
+                    .write_part_text(session_id, part, &mut text)
+                    .await?;
+            }
+            ensure!(String::from_utf8(text)?.contains("Markerless native history"));
+            let wire =
+                tokio::fs::read_to_string(case.workspace().join(".native-protocol.log")).await?;
+            ensure!(!wire.contains("session/close native-project"), "{wire}");
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_history_preview_pages_earlier_turns_without_replacing_the_view() -> TestResult {
+    for version in ["1", "2"] {
+        let (_bin, builder) = lifecycle_fixture(version)?;
+        builder
+            .seed_file("workspace/.native-history-window", b"preview".to_vec())
+            .seed_file("workspace/.native-single-connection", Vec::new())
+            .run(|case| async move {
+                let user = open_fixture_history(&case).await?;
+                let workspace = user
+                    .snapshot()
+                    .await?
+                    .session
+                    .workspace_id
+                    .context("workspace")?;
+                let http = case.http().await;
+                let path = format!("/api/v1/acp/workspaces/{workspace}/sessions");
+                let request = |id: &str, before_turn| WorkspaceAction::PreviewHistory {
+                    agent: ExternalAgent::ClaudeCode,
+                    native_id: id.into(),
+                    before_turn,
+                };
+                let initial_parts = user
+                    .parts()
+                    .await?
+                    .into_iter()
+                    .map(|part| part.part_id)
+                    .collect::<Vec<_>>();
+                let newest = http
+                    .send_json(Method::POST, &path, &request("native-project", None))
+                    .await?
+                    .require_success()?;
+                ensure!(newest.headers["cache-control"] == "no-store");
+                let WorkspaceResult::HistoryPreview { preview: newest } = newest.json()? else {
+                    anyhow::bail!("expected the newest history preview");
+                };
+                ensure!(newest.turns.len() == 8 && newest.next_before_turn == Some(6));
+                ensure!(
+                    newest.turns[0].user == "Preview turn 5"
+                        && newest.turns[7].reply == "Preview answer 12"
+                );
+
+                let WorkspaceResult::HistoryPreview { preview: earlier } = http
+                    .send_json(
+                        Method::POST,
+                        &path,
+                        &request("native-project", newest.next_before_turn),
+                    )
+                    .await?
+                    .require_success()?
+                    .json()?
+                else {
+                    anyhow::bail!("expected the earlier history preview");
+                };
+                ensure!(earlier.turns.len() == 5 && earlier.next_before_turn.is_none());
+                ensure!(
+                    earlier.turns[0].user.starts_with("Imported user") && earlier.omitted_content
+                );
+                ensure!(earlier.turns[4].user == "Preview turn 4");
+                let expected = if version == "1" {
+                    "Preview answer 4"
+                } else {
+                    "Updated earlier answer"
+                };
+                ensure!(earlier.turns[4].reply == expected);
+                ensure!(
+                    http.send_json(Method::POST, &path, &request("foreign", None))
+                        .await?
+                        .status
+                        .is_client_error()
+                );
+                ensure!(
+                    http.send_json(Method::POST, &path, &request("native-project", Some(1)))
+                        .await?
+                        .status
+                        .is_client_error()
+                );
+                ensure!(
+                    user.parts()
+                        .await?
+                        .into_iter()
+                        .map(|part| part.part_id)
+                        .eq(initial_parts)
+                );
+                let continued = user
+                    .send("Continue after browsing")
+                    .await?
+                    .wait_settled()
+                    .await?;
+                continued.assert_succeeded()?;
+                continued.assert_assistant_text("Reply from native-project")?;
+                let WorkspaceResult::Imported { session_id } = user
+                    .client()
+                    .external_agent_workspace(
+                        workspace,
+                        WorkspaceAction::Import {
+                            agent: ExternalAgent::ClaudeCode,
+                            native_id: "native-project".into(),
+                        },
+                    )
+                    .await?
+                else {
+                    anyhow::bail!("expected existing native view");
+                };
+                ensure!(session_id == user.id());
+                let active_parts = user.parts().await?;
+                http.send_json(Method::POST, &path, &request("native-project", None))
+                    .await?
+                    .require_success()?;
+                ensure!(
+                    user.parts()
+                        .await?
+                        .into_iter()
+                        .map(|part| part.part_id)
+                        .eq(active_parts.into_iter().map(|part| part.part_id))
+                );
+                let wire = tokio::fs::read_to_string(case.workspace().join(".native-protocol.log"))
+                    .await?;
+                ensure!(
+                    !wire.contains("close-prompted native-project\n"),
+                    "preview must not stop native work: {wire}"
+                );
+                Ok(())
+            })
+            .await?;
+    }
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -962,7 +1400,21 @@ fn archive_fixture(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn antigravity_reads_previous_history_and_prompts_only_in_the_restricted_profile()
 -> TestResult {
+    exercise_previous_antigravity_history(false).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn antigravity_continues_and_compacts_guarded_previous_history() -> TestResult {
+    exercise_previous_antigravity_history(true).await
+}
+
+async fn exercise_previous_antigravity_history(guarded: bool) -> TestResult {
     let (_bin, builder) = archive_fixture("agy", "1")?;
+    let builder = if guarded {
+        builder.seed_file("workspace/.guarded-antigravity-history", Vec::new())
+    } else {
+        builder
+    };
     builder
         .seed_file("workspace/.split-antigravity-history", Vec::new())
         .seed_file("home/.gemini/antigravity-cli/conversations/fixture", Vec::new())
@@ -980,11 +1432,36 @@ async fn antigravity_reads_previous_history_and_prompts_only_in_the_restricted_p
             let legacy = case.user().attach_session(session_id).await?;
             ensure!(legacy.parts().await?.iter().any(|part| part.role == "user"));
             tokio::fs::write(case.workspace().join(".managed-signed-in"), b"").await?;
-            let SessionResult::Status { capabilities, .. } =
+            let SessionResult::Status { capabilities, session: native, .. } =
                 client.external_agent_session(session_id, SessionAction::Status).await?
             else { anyhow::bail!("expected native session status"); };
-            ensure!(!capabilities.continue_conversation);
-            legacy.send("Continue the legacy conversation").await?.wait_settled().await?.assert_failed()?;
+            ensure!(capabilities.continue_conversation == guarded);
+            ensure!(native.context("native ID")?.native_id == "ready");
+            let run = legacy.send("Continue the legacy conversation").await?.wait_settled().await?;
+            if guarded {
+                run.assert_succeeded()?;
+                run.assert_assistant_text("Restricted Antigravity")?;
+                legacy.send("/agent:compact Continue after native compaction")
+                    .await?.wait_settled().await?.assert_succeeded()?;
+                let wire = tokio::fs::read_to_string(case.workspace().join(".archive-wire")).await?;
+                ensure!(wire.matches("legacy-resume ready").count() == 3, "{wire}");
+                ensure!(wire.matches("session/prompt ready").count() == 2, "{wire}");
+                ensure!(
+                    wire.find("compact-cli ready")
+                        .zip(wire.find("compact-followup ready"))
+                        .is_some_and(|(compact, followup)| compact < followup),
+                    "{wire}",
+                );
+                let native_config = case.workspace().join(".agents/mcp_config.json");
+                tokio::fs::create_dir_all(native_config.parent().context("MCP config directory")?).await?;
+                tokio::fs::write(&native_config, b"{}").await?;
+                legacy.send("Retry with workspace MCP configured").await?.wait_settled().await?.assert_failed()?;
+                let checked_wire = tokio::fs::read_to_string(case.workspace().join(".archive-wire")).await?;
+                ensure!(checked_wire.matches("session/prompt ready").count() == 2, "{checked_wire}");
+                tokio::fs::remove_file(native_config).await?;
+            } else {
+                run.assert_failed()?;
+            }
             let created: agena_api::resource::SessionResource = case.http().await
                 .send_json(Method::POST, "/api/v1/acp/sessions", &json!({
                     "workspace_id": workspace, "title": "Restricted connection", "external_agent": "antigravity",

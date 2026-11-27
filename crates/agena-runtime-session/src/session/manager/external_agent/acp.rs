@@ -19,6 +19,7 @@ use tokio::{
     process::{ChildStdin, ChildStdout, Command},
     sync::mpsc,
     task::{JoinError, JoinSet},
+    time::Instant,
 };
 use tokio_util::{
     codec::{FramedRead, LinesCodec},
@@ -37,6 +38,7 @@ use super::{
 
 mod antigravity;
 mod cursors;
+mod inactivity;
 mod index;
 mod isolation;
 mod lifecycle;
@@ -45,6 +47,7 @@ mod protocol;
 mod providers;
 mod startup_options;
 
+use inactivity::PromptIdle;
 pub(super) use index::MAX_BATCH_IDS;
 pub(super) use lifecycle::{SessionContext, bounded_string, bounded_title};
 use protocol::{ActivitySnapshot, PromptLifecycle, Version};
@@ -54,6 +57,7 @@ const CANCELLATION_GRACE: Duration = Duration::from_millis(500);
 const MAX_FRAME_BYTES: usize = 32 * 1024 * 1024;
 const MAX_OPENING_SESSIONS: usize = 8;
 const MAX_OPENING_MESSAGE_UPDATES: usize = 256;
+const MAX_REPLAYED_USERS: usize = 6_000;
 const MAX_PEER_REQUESTS: usize = 128;
 pub(super) const MAX_CURSOR_BYTES: usize = 4096;
 
@@ -76,6 +80,7 @@ pub(super) struct AcpClient {
     cwd: PathBuf,
     additional_directories: Vec<PathBuf>,
     previous_antigravity_history: bool,
+    antigravity_guard_installed: bool,
     agent_arguments: Vec<String>,
     isolation: Option<isolation::Isolation>,
     child: ManagedChild,
@@ -93,10 +98,12 @@ pub(super) struct AcpClient {
     capabilities: Option<Capabilities>,
     initialization: Option<Value>,
     mcp: Option<mcp::AcpEndpoint>,
+    mcp_activity: Option<mcp::ToolProgress>,
     native_work: Option<cancellation::Connection>,
     opening_turn: Weak<ExternalTurn>,
+    opening_replies: PeerReplies,
     pending: HashMap<Value, PendingInteraction>,
-    url_elicitations: HashSet<String>,
+    url_elicitations: HashMap<String, Instant>,
 }
 
 struct ActiveRequest {
@@ -183,6 +190,51 @@ pub(super) struct OpeningMessages {
     bytes: usize,
     snapshots_only: bool,
     resume_rejection: Option<ResumeRejection>,
+    replayed_users: Option<ReplayedUsers>,
+}
+
+#[derive(Default)]
+pub(super) struct ReplayedUsers {
+    ids: VecDeque<[u8; 32]>,
+    complete: bool,
+}
+
+impl ReplayedUsers {
+    fn record(&mut self, update: &Value) {
+        match update["sessionUpdate"].as_str() {
+            Some("replay_complete") => self.complete = true,
+            Some("user_message" | "user_message_chunk") if !self.complete => {
+                if let Some(id) = update["messageId"]
+                    .as_str()
+                    .filter(|id| id.len() <= MAX_CURSOR_BYTES)
+                {
+                    use sha2::{Digest, Sha256};
+
+                    let digest = Sha256::digest(id.as_bytes()).into();
+                    if self.ids.back() != Some(&digest) {
+                        if self.ids.len() == MAX_REPLAYED_USERS {
+                            self.ids.pop_front();
+                        }
+                        self.ids.push_back(digest);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn contains(&self, id: &str) -> bool {
+        use sha2::{Digest, Sha256};
+
+        self.ids.contains(&Sha256::digest(id.as_bytes()).into())
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum OpenPurpose {
+    Prompt,
+    RetryPrompt,
+    Compact,
 }
 
 #[derive(Clone, Copy)]
@@ -193,6 +245,12 @@ enum ResumeRejection {
 
 impl OpeningMessages {
     fn record(&mut self, update: Value, bytes: usize) {
+        if let Some(replay) = &mut self.replayed_users
+            && !replay.complete
+        {
+            replay.record(&update);
+            return;
+        }
         let Some(message) = MessageUpdate::parse(&update) else {
             return;
         };
@@ -235,6 +293,10 @@ impl OpeningMessages {
 
     pub(super) fn into_updates(self) -> Vec<Value> {
         self.frames.into_iter().map(|(update, _)| update).collect()
+    }
+
+    pub(super) fn take_replayed_users(&mut self) -> Option<ReplayedUsers> {
+        self.replayed_users.take()
     }
 }
 
@@ -302,7 +364,7 @@ pub(super) struct OpenedSession {
     pub(super) state: ExternalAgentState,
     pub(super) activity: ActivitySnapshot,
     pub(super) replacements: OpeningMessages,
-    close_supported: bool,
+    pub(super) close_supported: bool,
     delete_supported: bool,
 }
 
@@ -383,7 +445,7 @@ impl AcpClient {
         Self::spawn_profile(agent, cwd, false, directories)
     }
 
-    fn spawn_profile(
+    pub(super) fn spawn_profile(
         agent: ExternalAgent,
         cwd: &Path,
         previous_antigravity_history: bool,
@@ -396,9 +458,23 @@ impl AcpClient {
             }
             ExternalAgent::ClaudeCode => Vec::new(),
         };
+        let antigravity_guard_installed = previous_antigravity_history
+            && match policy::install_antigravity_guard() {
+                Ok(installed) => installed,
+                Err(error) => {
+                    tracing::warn!(%error, "could not install the Antigravity ACP tool guard");
+                    false
+                }
+            };
         let mut command = Command::new(program);
         command.args(arguments).args(&agent_arguments);
         agent_environment(&mut command);
+        if agent == ExternalAgent::Antigravity && !previous_antigravity_history {
+            command.env(
+                agena_mcp_server::antigravity_guard::MANAGED_PROFILE_ENV,
+                "1",
+            );
+        }
         command.current_dir(cwd);
         let isolation = isolation::wrap(
             &mut command,
@@ -408,6 +484,9 @@ impl AcpClient {
             previous_antigravity_history,
             None,
         )?;
+        let antigravity_guard_installed = antigravity_guard_installed
+            && (isolation.is_some()
+                || policy::native_antigravity_customizations(cwd, directories)?.is_empty());
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -433,6 +512,7 @@ impl AcpClient {
             cwd: cwd.to_owned(),
             additional_directories: directories.to_vec(),
             previous_antigravity_history,
+            antigravity_guard_installed,
             agent_arguments,
             isolation,
             child,
@@ -450,10 +530,12 @@ impl AcpClient {
             capabilities: None,
             initialization: None,
             mcp: None,
+            mcp_activity: None,
             native_work: None,
             opening_turn: Weak::new(),
+            opening_replies: JoinSet::new(),
             pending: HashMap::new(),
-            url_elicitations: HashSet::new(),
+            url_elicitations: HashMap::new(),
         })
     }
 
@@ -743,6 +825,19 @@ impl AcpClient {
                     "This isolated external agent must provide ACP or stdio MCP transport.".into(),
                 ));
             }
+            let notice = serde_json::to_string(&agena_runtime_contracts::NoticePart {
+                kind: "external_agent_mcp_unavailable".into(),
+                summary: format!(
+                    "{} did not advertise an MCP transport compatible with Agena. Agena tools are unavailable for this turn.",
+                    self.agent.label(),
+                ),
+                detail: None,
+                title: Some("Agena tools unavailable".into()),
+            })?;
+            let request = super::RequestId::new();
+            super::persist(|| turn.attempt.notice(request, notice.clone()))
+                .await
+                .map_err(super::kernel_error)?;
             return Ok(None);
         };
         let relay = self
@@ -751,6 +846,7 @@ impl AcpClient {
             .map(isolation::Isolation::relay_socket);
         let bridge = mcp::Bridge::start(turn, kind, relay).await?;
         self.mcp = bridge.acp_endpoint();
+        self.mcp_activity = Some(bridge.tool_progress());
         Ok(Some(bridge))
     }
 
@@ -764,8 +860,16 @@ impl AcpClient {
             additional_directories,
             ..Default::default()
         };
-        self.start_with_context(cwd, None, None, false, false, &context, cancel)
-            .await
+        self.start_with_context(
+            cwd,
+            None,
+            None,
+            false,
+            OpenPurpose::Prompt,
+            &context,
+            cancel,
+        )
+        .await
     }
 
     pub(super) async fn start_with_context(
@@ -774,16 +878,19 @@ impl AcpClient {
         mcp: Option<Value>,
         previous: Option<(&str, &ExternalAgentState)>,
         has_images: bool,
-        require_existing: bool,
+        purpose: OpenPurpose,
         context: &SessionContext,
         cancel: &CancellationToken,
     ) -> Result<OpenedSession, AppError> {
-        if self.previous_antigravity_history {
+        self.prepare_provider_routes(cancel).await?;
+        if self.history_read_only() {
             return Err(AppError::Config(
-                "Start a new Agena ACP session to use Antigravity tools through Agena.".into(),
+                "Continuing this Antigravity history requires a verified adapter and process isolation for native workspace MCP or hooks.".into(),
             ));
         }
-        self.prepare_provider_routes(cancel).await?;
+        if self.previous_antigravity_history && (previous.is_none() || mcp.is_none()) {
+            return Err(AppError::ExternalAgentResumeUnavailable);
+        }
         let setup = async {
             let capabilities = self.initialize(cancel).await?;
             if has_images && !capabilities.image {
@@ -826,6 +933,9 @@ impl AcpClient {
             if let Some((previous, state)) = previous {
                 let mut resume = params.clone();
                 resume["sessionId"] = json!(previous);
+                if purpose == OpenPurpose::RetryPrompt {
+                    resume["replayFrom"] = json!({"type": "start"});
+                }
                 self.apply_initial_config_options(cwd, &mut resume, context, cancel)
                     .await?;
                 let methods = [
@@ -845,7 +955,11 @@ impl AcpClient {
                             ..OpeningState::default()
                         },
                     )]);
-                    let mut replacements = OpeningMessages::default();
+                    let mut replacements = OpeningMessages {
+                        replayed_users: (purpose == OpenPurpose::RetryPrompt)
+                            .then(ReplayedUsers::default),
+                        ..Default::default()
+                    };
                     match self
                         .request(
                             method,
@@ -859,6 +973,14 @@ impl AcpClient {
                         .await
                     {
                         Ok(response) => {
+                            if let Some(replay) = &mut replacements.replayed_users
+                                && !replay.complete
+                            {
+                                tracing::debug!(
+                                    "ACP v2 resume succeeded without a replay_complete update"
+                                );
+                                replay.complete = true;
+                            }
                             return Ok(opened(
                                 previous.to_owned(),
                                 true,
@@ -890,7 +1012,13 @@ impl AcpClient {
                     return Err(AppError::ExternalAgentResumeUnavailable);
                 }
             }
-            if require_existing {
+            if self.previous_antigravity_history {
+                return Err(AppError::ExternalAgentResumeUnavailable);
+            }
+            if purpose == OpenPurpose::RetryPrompt {
+                return Err(AppError::ExternalAgentPromptUncertain);
+            }
+            if purpose == OpenPurpose::Compact {
                 return Err(AppError::Config(
                     "Antigravity could not resume the existing conversation to compact.".into(),
                 ));
@@ -929,17 +1057,7 @@ impl AcpClient {
             session.missing_previous = missing_previous;
             Ok(session)
         };
-        let result = tokio::time::timeout(STARTUP_TIMEOUT, setup).await;
-        if result.is_err() {
-            self.abandon_request().await;
-        }
-        result.map_err(|_| {
-            if previous.is_some() {
-                AppError::ExternalAgentResumeUnavailable
-            } else {
-                AppError::Config("The external agent timed out while opening a conversation. Check its installation and sign-in.".into())
-            }
-        })?
+        setup.await
     }
 
     pub(super) async fn set_option(
@@ -993,21 +1111,13 @@ impl AcpClient {
             .resumed
             .then_some((session.id.as_str(), &mut session.replacements));
         let response = self
-            .request_for(
-                STARTUP_TIMEOUT,
+            .request(
                 method,
                 params,
                 SessionUpdates::Opening(&mut states, replacements),
                 cancel,
             )
-            .await
-            .map_err(|_| {
-                AppError::Config(format!(
-                    "{} timed out while changing the {}.",
-                    self.agent.label(),
-                    kind.label()
-                ))
-            })??;
+            .await?;
         let opening = states.remove(&session.id).unwrap_or_default();
         session.state = opening.state;
         session.activity = opening.activity;
@@ -1067,9 +1177,10 @@ impl AcpClient {
         session: &str,
         prompt: Vec<Value>,
         activity: ActivitySnapshot,
+        replayed_users: Option<ReplayedUsers>,
         turn: &Arc<ExternalTurn>,
     ) -> Result<PromptResult, AppError> {
-        if self.previous_antigravity_history {
+        if self.history_read_only() {
             return Err(AppError::Internal(
                 "Cannot prompt an Antigravity history connection.".into(),
             ));
@@ -1080,11 +1191,7 @@ impl AcpClient {
         let mut params = json!({"sessionId": session});
         params["prompt"] = Value::Array(prompt);
         if self.uses_v2() {
-            params["idempotencyKey"] = json!(format!(
-                "{}:{}",
-                turn.control.execution,
-                turn.control.generation.get(),
-            ));
+            params["idempotencyKey"] = json!(turn.control.execution.to_string());
         }
         let steering_method = if self.uses_v2() || self.agent == ExternalAgent::Antigravity {
             Some("session/prompt")
@@ -1108,6 +1215,7 @@ impl AcpClient {
             previous_tail,
             self.capabilities.is_some_and(|caps| caps.air_rewind),
         );
+        lifecycle.replayed_users = replayed_users;
         let result = self
             .request(
                 "session/prompt",
@@ -1159,25 +1267,57 @@ impl AcpClient {
         updates: SessionUpdates<'_>,
         cancel: &CancellationToken,
     ) -> Result<Value, AppError> {
+        self.request_with_timeout(None, method, params, updates, cancel)
+            .await
+            .expect("unbounded ACP request cannot time out")
+    }
+
+    async fn request_with_timeout(
+        &mut self,
+        duration: Option<Duration>,
+        method: &str,
+        params: Value,
+        updates: SessionUpdates<'_>,
+        cancel: &CancellationToken,
+    ) -> Result<Result<Value, AppError>, tokio::time::error::Elapsed> {
         let session = match &updates {
             SessionUpdates::Turn { session, .. } => Some(*session),
             _ => None,
         };
         let mut steering_requests = HashMap::new();
-        let result = self
-            .request_loop(method, params, updates, cancel, &mut steering_requests)
-            .await;
-        if result.is_err()
-            && cancel.is_cancelled()
-            && let Some(session) = session
-            && let Some(request) = self.active_request.take()
-        {
-            self.cancel_foreground(session, request, steering_requests.into_keys())
-                .await;
-        } else if result.is_err() {
-            self.abandon_request().await;
-        } else {
+        let mut replies = std::mem::take(&mut self.opening_replies);
+        let exchange = self.request_loop(
+            method,
+            params,
+            updates,
+            cancel,
+            &mut steering_requests,
+            &mut replies,
+        );
+        let result = match duration {
+            Some(duration) => tokio::time::timeout(duration, exchange).await,
+            None => Ok(exchange.await),
+        };
+        if matches!(&result, Ok(Ok(_))) {
             self.active_request = None;
+            self.opening_replies = replies;
+        } else {
+            if (cancel.is_cancelled()
+                || matches!(
+                    &result,
+                    Ok(Err(AppError::ExternalAgentPromptInactive { .. }))
+                ))
+                && let Some(session) = session
+                && let Some(request) = self.active_request.take()
+            {
+                self.cancel_foreground(session, request, steering_requests.into_keys())
+                    .await;
+            } else {
+                self.abandon_request().await;
+            }
+            // Client tools and passive inputs settle their local state after
+            // withdrawal, even when there is no longer a peer to answer.
+            while replies.join_next().await.is_some() {}
         }
         result
     }
@@ -1190,12 +1330,8 @@ impl AcpClient {
         updates: SessionUpdates<'_>,
         cancel: &CancellationToken,
     ) -> Result<Result<Value, AppError>, tokio::time::error::Elapsed> {
-        let result =
-            tokio::time::timeout(duration, self.request(method, params, updates, cancel)).await;
-        if result.is_err() {
-            self.abandon_request().await;
-        }
-        result
+        self.request_with_timeout(Some(duration), method, params, updates, cancel)
+            .await
     }
 
     async fn request_loop(
@@ -1205,6 +1341,7 @@ impl AcpClient {
         mut updates: SessionUpdates<'_>,
         cancel: &CancellationToken,
         steering_requests: &mut HashMap<u64, steering::Request>,
+        replies: &mut PeerReplies,
     ) -> Result<Value, AppError> {
         if self.air_index && !index::allowed_request(method) {
             return Err(AppError::Internal(
@@ -1217,19 +1354,20 @@ impl AcpClient {
             SessionUpdates::RequestInput(host) => Some(*host),
             _ => None,
         };
-        let opening = if matches!(&updates, SessionUpdates::Opening(..)) {
+        let startup = matches!(&updates, SessionUpdates::Opening(..));
+        let opening_target = params["sessionId"].as_str().map(str::to_owned);
+        let opening = if startup {
             self.opening_turn.upgrade()
         } else {
             None
         };
-        let opening_session = opening
-            .as_ref()
-            .and_then(|_| params["sessionId"].as_str().map(str::to_owned));
+        let opening_session = opening.as_ref().and(opening_target.as_deref());
+        let opening_scope = opening.as_ref().zip(opening_session);
         if method == "session/resume"
             && self.uses_v2()
             && let Some(work) = &self.native_work
         {
-            work.set_root(opening_session.as_deref());
+            work.set_root(opening_session);
         }
         let (turn, mut steering, mut prompt) = match &mut updates {
             SessionUpdates::Turn {
@@ -1241,6 +1379,7 @@ impl AcpClient {
             _ => (None, None, None),
         };
         let v2 = self.uses_v2();
+        let retain_opening_requests = v2 && opening_scope.is_some();
         let mut v1_result = None;
         {
             let mut request = json!({"jsonrpc":"2.0", "id":id, "method":method});
@@ -1251,32 +1390,46 @@ impl AcpClient {
                 awaiting_reply: true,
             });
         }
+        let mut inactivity = if turn.is_some() {
+            Some(PromptIdle::after_send(self.mcp_activity.clone()))
+        } else if startup {
+            Some(PromptIdle::new(STARTUP_TIMEOUT, self.mcp_activity.clone()))
+        } else {
+            None
+        };
         // Requests and updates share the transcript mutex. Let request tasks
         // make progress while the stream loop records updates.
-        let mut replies = JoinSet::new();
         loop {
+            let steering_pending = !steering_requests.is_empty();
             if v2
                 && let Some(result) = prompt
                     .as_mut()
-                    .and_then(|prompt| prompt.take_result(!steering_requests.is_empty()))
+                    .and_then(|prompt| prompt.take_result(steering_pending))
             {
-                self.finish_interactions(&mut replies, cancel).await?;
+                self.finish_interactions(replies, cancel).await?;
                 return Ok(result);
             }
             if v1_result.is_some()
-                && steering_requests.is_empty()
+                && !steering_pending
                 && let Some((turn, _)) = turn
                 && !turn.has_native_background().await
             {
-                self.finish_interactions(&mut replies, cancel).await?;
+                self.finish_interactions(replies, cancel).await?;
                 return Ok(v1_result.take().expect("checked completed v1 result"));
             }
+            let completion_deadline = v2
+                .then(|| prompt.as_ref()?.completion_deadline(steering_pending))
+                .flatten();
+            // A silent background terminal can remain live after the Agent
+            // completes its prompt. Inactivity applies to pending input and
+            // foreground work, not to a reported independent task.
+            let background_only = !steering_pending
+                && (v1_result.is_some()
+                    || (v2 && prompt.as_ref().is_some_and(|p| p.waiting_for_background())));
+            let authorizing_until = self.url_elicitations.values().copied().max();
             let line = tokio::select! {
                 biased;
-                _ = cancel.cancelled() => {
-                    replies.shutdown().await;
-                    return Err(AppError::Cancelled);
-                }
+                _ = cancel.cancelled() => return Err(AppError::Cancelled),
                 id = abandoned_steering(steering_requests), if !steering_requests.is_empty() => {
                     steering_requests.remove(&id);
                     self.abandon_rpc(id).await;
@@ -1284,6 +1437,9 @@ impl AcpClient {
                 }
                 Some(reply) = replies.join_next(), if !replies.is_empty() => {
                     self.reply_to_interaction(reply, cancel).await?;
+                    if let Some(inactivity) = &mut inactivity {
+                        inactivity.record();
+                    }
                     if let Some((turn, _)) = turn
                         && self.pending.is_empty()
                     {
@@ -1325,18 +1481,35 @@ impl AcpClient {
                     self.handle_work_event(event, cancel).await;
                     continue;
                 }
+                _ = async {
+                    inactivity.as_mut().expect("enabled for a session operation").expired(authorizing_until).await;
+                }, if inactivity.is_some() && !background_only && self.pending.is_empty() => {
+                    if startup {
+                        return Err(AppError::Config(format!(
+                            "{} timed out during {method}.",
+                            self.agent.label(),
+                        )));
+                    }
+                    return Err(inactivity.as_ref().expect("enabled for a prompt").error(self.agent.label()));
+                }
                 line = self.output.next() => line,
+                _ = async { tokio::time::sleep_until(completion_deadline.expect("completion is pending")).await }, if completion_deadline.is_some() => {
+                    continue;
+                }
             };
-            let line = line.ok_or_else(|| {
-                let hint = if self.isolation.is_some() {
-                    "Check the Linux MXC prerequisites, ACP sandbox policy, and agent installation."
-                } else {
-                    "Check the official agent's sign-in and version."
-                };
-                AppError::Config(format!(
-                    "{} closed its ACP connection during {method}. {hint}", self.agent.label()
-                ))
-            })?.map_err(|error| AppError::Internal(format!("invalid ACP frame: {error}")))?;
+            let line = line
+                .ok_or_else(|| {
+                    let hint = if self.isolation.is_some() {
+                        "Check the MXC prerequisites, ACP sandbox policy, and agent installation."
+                    } else {
+                        "Check the official agent's sign-in and version."
+                    };
+                    AppError::Config(format!(
+                        "{} closed its ACP connection during {method}. {hint}",
+                        self.agent.label()
+                    ))
+                })?
+                .map_err(|error| AppError::Internal(format!("invalid ACP frame: {error}")))?;
             if line.trim().is_empty() {
                 continue;
             }
@@ -1366,8 +1539,14 @@ impl AcpClient {
                         continue;
                     }
                     if peer_method == "mcp/message" {
-                        self.receive_mcp(peer_id, params, turn, &mut replies, cancel)
-                            .await?;
+                        self.receive_mcp(
+                            peer_id,
+                            params,
+                            turn.or(opening_scope.filter(|_| v2)),
+                            replies,
+                            cancel,
+                        )
+                        .await?;
                         continue;
                     }
                     let kind = match peer_method {
@@ -1397,13 +1576,7 @@ impl AcpClient {
                         let input =
                             input_requests::NativeInput::elicitation(params, self.agent.label());
                         self.begin_passive_input(
-                            peer_id,
-                            kind,
-                            params,
-                            input,
-                            host,
-                            &mut replies,
-                            cancel,
+                            peer_id, kind, params, input, host, replies, cancel,
                         )
                         .await?;
                         continue;
@@ -1425,8 +1598,9 @@ impl AcpClient {
                             Some(turn)
                         }
                         (None, Some(session))
-                            if kind == InteractionKind::Form
-                                && opening_session.as_deref() == Some(session) =>
+                            if opening_session == Some(session)
+                                && (kind == InteractionKind::Form
+                                    || (v2 && kind == InteractionKind::Permission)) =>
                         {
                             opening.as_ref()
                         }
@@ -1456,7 +1630,11 @@ impl AcpClient {
                             continue;
                         }
                     };
-                    let withdrawal = CancellationToken::new();
+                    let withdrawal = if matches!(kind, InteractionKind::ClientTool(_)) {
+                        turn.control.cancel.child_token()
+                    } else {
+                        CancellationToken::new()
+                    };
                     self.pending.insert(
                         peer_id.clone(),
                         PendingInteraction {
@@ -1485,10 +1663,13 @@ impl AcpClient {
                     }
                 } else if peer_method == "elicitation/complete" {
                     if let Some(id) = elicitation_id(params)
-                        && self.url_elicitations.remove(id)
+                        && self.url_elicitations.remove(id).is_some()
                         && let Some(turn) = turn.map(|(turn, _)| turn).or(opening.as_ref())
                     {
                         turn.complete_url_elicitation().await?;
+                        if let Some(inactivity) = &mut inactivity {
+                            inactivity.record();
+                        }
                     }
                 } else if peer_method == "auth/status_update" {
                     self.observe_auth_status(params);
@@ -1506,6 +1687,12 @@ impl AcpClient {
                             session: root,
                             ..
                         } => {
+                            if let Some(inactivity) = &mut inactivity
+                                && (session == *root
+                                    || turn.accepts_native_session(root, session).await)
+                            {
+                                inactivity.observe_update(session == *root, &update);
+                            }
                             if session == *root
                                 && let Some(lifecycle) = &mut prompt
                             {
@@ -1534,6 +1721,11 @@ impl AcpClient {
                             replay.update(expected, session, &update, v2)?;
                         }
                         SessionUpdates::Opening(states, messages) => {
+                            if opening_target.as_deref() == Some(session)
+                                && let Some(inactivity) = &mut inactivity
+                            {
+                                inactivity.observe_update(true, &update);
+                            }
                             if let Some(state) = states.get_mut(session) {
                                 state.observe(session, session, &update);
                             } else if let Some((root, state)) =
@@ -1561,10 +1753,16 @@ impl AcpClient {
                 continue;
             }
             if self.complete_native_cancellation(&message) {
+                if let Some(inactivity) = &mut inactivity {
+                    inactivity.record();
+                }
                 continue;
             }
             let response_id = message.get("id").and_then(Value::as_u64);
             if let Some(request) = response_id.and_then(|id| steering_requests.remove(&id)) {
+                if let Some(inactivity) = &mut inactivity {
+                    inactivity.record();
+                }
                 let Some((turn, _)) = turn else {
                     unreachable!("steering reply without prompt")
                 };
@@ -1572,7 +1770,11 @@ impl AcpClient {
                     Err(self.peer_error("steering", error))
                 } else if message["result"]["outcome"] == "promptRequired" {
                     Err(AppError::Config("The external turn ended before it could accept the additional instruction.".into()))
-                } else if message.get("result").is_some() {
+                } else if message.get("result").is_some()
+                    && (!v2
+                        || bounded_string(&message["result"]["messageId"], MAX_CURSOR_BYTES)
+                            .is_some())
+                {
                     turn.record_steer(&request).await
                 } else {
                     Err(AppError::Internal(
@@ -1594,8 +1796,31 @@ impl AcpClient {
                 .as_mut()
                 .expect("current ACP request")
                 .awaiting_reply = false;
+            if let Some(inactivity) = &mut inactivity {
+                inactivity.record();
+            }
             if let Some(error) = message.get("error") {
-                self.finish_interactions(&mut replies, cancel).await?;
+                self.finish_interactions(replies, cancel).await?;
+                if let Some((turn, _)) = turn
+                    && method == "session/prompt"
+                    && (v2
+                        || matches!(
+                            error["code"].as_i64(),
+                            Some(-32600 | -32601 | -32602 | -32000)
+                        ))
+                    && !prompt
+                        .as_ref()
+                        .is_some_and(|prompt| prompt.replayed_users.is_some())
+                    && self
+                        .mcp_activity
+                        .as_ref()
+                        .is_none_or(mcp::ToolProgress::revoke_if_idle)
+                {
+                    // This reply establishes rejection before insertion. Stop
+                    // admitting tools before the kernel checks for effects.
+                    turn.record_prompt_delivery(super::ExternalAgentPromptDelivery::Unsent)
+                        .await?;
+                }
                 if matches!(method, "session/resume" | "session/load")
                     && let SessionUpdates::Opening(_, Some((session, captured))) = &mut updates
                 {
@@ -1622,14 +1847,30 @@ impl AcpClient {
                 AppError::Internal("external agent returned an invalid ACP response".into())
             })?;
             if v2 && let Some(prompt) = &mut prompt {
-                prompt.acknowledge(&result);
+                let (turn, _) = turn.expect("ACP prompt has a turn");
+                turn.record_prompt_delivery(super::ExternalAgentPromptDelivery::Accepted)
+                    .await?;
+                let message_id = bounded_string(&result["messageId"], MAX_CURSOR_BYTES)
+                    .ok_or_else(|| AppError::Config(
+                        "The external agent accepted the prompt without a valid ACP message ID.".into(),
+                    ))?;
+                if prompt
+                    .replayed_users
+                    .as_ref()
+                    .is_some_and(|users| users.contains(&message_id))
+                {
+                    return Err(AppError::ExternalAgentPromptAlreadyAccepted);
+                }
+                prompt.acknowledge(message_id);
                 continue;
             }
             if turn.is_some() && method == "session/prompt" {
                 v1_result = Some(result);
                 continue;
             }
-            self.finish_interactions(&mut replies, cancel).await?;
+            if !retain_opening_requests {
+                self.finish_interactions(replies, cancel).await?;
+            }
             if v2 {
                 protocol::normalize_config_options(&mut result);
             }
@@ -1644,7 +1885,7 @@ impl AcpClient {
         }
         let id =
             elicitation_id(params).ok_or(Reply::Error(-32602, "Invalid ACP elicitation ID"))?;
-        if self.url_elicitations.contains(id)
+        if self.url_elicitations.contains_key(id)
             || self
                 .pending
                 .values()
@@ -1867,9 +2108,7 @@ impl AcpClient {
         replies: &mut PeerReplies,
         cancel: &CancellationToken,
     ) -> Result<(), AppError> {
-        for pending in self.pending.values() {
-            pending.withdrawal.cancel();
-        }
+        self.withdraw_interactions();
         while let Some(reply) = replies.join_next().await {
             self.reply_to_interaction(reply, cancel).await?;
         }
@@ -1899,6 +2138,7 @@ impl AcpClient {
         if active.is_none() && self.pending.is_empty() {
             return;
         }
+        self.withdraw_interactions();
         let cancel = CancellationToken::new();
         let cleanup = async {
             if let Some(request) = active.filter(|request| request.awaiting_reply) {
@@ -1907,12 +2147,19 @@ impl AcpClient {
             self.cancel_peer_requests(&cancel).await
         };
         let _ = tokio::time::timeout(CANCELLATION_GRACE, cleanup).await;
+        self.pending.clear();
+    }
+
+    fn withdraw_interactions(&self) {
+        for pending in self.pending.values() {
+            pending.withdrawal.cancel();
+        }
     }
 
     async fn cancel_peer_requests(&mut self, cancel: &CancellationToken) -> Result<(), AppError> {
+        self.withdraw_interactions();
         let pending = std::mem::take(&mut self.pending);
         for (id, request) in pending {
-            request.withdrawal.cancel();
             self.write(&request.kind.cancelled().message(&id), cancel)
                 .await?;
         }
@@ -2000,8 +2247,7 @@ impl AcpClient {
             Ok::<(), AppError>(())
         };
         let _ = tokio::time::timeout(CANCELLATION_GRACE, stop).await;
-        // The kernel has already cancelled this attempt. No callback from the
-        // stopped transport can publish a later reply into that attempt.
+        self.withdraw_interactions();
         self.pending.clear();
     }
 
@@ -2072,10 +2318,10 @@ impl AcpClient {
         let method = method.to_owned();
         let args = params["params"].clone();
         replies.spawn(async move {
-            let reply = tokio::select! {
-                biased;
-                _ = withdrawal.cancelled() => InteractionKind::Mcp.cancelled(),
-                result = endpoint.respond(&method, args) => Reply::Result(result),
+            let reply = match endpoint.respond(&method, args, withdrawal).await {
+                Ok(result) => Reply::Result(result),
+                Err(AppError::Cancelled) => InteractionKind::Mcp.cancelled(),
+                Err(error) => return Err(error),
             };
             Ok((id, reply))
         });
@@ -2091,7 +2337,13 @@ impl AcpClient {
             AppError::Internal(format!("ACP interaction task stopped: {error}"))
         })??;
         let pending = &self.pending[&id];
-        let reply = if pending.withdrawal.is_cancelled() {
+        // A tool can commit before the withdrawal reaches its executor.
+        // Return the actual outcome instead of implying it did not execute.
+        let reply = if pending.withdrawal.is_cancelled()
+            && matches!(
+                pending.kind,
+                InteractionKind::Permission | InteractionKind::Form
+            ) {
             pending.kind.cancelled()
         } else {
             reply
@@ -2104,7 +2356,8 @@ impl AcpClient {
             .and_then(|pending| pending.url_elicitation)
             && accepted
         {
-            self.url_elicitations.insert(url_id);
+            self.url_elicitations
+                .insert(url_id, Instant::now() + input_requests::INPUT_TIMEOUT);
         }
         Ok(())
     }
@@ -2122,11 +2375,16 @@ impl AcpClient {
                 "The external agent request exceeds its size limit.".into(),
             ));
         }
+        let deadline = tokio::time::sleep(STARTUP_TIMEOUT);
+        tokio::pin!(deadline);
         let mut written = 0;
         while written < frame.len() {
             let bytes = tokio::select! {
                 biased;
                 _ = cancel.cancelled() => return Err(AppError::Cancelled),
+                _ = &mut deadline => return Err(AppError::Config(format!(
+                    "{} did not read an ACP message in time.", self.agent.label()
+                ))),
                 result = self.input.write(&frame[written..]) => result.map_err(|error|
                     AppError::Internal(format!("could not write the ACP connection: {error}")))?,
             };
@@ -2150,16 +2408,15 @@ impl AcpClient {
         cancel: &CancellationToken,
     ) -> Result<(), AppError> {
         self.mcp = None;
+        self.mcp_activity = None;
         let mut replies = JoinSet::new();
         let result = self
             .read_idle(kernel, resume, state, host, &mut replies, cancel)
             .await;
         self.native_work = None;
         self.live_auth = None;
-        for pending in self.pending.values() {
-            pending.withdrawal.cancel();
-        }
-        replies.shutdown().await;
+        self.withdraw_interactions();
+        while replies.join_next().await.is_some() {}
         result
     }
 
@@ -2290,7 +2547,7 @@ impl AcpClient {
                 }
                 "elicitation/complete"
                     if elicitation_id(params)
-                        .is_some_and(|id| self.url_elicitations.remove(id)) =>
+                        .is_some_and(|id| self.url_elicitations.remove(id).is_some()) =>
                 {
                     super::state::apply_update(
                         &mut state,
@@ -2395,6 +2652,7 @@ impl AcpClient {
             &self.cwd,
             &self.additional_directories,
             native_id,
+            self.previous_antigravity_history,
             self.isolation.is_some(),
             cancel,
         )
@@ -2405,6 +2663,7 @@ impl AcpClient {
         self.native_work = None;
         self.live_auth = None;
         self.abandon_request().await;
+        while self.opening_replies.join_next().await.is_some() {}
         drop(self.input);
         if tokio::time::timeout(Duration::from_millis(300), self.child.wait())
             .await

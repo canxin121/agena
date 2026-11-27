@@ -27,6 +27,9 @@ pub struct SessionConfiguration {
     pub external_agent_resume: Option<ExternalAgentResume>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub external_agent_link: Option<ExternalAgentLink>,
+    /// Continuation and delivery state for the last attached, unsettled ACP turn.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub external_agent_pending_turn: Option<ExternalAgentPendingTurn>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub external_agent_directories: Vec<PathBuf>,
     #[serde(skip_serializing_if = "ExternalAgentState::is_empty")]
@@ -79,6 +82,24 @@ pub struct ExternalAgentResume {
     pub incarnation: Option<RoundId>,
     pub input: [u8; 32],
     pub message: EntryId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalAgentPendingTurn {
+    pub message: EntryId,
+    pub round: RoundId,
+    pub input: [u8; 32],
+    pub delivery: ExternalAgentPromptDelivery,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum ExternalAgentPromptDelivery {
+    Unsent,
+    Unconfirmed,
+    Keyed { prompt: [u8; 32] },
+    Accepted,
 }
 
 pub const MAX_EXTERNAL_AGENT_INPUTS: usize = 8;
@@ -281,6 +302,8 @@ pub struct ExternalAgentRewind {
 #[serde(default, deny_unknown_fields)]
 pub struct ExternalAgentState {
     #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub antigravity_legacy_history: bool,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub history_read_only: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cursor_tail: Option<ExternalAgentCursorEntity>,
@@ -361,6 +384,7 @@ impl ExternalAgentState {
                 snapshot.options.truncate(snapshot.options.len() / 2);
             } else {
                 return Self {
+                    antigravity_legacy_history: snapshot.antigravity_legacy_history,
                     history_read_only: snapshot.history_read_only,
                     ..Self::default()
                 };
@@ -370,7 +394,8 @@ impl ExternalAgentState {
     }
 
     pub fn is_empty(&self) -> bool {
-        !self.history_read_only
+        !self.antigravity_legacy_history
+            && !self.history_read_only
             && self.cursor_tail.is_none()
             && self.plans.is_empty()
             && self.options.is_empty()

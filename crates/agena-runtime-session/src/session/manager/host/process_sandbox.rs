@@ -90,13 +90,13 @@ impl SessionManager {
         }
 
         let live = if call >= 0 {
-            Some(self.live_tool(session, call)?)
+            Some(self.live_tool_scope(session, call)?)
         } else {
             None
         };
         let key = session_id(session)?;
         let state = match live.as_ref() {
-            Some((_, control)) => control.state.clone(),
+            Some(live) => live.control.state.clone(),
             None => self.state_for_session(key).await?,
         };
         let admission = HOST_POLICY_READS
@@ -106,7 +106,7 @@ impl SessionManager {
         let context = self.execution_context_value(key).await?;
         let cancel = live
             .as_ref()
-            .map(|(_, control)| control.cancel.clone())
+            .map(|live| live.cancel.clone())
             .unwrap_or_else(|| self.shutdown.child_token());
         let executor = state
             .executor
@@ -123,8 +123,8 @@ impl SessionManager {
             .process_sandbox_permission_checks_async(&resources)
             .await
             .map_err(tool_error)?;
-        if let Some((tool, control)) = live.as_ref() {
-            self.authorize_checks(tool, checks, &executor, control, &state)
+        if let Some(live) = live.as_ref() {
+            self.authorize_checks(&live.tool, checks, &executor, &live.control, &state)
                 .await
                 .map_err(tool_error)?;
         } else {

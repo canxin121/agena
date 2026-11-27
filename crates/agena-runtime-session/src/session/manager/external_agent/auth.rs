@@ -72,9 +72,12 @@ impl SessionManager {
     ) -> Result<ExternalAgentAuth, AppError> {
         let session = session_id(id)?;
         self.require_writable_bot_history(id).await?;
-        let agent = self
-            .external_agent(session)
-            .await?
+        let configuration = read_with_busy_retry(session, "external_agent_auth", || {
+            self.kernel().reader.configuration(session)
+        })
+        .await?;
+        let agent = configuration
+            .external_agent
             .ok_or_else(|| AppError::Config("This session has no external agent.".into()))?;
         let _permit = self.reserve_execution()?;
         let state = self.state_for_session(session).await?;
@@ -88,7 +91,14 @@ impl SessionManager {
                 "External agent sign-in requires a project workspace.".into(),
             ));
         }
-        let mut client = acp::AcpClient::spawn(agent, cwd)?;
+        let mut client = acp::AcpClient::spawn_profile(
+            agent,
+            cwd,
+            configuration
+                .external_agent_state
+                .antigravity_legacy_history,
+            &[],
+        )?;
         let terminal = matches!(action, ExternalAgentAuthAction::Inspect { terminal: true });
         // Claude advertises its native methods when the client can reproduce
         // the invocation in a terminal. Web only receives methods it can run.

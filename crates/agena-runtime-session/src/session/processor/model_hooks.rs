@@ -261,6 +261,34 @@ impl SessionProcessor {
         })
     }
 
+    pub(crate) async fn transform_model_system(
+        &self,
+        session_id: i64,
+        system: &mut String,
+        fragments: &[ResolvedFragment],
+    ) -> Result<(), AppError> {
+        if !self
+            .plugins
+            .has_subscription(HookSubscription::CHAT_SYSTEM_TRANSFORM)
+        {
+            return Ok(());
+        }
+        let updated = self
+            .plugins
+            .dispatch_chat_system_transform(ChatSystemTransformInput {
+                session_id,
+                current_system: system.clone(),
+            })
+            .await
+            .map_err(|error| invalid_projection(error.diagnostic_message()))?;
+        *system = updated.current_system;
+        retain_builtin_prompts(system, fragments);
+        if system.len() > MAX_HOOK_PROJECTION_BYTES {
+            return Err(invalid_projection("system prompt exceeds hook byte budget"));
+        }
+        Ok(())
+    }
+
     /// Transform a request projection before token budgeting and provider I/O.
     /// All returned content is validated, bounded, and never persisted back into
     /// the authoritative session history.
@@ -272,33 +300,14 @@ impl SessionProcessor {
         fragments: &[ResolvedFragment],
         turns: &mut Vec<CompletionInputRun>,
     ) -> Result<(), AppError> {
-        let system_hook = self
-            .plugins
-            .has_subscription(HookSubscription::CHAT_SYSTEM_TRANSFORM);
         let message_hook = self
             .plugins
             .has_subscription(HookSubscription::CHAT_MESSAGE);
         let messages_hook = self
             .plugins
             .has_subscription(HookSubscription::CHAT_MESSAGES_TRANSFORM);
-        if !system_hook && !message_hook && !messages_hook {
-            return Ok(());
-        }
-        if system_hook {
-            let updated = self
-                .plugins
-                .dispatch_chat_system_transform(ChatSystemTransformInput {
-                    session_id,
-                    current_system: system.clone(),
-                })
-                .await
-                .map_err(|error| invalid_projection(error.diagnostic_message()))?;
-            *system = updated.current_system;
-            retain_builtin_prompts(system, fragments);
-            if system.len() > MAX_HOOK_PROJECTION_BYTES {
-                return Err(invalid_projection("system prompt exceeds hook byte budget"));
-            }
-        }
+        self.transform_model_system(session_id, system, fragments)
+            .await?;
         if !message_hook && !messages_hook {
             return Ok(());
         }

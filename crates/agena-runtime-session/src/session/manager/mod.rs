@@ -94,6 +94,7 @@ type ToolPermitSlot = Arc<tokio::sync::Mutex<Option<OwnedSemaphorePermit>>>;
 struct LiveTool {
     tool: ToolHandle,
     control: Arc<RunControl>,
+    cancel: CancellationToken,
     permit: ToolPermitSlot,
     /// One tool owns one interaction slot. Concurrent plugin callbacks must
     /// serialize approval and may reuse a grant only within this live call.

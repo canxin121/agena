@@ -13,12 +13,18 @@ use tokio_util::{
     sync::CancellationToken,
 };
 
-use super::{AppError, MAX_FRAME_BYTES, agent_environment, isolation, policy};
+#[cfg(unix)]
+use std::os::unix::fs::symlink as link_directory;
+#[cfg(windows)]
+use std::os::windows::fs::symlink_dir as link_directory;
+
+use super::{AppError, MAX_FRAME_BYTES, PromptIdle, agent_environment, isolation, policy};
 
 pub(super) async fn compact(
     cwd: &Path,
     additional_directories: &[PathBuf],
     native_id: &str,
+    previous_history: bool,
     isolated_session: bool,
     cancel: &CancellationToken,
 ) -> Result<u64, AppError> {
@@ -30,14 +36,26 @@ pub(super) async fn compact(
         .prefix("agena-sandbox-antigravity-")
         .tempdir()?;
     let config = command_home.path().join(".gemini");
-    #[cfg(unix)]
-    std::os::unix::fs::symlink(&profile, &config)?;
-    #[cfg(windows)]
-    std::os::windows::fs::symlink_dir(&profile, &config)?;
+    if previous_history {
+        std::fs::create_dir(&config)?;
+        link_directory(profile.join("config"), config.join("config"))?;
+        link_directory(
+            policy::previous_antigravity_store()?,
+            config.join("antigravity-cli"),
+        )?;
+    } else {
+        link_directory(&profile, &config)?;
+    }
 
     let (program, _) = ExternalAgent::Antigravity.command();
     let mut command = Command::new(program);
     agent_environment(&mut command);
+    if !previous_history {
+        command.env(
+            agena_mcp_server::antigravity_guard::MANAGED_PROFILE_ENV,
+            "1",
+        );
+    }
     command
         .args([
             "--agent",
@@ -57,7 +75,7 @@ pub(super) async fn compact(
         ExternalAgent::Antigravity,
         cwd,
         additional_directories,
-        false,
+        previous_history,
         Some(command_home.path()),
     )?;
     if isolated_session && process_isolation.is_none() {
@@ -79,35 +97,52 @@ pub(super) async fn compact(
     let complete = async {
         let mut checkpoint = None;
         let mut succeeded = false;
-        while let Some(line) = output.next().await {
+        let mut progress = PromptIdle::after_send(None);
+        let idle = || {
+            AppError::Config("Antigravity stopped reporting compaction progress. Reopen the native conversation to check its checkpoint.".into())
+        };
+        while let Some(line) = tokio::select! {
+            _ = progress.expired(None) => return Err(idle()),
+            line = output.next() => line,
+        } {
             let line = line.map_err(|_| {
                 AppError::Config("Antigravity returned an invalid compaction stream.".into())
             })?;
             let event: Value = serde_json::from_str(&line)?;
-            match event["event"].as_str() {
+            let advanced = match event["event"].as_str() {
                 Some("init") if event["conversation_id"].as_str() != Some(native_id) => {
                     return Err(AppError::Config(
                         "Antigravity could not resume the conversation for compaction.".into(),
                     ));
                 }
+                Some("init") => true,
                 Some("step_update") => {
                     let step = &event["step_update"];
-                    if step["conversation_id"].as_str() == Some(native_id)
+                    let checkpoint_done = step["conversation_id"].as_str() == Some(native_id)
                         && step["step_type"] == "checkpoint"
-                        && step["state"] == "DONE"
-                    {
+                        && step["state"] == "DONE";
+                    if checkpoint_done {
                         checkpoint = step["step_index"].as_u64();
                     }
+                    step["conversation_id"].as_str() == Some(native_id)
                 }
                 Some("result") => {
                     let result = &event["result"];
                     succeeded = result["conversation_id"].as_str() == Some(native_id)
                         && result["status"] == "SUCCESS";
+                    succeeded
                 }
-                _ => {}
+                _ => false,
+            };
+            if advanced {
+                progress.record();
             }
         }
-        if !child.wait().await?.success() || !succeeded {
+        let status = tokio::select! {
+            _ = progress.expired(None) => return Err(idle()),
+            status = child.wait() => status?,
+        };
+        if !status.success() || !succeeded {
             return Err(AppError::Config(
                 "Antigravity could not compact the native conversation.".into(),
             ));

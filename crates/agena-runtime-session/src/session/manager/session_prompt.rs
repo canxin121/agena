@@ -1067,9 +1067,9 @@ mod tests {
         assert!(text.contains("Selected profile: `main`"));
         assert!(text.contains("`delegate.launch`"));
         assert!(text.contains("configured subagent default `domain-research`"));
-        assert!(
-            text.contains("- `domain-research` — Domain research: Find the relevant domain model")
-        );
+        assert!(text.contains(
+            "- `domain-research` (read-only) — Domain research: Find the relevant domain model"
+        ));
         for name in ["explore", "planner", "worker", "reviewer", "verifier"] {
             assert!(text.contains(&format!("- `{name}`")), "{name}");
         }

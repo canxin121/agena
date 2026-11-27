@@ -621,6 +621,7 @@ pub struct ExternalAgentRoundStart {
     pub round: RoundHandle,
     pub previous: Option<ExternalAgentResume>,
     pub link: Option<ExternalAgentLink>,
+    pub pending: Option<ExternalAgentPendingTurn>,
     pub selection: agena_domain::ExternalAgentSelection,
     pub state: ExternalAgentState,
 }
@@ -1119,6 +1120,7 @@ impl AttemptHandle {
                 round,
                 previous,
                 link,
+                pending,
                 selection,
                 state,
             } => Ok(CommitReceipt {
@@ -1130,6 +1132,7 @@ impl AttemptHandle {
                     },
                     previous,
                     link,
+                    pending,
                     selection,
                     state: *state,
                 },
@@ -1327,6 +1330,7 @@ impl RoundHandle {
         &self,
         request: RequestId,
         link: ExternalAgentLink,
+        pending: ExternalAgentPendingTurn,
     ) -> Result<()> {
         let receipt = self
             .attempt
@@ -1337,6 +1341,7 @@ impl RoundHandle {
                     scope: self.attempt.scope,
                     round: self.id,
                     link,
+                    pending,
                 },
             )
             .await?;
@@ -1344,6 +1349,25 @@ impl RoundHandle {
             Mutation::Round(round) if round == self.id => Ok(()),
             _ => Err(unexpected()),
         }
+    }
+
+    pub async fn record_external_agent_prompt_delivery(
+        &self,
+        request: RequestId,
+        delivery: ExternalAgentPromptDelivery,
+    ) -> Result<()> {
+        self.attempt
+            .inner
+            .command(
+                request,
+                Command::RecordExternalAgentPromptDelivery {
+                    scope: self.attempt.scope,
+                    round: self.id,
+                    delivery,
+                },
+            )
+            .await?;
+        Ok(())
     }
 
     pub async fn record_external_agent_state(

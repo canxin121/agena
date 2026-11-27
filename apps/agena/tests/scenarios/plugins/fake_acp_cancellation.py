@@ -4,6 +4,8 @@
 import json
 from pathlib import Path
 import sys
+from threading import Event, Thread
+from time import sleep
 
 
 SESSION = "cancellation-session"
@@ -51,10 +53,10 @@ def permission(identifier, title):
 
 def begin(prompt):
     response(prompt, messageId="user-message")
+    update(sessionUpdate="terminal_update", terminalId="surviving-terminal", capabilities={"cancel": {}})
     update(sessionUpdate="state_update", state="running", background=[{
         "type": "terminal", "terminalId": "surviving-terminal",
     }])
-    update(sessionUpdate="terminal_update", terminalId="surviving-terminal", capabilities={"cancel": {}})
 
 
 def scoped(prompt):
@@ -90,6 +92,53 @@ def stop_foreground(prompt):
     Path(".acp-foreground-stopped").touch()
 
 
+def finish_silent_background(prompt):
+    begin(prompt)
+    update(sessionUpdate="state_update", state="idle", stopReason="end_turn",
+           background=[{"type": "terminal", "terminalId": "surviving-terminal"}])
+    # A live terminal can stay silent past the foreground inactivity deadline.
+    sleep(2)
+    update(sessionUpdate="terminal_update", terminalId="surviving-terminal", exitStatus={"exitCode": 0})
+    update(sessionUpdate="state_update", state="idle", background=[])
+    sleep(0.05)
+    update(sessionUpdate="state_update", state="running", background=[])
+    update(sessionUpdate="agent_message", messageId="background-followup",
+           content=[{"type": "text", "text": "Background follow-up completed"}])
+    update(sessionUpdate="state_update", state="idle", stopReason="end_turn", background=[])
+
+
+def stall(prompt):
+    if version == 2:
+        response(prompt, messageId="inactive-user-message")
+        update(sessionUpdate="state_update", state="running")
+    else:
+        update(sessionUpdate="agent_message_chunk", content={"type": "text", "text": "Partial response"})
+    stopped = Event()
+
+    def noise():
+        while not stopped.wait(0.15):
+            send(method="session/update", params={"sessionId": "different-session", "update": {
+                "sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "unrelated"},
+            }})
+            update(sessionUpdate="state_update", state="running")
+
+    worker = Thread(target=noise, daemon=True)
+    worker.start()
+    try:
+        frame = receive()
+        assert frame == {
+            "jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": SESSION},
+        }, frame
+    finally:
+        stopped.set()
+        worker.join()
+    Path(".acp-inactive-prompt-stopped").touch()
+    if version == 2:
+        update(sessionUpdate="state_update", state="idle", stopReason="cancelled")
+    else:
+        cancelled(prompt)
+
+
 try:
     while True:
         request = receive()
@@ -121,6 +170,11 @@ try:
             prompt = params["prompt"][0]["text"]
             if prompt == "timeout one native request":
                 scoped(request)
+            elif prompt == "wait for silent background":
+                finish_silent_background(request)
+            elif prompt == "stop sending response updates":
+                stall(request)
+                break
             else:
                 assert prompt == "stop foreground", prompt
                 stop_foreground(request)

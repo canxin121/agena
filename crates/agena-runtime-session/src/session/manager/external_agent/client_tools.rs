@@ -45,9 +45,9 @@ impl Operation {
             return Err(AppError::Cancelled);
         }
         match self {
-            Self::ReadFile => turn.read_native_file(params).await,
-            Self::WriteFile => turn.write_native_file(params).await,
-            Self::CreateTerminal => turn.create_native_terminal(params).await,
+            Self::ReadFile => turn.read_native_file(params, withdrawal).await,
+            Self::WriteFile => turn.write_native_file(params, withdrawal).await,
+            Self::CreateTerminal => turn.create_native_terminal(params, withdrawal).await,
             operation => turn.native_terminal(operation, params, withdrawal).await,
         }
     }
@@ -70,10 +70,11 @@ impl ExternalTurn {
         &self,
         name: &str,
         input: Value,
+        cancel: &CancellationToken,
     ) -> Result<Option<Value>, AppError> {
         let arguments = StructuredObject::try_from(input.clone()).map_err(AppError::Config)?;
         let invocation = ToolInvocation::new(name.to_owned(), arguments);
-        let (_, result) = self.invoke_tool(invocation, input).await?;
+        let (_, result) = self.invoke_tool(invocation, input, cancel).await?;
         if result.phase != ToolPhase::Succeeded {
             return Ok(None);
         }
@@ -103,7 +104,11 @@ impl ExternalTurn {
         Ok(Some(serde_json::from_str(&text)?))
     }
 
-    async fn read_native_file(&self, params: &Value) -> Result<Value, AppError> {
+    async fn read_native_file(
+        &self,
+        params: &Value,
+        cancel: &CancellationToken,
+    ) -> Result<Value, AppError> {
         let path = absolute_path(&params["path"])?;
         let line = optional_usize(params, "line")?.unwrap_or(1);
         let limit = optional_usize(params, "limit")?;
@@ -114,6 +119,7 @@ impl ExternalTurn {
             .invoke_client_tool(
                 "fs.read_many",
                 json!({"paths": [path], "max_total_bytes": FILE_BYTES}),
+                cancel,
             )
             .await?
             .ok_or_else(denied)?;
@@ -137,25 +143,33 @@ impl ExternalTurn {
         Ok(json!({"content": content}))
     }
 
-    async fn write_native_file(&self, params: &Value) -> Result<Value, AppError> {
+    async fn write_native_file(
+        &self,
+        params: &Value,
+        cancel: &CancellationToken,
+    ) -> Result<Value, AppError> {
         let path = absolute_path(&params["path"])?;
         let text = params["content"].as_str().ok_or_else(invalid)?;
         // A revision-checked fs.write can create a missing file without a
         // hash. Replacing a file requires an authorized and observed revision.
         let stat = self
-            .invoke_client_tool("fs.stat", json!({"path": path}))
+            .invoke_client_tool("fs.stat", json!({"path": path}), cancel)
             .await?;
         let input = json!({
             "path": path, "content": text, "create_parents": true,
             "expected_sha256": stat.as_ref().and_then(|stat| stat["sha256"].as_str()),
         });
-        self.invoke_client_tool("fs.write", input)
+        self.invoke_client_tool("fs.write", input, cancel)
             .await?
             .ok_or_else(denied)?;
         Ok(json!({}))
     }
 
-    async fn create_native_terminal(&self, params: &Value) -> Result<Value, AppError> {
+    async fn create_native_terminal(
+        &self,
+        params: &Value,
+        cancel: &CancellationToken,
+    ) -> Result<Value, AppError> {
         let command = terminal_command(params)?;
         let cwd = match params.get("cwd").filter(|value| !value.is_null()) {
             Some(cwd) => absolute_path(cwd)?,
@@ -180,6 +194,7 @@ impl ExternalTurn {
                     "command": command, "shell": shell, "workdir": cwd,
                     "description": "ACP terminal", "yield_time_ms": 0,
                 }),
+                cancel,
             )
             .await?
             .ok_or_else(denied)?;

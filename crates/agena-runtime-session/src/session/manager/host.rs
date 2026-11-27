@@ -40,6 +40,11 @@ impl SessionManager {
         session: i64,
         call: i64,
     ) -> Result<(ToolHandle, Arc<RunControl>), AppError> {
+        let live = self.live_tool_scope(session, call)?;
+        Ok((live.tool, live.control))
+    }
+
+    fn live_tool_scope(&self, session: i64, call: i64) -> Result<LiveTool, AppError> {
         let live = self
             .tools
             .lock()
@@ -49,10 +54,10 @@ impl SessionManager {
             .ok_or_else(|| {
                 AppError::Config("the host callback has no active tool authority".into())
             })?;
-        if live.control.cancel.is_cancelled() {
+        if live.cancel.is_cancelled() {
             return Err(AppError::Cancelled);
         }
-        Ok((live.tool, live.control))
+        Ok(live)
     }
     pub async fn require_host_invocation_permission(
         &self,
@@ -72,14 +77,19 @@ impl SessionManager {
                 .await
                 .map_err(tool_error);
         }
-        let (tool, control) = self.live_tool(session, call)?;
+        let LiveTool {
+            tool,
+            control,
+            cancel,
+            ..
+        } = self.live_tool_scope(session, call)?;
         let state = control.state.clone();
         let context = self.execution_context_value(session_id(session)?).await?;
         let executor = state
             .executor
             .for_session_context_async(&context)
             .await
-            .with_cancellation_token(Some(control.cancel.clone()));
+            .with_cancellation_token(Some(cancel));
         self.authorize_tool(&tool, &invocation, &executor, &control, &state)
             .await
             .map_err(tool_error)
@@ -255,7 +265,12 @@ impl SessionManager {
                 .authorize_session_scoped_checks(session, &executor, vec![check])
                 .await;
         }
-        let (tool, control) = self.live_tool(session, call)?;
+        let LiveTool {
+            tool,
+            control,
+            cancel,
+            ..
+        } = self.live_tool_scope(session, call)?;
         let state = control.state.clone();
         let context = self
             .execution_context_for_execution(session_id(session)?, &state, Some(control.execution))
@@ -263,7 +278,7 @@ impl SessionManager {
         let executor = state
             .executor
             .for_session_resource_context(&context)
-            .with_cancellation_token(Some(control.cancel.clone()));
+            .with_cancellation_token(Some(cancel));
         let executor = self
             .sandbox_executor_for_session(&executor, session)
             .await
@@ -280,7 +295,12 @@ impl SessionManager {
         call: i64,
         input: crate::part::AskUserToolInput,
     ) -> Result<AskUserResponse, AppError> {
-        let (tool, control) = self.live_tool(session, call)?;
+        let LiveTool {
+            tool,
+            control,
+            cancel,
+            ..
+        } = self.live_tool_scope(session, call)?;
         let configuration = self
             .kernel()
             .reader
@@ -305,7 +325,7 @@ impl SessionManager {
             result
         };
         let command = request_key("host-input", &format!("{session}:{call}:{sequence}"));
-        self.request_input_for_tool(&tool, &control, command, input, None)
+        self.request_input_for_tool(&tool, &control, command, input, Some(&cancel))
             .await
     }
 
@@ -450,14 +470,19 @@ impl SessionManager {
                 .await
                 .map_err(tool_error);
         }
-        let (tool, control) = self.live_tool(session, call)?;
+        let LiveTool {
+            tool,
+            control,
+            cancel,
+            ..
+        } = self.live_tool_scope(session, call)?;
         let state = self.state_for_session(session_id(session)?).await?;
         let context = self.execution_context_value(session_id(session)?).await?;
         let executor = state
             .executor
             .for_session_context_async(&context)
             .await
-            .with_cancellation_token(Some(control.cancel.clone()));
+            .with_cancellation_token(Some(cancel));
         let manager = self.clone();
         let authorizer = executor.clone();
         let authority_tool = tool.clone();

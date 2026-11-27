@@ -1,4 +1,5 @@
 use super::{AssistantRuntime, runtime_error};
+use crate::session::{Session, SessionManager};
 use agena_assistant::bot::BotProfile;
 use agena_assistant::*;
 use agena_plugin_sdk::host_api::{CompanionAction, CompanionRequest};
@@ -103,6 +104,13 @@ impl AssistantRuntime {
     async fn assistant_scope(&self, source: i64) -> Result<(Option<i64>, std::path::PathBuf)> {
         let manager = self.manager()?;
         let session = manager.get_session(source).await.map_err(runtime_error)?;
+        Self::assistant_scope_for(&manager, &session).await
+    }
+
+    async fn assistant_scope_for(
+        manager: &SessionManager,
+        session: &Session,
+    ) -> Result<(Option<i64>, std::path::PathBuf)> {
         Ok((
             session.workspace_id,
             if let Some(authority) = &session.execution.channel_authority {
@@ -111,7 +119,7 @@ impl AssistantRuntime {
                 manager.global_memory_root().to_path_buf()
             } else {
                 manager
-                    .session_workspace_root(source)
+                    .session_workspace_root(session.id)
                     .await
                     .map_err(runtime_error)?
             },
@@ -309,11 +317,20 @@ impl AssistantRuntime {
     }
     /// Policy and scope for reminder guidance and memory retrieval.
     pub(crate) async fn companion_context(&self, source: i64) -> Result<Value> {
-        self.source_bot_profile(source).await?;
-        let (workspace, memory_root) = self.assistant_scope(source).await?;
         let manager = self.manager()?;
+        let acp = agena_domain::is_acp_session_id(source);
+        let scope = if acp {
+            manager
+                .acp_scope()
+                .ok_or(Error::Unavailable("ACP session runtime is unavailable"))?
+        } else {
+            self.source_bot_profile(source).await?;
+            manager.clone()
+        };
+        let session = scope.get_session(source).await.map_err(runtime_error)?;
+        let (workspace, memory_root) = Self::assistant_scope_for(&scope, &session).await?;
         let memory_instance_id = manager.memory_instance_id().to_owned();
-        let memory_checkpoint_entry_id = manager
+        let memory_checkpoint_entry_id = scope
             .session_kernel()
             .reader
             .prompt_window_status(
@@ -325,18 +342,14 @@ impl AssistantRuntime {
             .checkpoint_entry_id
             .map(|entry| entry.get());
         let mut profile = self.companion.profile_scoped(workspace).await?;
-        let channel = self
-            .manager()?
-            .get_session(source)
-            .await
-            .map_err(runtime_error)?
-            .execution
-            .channel_authority;
+        let channel = session.execution.channel_authority;
         if channel.as_ref().is_some_and(|a| !a.allows_private_memory()) {
             profile.preferences.memory_enabled = false;
         }
 
-        let enabled = self.require_companion_owner(source).await.is_ok();
+        // ACP supplies workspace memory to the current turn. Reminders and
+        // integration deliveries still require a durable conversation owner.
+        let enabled = !acp && self.require_companion_owner(source).await.is_ok();
         Ok(json!({"enabled":enabled,"profile":profile,
             "memory_workspace_root":memory_root,"memory_global":workspace.is_none(),"memory_instance_id":memory_instance_id,"memory_checkpoint_entry_id":memory_checkpoint_entry_id,"channel_authority":channel,
             "memory_scope":"this private workspace only; never combine direct, group, tenant or user memories",

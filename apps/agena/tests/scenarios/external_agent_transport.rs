@@ -532,6 +532,123 @@ async fn preview_permission_subject_updates_the_existing_tool_before_answer() ->
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v2_resume_serves_bound_mcp_and_keeps_permission_pending_into_the_turn() -> TestResult {
+    let (_bin, builder) = transport_fixture(ExternalAgent::ClaudeCode)?;
+    builder
+        .seed_file("workspace/.acp-resume-callbacks", Vec::new())
+        .run(|case| async move {
+            let user = attach(&case, ExternalAgent::ClaudeCode).await?;
+            user.send("start work to recover")
+                .await?
+                .wait_settled()
+                .await?
+                .assert_assistant_text("Ready to resume")?;
+            let run = user.send("continue recovered work").await?;
+            let pending = run.wait_user_input().await?;
+            pending
+                .answer(BTreeMap::from([("0".into(), vec!["Allow".into()])]))
+                .await?;
+            let result = run.wait_settled().await?;
+            result.assert_succeeded()?;
+            result.assert_assistant_text("Returned from resumed callbacks")?;
+            ensure!(case.model().requests().is_empty());
+            Ok(())
+        })
+        .await
+}
+
+async fn withdraw_tool_requests(agent: ExternalAgent) -> TestResult {
+    let (_bin, builder) = transport_fixture(agent)?;
+    builder
+        .run(move |case| async move {
+            let user = attach(&case, agent).await?;
+            user.client()
+                .set_session_permission(
+                    user.id(),
+                    serde_json::from_value(serde_json::json!({
+                        "tools": {"default": "allow", "names": {"agena.fs.write": "ask"}},
+                        "path": {"workspace": "readwrite"},
+                    }))?,
+                )
+                .await?;
+            let run = user.send("withdraw tool requests").await?;
+            let approval = run.wait_permission().await?;
+            tokio::fs::write(case.workspace().join(".acp-withdraw-permission"), "").await?;
+            let result = run.wait_settled().await?;
+            result.assert_succeeded()?;
+            result.assert_assistant_text("Another tool completed after the withdrawals")?;
+            ensure!(approval.allow_once().await.is_err());
+            for name in if agent == ExternalAgent::ClaudeCode {
+                &["agena.fs.write", "agena.shell.exec"][..]
+            } else {
+                &["fs.write"][..]
+            } {
+                ensure!(
+                    result.parts.iter().any(|part| part.kind == "tool_call"
+                        && part.content["name"] == *name
+                        && part.state == "cancelled"),
+                    "expected {name} to be cancelled: {:?}",
+                    result.parts,
+                );
+            }
+            ensure!(
+                tokio::fs::read_to_string(case.workspace().join("native.txt")).await?
+                    == "native fixture first line\nnative fixture second line\n"
+            );
+            ensure!(!case.workspace().join(".acp-shell-effect").exists());
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v1_withdrawing_a_client_file_request_cancels_its_approval() -> TestResult {
+    withdraw_tool_requests(ExternalAgent::Antigravity).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v2_withdrawing_an_mcp_request_cancels_the_exact_tool() -> TestResult {
+    withdraw_tool_requests(ExternalAgent::ClaudeCode).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn v1_lost_connection_settles_the_pending_client_write() -> TestResult {
+    let agent = ExternalAgent::Antigravity;
+    let (_bin, builder) = transport_fixture(agent)?;
+    builder
+        .run(move |case| async move {
+            let user = attach(&case, agent).await?;
+            user.client()
+                .set_session_permission(
+                    user.id(),
+                    serde_json::from_value(serde_json::json!({
+                        "tools": {"default": "allow", "names": {"agena.fs.write": "ask"}},
+                        "path": {"workspace": "readwrite"},
+                    }))?,
+                )
+                .await?;
+            let run = user.send("disconnect during a client write").await?;
+            let approval = run.wait_permission().await?;
+            tokio::fs::write(case.workspace().join(".acp-disconnect"), "").await?;
+            let result = run.wait_settled().await?;
+            result.assert_failed()?;
+            ensure!(result.parts.iter().any(|part| {
+                part.kind == "tool_call"
+                    && part.content["name"] == "fs.write"
+                    && part.state == "cancelled"
+                    && part.content["error"]["failure"]["code"] == "internal.cancelled_as_failure"
+            }));
+            ensure!(approval.allow_once().await.is_err());
+            ensure!(
+                tokio::fs::read_to_string(case.workspace().join("native.txt")).await?
+                    == "native fixture first line\nnative fixture second line\n"
+            );
+            Ok(())
+        })
+        .await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn v1_peer_uses_policy_scoped_file_and_terminal_callbacks() -> TestResult {
     let (_bin, builder) = transport_fixture(ExternalAgent::Antigravity)?;
     builder

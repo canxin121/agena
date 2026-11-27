@@ -846,14 +846,17 @@ impl SessionManager {
         control: Arc<RunControl>,
         state: Arc<ExecutionState>,
         media_target: super::media::MediaTarget,
+        tool_cancel: Option<CancellationToken>,
     ) -> Result<ToolResult, AppError> {
         let key = (control.session.get(), tool.id().get());
+        let cancel = tool_cancel.unwrap_or_else(|| control.cancel.clone());
         let permit_slot: ToolPermitSlot = Arc::new(tokio::sync::Mutex::new(None));
         self.tools.lock().unwrap_or_else(|p| p.into_inner()).insert(
             key,
             LiveTool {
                 tool: tool.clone(),
                 control: control.clone(),
+                cancel: cancel.clone(),
                 permit: permit_slot.clone(),
                 permissions: Default::default(),
             },
@@ -861,6 +864,7 @@ impl SessionManager {
         let mut applied_invocation = invocation.clone();
         let runtime = tokio::runtime::Handle::current();
         let manager = self.clone();
+        let executor = executor.with_cancellation_token(Some(cancel.clone()));
         let authorizer = executor.clone();
         let authority_tool = tool.clone();
         let authority_control = control.clone();
@@ -888,10 +892,10 @@ impl SessionManager {
             applied_invocation=invocation.clone();
             self.authorize_tool(&tool,&invocation,&executor,&control,&state).await?;
             let executor = self.sandbox_executor_for_session(&executor, key.0).await?;
-            if control.cancel.is_cancelled(){return Err(ToolError::Cancelled);}
+            if cancel.is_cancelled(){return Err(ToolError::Cancelled);}
             let kind=executor.streaming_content_kind(&invocation)?;
             let output=match kind {Some(kind)=>Some(crate::tool::ToolOutputStreams::open(&tool,kind).await.map_err(|e|ToolError::invalid_input(e.to_string()))?),None=>None};
-            let permit=tokio::select!{_ = control.cancel.cancelled()=>return Err(ToolError::Cancelled),permit=state.tools.clone().acquire_owned()=>permit.map_err(|_|ToolError::Cancelled)?};
+            let permit=tokio::select!{_ = cancel.cancelled()=>return Err(ToolError::Cancelled),permit=state.tools.clone().acquire_owned()=>permit.map_err(|_|ToolError::Cancelled)?};
             *permit_slot.lock().await = Some(permit);
             let mut execution=executor.execute_invocation(&invocation,crate::tool::ToolRuntimeContext{
                 session_id:Some(key.0),call_id:Some(key.1),prepared_shell_command:shell,launch_provenance:None,
@@ -904,11 +908,14 @@ impl SessionManager {
         // The effect is now over. Everything below only retries persistence of
         // this exact observed value, never invocation preparation or execution.
         let effect = match effect {
-            Err(ToolError::UserInputRequired(input)) => self
-                .request_host_user_input(key.0, key.1, *input)
-                .await
-                .map(super::host::input_execution)
-                .map_err(|e| ToolError::invalid_input(e.to_string())),
+            Err(ToolError::UserInputRequired(input)) => {
+                match self.request_host_user_input(key.0, key.1, *input).await {
+                    Ok(_) if cancel.is_cancelled() => Err(ToolError::Cancelled),
+                    Ok(response) => Ok(super::host::input_execution(response)),
+                    Err(AppError::Cancelled) => Err(ToolError::Cancelled),
+                    Err(error) => Err(ToolError::invalid_input(error.to_string())),
+                }
+            }
             other => other,
         };
         let (phase, value, blobs) = match effect {
@@ -1018,15 +1025,15 @@ impl SessionManager {
         control: &Arc<RunControl>,
         state: &ExecutionState,
     ) -> Result<(), ToolError> {
-        let permissions = self
+        let (permissions, cancel) = self
             .tools
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .get(&(control.session.get(), tool.id().get()))
-            .map(|live| live.permissions.clone())
+            .map(|live| (live.permissions.clone(), live.cancel.clone()))
             .ok_or(ToolError::Cancelled)?;
         let mut granted = tokio::select! {
-            _ = control.cancel.cancelled() => return Err(ToolError::Cancelled),
+            _ = cancel.cancelled() => return Err(ToolError::Cancelled),
             granted = permissions.lock() => granted,
         };
         // Persisted workspace rules follow the owning session, independently
@@ -1044,7 +1051,7 @@ impl SessionManager {
                 .workspace_id
         };
         for check in checks {
-            if control.cancel.is_cancelled() {
+            if cancel.is_cancelled() {
                 return Err(ToolError::Cancelled);
             }
             let action_key = permission_key(&check.action)
@@ -1083,7 +1090,7 @@ impl SessionManager {
             let automatic = matches!(decision, PermissionDecision::Auto { .. });
             let decision = if matches!(decision, PermissionDecision::Auto { .. }) {
                 match tokio::select! {
-                    _ = control.cancel.cancelled() => return Err(ToolError::Cancelled),
+                    _ = cancel.cancelled() => return Err(ToolError::Cancelled),
                     verdict = self.classify_permission(&check.action, &decision, control.session, state, executor) => verdict,
                 } {
                     Some(true) => PermissionDecision::Allow,
@@ -1157,7 +1164,7 @@ impl SessionManager {
                         PermissionAction::Tool { tool_name, .. } => tool_name.clone(),
                         _ => "resource".to_owned(),
                     };
-                    if let Err(error) = state
+                    let notify_plugin = state
                         .executor
                         .plugin_manager()
                         .dispatch_permission_request(agena_plugin_host::PermissionRequestInput {
@@ -1165,9 +1172,13 @@ impl SessionManager {
                             tool_name,
                             action: action_key.clone(),
                             description: reason.clone(),
-                        })
-                        .await
-                    {
+                        });
+                    let notified = tokio::select! {
+                        biased;
+                        _ = cancel.cancelled() => return Err(ToolError::Cancelled),
+                        result = notify_plugin => result,
+                    };
+                    if let Err(error) = notified {
                         return Err(ToolError::PolicyDenied(Box::new(
                             agena_domain::PolicyDeniedResult {
                                 action: check.action.clone(),
@@ -1196,11 +1207,39 @@ impl SessionManager {
                             .map_err(|e| ToolError::invalid_input(e.to_string()))?
                             .value;
                     control.phase(agena_domain::ExecutionPhase::AwaitingInteraction);
-                    let decision = self
-                        .wait_interaction(control.session, interaction, Some(&control.cancel))
-                        .await
-                        .map_err(|e| ToolError::invalid_input(e.to_string()))?;
+                    let decision = tokio::select! {
+                        biased;
+                        _ = cancel.cancelled() => Err(AppError::Cancelled),
+                        decision = self.wait_interaction(control.session, interaction, None) => decision,
+                    };
                     control.phase(agena_domain::ExecutionPhase::ExecutingTools);
+                    let decision = match decision {
+                        Err(AppError::Cancelled) if !control.cancel.is_cancelled() => {
+                            let command = RequestId::new();
+                            match persist(|| {
+                                self.kernel().sessions.reply(
+                                    command,
+                                    control.session,
+                                    interaction,
+                                    InteractionDecision::Cancel,
+                                    None,
+                                )
+                            })
+                            .await
+                            {
+                                Ok(_) | Err(KernelError::Conflict(_)) => {
+                                    return Err(ToolError::Cancelled);
+                                }
+                                Err(error) => {
+                                    return Err(ToolError::invalid_input(error.to_string()));
+                                }
+                            }
+                        }
+                        Err(AppError::Cancelled) => return Err(ToolError::Cancelled),
+                        Err(error) => return Err(ToolError::invalid_input(error.to_string())),
+                        Ok(_) if cancel.is_cancelled() => return Err(ToolError::Cancelled),
+                        Ok(decision) => decision,
+                    };
                     if !matches!(
                         &decision,
                         InteractionDecision::Permission { allowed: true, .. }

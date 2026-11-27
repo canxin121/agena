@@ -123,6 +123,7 @@ impl Fixture {
                 (self.session.get(), tool.id().get()),
                 LiveTool {
                     tool: tool.clone(),
+                    cancel: control.cancel.clone(),
                     control: control.clone(),
                     permit: Default::default(),
                     permissions: Default::default(),

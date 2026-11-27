@@ -71,23 +71,23 @@ impl SessionManager {
         if let Some(session) = session {
             let key = session_id(session)?;
             let live = match call {
-                Some(call) if call >= 0 => Some(self.live_tool(session, call)?),
+                Some(call) if call >= 0 => Some(self.live_tool_scope(session, call)?),
                 _ => None,
             };
             let state = match live.as_ref() {
-                Some((_, control)) => control.state.clone(),
+                Some(live) => live.control.state.clone(),
                 None => self.state_for_session(key).await?,
             };
             let context = match live.as_ref() {
-                Some((_, control)) => {
-                    self.execution_context_for_execution(key, &state, Some(control.execution))
+                Some(live) => {
+                    self.execution_context_for_execution(key, &state, Some(live.control.execution))
                         .await?
                 }
                 None => self.execution_context_with_state(key, &state).await?,
             };
             let cancel = live
                 .as_ref()
-                .map(|(_, control)| control.cancel.clone())
+                .map(|live| live.cancel.clone())
                 .unwrap_or_else(|| self.shutdown.child_token());
             let executor = if include_tool_catalog {
                 state.executor.for_session_context_async(&context).await

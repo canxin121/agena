@@ -143,6 +143,10 @@ fn cursor_id(update: &Value) -> Option<String> {
     bounded_string(&update["cursorId"], MAX_CURSOR_BYTES)
 }
 
+pub(super) fn anchored_entity(update: &Value) -> Option<Entity> {
+    Some(Anchor::parse(&update["anchor"])?.entity)
+}
+
 #[derive(Clone, Copy, Default)]
 struct Grant {
     fork: bool,
@@ -182,6 +186,19 @@ pub(super) struct Book {
 }
 
 impl Book {
+    pub(super) fn forget(&mut self, entity: &Entity) {
+        for after in [false, true] {
+            if let Some(ids) = self.anchors.remove(&Anchor {
+                after,
+                entity: entity.clone(),
+            }) {
+                for id in ids {
+                    self.grants.remove(&id);
+                }
+            }
+        }
+    }
+
     pub(super) fn observe(&mut self, update: &Value, allow_rewind: bool, limit: usize) {
         let Some(id) = cursor_id(update) else { return };
         let grant = Grant::from_update(update, allow_rewind);

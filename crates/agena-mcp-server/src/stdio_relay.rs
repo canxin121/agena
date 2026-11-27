@@ -17,16 +17,26 @@ use tokio::{
 pub const WORKER_ARG: &str = "--internal-acp-mcp-stdio";
 pub const TOKEN_ENV: &str = "AGENA_ACP_MCP_RELAY_TOKEN";
 pub const TOKEN_BYTES: usize = 32;
+#[cfg(unix)]
 pub const UNIX_PREFIX: &str = "unix:";
+#[cfg(windows)]
+pub const PIPE_PREFIX: &str = r"\\.\pipe\agena-acp-mcp-";
 
 enum Endpoint {
     Loopback(SocketAddrV4),
     #[cfg(unix)]
     Unix(PathBuf),
+    #[cfg(windows)]
+    Pipe(String),
 }
 
 impl Endpoint {
     fn parse(value: String) -> Option<Self> {
+        #[cfg(windows)]
+        if let Some(name) = value.strip_prefix(PIPE_PREFIX) {
+            return (name.len() == TOKEN_BYTES && name.bytes().all(|b| b.is_ascii_hexdigit()))
+                .then_some(Self::Pipe(value));
+        }
         #[cfg(unix)]
         if let Some(path) = value.strip_prefix(UNIX_PREFIX) {
             let path = PathBuf::from(path);
@@ -78,6 +88,24 @@ fn run(address: Endpoint, token: &[u8]) -> io::Result<()> {
             Endpoint::Loopback(address) => relay(TcpStream::connect(address), token).await,
             #[cfg(unix)]
             Endpoint::Unix(path) => relay(tokio::net::UnixStream::connect(path), token).await,
+            #[cfg(windows)]
+            Endpoint::Pipe(name) => {
+                let connect = async {
+                    use tokio::net::windows::named_pipe::ClientOptions;
+
+                    loop {
+                        match ClientOptions::new().open(&name) {
+                            // ERROR_PIPE_BUSY: another client has connected and the next
+                            // server instance is about to be created.
+                            Err(error) if error.raw_os_error() == Some(231) => {
+                                tokio::time::sleep(Duration::from_millis(20)).await;
+                            }
+                            result => return result,
+                        }
+                    }
+                };
+                relay(connect, token).await
+            }
         }
     });
     // Stdin can still be open in the native agent after the grant expires.

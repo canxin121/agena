@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::{LazyLock, Weak},
+};
 
 use agena_domain::{
     AccessKind, ExternalAgentArchiveFilter, ExternalAgentForkPoint, ExternalAgentSessionAction,
@@ -13,6 +16,48 @@ use crate::session::manager::session_prompt::external_agent_system_prompt;
 mod index;
 
 static NATIVE_REPLAYS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+type NativeReplayKey = (PathBuf, &'static str, String);
+type NativeReplayLocks = StdMutex<HashMap<NativeReplayKey, Weak<tokio::sync::Mutex<()>>>>;
+static NATIVE_REPLAY_LOCKS: LazyLock<NativeReplayLocks> = LazyLock::new(Default::default);
+
+fn native_replay_lock(
+    cwd: &Path,
+    agent: ExternalAgent,
+    native_id: &str,
+) -> Arc<tokio::sync::Mutex<()>> {
+    let key = (cwd.to_owned(), agent.id(), native_id.to_owned());
+    let mut locks = NATIVE_REPLAY_LOCKS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+        return lock;
+    }
+    locks.retain(|_, lock| lock.strong_count() != 0);
+    let lock = Arc::new(tokio::sync::Mutex::new(()));
+    locks.insert(key, Arc::downgrade(&lock));
+    lock
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HistoryAccess {
+    Import,
+    Open,
+    Preview(Option<u64>),
+}
+
+fn active_history_view(
+    access: HistoryAccess,
+    session: SessionId,
+) -> Result<ExternalAgentWorkspaceResult, AppError> {
+    match access {
+        HistoryAccess::Open => Ok(ExternalAgentWorkspaceResult::Opened {
+            session_id: session.get(),
+        }),
+        _ => Err(AppError::Config(
+            "Finish or stop the active turn before previewing native history.".into(),
+        )),
+    }
+}
 
 pub(super) fn apply_info_update(state: &mut ExternalAgentState, update: &Value) -> bool {
     let Some(next) = update.as_object() else {
@@ -97,20 +142,38 @@ impl SessionManager {
         if !self.is_acp_scope() {
             return Err(AppError::Config("Open the project in ACP sessions.".into()));
         }
-        let (agent, cursor, import, refresh) = match action {
-            ExternalAgentWorkspaceAction::List { agent, cursor } => (agent, cursor, None, false),
+        let (agent, cursor, native) = match action {
+            ExternalAgentWorkspaceAction::List { agent, cursor } => (agent, cursor, None),
             ExternalAgentWorkspaceAction::Import { agent, native_id } => {
-                (agent, None, Some(native_id), false)
+                (agent, None, Some((native_id, HistoryAccess::Import)))
             }
             ExternalAgentWorkspaceAction::Open { agent, native_id } => {
-                (agent, None, Some(native_id), true)
+                (agent, None, Some((native_id, HistoryAccess::Open)))
+            }
+            ExternalAgentWorkspaceAction::PreviewHistory {
+                agent,
+                native_id,
+                before_turn,
+            } => {
+                if before_turn.is_some_and(|turn| turn <= 1) {
+                    return Err(AppError::Config(
+                        "Invalid native history turn boundary.".into(),
+                    ));
+                }
+                (
+                    agent,
+                    None,
+                    Some((native_id, HistoryAccess::Preview(before_turn))),
+                )
             }
             action => return self.manage_native_index(workspace_id, action).await,
         };
         if cursor
             .as_ref()
             .is_some_and(|cursor| cursor.len() > acp::MAX_CURSOR_BYTES)
-            || import.as_deref().is_some_and(invalid_native_string)
+            || native
+                .as_ref()
+                .is_some_and(|(id, _)| invalid_native_string(id))
         {
             return Err(AppError::Config(
                 "Invalid external agent conversation ID or cursor.".into(),
@@ -118,32 +181,50 @@ impl SessionManager {
         }
         let cwd = canonical_directory(&self.workspace_root_by_id(workspace_id).await?).await?;
         let _permit = self.reserve_execution()?;
-        let current_view = if let Some(native_id) = import.as_ref().filter(|_| refresh) {
+        let cancel = self.shutdown.child_token();
+        let _native_replay = if let Some((native_id, _)) = native.as_ref() {
+            // Serialize even the first replay, before a local session ID
+            // exists to coordinate clicks from different clients.
+            let lock = native_replay_lock(&cwd, agent, native_id);
+            Some(tokio::select! {
+                biased;
+                _ = cancel.cancelled() => return Err(AppError::Cancelled),
+                held = lock.lock_owned() => held,
+            })
+        } else {
+            None
+        };
+        let current_view = if let Some((native_id, access)) = native.as_ref() {
             let link = ExternalAgentLink {
                 native_id: native_id.clone(),
                 cwd: cwd.clone(),
                 incarnation: None,
                 resume_at: None,
             };
-            self.kernel_runtime
+            let existing = self
+                .kernel_runtime
                 .acp_view(workspace_id, agent, &link)
                 .await
-                .map_err(kernel_error)?
-                .map(|id| (id, self.session_dispatch(id)))
+                .map_err(kernel_error)?;
+            if let Some(id) = existing
+                && *access == HistoryAccess::Import
+            {
+                return Ok(ExternalAgentWorkspaceResult::Imported {
+                    session_id: id.get(),
+                });
+            }
+            existing.map(|id| (id, self.session_dispatch(id), *access))
         } else {
             None
         };
         // Attach to live work without opening a second peer on its native
         // history. Recheck idleness under the same locks as submit and run.
-        let held = if let Some((id, dispatch)) = current_view.as_ref() {
-            let attached = ExternalAgentWorkspaceResult::Opened {
-                session_id: id.get(),
-            };
+        let held = if let Some((id, dispatch, access)) = current_view.as_ref() {
             let Ok(submission) = dispatch.submission.try_lock() else {
-                return Ok(attached);
+                return active_history_view(*access, *id);
             };
             let Ok(execution) = dispatch.execution.try_lock() else {
-                return Ok(attached);
+                return active_history_view(*access, *id);
             };
             match self.kernel().reader.control_snapshot(*id, 0).await {
                 Ok(snapshot)
@@ -151,7 +232,7 @@ impl SessionManager {
                         || snapshot.summary.queued_executions != 0
                         || snapshot.configuration.external_agent_inputs.is_some() =>
                 {
-                    return Ok(attached);
+                    return active_history_view(*access, *id);
                 }
                 Ok(snapshot) => Some((
                     *id,
@@ -165,7 +246,7 @@ impl SessionManager {
         } else {
             None
         };
-        let _replay_slot = if import.is_some() {
+        let _replay_slot = if native.is_some() {
             Some(
                 NATIVE_REPLAYS
                     .try_acquire()
@@ -185,14 +266,13 @@ impl SessionManager {
         } else {
             acp::SessionContext::default()
         };
-        let cancel = self.shutdown.child_token();
         let mut client = acp::AcpClient::spawn_with_directories(
             agent,
             &cwd,
             &replay_context.additional_directories,
         )?;
         let outcome = async {
-            let Some(native_id) = import else {
+            let Some((native_id, access)) = native else {
                 let page = client
                     .list_workspace_native(
                         &cwd,
@@ -227,14 +307,19 @@ impl SessionManager {
                 }
             };
             if let Some((id, _, _, _)) = &held {
-                self.close_idle_external_agent_for_management(*id).await;
+                // Browsing needs the connection slot. A session/close would
+                // also stop the native session's independent background work.
+                self.close_idle_external_agent(*id).await;
+            }
+            if let HistoryAccess::Preview(before_turn) = access {
+                let preview = client
+                    .preview_native_history(&cwd, &native_id, &replay_context, before_turn, &cancel)
+                    .await?;
+                return Ok(ExternalAgentWorkspaceResult::HistoryPreview { preview });
             }
             let (turns, mut state) = client
                 .replay_native(&cwd, &native_id, &replay_context, &cancel)
                 .await?;
-            if client.lifecycle_capabilities(&cancel).await?.close {
-                let _ = client.release_native(&native_id, false, &cancel).await;
-            }
             let title = state
                 .metadata
                 .title
@@ -267,7 +352,7 @@ impl SessionManager {
             .await
             .map_err(kernel_error)?;
             let session_id = created.value.id.get();
-            Ok(if refresh {
+            Ok(if access == HistoryAccess::Open {
                 ExternalAgentWorkspaceResult::Opened { session_id }
             } else {
                 ExternalAgentWorkspaceResult::Imported { session_id }

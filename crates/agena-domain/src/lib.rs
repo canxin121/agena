@@ -170,10 +170,11 @@ pub use external_agent_details::{
     ExternalAgentWorkKind,
 };
 pub use external_agent_lifecycle::{
-    ExternalAgentArchiveFilter, ExternalAgentForkPoint, ExternalAgentIndexCapabilities,
-    ExternalAgentIndexedSession, ExternalAgentSessionAction, ExternalAgentSessionCapabilities,
-    ExternalAgentSessionInfo, ExternalAgentSessionMetadata, ExternalAgentSessionResult,
-    ExternalAgentWorkspaceAction, ExternalAgentWorkspaceResult,
+    ExternalAgentArchiveFilter, ExternalAgentForkPoint, ExternalAgentHistoryPreview,
+    ExternalAgentHistoryPreviewTurn, ExternalAgentIndexCapabilities, ExternalAgentIndexedSession,
+    ExternalAgentSessionAction, ExternalAgentSessionCapabilities, ExternalAgentSessionInfo,
+    ExternalAgentSessionMetadata, ExternalAgentSessionResult, ExternalAgentWorkspaceAction,
+    ExternalAgentWorkspaceResult,
 };
 pub use finish_reason::{FinishReason, RunAbortReason};
 pub use ids::{

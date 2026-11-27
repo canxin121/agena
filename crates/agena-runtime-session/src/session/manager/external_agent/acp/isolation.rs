@@ -29,6 +29,7 @@ struct AgentConfig {
 }
 
 pub(super) struct Isolation {
+    #[cfg(not(windows))]
     _relay: tempfile::TempDir,
     socket: PathBuf,
 }
@@ -64,9 +65,9 @@ pub(super) fn wrap(
     let Some(config) = configured(agent)? else {
         return Ok(None);
     };
-    if !cfg!(target_os = "linux") || !sandbox::enabled() {
+    if !sandbox::enabled() {
         return Err(AppError::Config(
-            "ACP process isolation needs an enabled Linux MXC sandbox.".into(),
+            "ACP process isolation needs an enabled MXC sandbox.".into(),
         ));
     }
     let network = config
@@ -76,15 +77,31 @@ pub(super) fn wrap(
     network
         .validate_for_platform(std::env::consts::OS)
         .map_err(AppError::Config)?;
-    if network.egress.as_ref().and_then(|egress| egress.default) == Some(NetworkAction::Allow) {
+    if !cfg!(target_os = "macos")
+        && network.egress.as_ref().and_then(|egress| egress.default) == Some(NetworkAction::Allow)
+    {
         return Err(AppError::Config(
             "ACP process isolation requires default-deny egress.".into(),
         ));
     }
     let mut writes = Vec::new();
+    let mut denied = Vec::new();
     match agent {
         ExternalAgent::Antigravity => {
             let root = policy::antigravity_profile()?;
+            // agy can discover workspace MCP servers during startup, before
+            // any PreToolUse decision. Hide the native workspace configuration
+            // from its sandbox while Agena uses the authorized project itself.
+            denied = policy::native_antigravity_customizations(cwd, additional_directories)?;
+            let guard =
+                agena_runtime_tools::canonicalize_mutation_path(&root.join("config/hooks.json"));
+            if denied.iter().any(|path| {
+                guard.starts_with(agena_runtime_tools::canonicalize_mutation_path(path))
+            }) {
+                return Err(AppError::Config(
+                    "An Antigravity workspace customization overlaps the ACP tool guard.".into(),
+                ));
+            }
             writes.push(root);
             if previous_history {
                 writes.push(policy::previous_antigravity_store()?);
@@ -122,19 +139,31 @@ pub(super) fn wrap(
         }
         fs::create_dir_all(path)?;
     }
-    let relay = tempfile::Builder::new()
-        .prefix("agena-sandbox-acp-relay-")
-        .tempdir()?;
-    reads.push(relay.path().to_path_buf());
-    let mut private_paths = vec![relay.path().to_path_buf()];
+    let mut private_paths = Vec::new();
+    #[cfg(not(windows))]
+    let (relay, socket) = {
+        let relay = tempfile::Builder::new()
+            .prefix("agena-sandbox-acp-relay-")
+            .tempdir()?;
+        reads.push(relay.path().to_path_buf());
+        private_paths.push(relay.path().to_path_buf());
+        let socket = relay.path().join("mcp.sock");
+        (relay, socket)
+    };
+    #[cfg(windows)]
+    let socket = PathBuf::from(format!(
+        "{}{}",
+        agena_mcp_server::stdio_relay::PIPE_PREFIX,
+        uuid::Uuid::new_v4().simple()
+    ));
     if let Some(home) = private_home {
         reads.push(home.to_owned());
         private_paths.push(home.to_owned());
     }
-    let socket = relay.path().join("mcp.sock");
     let policy = SandboxPolicy {
         readonly_paths: reads,
         readwrite_paths: writes,
+        denied_paths: denied,
         runtime_paths: config.runtime_paths,
         private_paths,
         workload_home: private_home.map(Path::to_path_buf),
@@ -143,6 +172,7 @@ pub(super) fn wrap(
     };
     sandbox::wrap_tokio_command(command, &policy)?;
     Ok(Some(Isolation {
+        #[cfg(not(windows))]
         _relay: relay,
         socket,
     }))

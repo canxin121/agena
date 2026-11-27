@@ -1,13 +1,15 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque, hash_map::RandomState},
+    hash::{BuildHasher, Hash},
     io::{self, Write},
     path::{Component, Path},
 };
 
 use agena_domain::{
     ActivityId, ActivityPayload, AttachmentItem, AttachmentKind, AttachmentSource, BlobId,
-    ComposerActivity, ComposerDocument, ComposerNode, ExternalAgent, RawOutput, ResourceActivity,
-    ResourceDelivery, ResourceKind, ResourceReference, StructuredObject, ToolInvocation,
+    ComposerActivity, ComposerDocument, ComposerNode, ExternalAgent, ExternalAgentHistoryPreview,
+    ExternalAgentHistoryPreviewTurn, RawOutput, ResourceActivity, ResourceDelivery, ResourceKind,
+    ResourceReference, StructuredObject, ToolInvocation,
 };
 use agena_runtime_tools::media_input;
 use agena_storage::kernel::{
@@ -34,20 +36,30 @@ const MAX_REPLAY_WIRE_BYTES: usize = 24 * 1024 * 1024;
 const MAX_REPLAY_RECORDS: usize = 6_000;
 const MAX_REPLAY_UPDATES: usize = 65_536;
 const MAX_ENTRY_BLOBS: usize = 16;
+const MAX_USER_VIEW_BYTES: usize = 224 * 1024;
+const MAX_HISTORY_PREVIEW_TURNS: usize = 8;
+const MAX_HISTORY_PREVIEW_TEXT_BYTES: usize = 32 * 1024;
 
 #[derive(Default)]
 pub(in super::super) struct Replay {
-    entries: Vec<Record>,
+    entries: VecDeque<BufferedRecord>,
+    first: usize,
+    user_starts: VecDeque<usize>,
     messages: HashMap<MessageKey, Vec<usize>>,
     tools: HashMap<String, usize>,
+    discarded: DiscardedIds,
     cursors: cursors::Book,
     announced_entities: HashSet<cursors::Entity>,
-    allow_rewind: bool,
+    pub(super) allow_rewind: bool,
     state: ExternalAgentState,
-    wire: ReplayBudget<MAX_REPLAY_WIRE_BYTES>,
+    wire: usize,
     updates: usize,
+    discarded_turns: usize,
+    omitted_content: bool,
+    clipped_turn: Option<ClippedTurn>,
     pub(super) complete: bool,
     complete_children: HashSet<String>,
+    preview: Option<PreviewWindow>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -57,17 +69,82 @@ enum Role {
     Thought,
 }
 
+#[derive(Clone, Copy)]
+enum ClippedTurn {
+    Input,
+    Reply,
+}
+
+struct PreviewWindow {
+    before_turn: Option<u64>,
+    ended: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct MessageKey {
     role: Role,
     id: Option<String>,
 }
 
+impl MessageKey {
+    fn entity(&self) -> Option<cursors::Entity> {
+        self.id
+            .as_deref()
+            .map(|id| cursors::Entity::message(message_kind(&self.role), id))
+    }
+}
+
 enum Record {
     Blocks { key: MessageKey, blocks: Vec<Value> },
     Tool(ReplayTool),
     Anchor(cursors::Entity),
+    Omitted,
     Discarded,
+}
+
+struct BufferedRecord {
+    value: Record,
+    bytes: usize,
+    updates: usize,
+}
+
+/// A bounded record of discarded native identities. Conservative matches
+/// prevent a very late replacement from reopening an evicted turn.
+#[derive(Default)]
+struct DiscardedIds {
+    hash: RandomState,
+    bits: Vec<u64>,
+}
+
+impl DiscardedIds {
+    const WORDS: usize = 32 * 1024;
+
+    fn indexes(&self, key: &impl Hash) -> [usize; 3] {
+        let hash = self.hash.hash_one(key);
+        let mask = Self::WORDS * 64 - 1;
+        [
+            hash as usize & mask,
+            (hash >> 21) as usize & mask,
+            (hash >> 42) as usize & mask,
+        ]
+    }
+
+    fn mark(&mut self, key: &impl Hash) {
+        if self.bits.is_empty() {
+            self.bits.resize(Self::WORDS, 0);
+        }
+        for index in self.indexes(key) {
+            self.bits[index / 64] |= 1 << (index % 64);
+        }
+    }
+
+    fn contains(&self, key: &impl Hash) -> bool {
+        !self.bits.is_empty()
+            && self
+                .indexes(key)
+                .into_iter()
+                .all(|index| self.bits[index / 64] & (1 << (index % 64)) != 0)
+    }
 }
 
 #[derive(Default)]
@@ -87,10 +164,48 @@ impl<const LIMIT: usize> Write for ReplayBudget<LIMIT> {
     }
 }
 
+fn replay_weight(value: &Value) -> usize {
+    let mut budget = ReplayBudget::<MAX_REPLAY_WIRE_BYTES>::default();
+    let _ = serde_json::to_writer(&mut budget, value);
+    budget.0
+}
+
+fn omitted_block(reason: &str) -> Value {
+    json!({"type": "text", "text": format!("[{reason}]")})
+}
+
+fn reduced_update(update: &Value) -> Value {
+    let kind = update["sessionUpdate"].as_str().unwrap_or_default();
+    let mut reduced = json!({"sessionUpdate": kind});
+    for field in ["messageId", "toolCallId", "title", "status", "kind"] {
+        if let Some(value) = bounded_string(&update[field], 4096) {
+            reduced[field] = json!(value);
+        }
+    }
+    let block = omitted_block("Large native content omitted from this history view");
+    reduced["content"] = match kind {
+        "tool_call" | "tool_call_update" => json!([{"type": "content", "content": block}]),
+        "tool_call_content_chunk" => json!({"type": "content", "content": block}),
+        _ => block,
+    };
+    reduced
+}
+
+fn message_kind(role: &Role) -> &'static str {
+    match role {
+        Role::User => "user_message",
+        Role::Assistant => "agent_message",
+        Role::Thought => "agent_thought",
+    }
+}
+
 impl Replay {
-    pub(super) fn new(allow_rewind: bool) -> Self {
+    pub(super) fn preview(before_turn: Option<u64>) -> Self {
         Self {
-            allow_rewind,
+            preview: Some(PreviewWindow {
+                before_turn,
+                ended: false,
+            }),
             ..Self::default()
         }
     }
@@ -124,7 +239,6 @@ impl Replay {
                 "subagent_update" | "terminal_update" | "terminal_output_chunk"
             )
         {
-            self.account(update)?;
             let historical = v2
                 && if source == root {
                     !self.complete
@@ -159,14 +273,40 @@ impl Replay {
             "tool_call" | "tool_call_update" | "tool_call_content_chunk"
         );
         let cursor = kind == "cursor_update";
+        if let Some(preview) = &self.preview {
+            if message.is_none() && !tool {
+                return Ok(());
+            }
+            // Peers which only replay from the start still send the remainder.
+            // Preserve late snapshots of retained IDs within the selected page.
+            if preview.ended
+                && !message.as_ref().is_some_and(|(role, _)| {
+                    bounded_string(&update["messageId"], 4096).is_some_and(|id| {
+                        self.messages.contains_key(&MessageKey {
+                            role: role.clone(),
+                            id: Some(id),
+                        })
+                    })
+                })
+                && !(tool
+                    && update["toolCallId"]
+                        .as_str()
+                        .is_some_and(|id| self.tools.contains_key(id)))
+            {
+                return Ok(());
+            }
+        }
         if message.is_none() && !tool && !cursor {
             apply_native_update(&mut self.state, root, source, update);
             if !self.complete
                 && let Some(entity) = cursors::Entity::from_update(update)
+                && self.clipped_turn.is_none()
+                && !self.discarded.contains(&entity)
                 && self.announced_entities.insert(entity.clone())
             {
-                self.account(update)?;
-                self.push(Record::Anchor(entity))?;
+                let charge = replay_weight(update).min(MAX_REPLAY_WIRE_BYTES);
+                self.push(Record::Anchor(entity), charge);
+                self.roll_window();
             }
             return Ok(());
         }
@@ -174,40 +314,63 @@ impl Replay {
         // ends the historical range, even if the peer keeps streaming.
         if self.complete {
             if cursor {
-                self.account(update)?;
                 self.cursors.observe(update, self.allow_rewind, 0);
             }
             return Ok(());
         }
-        self.account(update)?;
-        if let Some((role, replace)) = message {
-            self.message(role, replace, update)?;
-        } else if tool {
-            self.tool(update)?;
+        let charge = replay_weight(update);
+        let reduced;
+        let (update, charge) = if charge > MAX_REPLAY_WIRE_BYTES {
+            self.omitted_content = true;
+            reduced = reduced_update(update);
+            (&reduced, replay_weight(&reduced))
         } else {
+            (update, charge)
+        };
+        if let Some((role, replace)) = message {
+            self.message(role, replace, update, charge);
+        } else if tool {
+            self.tool(update, charge);
+        } else if !cursors::anchored_entity(update)
+            .is_some_and(|entity| self.discarded.contains(&entity))
+        {
             self.cursors
                 .observe(update, self.allow_rewind, MAX_REPLAY_RECORDS);
         }
+        self.roll_window();
         Ok(())
     }
 
-    fn account(&mut self, update: &Value) -> Result<(), AppError> {
-        self.updates += 1;
-        if self.updates > MAX_REPLAY_UPDATES
-            || serde_json::to_writer(&mut self.wire, update).is_err()
-        {
-            return Err(history_budget());
-        }
-        Ok(())
+    fn record_mut(&mut self, index: usize) -> &mut Record {
+        &mut self.entries[index - self.first].value
     }
 
-    fn message(&mut self, role: Role, replace: bool, update: &Value) -> Result<(), AppError> {
+    fn message(&mut self, role: Role, replace: bool, update: &Value, charge: usize) {
         let key = MessageKey {
             role,
             id: bounded_string(&update["messageId"], 4096),
         };
+        if key
+            .entity()
+            .is_some_and(|entity| self.discarded.contains(&entity))
+            && !self.messages.contains_key(&key)
+        {
+            return;
+        }
+        if let Some(clipped) = self.clipped_turn {
+            if key.role != Role::User {
+                self.clipped_turn = Some(ClippedTurn::Reply);
+                return;
+            }
+            if self.messages.contains_key(&key)
+                || (key.id.is_none() && matches!(clipped, ClippedTurn::Input))
+            {
+                return;
+            }
+            self.clipped_turn = None;
+        }
         if replace && update.get("content").is_none() && self.messages.contains_key(&key) {
-            return Ok(());
+            return;
         }
         let blocks = match &update["content"] {
             Value::Array(blocks) => blocks.clone(),
@@ -219,11 +382,11 @@ impl Replay {
                 let keep = slots[0];
                 // A snapshot supersedes every chunk of this message,
                 // including segments on either side of a tool record.
-                for slot in slots.drain(1..) {
-                    self.entries[slot] = Record::Discarded;
+                for slot in slots.split_off(1) {
+                    self.replace_record(slot, Record::Discarded, 0);
                 }
-                self.entries[keep] = Record::Blocks { key, blocks };
-                return Ok(());
+                self.replace_record(keep, Record::Blocks { key, blocks }, charge);
+                return;
             }
         } else {
             let slot = if key.role == Role::User {
@@ -233,57 +396,258 @@ impl Replay {
             } else {
                 None
             };
-            let adjacent = self.entries.len().checked_sub(1);
-            if let Some(Record::Blocks {
-                key: prior,
-                blocks: saved,
-            }) = slot
-                .or(adjacent)
-                .and_then(|index| self.entries.get_mut(index))
+            let adjacent = self
+                .entries
+                .len()
+                .checked_sub(1)
+                .map(|index| self.first + index);
+            if let Some(index) = slot.or(adjacent)
+                && let Record::Blocks {
+                    key: prior,
+                    blocks: saved,
+                } = self.record_mut(index)
                 && *prior == key
             {
                 saved.extend(blocks);
-                return Ok(());
+                self.charge(index, charge);
+                return;
             }
         }
-        let index = self.entries.len();
-        self.push(Record::Blocks {
-            key: key.clone(),
-            blocks,
-        })?;
+        if key.role == Role::User
+            && let Some(preview) = &mut self.preview
+            && preview.before_turn.is_some_and(|boundary| {
+                (self.discarded_turns + self.user_starts.len()) as u64 + 1 >= boundary
+            })
+        {
+            preview.ended = true;
+            return;
+        }
+        let index = self.push(
+            Record::Blocks {
+                key: key.clone(),
+                blocks,
+            },
+            charge,
+        );
+        if key.role == Role::User {
+            self.user_starts.push_back(index);
+        }
         if key.id.is_some() {
             self.messages.entry(key).or_default().push(index);
         }
-        Ok(())
     }
 
-    fn tool(&mut self, update: &Value) -> Result<(), AppError> {
+    fn tool(&mut self, update: &Value, charge: usize) {
         let Some(id) = bounded_string(&update["toolCallId"], 4092) else {
-            return Ok(());
+            return;
         };
+        if self
+            .discarded
+            .contains(&cursors::Entity::message("tool_call", &id))
+            && !self.tools.contains_key(&id)
+        {
+            return;
+        }
+        if self.clipped_turn.is_some() {
+            self.clipped_turn = Some(ClippedTurn::Reply);
+            return;
+        }
         if let Some(&index) = self.tools.get(&id)
-            && let Record::Tool(tool) = &mut self.entries[index]
+            && let Record::Tool(tool) = self.record_mut(index)
         {
             tool.patch(update);
-            return Ok(());
+            self.charge(index, charge);
+            return;
         }
         let mut tool = ReplayTool {
             id: id.clone(),
             ..Default::default()
         };
         tool.patch(update);
-        let index = self.entries.len();
-        self.push(Record::Tool(tool))?;
+        let index = self.push(Record::Tool(tool), charge);
         self.tools.insert(id, index);
-        Ok(())
     }
 
-    fn push(&mut self, record: Record) -> Result<(), AppError> {
-        if self.entries.len() >= MAX_REPLAY_RECORDS {
-            return Err(history_budget());
+    fn push(&mut self, value: Record, bytes: usize) -> usize {
+        let index = self.first + self.entries.len();
+        let updates = usize::from(bytes != 0);
+        self.entries.push_back(BufferedRecord {
+            value,
+            bytes,
+            updates,
+        });
+        self.wire += bytes;
+        self.updates += updates;
+        index
+    }
+
+    fn charge(&mut self, index: usize, bytes: usize) {
+        let frame = &mut self.entries[index - self.first];
+        frame.bytes += bytes;
+        frame.updates += 1;
+        self.wire += bytes;
+        self.updates += 1;
+    }
+
+    fn replace_record(&mut self, index: usize, value: Record, bytes: usize) {
+        let frame = &mut self.entries[index - self.first];
+        let updates = usize::from(bytes != 0);
+        self.wire = self.wire - frame.bytes + bytes;
+        self.updates = self.updates - frame.updates + updates;
+        *frame = BufferedRecord {
+            value,
+            bytes,
+            updates,
+        };
+    }
+
+    fn discard_before(&mut self, cut: usize) {
+        while self.first < cut {
+            let Some(frame) = self.entries.pop_front() else {
+                break;
+            };
+            let index = self.first;
+            self.first += 1;
+            self.wire -= frame.bytes;
+            self.updates -= frame.updates;
+            if self.user_starts.front() == Some(&index) {
+                self.user_starts.pop_front();
+            }
+            match frame.value {
+                Record::Blocks { key, .. } => {
+                    if let Some(slots) = self.messages.get_mut(&key) {
+                        slots.retain(|slot| *slot != index);
+                        if slots.is_empty() {
+                            self.messages.remove(&key);
+                            if let Some(entity) = key.entity() {
+                                self.cursors.forget(&entity);
+                                self.discarded.mark(&entity);
+                            }
+                        }
+                    }
+                }
+                Record::Tool(tool) => {
+                    self.tools.remove(&tool.id);
+                    let entity = cursors::Entity::message("tool_call", &tool.id);
+                    self.cursors.forget(&entity);
+                    self.discarded.mark(&entity);
+                }
+                Record::Anchor(entity) => {
+                    self.announced_entities.remove(&entity);
+                    self.cursors.forget(&entity);
+                    self.discarded.mark(&entity);
+                }
+                Record::Omitted | Record::Discarded => {}
+            }
         }
-        self.entries.push(record);
-        Ok(())
+    }
+
+    fn roll_window(&mut self) {
+        while self.entries.len() > MAX_REPLAY_RECORDS
+            || self.updates > MAX_REPLAY_UPDATES
+            || self.wire > MAX_REPLAY_WIRE_BYTES
+            || (self.preview.is_some() && self.user_starts.len() > MAX_HISTORY_PREVIEW_TURNS)
+        {
+            if let Some(&next_turn) = self.user_starts.get(1) {
+                self.discard_before(next_turn);
+                self.discarded_turns += 1;
+                continue;
+            }
+            if let Some(&first_user) = self.user_starts.front()
+                && self.first < first_user
+            {
+                self.discard_before(first_user);
+                self.omitted_content = true;
+                continue;
+            }
+
+            // A single turn can exceed the complete replay budget on its own.
+            // Keep its input and suppress its remaining output until the next user.
+            let clipped = if self.entries.iter().any(|frame| {
+                matches!(
+                    &frame.value,
+                    Record::Blocks { key, .. } if key.role != Role::User
+                ) || matches!(&frame.value, Record::Tool(_))
+            }) {
+                ClippedTurn::Reply
+            } else {
+                ClippedTurn::Input
+            };
+            let saved = if self.user_starts.front() == Some(&self.first) {
+                let frame = self.entries.front_mut().expect("replay user boundary");
+                let Record::Blocks { key, mut blocks } =
+                    std::mem::replace(&mut frame.value, Record::Discarded)
+                else {
+                    unreachable!("replay boundary must be a user record")
+                };
+                let mut bytes = frame.bytes;
+                if bytes > MAX_USER_VIEW_BYTES {
+                    blocks = vec![omitted_block(
+                        "Native user message exceeded the view size limit",
+                    )];
+                    bytes = replay_weight(&Value::Array(blocks.clone()));
+                }
+                self.messages.remove(&key);
+                Some((key, blocks, bytes))
+            } else {
+                None
+            };
+            self.discard_before(self.first + self.entries.len());
+            if let Some((key, blocks, bytes)) = saved {
+                let index = self.push(
+                    Record::Blocks {
+                        key: key.clone(),
+                        blocks,
+                    },
+                    bytes,
+                );
+                self.user_starts.push_back(index);
+                if key.id.is_some() {
+                    self.messages.insert(key, vec![index]);
+                }
+                self.push(Record::Omitted, 0);
+            }
+            self.clipped_turn = Some(clipped);
+            self.omitted_content = true;
+        }
+    }
+
+    pub(super) fn finish_preview(self) -> ExternalAgentHistoryPreview {
+        let mut turns = Vec::<ExternalAgentHistoryPreviewTurn>::new();
+        let mut omitted_content = self.omitted_content;
+        for frame in self.entries {
+            match frame.value {
+                Record::Blocks { key, blocks } if key.role != Role::Thought => {
+                    let output = if key.role == Role::User {
+                        turns.push(ExternalAgentHistoryPreviewTurn::default());
+                        &mut turns.last_mut().expect("new preview turn").user
+                    } else if let Some(turn) = turns.last_mut() {
+                        &mut turn.reply
+                    } else {
+                        omitted_content = true;
+                        continue;
+                    };
+                    for block in blocks {
+                        let text = match block["type"].as_str() {
+                            Some("text") => block["text"].as_str(),
+                            Some("resource_link") => block["uri"].as_str(),
+                            _ => None,
+                        };
+                        if text.is_none_or(|text| !append_preview(output, text)) {
+                            omitted_content = true;
+                        }
+                    }
+                }
+                Record::Blocks { .. } | Record::Tool(_) | Record::Omitted => omitted_content = true,
+                Record::Anchor(_) | Record::Discarded => {}
+            }
+        }
+        ExternalAgentHistoryPreview {
+            turns,
+            next_before_turn: (self.discarded_turns != 0)
+                .then_some(self.discarded_turns as u64 + 1),
+            omitted_content,
+        }
     }
 
     pub(super) async fn finish(
@@ -295,13 +659,14 @@ impl Replay {
             agent,
             cwd,
             media_bytes: 0,
+            omitted_content: self.omitted_content,
             sequence: 0,
         };
         let mut turns = Vec::<ExternalAgentHistoryTurn>::new();
         let mut prelude = Vec::new();
         let mut preceding = None;
-        for record in self.entries {
-            match record {
+        for frame in self.entries {
+            match frame.value {
                 Record::Blocks { key, blocks } if key.role == Role::User => {
                     let (document, blobs) = projection.user(blocks).await?;
                     if !document.is_empty() {
@@ -322,21 +687,10 @@ impl Replay {
                             response: Vec::new(),
                         });
                     }
-                    preceding = key
-                        .id
-                        .as_deref()
-                        .map(|id| cursors::Entity::message("user_message", id));
+                    preceding = key.entity();
                 }
                 Record::Blocks { key, blocks } => {
-                    let kind = if key.role == Role::Thought {
-                        "agent_thought"
-                    } else {
-                        "agent_message"
-                    };
-                    preceding = key
-                        .id
-                        .as_deref()
-                        .map(|id| cursors::Entity::message(kind, id));
+                    preceding = key.entity();
                     let output = turns
                         .last_mut()
                         .map_or(&mut prelude, |turn| &mut turn.response);
@@ -353,6 +707,7 @@ impl Replay {
                         .push(part);
                 }
                 Record::Anchor(entity) => preceding = Some(entity),
+                Record::Omitted => preceding = None,
                 Record::Discarded => {}
             }
         }
@@ -362,47 +717,125 @@ impl Replay {
             ));
         }
         self.state.cursor_tail = preceding.map(cursors::Entity::saved);
-        retain_recent_turns(&mut turns)?;
+        retain_recent_turns(&mut turns, self.discarded_turns, projection.omitted_content)?;
         Ok((turns, self.state.bounded_snapshot(MAX_STATE_SNAPSHOT_BYTES)))
     }
 }
 
-fn retain_recent_turns(turns: &mut Vec<ExternalAgentHistoryTurn>) -> Result<(), AppError> {
-    type ProjectionBudget = ReplayBudget<MAX_EXTERNAL_AGENT_HISTORY_METADATA_BYTES>;
-    if serde_json::to_writer(ProjectionBudget::default(), &turns).is_ok() {
+fn retain_recent_turns(
+    turns: &mut Vec<ExternalAgentHistoryTurn>,
+    discarded_turns: usize,
+    mut omitted_content: bool,
+) -> Result<(), AppError> {
+    if turns.is_empty()
+        || (discarded_turns == 0 && !omitted_content && projected_size(turns).is_some())
+    {
         return Ok(());
     }
     // The retained view must be a contiguous suffix ending at the real
     // conversation head. Reserve space for its array and projection notice.
     let mut remaining = MAX_EXTERNAL_AGENT_HISTORY_METADATA_BYTES - 1024;
-    let available_turns = turns.len();
+    let available_turns = discarded_turns + turns.len();
     let mut retained_turns = 0;
     for turn in turns.iter().rev() {
-        let mut budget = ProjectionBudget::default();
-        if serde_json::to_writer(&mut budget, turn).is_err() || budget.0 + 1 > remaining {
+        let Some(size) = projected_size(turn).filter(|size| size + 1 <= remaining) else {
             break;
-        }
-        remaining -= budget.0 + 1;
+        };
+        remaining -= size + 1;
         retained_turns += 1;
     }
     if retained_turns == 0 {
-        return Err(AppError::Config(
-            "The latest native turn exceeds the size limit for an Agena ACP history view.".into(),
-        ));
+        let newest = turns.last_mut().expect("nonempty native history");
+        fit_latest_reply(newest, remaining)?;
+        retained_turns = 1;
+        omitted_content = true;
     }
-    turns.drain(..available_turns - retained_turns);
+    turns.drain(..turns.len() - retained_turns);
     let first = &mut turns[0];
-    // There is no local predecessor for a native cut before this user input.
-    first.cursor = None;
-    first.prelude.insert(0, ExternalAgentHistoryPart::Notice {
-        text: serde_json::to_string(&agena_runtime_contracts::NoticePart {
-            kind: "external_agent_history_window".into(),
-            summary: format!("Agena loaded the latest {retained_turns} of {available_turns} turns. The earlier turns remain in the native conversation."),
-            detail: None,
-            title: Some("Native history".into()),
-        })?,
-    });
-    serde_json::to_writer(ProjectionBudget::default(), &turns).map_err(|_| history_budget())
+    let mut summary = if retained_turns < available_turns {
+        // The retained view has no local predecessor before its first user.
+        first.cursor = None;
+        format!(
+            "Agena loaded the latest {retained_turns} of {available_turns} turns. The earlier turns remain in the native conversation."
+        )
+    } else {
+        String::new()
+    };
+    if omitted_content {
+        if !summary.is_empty() {
+            summary.push(' ');
+        }
+        summary.push_str("Some native content exceeded the history view limits. The original content remains in the native conversation.");
+    }
+    first.prelude.insert(
+        0,
+        ExternalAgentHistoryPart::Notice {
+            text: serde_json::to_string(&agena_runtime_contracts::NoticePart {
+                kind: "external_agent_history_window".into(),
+                summary,
+                detail: None,
+                title: Some("Native history".into()),
+            })?,
+        },
+    );
+    projected_size(turns).map(|_| ()).ok_or_else(history_budget)
+}
+
+fn projected_size(value: &impl serde::Serialize) -> Option<usize> {
+    let mut budget = ReplayBudget::<MAX_EXTERNAL_AGENT_HISTORY_METADATA_BYTES>::default();
+    serde_json::to_writer(&mut budget, value).ok()?;
+    Some(budget.0)
+}
+
+fn fit_latest_reply(turn: &mut ExternalAgentHistoryTurn, budget: usize) -> Result<(), AppError> {
+    turn.prelude.clear();
+    let response = std::mem::take(&mut turn.response);
+    let mut remaining = budget
+        .checked_sub(projected_size(turn).ok_or_else(history_budget)?)
+        .ok_or_else(history_budget)?;
+    for mut part in response.into_iter().rev() {
+        if let Some(size) = projected_size(&part).filter(|size| size + 1 <= remaining) {
+            remaining -= size + 1;
+            turn.response.push(part);
+            continue;
+        }
+        if retain_text_suffix(&mut part, remaining) {
+            turn.response.push(part);
+        }
+        break;
+    }
+    turn.response.reverse();
+    Ok(())
+}
+
+fn retain_text_suffix(part: &mut ExternalAgentHistoryPart, budget: usize) -> bool {
+    let ExternalAgentHistoryPart::Text { text, reasoning } = part else {
+        return false;
+    };
+    let overhead = projected_size(&ExternalAgentHistoryPart::Text {
+        text: String::new(),
+        reasoning: *reasoning,
+    })
+    .expect("empty history text size");
+    let mut remaining = budget.saturating_sub(overhead + 1);
+    let mut start = text.len();
+    for (index, character) in text.char_indices().rev() {
+        let bytes = match character {
+            '"' | '\\' | '\n' | '\r' | '\t' | '\u{08}' | '\u{0c}' => 2,
+            '\u{00}'..='\u{1f}' => 6,
+            _ => character.len_utf8(),
+        };
+        let Some(rest) = remaining.checked_sub(bytes) else {
+            break;
+        };
+        remaining = rest;
+        start = index;
+    }
+    if start == text.len() {
+        return false;
+    }
+    text.drain(..start);
+    true
 }
 
 #[derive(Default)]
@@ -466,7 +899,10 @@ impl ReplayTool {
         let mut adjacent = false;
         for (chunk, mut item) in self.content {
             match item["type"].as_str() {
-                Some("content") => match projection.block(item["content"].take()).await? {
+                Some("content") => match projection
+                    .block(item["content"].take(), blobs.len() < MAX_ENTRY_BLOBS)
+                    .await?
+                {
                     Block::Text(value) => {
                         if !value.is_empty() {
                             if !text.is_empty() && !(chunk && adjacent) {
@@ -479,7 +915,7 @@ impl ReplayTool {
                     }
                     Block::Link(link) => items.push(link.tool_item()),
                     Block::Media(attachment, blob) => {
-                        push_blob(&mut blobs, blob)?;
+                        blobs.push(blob);
                         raw.attachments.push(attachment);
                     }
                 },
@@ -535,6 +971,7 @@ struct Projection<'a> {
     agent: ExternalAgent,
     cwd: &'a Path,
     media_bytes: usize,
+    omitted_content: bool,
     sequence: usize,
 }
 
@@ -568,7 +1005,7 @@ impl Projection<'_> {
                 }
                 continue;
             }
-            let resource = match self.block(block).await? {
+            let resource = match self.block(block, blobs.len() < MAX_ENTRY_BLOBS).await? {
                 Block::Text(text) => {
                     push_user_text(&mut document, text);
                     continue;
@@ -601,7 +1038,7 @@ impl Projection<'_> {
                             "missing imported media reference".into(),
                         ));
                     };
-                    push_blob(&mut blobs, blob)?;
+                    blobs.push(blob);
                     ResourceActivity {
                         delivery: ResourceDelivery::ModelInput,
                         kind: match item.kind {
@@ -631,6 +1068,17 @@ impl Projection<'_> {
                 provenance: Default::default(),
             }));
         }
+        if serde_json::to_writer(ReplayBudget::<MAX_USER_VIEW_BYTES>::default(), &document).is_err()
+        {
+            self.omitted_content = true;
+            self.media_bytes -= blobs.iter().map(|blob| blob.bytes.len()).sum::<usize>();
+            blobs.clear();
+            document = ComposerDocument::default();
+            push_user_text(
+                &mut document,
+                "[Native user message exceeded the view size limit]".into(),
+            );
+        }
         Ok((document, blobs))
     }
 
@@ -642,7 +1090,7 @@ impl Projection<'_> {
     ) -> Result<(), AppError> {
         let mut text = String::new();
         for value in blocks {
-            let (title, raw, blobs) = match self.block(value).await? {
+            let (title, raw, blobs) = match self.block(value, true).await? {
                 Block::Text(value) => {
                     text.push_str(&value);
                     continue;
@@ -680,7 +1128,7 @@ impl Projection<'_> {
         Ok(())
     }
 
-    async fn block(&mut self, value: Value) -> Result<Block, AppError> {
+    async fn block(&mut self, value: Value, room_for_media: bool) -> Result<Block, AppError> {
         match value["type"].as_str() {
             Some("text") => Ok(Block::Text(clean_text(
                 value["text"].as_str().unwrap_or_default(),
@@ -689,12 +1137,20 @@ impl Projection<'_> {
                 || Block::Text("[Invalid ACP resource reference]".into()),
                 Block::Link,
             )),
-            Some("resource" | "image" | "audio") => self.media(value).await,
+            Some("resource" | "image" | "audio") => self.media(value, room_for_media).await,
             _ => Ok(Block::Text(String::new())),
         }
     }
 
-    async fn media(&mut self, value: Value) -> Result<Block, AppError> {
+    async fn media(&mut self, value: Value, room_for_media: bool) -> Result<Block, AppError> {
+        let remaining = MAX_EXTERNAL_AGENT_HISTORY_MEDIA_BYTES - self.media_bytes;
+        if !room_for_media || encoded_media_size(&value).is_some_and(|size| size > remaining) {
+            self.omitted_content = true;
+            return Ok(Block::Text(
+                "[Native attachment omitted from this history view due to its attachment limits]"
+                    .into(),
+            ));
+        }
         let loaded = MEDIA_WORKERS
             .run(move || decode_media(value))
             .await
@@ -707,12 +1163,14 @@ impl Projection<'_> {
                 )));
             }
         };
-        self.media_bytes += prepared.bytes.len();
-        if self.media_bytes > MAX_EXTERNAL_AGENT_HISTORY_MEDIA_BYTES {
-            return Err(AppError::Config(
-                "This native conversation exceeds the 8 MiB attachment import limit.".into(),
+        if prepared.bytes.len() > remaining {
+            self.omitted_content = true;
+            return Ok(Block::Text(
+                "[Native attachment omitted from this history view due to its attachment limits]"
+                    .into(),
             ));
         }
+        self.media_bytes += prepared.bytes.len();
         let id = BlobId::new();
         let mut item = prepared.attachment(None);
         bind_agent_attachment(self.agent, &mut item, id)?;
@@ -729,6 +1187,23 @@ impl Projection<'_> {
             },
         ))
     }
+}
+
+fn encoded_media_size(value: &Value) -> Option<usize> {
+    if value["type"] == "resource" {
+        if let Some(text) = value["resource"]["text"].as_str() {
+            return Some(text.len());
+        }
+        return Some(
+            value["resource"]["blob"]
+                .as_str()?
+                .trim_end_matches('=')
+                .len()
+                * 3
+                / 4,
+        );
+    }
+    Some(value["data"].as_str()?.trim_end_matches('=').len() * 3 / 4)
 }
 
 fn decode_media(value: Value) -> Result<media_input::PreparedMedia, String> {
@@ -890,19 +1365,6 @@ fn tool_part(
     })
 }
 
-fn push_blob(
-    blobs: &mut Vec<ExternalAgentHistoryBlob>,
-    blob: ExternalAgentHistoryBlob,
-) -> Result<(), AppError> {
-    if blobs.len() >= MAX_ENTRY_BLOBS {
-        return Err(AppError::Config(
-            "An imported message or tool result contains more than 16 attachments.".into(),
-        ));
-    }
-    blobs.push(blob);
-    Ok(())
-}
-
 fn push_user_text(document: &mut ComposerDocument, text: String) {
     if text.is_empty() {
         return;
@@ -921,9 +1383,21 @@ fn push_reply_text(output: &mut Vec<ExternalAgentHistoryPart>, text: String, rea
 }
 
 fn clean_text(text: &str) -> String {
-    text.chars()
-        .filter(|ch| !ch.is_control() || matches!(ch, '\n' | '\r' | '\t'))
-        .collect()
+    text.chars().filter(|ch| visible_text(*ch)).collect()
+}
+
+fn append_preview(output: &mut String, text: &str) -> bool {
+    for ch in text.chars().filter(|ch| visible_text(*ch)) {
+        if output.len() + ch.len_utf8() > MAX_HISTORY_PREVIEW_TEXT_BYTES {
+            return false;
+        }
+        output.push(ch);
+    }
+    true
+}
+
+fn visible_text(ch: char) -> bool {
+    !ch.is_control() || matches!(ch, '\n' | '\r' | '\t')
 }
 
 fn history_budget() -> AppError {

@@ -1,10 +1,15 @@
+use std::{collections::HashSet, time::Duration};
+
 use agena_provider::CompletionUsage;
 use agena_storage::kernel::{ExternalAgentCursorEntity, ExternalAgentNativeCursor};
 use serde_json::{Value, json};
+use tokio::time::Instant;
 
 use super::{MAX_CURSOR_BYTES, bounded_string, cursors};
 
 const MAX_PROMPT_CURSORS: usize = 64;
+const MAX_PENDING_USER_IDS: usize = 64;
+const FOREGROUND_FOLLOWUP_GRACE: Duration = Duration::from_millis(250);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Version {
@@ -103,10 +108,25 @@ enum ForegroundState {
     Unknown,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum BackgroundState {
+    #[default]
+    Unreported,
+    Empty,
+    Active,
+    Uncertain,
+}
+
+impl BackgroundState {
+    fn blocks_completion(self) -> bool {
+        matches!(self, Self::Active | Self::Uncertain)
+    }
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
 pub(in crate::session::manager::external_agent) struct ActivitySnapshot {
     foreground: ForegroundState,
-    background: bool,
+    background: BackgroundState,
 }
 
 impl ActivitySnapshot {
@@ -122,26 +142,37 @@ impl ActivitySnapshot {
             "idle" => ForegroundState::Idle,
             _ => ForegroundState::Unknown,
         };
-        if let Some(background) = update["background"].as_array() {
-            self.background = !background.is_empty();
-        }
+        self.background = match update["background"].as_array() {
+            Some(background) if background.is_empty() => BackgroundState::Empty,
+            Some(_) => BackgroundState::Active,
+            None if self.background.blocks_completion() => BackgroundState::Uncertain,
+            None => BackgroundState::Unreported,
+        };
         true
     }
+}
+
+#[derive(Default)]
+struct InheritedForeground {
+    inserted_users: HashSet<String>,
+    stop: Option<Value>,
 }
 
 /// A v2 prompt reply acknowledges insertion. Session state ends the workflow
 /// and accounts for work that continues after the foreground becomes idle.
 #[derive(Default)]
 pub(super) struct PromptLifecycle {
-    accepted: bool,
+    pub(super) replayed_users: Option<super::ReplayedUsers>,
     message_id: Option<String>,
     cursors: cursors::Book,
     preceding: Option<cursors::Entity>,
     tail: cursors::Tail,
     allow_rewind: bool,
     activity: ActivitySnapshot,
+    inherited: Option<InheritedForeground>,
     started: bool,
     stop: Option<Value>,
+    quiet_after: Option<Instant>,
 }
 
 impl PromptLifecycle {
@@ -153,6 +184,8 @@ impl PromptLifecycle {
         let preceding = preceding.and_then(cursors::Entity::restore);
         Self {
             activity,
+            inherited: (activity.foreground != ForegroundState::Idle)
+                .then(InheritedForeground::default),
             tail: cursors::Tail::new(preceding.clone()),
             preceding,
             allow_rewind,
@@ -160,12 +193,14 @@ impl PromptLifecycle {
         }
     }
 
-    pub(super) fn acknowledge(&mut self, result: &Value) {
-        if self.accepted {
-            return;
+    pub(super) fn acknowledge(&mut self, message_id: String) {
+        if let Some(inherited) = &mut self.inherited
+            && inherited.inserted_users.contains(&message_id)
+            && let Some(stop) = inherited.stop.take()
+        {
+            self.stop = Some(stop);
         }
-        self.accepted = true;
-        self.message_id = bounded_string(&result["messageId"], MAX_CURSOR_BYTES);
+        self.message_id = Some(message_id);
     }
 
     pub(super) fn observe(&mut self, update: &Value) {
@@ -175,34 +210,96 @@ impl PromptLifecycle {
             return;
         }
         self.tail.observe(update);
+        if let Some(inherited) = &mut self.inherited
+            && self.activity.foreground == ForegroundState::Active
+            && matches!(
+                update["sessionUpdate"].as_str(),
+                Some("user_message" | "user_message_chunk")
+            )
+            && inherited.inserted_users.len() < MAX_PENDING_USER_IDS
+            && let Some(id) = bounded_string(&update["messageId"], MAX_CURSOR_BYTES)
+        {
+            inherited.inserted_users.insert(id);
+        }
         let previous = self.activity.foreground;
+        let previous_background = self.activity.background;
         if !self.activity.observe(update) {
             return;
         }
+        if previous_background.blocks_completion()
+            && self.activity.background == BackgroundState::Empty
+        {
+            self.quiet_after = Some(Instant::now() + FOREGROUND_FOLLOWUP_GRACE);
+        }
         match self.activity.foreground {
             ForegroundState::Active if previous != ForegroundState::Active => {
-                self.started |= previous == ForegroundState::Idle;
+                if previous == ForegroundState::Idle {
+                    self.started = true;
+                    self.inherited = None;
+                }
                 self.stop = None;
+                self.quiet_after = None;
             }
-            ForegroundState::Idle if previous != ForegroundState::Idle => {
-                if self.started || (self.accepted && previous == ForegroundState::Active) {
-                    self.stop = Some(json!({
-                        "stopReason": update["stopReason"],
-                        "error": update["error"],
-                        "usage": update["usage"],
-                    }));
+            ForegroundState::Idle if previous == ForegroundState::Active => {
+                let stop = json!({
+                    "stopReason": update["stopReason"],
+                    "error": update["error"],
+                    "usage": update["usage"],
+                });
+                if self.started {
+                    self.stop = Some(stop);
+                } else if let Some(inherited) = &mut self.inherited
+                    && update["stopReason"] != "cancelled"
+                {
+                    // A prompt can join resumed foreground work. Correlate
+                    // a late reply with a user message observed in that work.
+                    // Leave room for a following foreground interval.
+                    self.quiet_after = Some(Instant::now() + FOREGROUND_FOLLOWUP_GRACE);
+                    if self.message_id.is_some() {
+                        self.stop = Some(stop);
+                    } else {
+                        inherited.stop = Some(stop);
+                    }
                 }
                 self.started = false;
+            }
+            ForegroundState::Idle if previous == ForegroundState::Unknown => {
+                if self.started {
+                    // The new snapshot confirms there is no foreground work.
+                    // Its stop reason may predate the loss of observability.
+                    self.stop = Some(json!({}));
+                }
+                self.started = false;
+                self.inherited = None;
             }
             _ => {}
         }
     }
 
-    pub(super) fn take_result(&mut self, steering_pending: bool) -> Option<Value> {
-        if self.accepted
+    fn completion_ready(&self, steering_pending: bool) -> bool {
+        self.message_id.is_some()
             && self.activity.foreground == ForegroundState::Idle
-            && !self.activity.background
+            && !self.activity.background.blocks_completion()
             && !steering_pending
+            && self.stop.is_some()
+    }
+
+    pub(super) fn completion_deadline(&self, steering_pending: bool) -> Option<Instant> {
+        self.quiet_after
+            .filter(|_| self.completion_ready(steering_pending))
+    }
+
+    pub(super) fn waiting_for_background(&self) -> bool {
+        self.message_id.is_some()
+            && self.activity.foreground == ForegroundState::Idle
+            && self.activity.background == BackgroundState::Active
+    }
+
+    pub(super) fn take_result(&mut self, steering_pending: bool) -> Option<Value> {
+        if self.completion_ready(steering_pending)
+            && self
+                .quiet_after
+                .is_none_or(|deadline| deadline <= Instant::now())
         {
             self.stop.take()
         } else {
@@ -288,19 +385,24 @@ mod tests {
         turn.observe(&json!({
             "sessionUpdate": "state_update", "state": "idle", "stopReason": "end_turn"
         }));
-        turn.acknowledge(&json!({"messageId": "prompt"}));
+        turn.acknowledge("prompt".into());
         assert!(turn.take_result(false).is_none());
         turn.observe(&json!({"sessionUpdate": "state_update", "state": "running"}));
         turn.observe(&json!({
             "sessionUpdate": "state_update", "state": "idle", "stopReason": "end_turn",
             "background": [{"type": "tool_call", "toolCallId": "job"}]
         }));
+        assert!(turn.waiting_for_background());
         assert!(turn.take_result(false).is_none());
         turn.observe(
             &json!({"sessionUpdate": "state_update", "state": "idle", "background": null}),
         );
+        assert!(!turn.waiting_for_background());
         assert!(turn.take_result(false).is_none());
         turn.observe(&json!({"sessionUpdate": "state_update", "state": "idle", "background": []}));
+        assert!(turn.completion_deadline(false).is_some());
+        assert!(turn.take_result(false).is_none());
+        turn.quiet_after = Some(Instant::now());
         assert_eq!(turn.take_result(false).unwrap()["stopReason"], "end_turn");
     }
 
@@ -314,11 +416,56 @@ mod tests {
         prompt.observe(
             &json!({"sessionUpdate": "state_update", "state": "idle", "stopReason": "max_tokens"}),
         );
-        prompt.acknowledge(&json!({"messageId": "new-user-message"}));
+        prompt.acknowledge("new-user-message".into());
         assert!(prompt.take_result(false).is_none());
         prompt.observe(&running);
         prompt.observe(&json!({"sessionUpdate": "state_update", "state": "idle"}));
         assert!(prompt.take_result(false).unwrap()["stopReason"].is_null());
+    }
+
+    #[test]
+    fn a_late_acknowledgment_matches_the_user_message_in_resumed_foreground() {
+        let mut snapshot = ActivitySnapshot::default();
+        snapshot.observe(&json!({"sessionUpdate": "state_update", "state": "running"}));
+        let mut prompt = PromptLifecycle::new(snapshot, None, false);
+        prompt.observe(&json!({
+            "sessionUpdate": "user_message", "messageId": "inserted",
+            "content": [{"type": "text", "text": "Join the running work"}],
+        }));
+        prompt.observe(&json!({
+            "sessionUpdate": "state_update", "state": "idle", "stopReason": "end_turn",
+        }));
+        prompt.acknowledge("inserted".into());
+        assert!(prompt.completion_deadline(false).is_some());
+        prompt.quiet_after = Some(Instant::now());
+        assert_eq!(prompt.take_result(false).unwrap()["stopReason"], "end_turn");
+    }
+
+    #[test]
+    fn regained_observability_settles_confirmed_work_without_a_stale_stop_reason() {
+        let mut prompt = PromptLifecycle::default();
+        prompt.acknowledge("accepted".into());
+        prompt.observe(&json!({"sessionUpdate": "state_update", "state": "running"}));
+        prompt.observe(&json!({"sessionUpdate": "state_update", "state": "unknown"}));
+        assert!(prompt.take_result(false).is_none());
+        prompt.observe(&json!({
+            "sessionUpdate": "state_update", "state": "idle", "stopReason": "cancelled",
+        }));
+        assert_eq!(prompt.take_result(false).unwrap(), json!({}));
+    }
+
+    #[test]
+    fn initially_unknown_work_can_recover_and_finish_an_inserted_prompt() {
+        let mut snapshot = ActivitySnapshot::default();
+        snapshot.observe(&json!({"sessionUpdate": "state_update", "state": "unknown"}));
+        let mut prompt = PromptLifecycle::new(snapshot, None, false);
+        prompt.observe(&json!({"sessionUpdate": "state_update", "state": "running"}));
+        prompt.acknowledge("accepted".into());
+        prompt.observe(&json!({
+            "sessionUpdate": "state_update", "state": "idle", "stopReason": "end_turn",
+        }));
+        prompt.quiet_after = Some(Instant::now());
+        assert_eq!(prompt.take_result(false).unwrap()["stopReason"], "end_turn");
     }
 
     #[test]
@@ -344,7 +491,7 @@ mod tests {
         let mut turn = PromptLifecycle::default();
         turn.observe(&update("other", "unrelated", "before"));
         turn.observe(&update("input", "opaque-cursor", "before"));
-        turn.acknowledge(&json!({"messageId": "input"}));
+        turn.acknowledge("input".into());
         turn.observe(&update("input", "different-anchor", "after"));
         assert_eq!(
             turn.into_fork_cursor(),
@@ -358,14 +505,14 @@ mod tests {
 
         let mut command = PromptLifecycle::default();
         command.observe(&update("other", "unrelated", "before"));
-        command.acknowledge(&json!({"messageId": "command"}));
+        command.acknowledge("command".into());
         assert_eq!(command.into_fork_cursor().unwrap().cursor_id, None);
     }
 
     #[test]
     fn accepts_a_capability_withdrawal_without_repeating_the_anchor() {
         let mut turn = PromptLifecycle::default();
-        turn.acknowledge(&json!({"messageId": "input"}));
+        turn.acknowledge("input".into());
         turn.observe(&json!({
             "sessionUpdate":"cursor_update", "cursorId":"opaque", "capabilities":{"fork":{}},
             "anchor":{"type":"user_message", "messageId":"input", "position":"before"},

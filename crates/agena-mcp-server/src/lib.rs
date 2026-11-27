@@ -41,6 +41,7 @@ use rmcp::model::{
 use rmcp::service::{RequestContext, RoleServer};
 use tokio_util::sync::CancellationToken;
 
+pub mod antigravity_guard;
 mod stateless_tool_policy;
 pub mod stdio_relay;
 
@@ -79,6 +80,8 @@ pub enum McpServerError {
     InvalidParams(String),
     #[error("not found: {0}")]
     NotFound(String),
+    #[error("tool request cancelled")]
+    Cancelled,
     #[error("backend error: {0}")]
     Backend(String),
     #[error("io error: {0}")]
@@ -112,6 +115,14 @@ impl Default for ServerInfo {
 pub trait McpServerBackend: Send + Sync + 'static {
     async fn list_tools(&self) -> Result<Vec<ToolDescriptor>, McpServerError>;
     async fn call_tool(&self, params: CallToolParams) -> Result<CallToolResult, McpServerError>;
+
+    async fn call_tool_with_cancellation(
+        &self,
+        params: CallToolParams,
+        _cancel: CancellationToken,
+    ) -> Result<CallToolResult, McpServerError> {
+        self.call_tool(params).await
+    }
 
     async fn list_resources(&self) -> Result<Vec<ResourceDescriptor>, McpServerError> {
         Ok(Vec::new())
@@ -176,18 +187,16 @@ impl<B> BackendHandler<B> {
 
 /// Build an Axum-compatible Streamable HTTP MCP service.
 ///
-/// The service creates one [`BackendHandler`] per request while sharing the
-/// supplied backend. The HTTP integration is intentionally stateless: the
-/// tunnel can forward each JSON-RPC request independently, and no
-/// `Mcp-Session-Id` is required. Authentication is intentionally left to the
-/// host application so it can attach an OAuth/resource-server middleware
-/// before mounting this service.
+/// Clients that negotiate an older MCP protocol can use an in-memory
+/// `Mcp-Session-Id` to route requests and their cancellation notifications.
+/// Modern stateless requests use the same backend. The mounting application
+/// supplies the authentication middleware.
 pub fn streamable_http_service<B>(
     backend: B,
     config: rmcp::transport::StreamableHttpServerConfig,
 ) -> rmcp::transport::StreamableHttpService<
     BackendHandler<B>,
-    rmcp::transport::streamable_http_server::session::never::NeverSessionManager,
+    rmcp::transport::streamable_http_server::session::local::LocalSessionManager,
 >
 where
     B: McpServerBackend,
@@ -199,9 +208,7 @@ where
                 &backend,
             )))
         },
-        Arc::new(
-            rmcp::transport::streamable_http_server::session::never::NeverSessionManager::default(),
-        ),
+        Arc::new(Default::default()),
         config,
     )
 }
@@ -258,7 +265,7 @@ where
     fn call_tool(
         &self,
         request: rmcp::model::CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<CallToolResponse, ErrorData>> + Send + '_ {
         let backend = Arc::clone(&self.backend);
         async move {
@@ -266,7 +273,10 @@ where
                 name: request.name.to_string(),
                 arguments: request.arguments.map(serde_json::Value::Object),
             };
-            let result = backend.call_tool(params).await.map_err(to_rmcp_error)?;
+            let result = backend
+                .call_tool_with_cancellation(params, context.ct)
+                .await
+                .map_err(to_rmcp_error)?;
             project(move || convert_call_tool_result(result).map(Into::into)).await
         }
     }
@@ -489,6 +499,9 @@ fn to_rmcp_error(error: McpServerError) -> ErrorData {
         }
         McpServerError::NotFound(message) => {
             ErrorData::new(ErrorCode::METHOD_NOT_FOUND, message, None)
+        }
+        McpServerError::Cancelled => {
+            ErrorData::new(ErrorCode(-32800), "Tool request cancelled", None)
         }
         other => ErrorData::new(ErrorCode::INTERNAL_ERROR, other.to_string(), None),
     }

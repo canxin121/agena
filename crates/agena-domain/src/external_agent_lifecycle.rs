@@ -40,6 +40,15 @@ pub enum ExternalAgentWorkspaceAction {
         native_id: String,
         archived: bool,
     },
+    SetTitle {
+        agent: ExternalAgent,
+        native_id: String,
+        title: String,
+    },
+    Delete {
+        agent: ExternalAgent,
+        native_id: String,
+    },
     Watch {
         agent: ExternalAgent,
         wait_seconds: Option<u16>,
@@ -73,6 +82,13 @@ pub enum ExternalAgentWorkspaceResult {
     Archive {
         native_id: String,
         archived: bool,
+    },
+    Title {
+        native_id: String,
+        title: String,
+    },
+    Deleted {
+        native_id: String,
     },
     Watch {
         supported: bool,
@@ -108,6 +124,12 @@ pub struct ExternalAgentIndexCapabilities {
     pub archive: bool,
     pub batch_get: bool,
     pub watch: bool,
+    #[serde(default)]
+    pub title: bool,
+    #[serde(default)]
+    pub delete: bool,
+    #[serde(default)]
+    pub fork: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

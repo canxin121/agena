@@ -29,6 +29,17 @@ mcp_headers = {}
 provider_configured = False
 provider_current = {"apiType": "openai", "baseUrl": "https://default.example.invalid"}
 session_id = "custom-acp-session-1"
+store_path = Path(".custom-acp-sessions.json")
+
+
+def load_store():
+    if store_path.exists():
+        return json.loads(store_path.read_text())
+    return {}
+
+
+def save_store(data):
+    store_path.write_text(json.dumps(data))
 
 
 def send(**fields):
@@ -87,7 +98,13 @@ for line in sys.stdin:
                 "agentCapabilities": {
                     "mcpCapabilities": {"http": True},
                     "providers": {},
-                    "sessionCapabilities": {"resume": {}, "close": {}},
+                    "sessionCapabilities": {
+                        "list": {},
+                        "resume": {},
+                        "close": {},
+                        "title": {},
+                        "delete": {},
+                    },
                 },
                 "authMethods": [
                     {"id": "cli-login", "name": "CLI Login", "type": "terminal", "args": ["login"]}
@@ -125,7 +142,39 @@ for line in sys.stdin:
         assert bridge["type"] == "http" and bridge["name"] == "agena", bridge
         mcp_url = bridge["url"]
         mcp_headers = {h["name"]: h["value"] for h in bridge["headers"]}
+        store = load_store()
+        store[session_id] = {
+            "sessionId": session_id,
+            "cwd": params.get("cwd") or os.getcwd(),
+            "title": "Initial custom title",
+            "updatedAt": "2026-11-28T00:00:00Z",
+        }
+        save_store(store)
         send(id=identifier, result={"sessionId": session_id})
+    elif method == "session/list":
+        store = load_store()
+        cwd_filter = params.get("cwd")
+        rows = [
+            row
+            for row in store.values()
+            if not cwd_filter or row.get("cwd") == cwd_filter
+        ]
+        send(id=identifier, result={"sessions": rows})
+    elif method == "session/set_title":
+        sid = params["sessionId"]
+        title = params["title"]
+        store = load_store()
+        assert sid in store, f"unknown session {sid}"
+        store[sid]["title"] = title
+        save_store(store)
+        send(id=identifier, result={"title": title})
+    elif method == "session/delete":
+        sid = params["sessionId"]
+        store = load_store()
+        assert sid in store, f"unknown session {sid}"
+        del store[sid]
+        save_store(store)
+        send(id=identifier, result={})
     elif method == "session/prompt":
         assert params["sessionId"] == session_id
         mcp(

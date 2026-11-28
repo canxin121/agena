@@ -30,7 +30,7 @@ pub(in crate::session::manager::external_agent) struct LifecycleCapabilities {
     system_prompt: SystemPromptSupport,
     pub(super) fork: bool,
     status: bool,
-    title: bool,
+    pub(super) title: bool,
 }
 
 impl LifecycleCapabilities {

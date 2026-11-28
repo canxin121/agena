@@ -1464,6 +1464,93 @@ async fn custom_generic_acp_agent_catalog_and_execution() -> TestResult {
             run.assert_succeeded()?;
             run.assert_text_contains("custom acp ok: acp callback content")?;
             ensure!(case.model().requests().is_empty());
+
+            // Workspace index_list exposes standard ACP title/delete capabilities and supports
+            // direct workspace-level set_title and delete by native_id without reopening.
+            let listed = user
+                .client()
+                .external_agent_workspace(
+                    workspace_id,
+                    agena_domain::ExternalAgentWorkspaceAction::IndexList {
+                        agent: ExternalAgent::Custom("codex-custom".into()),
+                        cursor: None,
+                        archived: agena_domain::ExternalAgentArchiveFilter::Unarchived,
+                    },
+                )
+                .await?;
+            match listed {
+                agena_domain::ExternalAgentWorkspaceResult::IndexPage {
+                    sessions,
+                    capabilities,
+                    ..
+                } => {
+                    ensure!(
+                        capabilities.title && capabilities.delete && !capabilities.fork,
+                        "{capabilities:?}"
+                    );
+                    ensure!(
+                        sessions.len() == 1
+                            && sessions[0].session.native_id == "custom-acp-session-1"
+                            && sessions[0].session.title.as_deref()
+                                == Some("Initial custom title"),
+                        "{sessions:?}"
+                    );
+                }
+                other => anyhow::bail!("unexpected index_list result: {other:?}"),
+            }
+
+            let renamed = user
+                .client()
+                .external_agent_workspace(
+                    workspace_id,
+                    agena_domain::ExternalAgentWorkspaceAction::SetTitle {
+                        agent: ExternalAgent::Custom("codex-custom".into()),
+                        native_id: "custom-acp-session-1".into(),
+                        title: "Renamed from sidebar".into(),
+                    },
+                )
+                .await?;
+            match renamed {
+                agena_domain::ExternalAgentWorkspaceResult::Title { native_id, title } => {
+                    ensure!(native_id == "custom-acp-session-1" && title == "Renamed from sidebar");
+                }
+                other => anyhow::bail!("unexpected set_title result: {other:?}"),
+            }
+
+            let deleted = user
+                .client()
+                .external_agent_workspace(
+                    workspace_id,
+                    agena_domain::ExternalAgentWorkspaceAction::Delete {
+                        agent: ExternalAgent::Custom("codex-custom".into()),
+                        native_id: "custom-acp-session-1".into(),
+                    },
+                )
+                .await?;
+            match deleted {
+                agena_domain::ExternalAgentWorkspaceResult::Deleted { native_id } => {
+                    ensure!(native_id == "custom-acp-session-1");
+                }
+                other => anyhow::bail!("unexpected delete result: {other:?}"),
+            }
+
+            let after_delete = user
+                .client()
+                .external_agent_workspace(
+                    workspace_id,
+                    agena_domain::ExternalAgentWorkspaceAction::IndexList {
+                        agent: ExternalAgent::Custom("codex-custom".into()),
+                        cursor: None,
+                        archived: agena_domain::ExternalAgentArchiveFilter::Unarchived,
+                    },
+                )
+                .await?;
+            match after_delete {
+                agena_domain::ExternalAgentWorkspaceResult::IndexPage { sessions, .. } => {
+                    ensure!(sessions.is_empty(), "{sessions:?}");
+                }
+                other => anyhow::bail!("unexpected index_list after delete: {other:?}"),
+            }
             Ok(())
         })
         .await

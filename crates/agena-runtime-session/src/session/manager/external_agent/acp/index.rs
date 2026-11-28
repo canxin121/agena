@@ -83,16 +83,27 @@ impl AcpClient {
         }
         let mut client = Self::spawn(spec, cwd)?;
         client.air_index = true;
-        let initialized = client.initialization(cancel).await;
-        let result = initialized.map(|response| {
+        let result = client.initialization(cancel).await.map(|response| {
             let supports = |capability| protocol::advertises_air_capability(response, capability);
             let index = supports("sessionIndex");
             let batch_get = index && supports("sessionBatchGet");
+            (
+                index,
+                batch_get && supports("sessionArchive"),
+                batch_get,
+                index && supports("sessionListSubscribe"),
+            )
+        });
+        let session_caps = client.capabilities;
+        let result = result.map(|(index, archive, batch_get, watch)| {
             ExternalAgentIndexCapabilities {
                 index,
-                archive: batch_get && supports("sessionArchive"),
+                archive,
                 batch_get,
-                watch: index && supports("sessionListSubscribe"),
+                watch,
+                title: session_caps.is_some_and(|caps| caps.lifecycle.title),
+                delete: session_caps.is_some_and(|caps| caps.delete),
+                fork: session_caps.is_some_and(|caps| caps.lifecycle.fork),
             }
         });
         match result {

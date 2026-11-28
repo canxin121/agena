@@ -48,6 +48,41 @@ impl SessionManager {
                 }
                 agent.clone()
             }
+            Action::SetTitle {
+                agent,
+                native_id,
+                title,
+            } => {
+                if invalid_native_string(native_id) {
+                    return Err(AppError::Config(
+                        "Invalid external agent conversation ID.".into(),
+                    ));
+                }
+                let title = validated_title(title.clone())?;
+                return self
+                    .mutate_workspace_native_session(
+                        workspace,
+                        agent.clone(),
+                        native_id.clone(),
+                        WorkspaceNativeMutation::SetTitle(title),
+                    )
+                    .await;
+            }
+            Action::Delete { agent, native_id } => {
+                if invalid_native_string(native_id) {
+                    return Err(AppError::Config(
+                        "Invalid external agent conversation ID.".into(),
+                    ));
+                }
+                return self
+                    .mutate_workspace_native_session(
+                        workspace,
+                        agent.clone(),
+                        native_id.clone(),
+                        WorkspaceNativeMutation::Delete,
+                    )
+                    .await;
+            }
             Action::Watch {
                 agent,
                 wait_seconds,
@@ -306,6 +341,126 @@ impl SessionManager {
                 AppError::Internal(format!("Native history subscription stopped: {error}"))
             })?
     }
+
+    async fn mutate_workspace_native_session(
+        &self,
+        workspace: i64,
+        agent: ExternalAgent,
+        native_id: String,
+        mutation: WorkspaceNativeMutation,
+    ) -> Result<ExternalAgentWorkspaceResult, AppError> {
+        let spec = self.resolve_external_agent(&agent)?;
+        let cwd = canonical_directory(&self.workspace_root_by_id(workspace).await?).await?;
+        let _permit = self.reserve_execution()?;
+        let cancel = self.shutdown.child_token();
+        let lock = native_replay_lock(&cwd, &agent, &native_id);
+        let _held = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(AppError::Cancelled),
+            held = lock.lock_owned() => held,
+        };
+        let lookup = ExternalAgentLink {
+            native_id: native_id.clone(),
+            cwd: cwd.clone(),
+            incarnation: None,
+            resume_at: None,
+        };
+        let open_view = self
+            .kernel_runtime
+            .acp_view(workspace, agent.clone(), &lookup)
+            .await
+            .map_err(kernel_error)?;
+        let busy_message = match &mutation {
+            WorkspaceNativeMutation::SetTitle(_) => {
+                "Finish or stop the active turn before renaming this conversation."
+            }
+            WorkspaceNativeMutation::Delete => {
+                "Finish or stop the active turn before deleting this conversation."
+            }
+        };
+        let view_dispatch = open_view.map(|id| (id, self.session_dispatch(id)));
+        let _view_guards = if let Some((id, dispatch)) = view_dispatch.as_ref() {
+            let submission = dispatch
+                .submission
+                .try_lock()
+                .map_err(|_| AppError::Config(busy_message.into()))?;
+            let execution = dispatch
+                .execution
+                .try_lock()
+                .map_err(|_| AppError::Config(busy_message.into()))?;
+            if let Ok(snapshot) = self.kernel().reader.control_snapshot(*id, 0).await
+                && (snapshot.summary.running_executions != 0
+                    || snapshot.summary.queued_executions != 0)
+            {
+                return Err(AppError::Config(busy_message.into()));
+            }
+            self.close_idle_external_agent(*id).await;
+            Some((submission, execution))
+        } else {
+            None
+        };
+        let mut client = acp::AcpClient::spawn(spec, &cwd)?;
+        if matches!(mutation, WorkspaceNativeMutation::Delete) {
+            // Claude v1 maps Delete to Archive on legacy AIR connections.
+            client.use_plain_delete();
+        }
+        let outcome = async {
+            match mutation {
+                WorkspaceNativeMutation::SetTitle(title) => {
+                    let saved = client.set_native_title(&native_id, &title, &cancel).await?;
+                    if let Some(id) = open_view {
+                        let request = RequestId::new();
+                        persist(|| {
+                            self.kernel().sessions.update_metadata(
+                                request,
+                                id,
+                                MetadataChange {
+                                    title: Some(saved.clone()),
+                                    sync_external_agent_title: true,
+                                    ..Default::default()
+                                },
+                            )
+                        })
+                        .await
+                        .map_err(kernel_error)?;
+                    }
+                    Ok(ExternalAgentWorkspaceResult::Title {
+                        native_id,
+                        title: saved,
+                    })
+                }
+                WorkspaceNativeMutation::Delete => {
+                    client.release_native(&native_id, true, &cancel).await?;
+                    if let Some(id) = open_view {
+                        let stored_link = self
+                            .kernel()
+                            .reader
+                            .configuration(id)
+                            .await
+                            .ok()
+                            .and_then(|config| config.native_session_link())
+                            .unwrap_or(lookup);
+                        let request = RequestId::new();
+                        let _ = persist(|| {
+                            self.kernel()
+                                .sessions
+                                .detach_external_agent(request, id, stored_link.clone())
+                        })
+                        .await;
+                    }
+                    Ok(ExternalAgentWorkspaceResult::Deleted { native_id })
+                }
+            }
+        }
+        .await;
+        client.close().await;
+        outcome
+    }
+}
+
+enum WorkspaceNativeMutation {
+    SetTitle(String),
+    Delete,
 }
 
 async fn standard_history(
@@ -318,6 +473,7 @@ async fn standard_history(
         ExternalAgentWorkspaceAction::IndexList {
             cursor, archived, ..
         } => {
+            let caps = client.lifecycle_capabilities(cancel).await?;
             let archive = client.supports_native_archive(cancel).await?;
             let page = client
                 .list_workspace_native(cwd, cursor.as_deref(), archived, cancel)
@@ -327,6 +483,9 @@ async fn standard_history(
                 next_cursor: page.next_cursor,
                 capabilities: agena_domain::ExternalAgentIndexCapabilities {
                     archive,
+                    title: caps.title,
+                    delete: caps.delete,
+                    fork: caps.fork,
                     ..Default::default()
                 },
             })

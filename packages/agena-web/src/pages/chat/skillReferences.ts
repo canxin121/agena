@@ -3,7 +3,7 @@ import type { SkillSummary } from '@/lib/skillsApi'
 import type { AttachedFile } from './useChatAttachments'
 
 export type ManagedSkillCatalogEntry = {
-  plugin_id: 'agena.skills'
+  plugin_id: string
   id: string
   skill_id: string
   title: string
@@ -16,10 +16,10 @@ export type SkillCatalogEntry = PluginCommandCatalogItem | ManagedSkillCatalogEn
 
 export function managedSkillCatalog(skills: SkillSummary[]): ManagedSkillCatalogEntry[] {
   return skills
-    .filter((skill) => skill.enabled && skill.valid && !skill.shadowed)
+    .filter((skill) => skill.enabled && skill.valid && !skill.shadowed && skill.invocation?.userInvocable !== false)
     .map(
       (skill): ManagedSkillCatalogEntry => ({
-        plugin_id: 'agena.skills',
+        plugin_id: skill.invocation && skill.source?.kind === 'plugin' ? skill.source.location : 'agena.skills',
         id: skill.name,
         skill_id: skill.id,
         title: skill.name,

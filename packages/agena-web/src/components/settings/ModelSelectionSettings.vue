@@ -574,6 +574,7 @@ async function saveSessionSelection() {
     acceptSessionState(state)
     syncEditor()
     toasts.push('success', st('Model settings saved'))
+    for (const message of state.system_messages ?? []) toasts.push('info', message)
   } catch (reason) {
     if (!disposed && target === targetIdentity.value)
       saveError.value = reason instanceof Error ? reason.message : String(reason)

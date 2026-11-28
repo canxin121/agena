@@ -1,11 +1,14 @@
 import { normalizeMessageIdentity } from '@/lib/messageIdentity'
+import { resourceComposerNode } from '@/lib/composerAttachments'
+import type { McpAppMedia, McpAppMessageContent } from '@/features/mcpApps/media'
+import { MAX_ATTACHMENTS } from '@/pages/chat/attachmentIngestion'
 import { defineStore } from 'pinia'
 import { useUiStore } from './ui'
 import { useBtwStore } from './btw'
 import { computed, onScopeDispose, ref } from 'vue'
 
 import * as chatApi from './chat/api'
-import { sessionWasDeleted } from './chat/sessionMutationSync'
+import { sessionRoutingScope, sessionWasDeleted } from './chat/sessionMutationSync'
 import { TranscriptCacheIndex } from './chat/transcriptCache'
 import { normalizeAgenaPart } from './chat/api'
 import {
@@ -73,6 +76,8 @@ const SESSION_PAGE_SIZE = 30
 // page is never only half of one reply. Older pages use the same size.
 const MESSAGE_PAGE_SIZE = 2
 const OLDER_MESSAGE_PAGE_SIZE = 2
+const MAX_STAGED_MCP_APP_MEDIA_BYTES = 32 * 1024 * 1024
+type StagedMcpAppContext = McpAppMessageContent & { scope: number; sending: boolean }
 
 function isRecord(value: JsonValue): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -373,6 +378,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
   // requests capture this generation so a late response cannot repopulate a
   // cache that has already been reset.
   let transcriptCacheGeneration = 0
+  const mcpAppContexts = new Map<string, Map<string, StagedMcpAppContext>>()
+  const mcpAppContextRevision = ref(0)
   let createSessionInFlight: Promise<Session | null> | null = null
   const workspaceRequestById = new Map<number, Promise<{ id: number; path: string } | null>>()
   const directoryHydrationOwners = new Map<string, object>()
@@ -1177,6 +1184,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
   /** Drop transcript pages when the chat page is actually unmounted. */
   function clearTranscriptCache() {
     transcriptCacheGeneration += 1
+    mcpAppContexts.clear()
+    mcpAppContextRevision.value += 1
     transcriptObservations.clear()
     transcriptRecovery.clear()
     executionWriteEpoch.clear()
@@ -1795,6 +1804,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
   }
 
   function forgetSession(sid: string) {
+    if (mcpAppContexts.delete(sid)) mcpAppContextRevision.value += 1
     transcriptCache.remove(sid)
     evictedTranscriptSessions.delete(sid)
     transcriptObservations.delete(sid)
@@ -1939,33 +1949,68 @@ const useChatStoreDefinition = defineStore('chat', () => {
     return document
   }
 
-  function buildRunOptions(opts: {
-    providerID?: string
-    adapterID?: string
-    modelID?: string
-    thinkingMode?: string
-    speedMode?: string
-    verbosity?: string
-  }): chatApi.RunOptionsPayload {
-    const providerID = (opts.providerID || '').trim()
-    const adapterID = (opts.adapterID || '').trim()
-    const modelID = (opts.modelID || '').trim()
-    const options: chatApi.RunOptionsPayload = {}
-    if (providerID && modelID) {
-      const model: chatApi.AgenaModelRef = {
-        provider_id: providerID,
-        ...(adapterID ? { adapter_id: adapterID } : {}),
-        model_id: modelID,
+  function hasMcpAppContext(sessionId: string, partId: string): boolean {
+    // Keep the transcript card in sync with consumption by the composer.
+    void mcpAppContextRevision.value
+    const context = mcpAppContexts.get(sessionId)?.get(partId)
+    return !!context && context.scope === sessionRoutingScope() && !context.sending
+  }
+
+  function setMcpAppContext(sessionId: string, partId: string, text: string, media?: McpAppMedia[]): boolean {
+    const entries = mcpAppContexts.get(sessionId) || new Map<string, StagedMcpAppContext>()
+    if (!text && !media?.length) {
+      entries.delete(partId)
+      if (!entries.size) mcpAppContexts.delete(sessionId)
+    } else {
+      if (mcpAppContexts.size >= 32 && !mcpAppContexts.has(sessionId)) return false
+      if (entries.size >= 4 && !entries.has(partId)) return false
+      if (media?.length) {
+        let bytes = media.reduce((total, file) => total + file.blob.size, 0)
+        const replaced = entries.get(partId)
+        for (const session of mcpAppContexts.values()) {
+          for (const context of session.values()) {
+            if (context === replaced && !context.sending) continue
+            bytes += context.media?.reduce((total, file) => total + file.blob.size, 0) ?? 0
+          }
+        }
+        if (bytes > MAX_STAGED_MCP_APP_MEDIA_BYTES) return false
       }
-      options.model = model
+      entries.set(partId, { text, media, scope: sessionRoutingScope(), sending: false })
+      mcpAppContexts.set(sessionId, entries)
     }
-    const thinkingMode = String(opts.thinkingMode || '').trim()
-    const speedMode = String(opts.speedMode || '').trim()
-    const verbosity = String(opts.verbosity || '').trim()
-    if (thinkingMode) options.thinking_mode = thinkingMode
-    if (speedMode) options.speed_mode = speedMode
-    if (verbosity) options.verbosity = verbosity
-    return options
+    mcpAppContextRevision.value += 1
+    return true
+  }
+
+  async function appendMcpAppMedia(
+    sessionId: string,
+    document: JsonValue[],
+    media: McpAppMedia[],
+    assertCurrent: () => void,
+    signal?: AbortSignal,
+  ) {
+    for (const file of media) {
+      assertCurrent()
+      const uploaded = await chatApi.uploadSessionFile(
+        Number(sessionId),
+        { filename: file.filename, blob: file.blob, mime: file.blob.type },
+        signal,
+      )
+      assertCurrent()
+      if (uploaded.session_id !== Number(sessionId) || !uploaded.path || !uploaded.sha256) {
+        throw new Error(i18n.global.t('chat.mcpApp.unavailable'))
+      }
+      document.push(
+        resourceComposerNode({
+          path: uploaded.path,
+          filename: file.filename,
+          mime: file.blob.type,
+          size: uploaded.size_bytes,
+          sha256: uploaded.sha256,
+          delivery: 'model_input',
+        }),
+      )
+    }
   }
 
   async function sendMessage(
@@ -1973,6 +2018,9 @@ const useChatStoreDefinition = defineStore('chat', () => {
     opts: {
       text?: string
       parts?: JsonValue[]
+      appMedia?: McpAppMedia[]
+      signal?: AbortSignal
+      promptCommand?: chatApi.SendMessagePayload['promptCommand']
       providerID?: string
       adapterID?: string
       modelID?: string
@@ -1983,9 +2031,59 @@ const useChatStoreDefinition = defineStore('chat', () => {
   ) {
     const sid = (sessionId || '').trim()
     const document = buildDocument(opts)
-    if (document.length === 0) return null
+    if (!document.length && !opts.appMedia?.length) return null
+    const scope = sessionRoutingScope()
     const generation = transcriptCacheGeneration
-    const state = await chatApi.sendMessage(sid, { document, ...buildRunOptions(opts) })
+    const pending = opts.promptCommand ? undefined : mcpAppContexts.get(sid)
+    const context = [...(pending ?? [])].filter(([, entry]) => entry.scope === scope && !entry.sending)
+    if (context.length) {
+      for (const [, entry] of context) entry.sending = true
+      mcpAppContextRevision.value += 1
+    }
+    function assertCurrent() {
+      opts.signal?.throwIfAborted()
+      if (generation !== transcriptCacheGeneration || scope !== sessionRoutingScope() || sessionWasDeleted(sid)) {
+        throw new DOMException('Conversation changed before sending', 'AbortError')
+      }
+    }
+    let submitted = false
+    let state
+    try {
+      const appMediaCount =
+        (opts.appMedia?.length ?? 0) + context.reduce((count, [, entry]) => count + (entry.media?.length ?? 0), 0)
+      if (appMediaCount) {
+        const resourceCount = document.filter((node) => {
+          const activity = asRecord(asRecord(node).activity)
+          return asRecord(activity.payload).activity_type === 'resource'
+        }).length
+        if (appMediaCount + resourceCount > MAX_ATTACHMENTS) {
+          throw new Error(i18n.global.t('chat.attachments.errors.tooMany', { count: MAX_ATTACHMENTS }))
+        }
+        if (opts.appMedia?.length) await appendMcpAppMedia(sid, document, opts.appMedia, assertCurrent, opts.signal)
+      }
+      for (const [, entry] of context) {
+        document.push({ type: 'text', text: `\n\n[MCP App context approved by the user]\n${entry.text}` })
+        if (entry.media?.length) await appendMcpAppMedia(sid, document, entry.media, assertCurrent, opts.signal)
+      }
+      assertCurrent()
+      state = await chatApi.sendMessage(sid, {
+        document,
+        promptCommand: opts.promptCommand,
+        ...chatApi.buildRunOptions(opts),
+      })
+      submitted = true
+    } finally {
+      const active = mcpAppContexts.get(sid)
+      if (active && context.length) {
+        for (const [part, entry] of context) {
+          if (active.get(part) !== entry) continue
+          if (submitted) active.delete(part)
+          else entry.sending = false
+        }
+        if (!active.size) mcpAppContexts.delete(sid)
+        mcpAppContextRevision.value += 1
+      }
+    }
     if (generation !== transcriptCacheGeneration || sessionWasDeleted(sid)) return state
     applyExecutionResource(state, generation)
     // The acknowledgement is durable even if the SSE patch was lost.
@@ -2001,7 +2099,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const sid = (sessionId || '').trim()
     if (!sid) return
     const generation = transcriptCacheGeneration
-    const state = await chatApi.continueSession(sid, buildRunOptions({}))
+    const state = await chatApi.continueSession(sid, chatApi.buildRunOptions({}))
     if (!applyExecutionResource(state, generation)) return
     reconcileExecutionAfterWrite(sid)
   }
@@ -2261,7 +2359,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const sid = (sessionId || '').trim()
     if (!sid) return null
     const generation = transcriptCacheGeneration
-    const state = await chatApi.compactSession(sid, buildRunOptions({}))
+    const state = await chatApi.compactSession(sid, chatApi.buildRunOptions({}))
     if (!applyExecutionResource(state, generation)) return null
     reconcileExecutionAfterWrite(sid)
   }
@@ -2277,6 +2375,7 @@ const useChatStoreDefinition = defineStore('chat', () => {
     const sid = (sessionId || '').trim()
     if (!sid) return null
     await chatApi.clearSession(sid, mode)
+    if (mcpAppContexts.delete(sid)) mcpAppContextRevision.value += 1
     clearMessagesHydrated(sid)
     messagesBySession.value = { ...messagesBySession.value, [sid]: [] }
     transcriptCache.remove(sid)
@@ -2622,6 +2721,8 @@ const useChatStoreDefinition = defineStore('chat', () => {
     updateMessageQueue,
     sendText,
     sendMessage,
+    hasMcpAppContext,
+    setMcpAppContext,
     continueSession,
     setSessionPermission,
     setSessionPermissionProfile,

@@ -52,3 +52,32 @@ export function buildRunRequestBody(options?: RunOptionsPayload): JsonObject {
   }
   return body
 }
+
+export function buildRunOptions(opts: {
+  providerID?: string
+  adapterID?: string
+  modelID?: string
+  thinkingMode?: string
+  speedMode?: string
+  verbosity?: string
+}): RunOptionsPayload {
+  const providerID = (opts.providerID || '').trim()
+  const adapterID = (opts.adapterID || '').trim()
+  const modelID = (opts.modelID || '').trim()
+  const options: RunOptionsPayload = {}
+  if (providerID && modelID) {
+    const model: AgenaModelRef = {
+      provider_id: providerID,
+      ...(adapterID ? { adapter_id: adapterID } : {}),
+      model_id: modelID,
+    }
+    options.model = model
+  }
+  const thinkingMode = String(opts.thinkingMode || '').trim()
+  const speedMode = String(opts.speedMode || '').trim()
+  const verbosity = String(opts.verbosity || '').trim()
+  if (thinkingMode) options.thinking_mode = thinkingMode
+  if (speedMode) options.speed_mode = speedMode
+  if (verbosity) options.verbosity = verbosity
+  return options
+}

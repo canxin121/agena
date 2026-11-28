@@ -143,6 +143,9 @@ export type AuthorKind = {
   kind: 'channel_member'
   role: ChannelRole
 } | {
+  kind: 'plugin'
+  as_user: boolean
+} | {
   kind: 'system'
   source: SystemAuthorKind
 }

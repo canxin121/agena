@@ -17,7 +17,9 @@ import {
 import {
   executePluginSlashCommand,
   type PluginCommandCatalogItem,
+  type PluginCommandInvocation,
   type PluginCommandResult,
+  type SessionPromptCommand,
 } from '@/lib/pluginOperations'
 
 /** A locally-run command, with the published description resolved for display. */
@@ -47,6 +49,11 @@ export type PluginCommand = {
 }
 
 export type Command = BuiltInCommand | PluginCommand
+
+type PluginSlashAction =
+  | { kind: 'prompt'; command: SessionPromptCommand }
+  | { kind: 'composer'; invocation: PluginCommandInvocation }
+  | { kind: 'result'; result: PluginCommandResult }
 
 function text(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
@@ -99,12 +106,13 @@ export function useChatCommands(opts: {
   draft: Ref<string>
   composerRef: Ref<ComposerExpose | null>
   composerPickerOpen: Ref<null | ComposerPickerKind>
+  sessionId: Ref<string | null>
   /** Whether the rendered conversation is the operator Bot. */
   isBotSession: Ref<boolean>
   onSend: () => Promise<void>
   onCommandSelected: (command: Command) => void | Promise<void>
 }) {
-  const { draft, composerRef, composerPickerOpen, isBotSession, onSend, onCommandSelected } = opts
+  const { draft, composerRef, composerPickerOpen, sessionId, isBotSession, onSend, onCommandSelected } = opts
   const { t } = useI18n()
   const commands = ref<Command[]>([])
   const commandsLoading = ref(false)
@@ -112,7 +120,7 @@ export function useChatCommands(opts: {
   const commandOpen = ref(false)
   const commandIndex = ref(0)
   const commandFocusSearch = ref(true)
-  let commandsLoadInFlight: Promise<void> | null = null
+  let commandsLoadInFlight: { sessionId: string | null; isBot: boolean; promise: Promise<void> } | null = null
 
   function closeCommandPalette() {
     commandOpen.value = false
@@ -185,27 +193,28 @@ export function useChatCommands(opts: {
     }
   }
 
-  async function loadCommandsInternal() {
+  async function loadCommandsInternal(targetSession: string | null, targetIsBot: boolean) {
     commandsLoading.value = true
     try {
       let catalogCommands: PluginCommandCatalogItem[] = []
       try {
-        const pluginCatalog = await readPluginCommandCatalog()
+        const pluginCatalog = await readPluginCommandCatalog(targetSession)
         catalogCommands = pluginCatalog?.catalog?.commands || []
       } catch {
         // An unreachable plugin catalog means there is nothing to offer yet;
         // the next load picks it up.
       }
 
+      if (targetSession !== sessionId.value || targetIsBot !== isBotSession.value) return
       const next = new Map<string, Command>()
-      for (const command of clientCommandsFromCatalog(catalogCommands, isBotSession.value)) {
+      for (const command of clientCommandsFromCatalog(catalogCommands, targetIsBot)) {
         const builtIn = builtInFromCatalog(command)
         if (builtIn && !next.has(builtIn.name)) next.set(builtIn.name, builtIn)
       }
       for (const rawCommand of catalogCommands) {
         // A declaration that does not name this conversation kind has no row,
         // exactly as the server refuses to run it here.
-        if (!commandAppliesToSession(rawCommand, isBotSession.value)) continue
+        if (!commandAppliesToSession(rawCommand, targetIsBot)) continue
         const command = pluginCommandFromCatalog(rawCommand)
         if (!command) continue
         if (next.has(command.name)) continue
@@ -216,31 +225,38 @@ export function useChatCommands(opts: {
       }
       commands.value = [...next.values()]
     } finally {
-      commandsLoading.value = false
+      if (targetSession === sessionId.value && targetIsBot === isBotSession.value) {
+        commandsLoading.value = false
+      }
     }
   }
 
   async function loadCommands() {
-    if (commandsLoadInFlight) return commandsLoadInFlight
-    const request = loadCommandsInternal()
+    const targetSession = sessionId.value
+    const targetIsBot = isBotSession.value
+    if (commandsLoadInFlight?.sessionId === targetSession && commandsLoadInFlight.isBot === targetIsBot) {
+      return commandsLoadInFlight.promise
+    }
+    const request = {
+      sessionId: targetSession,
+      isBot: targetIsBot,
+      promise: loadCommandsInternal(targetSession, targetIsBot),
+    }
     commandsLoadInFlight = request
     try {
-      await request
+      await request.promise
     } finally {
       if (commandsLoadInFlight === request) commandsLoadInFlight = null
     }
   }
 
-  // Switching between a project conversation and the Bot changes which
-  // declarations belong in the palette. Keep the rows honest without asking
-  // the server again: the catalog itself is session-agnostic, applicability is
-  // part of each declaration.
   watch(
-    () => isBotSession.value,
+    [sessionId, isBotSession],
     () => {
-      if (commands.value.length === 0) return
+      commands.value = []
       void loadCommands()
     },
+    { flush: 'sync' },
   )
 
   function commandScore(query: string, candidate: string): number | null {
@@ -292,7 +308,7 @@ export function useChatCommands(opts: {
 
   async function selectCommand(command: Command | null | undefined) {
     if (!command) return
-    if (commandNeedsArguments(command)) {
+    if (commandNeedsArguments(command) || (command.kind === 'plugin' && command.command.accepts_attachments)) {
       // TUI displays the required placeholder in the palette, but inserts
       // only the command name into the composer. Copying "<message>" into a
       // real draft would make it very easy to submit the placeholder
@@ -381,16 +397,43 @@ export function useChatCommands(opts: {
     }
   }
 
-  async function runPluginSlashCommand(raw: string, sessionId: string): Promise<PluginCommandResult | null> {
+  async function runPluginSlashCommand(
+    raw: string,
+    targetSession: string,
+    hasAttachments = false,
+  ): Promise<PluginSlashAction | null> {
     if (commands.value.length === 0) await loadCommands()
-    const matched = matchPluginSlashCommand(commands.value, raw)
+    let matched = matchPluginSlashCommand(commands.value, raw)
+    if (!matched && targetSession) {
+      await loadCommands()
+      matched = matchPluginSlashCommand(commands.value, raw)
+    }
+    if ((sessionId.value || '') !== targetSession) return null
     if (!matched) return null
-    const numericSessionId = Number(sessionId)
-    return await executePluginSlashCommand({
+    const numericSessionId = Number(targetSession)
+    const id = Number.isSafeInteger(numericSessionId) && numericSessionId > 0 ? numericSessionId : null
+    if (id !== null && matched.command.command.submits_prompt) {
+      return {
+        kind: 'prompt',
+        command: {
+          plugin_id: matched.command.pluginId,
+          command_id: matched.command.commandId,
+          args: matched.args,
+        },
+      }
+    }
+    const invocation = {
       command: matched.command.command,
-      sessionId: Number.isSafeInteger(numericSessionId) && numericSessionId > 0 ? numericSessionId : null,
+      sessionId: id,
       rawArgs: matched.args,
-    })
+    }
+    if (invocation.command.accepts_attachments) {
+      if (id === null) throw new Error(t('chat.toasts.sessionRequiredForCommand', { command: matched.command.name }))
+      return { kind: 'composer', invocation }
+    }
+    if (hasAttachments) throw new Error(t('chat.attachments.commandUnsupported'))
+    const result = await executePluginSlashCommand(invocation)
+    return { kind: 'result', result }
   }
 
   function commandIcon(command: Command) {

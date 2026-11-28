@@ -19,6 +19,7 @@ export function normalizeMessageIdentity(part: { author?: unknown; origin?: unkn
     (kind?.kind === 'instance_operator' ||
       (kind?.kind === 'channel_member' &&
         ['owner', 'administrator', 'operator', 'member', 'blocked'].includes(String(kind.role))) ||
+      (kind?.kind === 'plugin' && typeof kind.as_user === 'boolean') ||
       (kind?.kind === 'system' &&
         ['automation_report', 'shared_chat', 'subagent', 'integration', 'bot'].includes(String(kind.source))))
   ) {

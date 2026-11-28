@@ -10,6 +10,7 @@ import AgenaContentOutput from '@/components/chat/AgenaContentOutput.vue'
 import AgenaOperationBlock from '@/components/chat/AgenaOperationBlock.vue'
 import PartLoadingIndicator from '@/components/chat/PartLoadingIndicator.vue'
 import BrailleSpinner from '@/components/ui/BrailleSpinner.vue'
+import McpAppCard from '@/features/mcpApps/McpAppCard.vue'
 import DeferredPartBody from './DeferredPartBody.vue'
 import type { TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import type { ContentRef } from '@/lib/content'
@@ -88,6 +89,16 @@ const operation = computed<ReturnType<typeof operationPresentation>>((previous) 
   if (pane && !pane.isVisible.value && previous) return previous
   return operationPresentation(props.part, sectionValues.value, props.expanded)
 })
+const isMcpAppBlock = (block: unknown) => {
+  const value = jsonRecord(block)
+  return value.type === 'custom' && value.kind === 'mcp_app'
+}
+const presentationBlocks = computed(() => operation.value.presentationBlocks.filter((block) => !isMcpAppBlock(block)))
+const showMcpApp = computed(() =>
+  (!pane || pane.isVisible.value) &&
+  !!props.sessionId && props.sessionId === String(props.part.source.originSessionId) &&
+  jsonArray(jsonRecord(props.part.source.agenaPresentation).blocks).some(isMcpAppBlock),
+)
 const unpresentedContentResources = computed<ContentRef[]>(() => {
   if (!props.expanded || !props.sessionId) return []
   const content = jsonRecord(props.part.source.agenaContent)
@@ -560,6 +571,13 @@ function toggleOuter() {
       </span>
     </button>
 
+    <McpAppCard
+      v-if="showMcpApp && sessionId"
+      :key="`${sessionId}:${part.id}`"
+      :session-id="sessionId"
+      :part-id="part.id"
+    />
+
     <DeferredPartBody :active="expanded" class="transcript-content bg-muted/[0.08]">
       <div v-if="operation.userInputs.length" class="space-y-2 py-0.5 text-sm">
         <AgenaInteractionPart
@@ -593,7 +611,7 @@ function toggleOuter() {
         v-if="
           operation.commandMarkdown ||
           operation.summary ||
-          operation.presentationBlocks.length ||
+          presentationBlocks.length ||
           unpresentedContentResources.length
         "
         class="space-y-1 py-0.5"
@@ -615,7 +633,7 @@ function toggleOuter() {
         <MarkdownRenderer
           v-if="
             operation.summary &&
-            !operation.presentationBlocks.length &&
+            !presentationBlocks.length &&
             !operation.userInputs.length &&
             !operation.permissions.length &&
             !operation.error
@@ -625,7 +643,7 @@ function toggleOuter() {
           :stream="false"
         />
         <AgenaOperationBlock
-          v-for="(block, index) in operation.presentationBlocks"
+          v-for="(block, index) in presentationBlocks"
           :key="String(block.id || `${block.type || 'block'}:${index}`)"
           :block="block"
           :session-id="sessionId"

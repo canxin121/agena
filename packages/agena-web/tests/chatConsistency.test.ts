@@ -155,6 +155,72 @@ async function until(check: () => boolean) {
 }
 
 describe('chat session consistency', () => {
+  test('approved MCP App media waits for submission and survives a failed upload', async () => {
+    const chat = useChatStoreUnscoped(pinia)
+    const blob = new Blob(['fixture image bytes'], { type: 'image/png' })
+    const file = { kind: 'image' as const, filename: 'mcp-app-image-1.png', blob }
+    const path = '/fixture/session-assets/1/uploads/app-image.png'
+    const hash = 'e'.repeat(64)
+    const upload = spyOn(chatApi, 'uploadSessionFile')
+      .mockRejectedValueOnce(new Error('upload interrupted'))
+      .mockResolvedValue({
+        path,
+        sha256: hash,
+        session_id: 1,
+        workspace_id: 5,
+        name: file.filename,
+        size_bytes: blob.size,
+      })
+    const send = spyOn(chatApi, 'sendMessage').mockResolvedValue(execution(1))
+
+    expect(chat.setMcpAppContext('1', 'app-part', 'Approved image context', [file])).toBe(true)
+    expect(upload).not.toHaveBeenCalled()
+    await expect(chat.sendMessage('1', { text: 'My message' })).rejects.toThrow('upload interrupted')
+    expect(send).not.toHaveBeenCalled()
+    expect(chat.hasMcpAppContext('1', 'app-part')).toBe(true)
+
+    await chat.sendMessage('1', { text: 'My message' })
+    expect(upload.mock.calls[1]?.[0]).toBe(1)
+    expect(upload.mock.calls[1]?.[1].blob).toBe(blob)
+    expect(send.mock.calls[0]?.[1].document).toEqual([
+      { type: 'text', text: 'My message' },
+      { type: 'text', text: '\n\n[MCP App context approved by the user]\nApproved image context' },
+      {
+        type: 'activity',
+        activity: expect.objectContaining({
+          provenance: { content_hash: hash },
+          payload: expect.objectContaining({
+            kind: 'image',
+            delivery: 'model_input',
+            reference: { reference_type: 'workspace_path', path },
+          }),
+        }),
+      },
+    ])
+    expect(chat.hasMcpAppContext('1', 'app-part')).toBe(false)
+    await chat.sendMessage('1', { text: 'Following message' })
+    expect(upload).toHaveBeenCalledTimes(2)
+    expect(send.mock.calls[1]?.[1].document).toEqual([{ type: 'text', text: 'Following message' }])
+  })
+
+  test('a pending message acknowledgement preserves a newer approved MCP App context', async () => {
+    const chat = useChatStoreUnscoped(pinia)
+    const pending = deferred<chatApi.AgenaExecutionState>()
+    const send = spyOn(chatApi, 'sendMessage').mockReturnValueOnce(pending.promise).mockResolvedValue(execution(2))
+    expect(chat.setMcpAppContext('1', 'app-part', 'Earlier context')).toBe(true)
+    const first = chat.sendMessage('1', { text: 'First message' })
+    expect(chat.hasMcpAppContext('1', 'app-part')).toBe(false)
+    expect(chat.setMcpAppContext('1', 'app-part', 'Newer context')).toBe(true)
+    pending.resolve(execution(1))
+    await first
+
+    expect(chat.hasMcpAppContext('1', 'app-part')).toBe(true)
+    await chat.sendMessage('1', { text: 'Later message' })
+    expect(JSON.stringify(send.mock.calls[0]?.[1].document)).toContain('Earlier context')
+    expect(JSON.stringify(send.mock.calls[1]?.[1].document)).toContain('Newer context')
+    expect(chat.hasMcpAppContext('1', 'app-part')).toBe(false)
+  })
+
   test('parent part updates do not alter loaded fork or nested-fork snapshots', () => {
     const chat = useChatStoreUnscoped(pinia)
     const tool = part({

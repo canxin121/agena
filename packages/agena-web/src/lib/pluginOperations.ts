@@ -31,12 +31,14 @@ export function pluginCommandInvocationBody(input: {
   command: Pick<PluginCommandCatalogItem, 'slash'>
   sessionId: number | null
   rawArgs: string
+  composer?: PluginCommandComposer
 }) {
   return {
     input: {},
     session_id: input.sessionId,
     slash: input.command.slash || null,
     raw: String(input.rawArgs || '').trim(),
+    ...(input.composer && { composer: input.composer }),
   }
 }
 
@@ -126,6 +128,8 @@ export type PluginCommandCatalogItem = {
   plugin_id: string
   accepts_empty_input: boolean
   default_input: JsonValue
+  submits_prompt?: boolean
+  accepts_attachments?: boolean
   id: string
   title: string
   group: string
@@ -161,6 +165,12 @@ export type PluginHostEffect =
   | { kind: 'insert_prompt'; prompt: string }
   | { kind: 'refresh_plugin_surface'; plugin_id: string }
 
+export type SessionPromptCommand = {
+  plugin_id: string
+  command_id: string
+  args: string
+}
+
 export type PluginCommandResult = {
   status: PluginCommandStatus
   title: string
@@ -172,11 +182,19 @@ export type PluginCommandResult = {
   effects?: PluginHostEffect[]
 }
 
-export async function executePluginSlashCommand(input: {
+type PluginCommandComposer = {
+  document: JsonValue[]
+  options: JsonRecord
+}
+
+export type PluginCommandInvocation = {
   command: Pick<PluginCommandCatalogItem, 'plugin_id' | 'id' | 'slash'>
   sessionId: number | null
   rawArgs: string
-}): Promise<PluginCommandResult> {
+  composer?: PluginCommandComposer
+}
+
+export async function executePluginSlashCommand(input: PluginCommandInvocation): Promise<PluginCommandResult> {
   const response = await apiJson<{ result: PluginCommandResult }>(
     `/api/v1/plugins/${encodeURIComponent(input.command.plugin_id)}/commands/${encodeURIComponent(input.command.id)}/invoke`,
     {

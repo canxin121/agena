@@ -48,6 +48,7 @@ describe('skill references', () => {
       skill({ id: 'disabled', enabled: false }),
       skill({ id: 'invalid', valid: false }),
       skill({ id: 'overridden', scope: 'global', shadowed: true }),
+      skill({ id: 'model-only', invocation: { modelInvocable: true, userInvocable: false } }),
       skill({ id: 'compatible', editable: false, name: 'compatible-review' }),
       skill(),
     ])

@@ -21,6 +21,9 @@ import { useToastsStore } from '@/stores/toasts'
 
 type MarketplacePlugin = {
   plugin_id: string
+  install_spec?: string
+  install_registry?: string
+  package_source?: string
   name: string
   description: string
   homepage?: string | null
@@ -66,6 +69,7 @@ type InstalledPlugin = {
   registry_url: string
   require_signature: boolean
   require_github_distribution: boolean
+  has_install_source?: boolean
 }
 
 type OutdatedPlugin = {
@@ -82,6 +86,13 @@ type BackgroundTaskStart = {
 }
 
 const MAX_UPGRADE_BATCH_SIZE = 200
+const ecosystemSources = [
+  { id: 'agena', name: 'Agena' },
+  { id: 'codex', name: 'Codex' },
+  { id: 'claude', name: 'Claude Code' },
+  { id: 'deepseek', name: 'DeepSeek Harness' },
+]
+const agentExamples = { selector: 'codex:superpowers', environment: 'NAME', mapping: 'KEY=NAME' }
 
 const toasts = useToastsStore()
 const loading = ref(false)
@@ -90,7 +101,14 @@ const latestOperation = ref<BackgroundTask>()
 const error = ref('')
 const query = ref('')
 const source = ref('')
+const ecosystem = ref('agena')
+const enableAgentHooks = ref(false)
+const agentEnvironment = ref('')
+const directAgentSource = ref('')
+const agentOptions = ref('')
+const agentCommandHash = ref('')
 const directRepository = ref('')
+const directAgentPackage = ref('')
 const requireSignature = ref(false)
 const allowUnverified = ref(false)
 const searchResponse = ref<MarketplaceSearchResponse | null>(null)
@@ -99,6 +117,7 @@ const outdated = ref<OutdatedPlugin[]>([])
 const selectedUpgradeIds = ref<Set<string>>(new Set())
 const responseQuery = ref('')
 const responseSource = ref('')
+const responseEcosystem = ref('')
 const taskWaitController = new AbortController()
 let disposed = false
 onScopeDispose(() => {
@@ -107,8 +126,15 @@ onScopeDispose(() => {
 })
 
 const responseMatchesInputs = computed(
-  () => responseQuery.value === query.value.trim() && responseSource.value === source.value.trim(),
+  () =>
+    responseQuery.value === query.value.trim() &&
+    responseSource.value === source.value.trim() &&
+    responseEcosystem.value === ecosystem.value,
 )
+watch(ecosystem, () => {
+  source.value = ''
+  error.value = ''
+})
 const entries = computed(() => {
   if (!responseMatchesInputs.value) return []
   return [...(searchResponse.value?.entries || [])].sort((left, right) => {
@@ -141,7 +167,9 @@ const renamedQuery = computed(() => {
 })
 const installedById = computed(() => new Map(installed.value.map((entry) => [entry.plugin_id, entry])))
 const outdatedById = computed(() => new Map(outdated.value.map((entry) => [entry.plugin_id, entry])))
-const upgradeableInstalled = computed(() => installed.value.filter((entry) => outdatedById.value.has(entry.plugin_id)))
+const upgradeableInstalled = computed(() =>
+  installed.value.filter((entry) => entry.has_install_source || outdatedById.value.has(entry.plugin_id)),
+)
 const selectedUpgradeablePlugins = computed(() =>
   upgradeableInstalled.value.filter((entry) => selectedUpgradeIds.value.has(entry.plugin_id)),
 )
@@ -220,7 +248,7 @@ async function restoreOperation() {
   }
 }
 
-async function runTask(key: string, request: () => Promise<BackgroundTaskStart>): Promise<boolean> {
+async function runTask(key: string, request: () => Promise<BackgroundTaskStart>, refreshAfter = true): Promise<boolean> {
   if (actionKey.value) return false
   actionKey.value = key
   error.value = ''
@@ -230,11 +258,11 @@ async function runTask(key: string, request: () => Promise<BackgroundTaskStart>)
     const task = await observeOperation(start.task)
     if (disposed) return false
     if (task.status === 'succeeded') {
-      toasts.push('success', task.message || st('Marketplace operation completed'))
+      toasts.push('success', task.message?.split('\n', 1)[0] || st('Marketplace operation completed'))
     } else {
       throw new Error(taskFailure(task) || st('Marketplace operation failed'))
     }
-    await refresh(false)
+    if (refreshAfter) await refresh(false)
     return true
   } catch (reason) {
     if (disposed) return false
@@ -250,16 +278,19 @@ async function runTask(key: string, request: () => Promise<BackgroundTaskStart>)
 function searchRequest(refresh: boolean) {
   const requestedQuery = query.value.trim()
   const requestedSource = source.value.trim()
+  const requestedEcosystem = ecosystem.value
   const registryBody = requestedSource ? { registry_id: 'custom', registry_url: requestedSource } : {}
   return {
     query: requestedQuery,
     source: requestedSource,
+    ecosystem: requestedEcosystem,
     promise: apiJson<MarketplaceSearchResponse>('/api/v1/plugins/marketplace/search', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         ...registryBody,
         query: requestedQuery || null,
+        ecosystem: requestedEcosystem === 'agena' ? null : requestedEcosystem,
         refresh,
       }),
     }),
@@ -270,10 +301,12 @@ function setSearchResponse(
   response: MarketplaceSearchResponse,
   requestedQuery = query.value.trim(),
   requestedSource = source.value.trim(),
+  requestedEcosystem = ecosystem.value,
 ) {
   searchResponse.value = response
   responseQuery.value = requestedQuery
   responseSource.value = requestedSource
+  responseEcosystem.value = requestedEcosystem
 }
 
 async function search(refresh = false) {
@@ -282,7 +315,7 @@ async function search(refresh = false) {
   error.value = ''
   try {
     const request = searchRequest(refresh)
-    setSearchResponse(await request.promise, request.query, request.source)
+    setSearchResponse(await request.promise, request.query, request.source, request.ecosystem)
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : String(reason)
   } finally {
@@ -300,22 +333,45 @@ async function syncRegistry() {
   )
 }
 
-async function installPlugin(spec: string, dryRun = false) {
+async function installPlugin(spec: string, dryRun = false, entry?: MarketplacePlugin, packageSource?: string) {
   const trimmed = spec.trim()
   if (!trimmed) return
+  const agent = /^(codex|claude|deepseek|dsh):/.test(trimmed)
+  const registry = agent
+    ? entry?.install_registry
+      ? { registry_url: entry.install_registry }
+      : {}
+    : !trimmed.includes('/')
+      ? marketplaceRegistryBody()
+      : {}
+  const optionPairs = agentOptions.value.trim().split(/\s+/).filter(Boolean)
+  if (agent && optionPairs.some((pair) => !/^[A-Za-z0-9_]+=[A-Za-z_][A-Za-z0-9_]*$/.test(pair))) {
+    error.value = st('Use KEY=NAME for each plugin option.')
+    return
+  }
   await runTask(`${dryRun ? 'dry-run' : 'install'}:${trimmed}`, () =>
     apiJson<BackgroundTaskStart>('/api/v1/plugins/marketplace/install', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         spec: trimmed,
-        ...(!trimmed.includes('/') ? marketplaceRegistryBody() : {}),
+        ...registry,
         dry_run: dryRun,
         refresh: true,
-        require_signature: requireSignature.value,
-        allow_unverified: allowUnverified.value,
+        require_signature: !agent && requireSignature.value,
+        allow_unverified: !agent && allowUnverified.value,
+        agent_options: agent
+          ? {
+              enable_hooks: enableAgentHooks.value,
+              environment: agentEnvironment.value.trim().split(/\s+/).filter(Boolean),
+              option_env: Object.fromEntries(optionPairs.map((pair) => pair.split('='))),
+              accept_command: agentCommandHash.value.trim() || null,
+              package_source: packageSource?.trim() || entry?.package_source,
+            }
+          : undefined,
       }),
     }),
+    !dryRun,
   )
 }
 
@@ -337,7 +393,10 @@ async function upgradePlugins(pluginIds?: string[]) {
   const selectedIds = pluginIds ? [...new Set(pluginIds.map((id) => id.trim()).filter(Boolean))].sort() : null
   if (selectedIds && !selectedIds.length) return
   if (actionKey.value) return
-  const registryBody = marketplaceRegistryBody()
+  const registryBody =
+    ecosystem.value === 'agena' && selectedIds?.every((id) => !installedById.value.get(id)?.has_install_source)
+      ? marketplaceRegistryBody()
+      : {}
   const batches: Array<string[] | null> = selectedIds
     ? Array.from({ length: Math.ceil(selectedIds.length / MAX_UPGRADE_BATCH_SIZE) }, (_, index) =>
         selectedIds.slice(index * MAX_UPGRADE_BATCH_SIZE, (index + 1) * MAX_UPGRADE_BATCH_SIZE),
@@ -390,7 +449,7 @@ async function refresh(forceSearch = true) {
   ])
   const failures: string[] = []
   if (catalogResult.status === 'fulfilled') {
-    setSearchResponse(catalogResult.value, catalogRequest.query, catalogRequest.source)
+    setSearchResponse(catalogResult.value, catalogRequest.query, catalogRequest.source, catalogRequest.ecosystem)
   } else {
     failures.push(catalogResult.reason instanceof Error ? catalogResult.reason.message : String(catalogResult.reason))
   }
@@ -430,7 +489,7 @@ onMounted(() => {
       class="rounded-lg border border-border/50 px-3 py-2 text-sm text-muted-foreground"
     >
       {{ latestOperation.title }} · {{ $t(`chat.sessionWork.status.${latestOperation.status}`) }}
-      <span v-if="taskFailure(latestOperation)" class="block break-words">{{ taskFailure(latestOperation) }}</span>
+      <span v-if="taskFailure(latestOperation)" class="block whitespace-pre-wrap break-words">{{ taskFailure(latestOperation) }}</span>
     </p>
     <p
       v-if="error"
@@ -457,6 +516,14 @@ onMounted(() => {
         /></IconButton>
       </template>
       <div class="settings-toolbar">
+        <select
+          v-model="ecosystem"
+          class="h-9 rounded-md border border-input bg-background px-2 text-sm"
+          :aria-label="$st('Marketplace source')"
+          :disabled="loading || Boolean(actionKey)"
+        >
+          <option v-for="item in ecosystemSources" :key="item.id" :value="item.id">{{ item.name }}</option>
+        </select>
         <SearchInput
           v-model="query"
           class="settings-toolbar-search"
@@ -478,14 +545,21 @@ onMounted(() => {
               id="marketplace-source"
               v-model="source"
               class="h-9 w-full min-w-0 flex-1 rounded-md border border-input bg-background px-3 font-mono text-xs outline-none focus:border-ring"
-              :placeholder="$st('Official marketplace or owner/repository@ref')"
+              :placeholder="
+                ecosystem === 'deepseek' ? 'https://…/index.json' : $st('Official marketplace or owner/repository@ref')
+              "
               @keydown.enter.prevent="search(true)"
             />
-            <Button size="sm" variant="outline" :disabled="loading || Boolean(actionKey)" @click="syncRegistry"
+            <Button
+              v-if="ecosystem === 'agena'"
+              size="sm"
+              variant="outline"
+              :disabled="loading || Boolean(actionKey)"
+              @click="syncRegistry"
               ><RiUploadCloud2Line class="mr-1.5 h-4 w-4 shrink-0" />{{ $st('Sync') }}</Button
             >
           </div>
-          <div class="settings-control-grid text-xs text-muted-foreground">
+          <div v-if="ecosystem === 'agena'" class="settings-control-grid text-xs text-muted-foreground">
             <label class="flex items-start gap-2"
               ><input v-model="requireSignature" type="checkbox" class="mt-0.5 shrink-0" />{{
                 $st('Require a trusted Ed25519 signature')
@@ -497,7 +571,7 @@ onMounted(() => {
               }}</label
             >
           </div>
-          <p class="text-xs leading-relaxed text-muted-foreground">
+          <p v-if="ecosystem === 'agena'" class="text-xs leading-relaxed text-muted-foreground">
             {{ $st('Trusted signing keys are read from plugins.host.trusted_keys in your Agena config.') }}
           </p>
           <div
@@ -630,20 +704,20 @@ onMounted(() => {
               size="sm"
               variant="outline"
               :disabled="Boolean(actionKey)"
-              @click="installPlugin(plugin.plugin_id, true)"
+              @click="installPlugin(plugin.install_spec || plugin.plugin_id, true, plugin)"
             >
-              {{ $st('Dry run') }}
+              {{ plugin.install_spec ? $st('Preview') : $st('Dry run') }}
             </Button>
             <Button
               v-if="!installedById.has(plugin.plugin_id)"
               size="sm"
               :disabled="Boolean(actionKey)"
-              @click="installPlugin(plugin.plugin_id)"
+              @click="installPlugin(plugin.install_spec || plugin.plugin_id, false, plugin)"
             >
               <RiDownloadCloud2Line class="mr-1.5 h-4 w-4" />{{ $st('Install') }}
             </Button>
             <Button
-              v-else-if="outdatedById.has(plugin.plugin_id)"
+              v-else-if="outdatedById.has(plugin.plugin_id) || installedById.get(plugin.plugin_id)?.has_install_source"
               size="sm"
               :disabled="Boolean(actionKey)"
               @click="upgradePlugin(plugin.plugin_id)"
@@ -739,7 +813,9 @@ onMounted(() => {
                 {{ $st('Signature required') }}
               </span>
               <span
-                v-if="!plugin.require_github_distribution && !plugin.require_signature"
+                v-if="
+                  plugin.kind !== 'agent_plugin' && !plugin.require_github_distribution && !plugin.require_signature
+                "
                 class="rounded bg-muted px-2 py-1"
               >
                 {{ $st('Digest verified') }}
@@ -748,7 +824,7 @@ onMounted(() => {
           </div>
           <div class="settings-marketplace-actions flex flex-wrap items-center justify-end gap-2">
             <Button
-              v-if="outdatedById.has(plugin.plugin_id)"
+              v-if="outdatedById.has(plugin.plugin_id) || plugin.has_install_source"
               size="sm"
               variant="outline"
               :disabled="Boolean(actionKey)"
@@ -762,6 +838,67 @@ onMounted(() => {
           </div>
         </div>
       </div>
+    </SettingsCard>
+    <SettingsCard :title="$st('Install an agent plugin')" :icon="RiStore2Line">
+      <form class="space-y-3" @submit.prevent="installPlugin(directAgentPackage, false, undefined, directAgentSource)">
+        <div class="flex min-w-0 flex-col gap-2 sm:flex-row">
+          <input
+            v-model="directAgentPackage"
+            class="h-9 w-full min-w-0 flex-1 rounded-md border border-input bg-background px-3 font-mono text-sm"
+            :placeholder="agentExamples.selector"
+            :aria-label="$st('Agent plugin selector')"
+          />
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            :disabled="!directAgentPackage.trim() || Boolean(actionKey)"
+            @click="installPlugin(directAgentPackage, true, undefined, directAgentSource)"
+          >
+            {{ $st('Preview') }}
+          </Button>
+          <Button type="submit" size="sm" :disabled="!directAgentPackage.trim() || Boolean(actionKey)">
+            {{ $st('Install') }}
+          </Button>
+        </div>
+        <label class="flex items-center gap-2 text-xs">
+          <input v-model="enableAgentHooks" type="checkbox" />
+          {{ $st('Enable plugin hooks') }}
+        </label>
+        <div class="settings-control-grid gap-2">
+          <label class="space-y-1 text-xs">
+            <span>{{ $st('Direct plugin package source') }}</span>
+            <input
+              v-model="directAgentSource"
+              class="h-8 w-full rounded-md border border-input bg-background px-2 font-mono"
+              placeholder="https://github.com/owner/plugin"
+            />
+          </label>
+          <label class="space-y-1 text-xs">
+            <span>{{ $st('Environment variables') }}</span>
+            <input
+              v-model="agentEnvironment"
+              class="h-8 w-full rounded-md border border-input bg-background px-2 font-mono"
+              :placeholder="agentExamples.environment"
+            />
+          </label>
+          <label class="space-y-1 text-xs">
+            <span>{{ $st('Plugin option environment mappings') }}</span>
+            <input
+              v-model="agentOptions"
+              class="h-8 w-full rounded-md border border-input bg-background px-2 font-mono"
+              :placeholder="agentExamples.mapping"
+            />
+          </label>
+          <label class="space-y-1 text-xs">
+            <span>{{ $st('Install command SHA-256') }}</span>
+            <input
+              v-model="agentCommandHash"
+              class="h-8 w-full rounded-md border border-input bg-background px-2 font-mono"
+            />
+          </label>
+        </div>
+      </form>
     </SettingsCard>
     <SettingsCard
       :title="$st('Install directly from GitHub Releases')"

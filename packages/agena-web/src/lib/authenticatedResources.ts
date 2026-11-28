@@ -110,6 +110,15 @@ function triggerDownload(url: string, filename: string, external = false) {
   link.remove()
 }
 
+export function downloadBlob(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob)
+  try {
+    triggerDownload(url, filename)
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 1_000)
+  }
+}
+
 function responseFilename(disposition: string, fallback: string): string {
   const encoded = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1]
   if (encoded) {

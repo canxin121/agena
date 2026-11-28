@@ -78,34 +78,19 @@ import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu
 import type { TranscriptDisplayPart } from '@/components/chat/messageList.types'
 import type { MessageFold } from '@/types/chat'
 import type { JsonObject, JsonValue } from '@/types/json'
-import type { PluginCommandResult } from '@/lib/pluginOperations'
+import {
+  executePluginSlashCommand,
+  type PluginCommandInvocation,
+  type PluginCommandResult,
+  type SessionPromptCommand,
+} from '@/lib/pluginOperations'
 import { useTranscriptPreferencesStore } from '@/stores/transcriptPreferences'
+import { resourceComposerNode } from '@/lib/composerAttachments'
 
 type OptionMenuExpose = {
   containsTarget?: (target: Node | null) => boolean
   focusSearch?: () => void
 }
-
-type OutgoingMessagePart =
-  | { type: 'text'; text: string }
-  | {
-      type: 'activity'
-      activity: {
-        id: string
-        provenance?: { content_hash: string }
-        payload: {
-          activity_type: 'resource'
-          delivery?: 'reference' | 'model_input'
-          kind: 'file' | 'image' | 'audio' | 'video' | 'pdf'
-          reference:
-            | { reference_type: 'workspace_path'; path: string }
-            | { reference_type: 'artifact'; uri: string; sha256: string }
-          name: string
-          media_type?: string
-          size_bytes?: number
-        }
-      }
-    }
 
 const route = useRoute()
 const router = useRouter()
@@ -300,11 +285,12 @@ function clearSkillCatalog() {
   skillCatalog.value = []
   skillCatalogLoading.value = false
 }
-watch(sessionDirectory, clearSkillCatalog, { flush: 'sync' })
+watch([sessionDirectory, () => chat.selectedSessionId], clearSkillCatalog, { flush: 'sync' })
 onBeforeUnmount(clearSkillCatalog)
 
 function loadSkillCatalog(): Promise<void> {
   const directory = sessionDirectory.value
+  const sessionId = chat.selectedSessionId || undefined
   if (skillCatalogLoad && skillCatalogDirectory === directory) return skillCatalogLoad
   skillCatalogAbort?.abort()
   const abort = new AbortController()
@@ -313,9 +299,9 @@ function loadSkillCatalog(): Promise<void> {
   skillCatalog.value = []
   skillCatalogLoading.value = true
   skillCatalogLoad = (async () => {
-    const workspace = directory ? await chatApi.resolveWorkspace(directory) : null
+    const workspace = !sessionId && directory ? await chatApi.resolveWorkspace(directory) : null
     if (abort.signal.aborted || sessionDirectory.value !== directory) return
-    const response = await createSkillsClient(workspace?.id).listSkills(abort.signal)
+    const response = await createSkillsClient(workspace?.id).listSkills(abort.signal, sessionId)
     if (abort.signal.aborted || sessionDirectory.value !== directory) return
     skillCatalog.value = managedSkillCatalog(response.skills)
   })()
@@ -498,6 +484,7 @@ const chatCommands = useChatCommands({
   draft,
   composerRef,
   composerPickerOpen,
+  sessionId: computed(commandSessionId),
   isBotSession: bot.isBot,
   onSend: send,
   onCommandSelected: handleCommandSelected,
@@ -1321,6 +1308,10 @@ const runUi = useChatRunUi({
   attachedFiles,
   pendingAttachments,
   sending,
+  acceptsCommandWithoutModel: computed(() => {
+    const command = matchSlashCommand(commands.value, draft.value)?.command
+    return command?.kind === 'plugin' && command.command.accepts_attachments === true
+  }),
   renderBlocks,
   onSend: send,
   onCancellation: restoreCancelledComposer,
@@ -1603,20 +1594,6 @@ function workspaceRelativePath(inputPath: string, workspaceRoot: string): string
   return path.replace(/^\.\//, '')
 }
 
-function attachmentResourceKind(mime: string, filename: string): 'file' | 'image' | 'audio' | 'video' | 'pdf' {
-  const mediaType = String(mime || '')
-    .trim()
-    .toLowerCase()
-  const name = String(filename || '')
-    .trim()
-    .toLowerCase()
-  if (mediaType.startsWith('image/')) return 'image'
-  if (mediaType.startsWith('audio/')) return 'audio'
-  if (mediaType.startsWith('video/')) return 'video'
-  if (mediaType === 'application/pdf' || name.endsWith('.pdf')) return 'pdf'
-  return 'file'
-}
-
 /**
  * Build the submitted body from the composer document.
  *
@@ -1665,33 +1642,6 @@ function composeOutgoingText(
     })
   }
   return { text, typedText, attachmentIds }
-}
-
-function resourceComposerNode(input: {
-  sha256?: string
-  delivery?: 'reference' | 'model_input'
-  path: string
-  filename: string
-  mime: string
-  size?: number
-}): OutgoingMessagePart {
-  const mediaType = String(input.mime || '').trim()
-  return {
-    type: 'activity',
-    activity: {
-      id: globalThis.crypto.randomUUID(),
-      ...(input.sha256 ? { provenance: { content_hash: input.sha256 } } : {}),
-      payload: {
-        activity_type: 'resource',
-        delivery: input.delivery || 'reference',
-        kind: attachmentResourceKind(mediaType, input.filename),
-        reference: { reference_type: 'workspace_path', path: input.path },
-        name: input.filename,
-        ...(mediaType ? { media_type: mediaType } : {}),
-        ...(typeof input.size === 'number' ? { size_bytes: input.size } : {}),
-      },
-    },
-  }
 }
 
 function commandSessionId(): string | null {
@@ -2048,8 +1998,16 @@ async function handleCommandSelected(command: Command) {
       await executeBuiltInCommand(command)
       return
     }
-    const result = await chatCommands.runPluginSlashCommand(`/${command.name}`, commandSessionId() || '')
-    if (result) await applyPluginCommandResult(result, 'submit')
+    const line = `/${command.name}`
+    const sessionId = commandSessionId()
+    if (sessionId && command.command.submits_prompt) {
+      await submitPromptFromCommand(line)
+      return
+    }
+    const action = await chatCommands.runPluginSlashCommand(line, sessionId || '')
+    if (action?.kind === 'result' && commandSessionId() === sessionId) {
+      await applyPluginCommandResult(action.result, 'submit')
+    }
   } catch (err) {
     toasts.push('error', err instanceof Error ? err.message : String(err))
   }
@@ -2085,6 +2043,8 @@ async function send() {
 
 async function sendReady(sid: string | null) {
   let text = draft.value.trim()
+  let promptCommand: SessionPromptCommand | undefined
+  let composerCommand: PluginCommandInvocation | undefined
   const filesSnapshot = attachedFiles.value.slice()
   const draftSnapshot = draft.value
   const segmentsSnapshot: ComposerSegment[] = composerRef.value?.getSegments?.() ?? [
@@ -2105,20 +2065,29 @@ async function sendReady(sid: string | null) {
   if (!text) text = segmentText.trim()
   if ((!sid && filesSnapshot.length > 0) || (!text && filesSnapshot.length === 0)) return
 
-  if (text && filesSnapshot.length === 0) {
+  if (text.startsWith('/')) {
     try {
       if (commands.value.length === 0) await loadCommands()
       if (!bot.canSendConversation() || chat.selectedSessionId !== sid) return
       const matchedCommand = matchSlashCommand(commands.value, text)
       if (matchedCommand?.command.kind === 'builtin') {
+        if (filesSnapshot.length) throw new Error(t('chat.attachments.commandUnsupported'))
         draft.value = ''
         closeCommandPalette()
         await executeBuiltInCommand(matchedCommand.command, matchedCommand.args)
         return
       }
-      const result = await chatCommands.runPluginSlashCommand(text, sid || '')
-      if (result) {
-        const prompt = await applyPluginCommandResult(result, 'return')
+      const action = await chatCommands.runPluginSlashCommand(text, sid || '', filesSnapshot.length > 0)
+      if (action?.kind === 'prompt') {
+        promptCommand = action.command
+      } else if (action?.kind === 'composer') {
+        composerCommand = action.invocation
+      } else if (action?.kind === 'result') {
+        if (action.result.status !== 'succeeded') {
+          showPluginCommandFeedback(action.result)
+          return
+        }
+        const prompt = await applyPluginCommandResult(action.result, 'return')
         if (prompt) {
           text = prompt
           outgoingSegments = [{ type: 'text', text: prompt }]
@@ -2136,7 +2105,7 @@ async function sendReady(sid: string | null) {
 
   if (!bot.canSendConversation() || !sid || chat.selectedSessionId !== sid) return
 
-  if (!modelSelection.selectedProviderId.value || !modelSelection.selectedModelId.value) {
+  if (!composerCommand && (!modelSelection.selectedProviderId.value || !modelSelection.selectedModelId.value)) {
     toasts.push('error', t('chat.toasts.selectModelBeforeSending'))
     return
   }
@@ -2179,6 +2148,25 @@ async function sendReady(sid: string | null) {
   commandQuery.value = ''
   await nextTick()
   scrollToBottom('smooth')
+
+  async function restoreDraft() {
+    if (
+      chat.selectedSessionId === sid &&
+      !draft.value &&
+      attachedFiles.value.length === 0 &&
+      pendingAttachments.value.length === 0
+    ) {
+      draft.value = draftSnapshot
+      attachedFiles.value = filesSnapshot
+      await nextTick()
+      composerRef.value?.restoreSegments?.(segmentsSnapshot)
+    } else {
+      failedDraftSlot.save({ sessionId: sid, text: draftSnapshot, files: filesSnapshot, segments: segmentsSnapshot })
+      failedDraftVersion.value++
+      toasts.push('error', String(t('chat.attachments.failedDraftSaved')))
+    }
+  }
+
   try {
     // One text part plus the attachments as their own parts: the text keeps one
     // placeholder per inline attachment, so the transcript renders the
@@ -2232,29 +2220,30 @@ async function sendReady(sid: string | null) {
     if (!bot.canSendConversation() || chat.selectedSessionId !== sid) {
       throw new DOMException('Conversation changed before sending', 'AbortError')
     }
-    await chat.sendMessage(sid, { ...runCfg, parts })
+    if (composerCommand) {
+      const result = await executePluginSlashCommand({
+        ...composerCommand,
+        composer: {
+          document: parts,
+          options: chatApi.buildRunRequestBody(chatApi.buildRunOptions(runCfg)),
+        },
+      })
+      if (result.status === 'succeeded') {
+        void chat.refreshExecutionStatus(sid, true).catch(() => {})
+      } else {
+        await restoreDraft()
+      }
+      showPluginCommandFeedback(result)
+      return
+    }
+    await chat.sendMessage(sid, { ...runCfg, parts, promptCommand })
 
     // Match the TUI: only a successfully submitted plain-text draft enters
     // global prompt history. Messages containing resources/attachments are
     // intentionally excluded because recalling them would silently lose data.
     if (filesSnapshot.length === 0) recordPromptHistory(text)
   } catch (e) {
-    // Restore composer content on failure.
-    if (
-      chat.selectedSessionId === sid &&
-      !draft.value &&
-      attachedFiles.value.length === 0 &&
-      pendingAttachments.value.length === 0
-    ) {
-      draft.value = draftSnapshot
-      attachedFiles.value = filesSnapshot
-      await nextTick()
-      composerRef.value?.restoreSegments?.(segmentsSnapshot)
-    } else {
-      failedDraftSlot.save({ sessionId: sid, text: draftSnapshot, files: filesSnapshot, segments: segmentsSnapshot })
-      failedDraftVersion.value++
-      toasts.push('error', String(t('chat.attachments.failedDraftSaved')))
-    }
+    await restoreDraft()
     throw e
   } finally {
     submittingAttachmentUrls.clear()

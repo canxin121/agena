@@ -141,6 +141,7 @@ export function useChatRunUi(opts: {
   attachedFiles: Ref<AttachedFile[]>
   pendingAttachments: Ref<PendingAttachment[]>
   sending: Ref<boolean>
+  acceptsCommandWithoutModel?: ComputedRef<boolean>
 
   renderBlocks: ComputedRef<RenderBlock[]>
 
@@ -159,6 +160,7 @@ export function useChatRunUi(opts: {
     attachedFiles,
     pendingAttachments,
     sending,
+    acceptsCommandWithoutModel,
     renderBlocks,
     onSend,
     onCancellation,
@@ -346,8 +348,11 @@ export function useChatRunUi(opts: {
   const canSend = computed(() => {
     if (!chat.selectedSessionId) return false
     if (sending.value) return false
-    if (!String(modelSelection.selectedProviderId.value || '').trim()) return false
-    if (!String(modelSelection.selectedModelId.value || '').trim()) return false
+    const hasModel = Boolean(
+      String(modelSelection.selectedProviderId.value || '').trim() &&
+        String(modelSelection.selectedModelId.value || '').trim(),
+    )
+    if (!hasModel && !acceptsCommandWithoutModel?.value) return false
     return Boolean(
       String(draft.value || '').trim() || attachedFiles.value.length > 0 || pendingAttachments.value.length > 0,
     )

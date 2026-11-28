@@ -1,6 +1,7 @@
 import { i18n } from '@/i18n'
 import { withInterfaceLocale } from '@/i18n/interfaceLocale'
 import type { RequestPerformance } from '@/types/usage'
+import type { SessionPromptCommand } from '@/lib/pluginOperations'
 // Agena REST API client for the chat subsystem.
 //
 // All endpoints live under /api/v1. Ids are numeric; timestamps are RFC3339
@@ -42,7 +43,7 @@ import { compareChatIds } from './messageIndex'
 import { DEFAULT_TRANSCRIPT_PART_PAGE_SIZE } from '@/pages/chat/transcriptPartPaging'
 import { buildRunRequestBody, type RunOptionsPayload } from './runOptions'
 
-export { buildRunRequestBody, type AgenaModelRef, type RunOptionsPayload } from './runOptions'
+export { buildRunOptions, buildRunRequestBody, type AgenaModelRef, type RunOptionsPayload } from './runOptions'
 
 // --- agena wire projections ------------------------------------------------
 
@@ -129,6 +130,7 @@ export type AgenaSessionParts = {
 export type QueuedMessage = { execution_id: string; message_id: number }
 
 export type AgenaExecutionState = {
+  system_messages?: string[]
   queued_messages?: QueuedMessage[]
   queue_paused?: boolean
   session: AgenaSession
@@ -866,6 +868,7 @@ export async function uploadWorkspaceFile(
 export async function uploadSessionFile(
   sessionId: number,
   input: { filename: string; dataBase64?: string; blob?: Blob; mime?: string },
+  signal?: AbortSignal,
 ): Promise<WorkspaceFileUpload> {
   if (!Number.isSafeInteger(sessionId) || sessionId <= 0)
     throw new Error(i18n.global.t('chat.errors.sessionIdRequired'))
@@ -877,6 +880,7 @@ export async function uploadSessionFile(
       method: 'POST',
       headers: { 'content-type': 'application/octet-stream' },
       body: input.blob,
+      signal,
     })
   }
   const dataBase64 = String(input.dataBase64 || '').trim()
@@ -884,6 +888,7 @@ export async function uploadSessionFile(
   return await apiJson<WorkspaceFileUpload>(`/api/v1/sessions/${encodeURIComponent(String(sessionId))}/attachments`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
+    signal,
     body: JSON.stringify({
       filename,
       data_base64: dataBase64,
@@ -1195,12 +1200,14 @@ export async function listTranscriptFoldParts(
 
 export type SendMessagePayload = RunOptionsPayload & {
   document: JsonValue[]
+  promptCommand?: SessionPromptCommand
 }
 
 export function buildMessageRequestBody(payload: SendMessagePayload): JsonObject {
   return {
     ...buildRunRequestBody(payload),
     document: Array.isArray(payload.document) ? payload.document : [],
+    ...(payload.promptCommand ? { prompt_command: payload.promptCommand } : {}),
   }
 }
 
@@ -1233,7 +1240,7 @@ export async function setSessionSelection(sessionId: string, options: RunOptions
   const state = await apiJson<AgenaExecutionState>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/selection`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(buildSessionSelectionRequest(options)),
+    body: JSON.stringify({ ...buildSessionSelectionRequest(options), model_switch: { source: 'picker' } }),
   })
   toSession(state.session, scope)
   reconcileSessionMutation(sessionId, 'execution', scope)

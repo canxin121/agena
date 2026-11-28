@@ -55,4 +55,18 @@ describe('message sender identity', () => {
       role: 'member',
     })
   })
+
+  test('an in-turn prompt keeps its plugin sender and its own transcript part', () => {
+    const plugin: MessageAuthor = {
+      id: 'plugin:claude.fixture',
+      display_name: 'fixture',
+      kind: { kind: 'plugin', as_user: true },
+    }
+    const messages = entriesFromParts('3', [
+      part(1),
+      { ...part(2), message_id: 1, author: plugin },
+    ])
+    expect(messages.map((message) => messageSenderLabel(message.info))).toEqual(['user', 'fixture'])
+    expect(messages[1]?.info.author).toEqual(plugin)
+  })
 })

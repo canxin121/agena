@@ -22,6 +22,7 @@ export type SkillSummary = {
   revision: string
   source: SkillSource | null
   diagnostics: string[]
+  invocation?: { modelInvocable: boolean; userInvocable: boolean }
 }
 export type SkillMetadata = {
   name: string
@@ -41,6 +42,10 @@ export type SkillDetail = SkillSummary & {
   document: string
   metadata: SkillMetadata | null
   files: Array<{ path: string; size: number }>
+  resource_base?:
+    | { kind: 'directory'; path: string }
+    | { kind: 'url'; url: string }
+    | { kind: 'opaque'; description: string }
 }
 export type SkillResource = { path: string; content: string; revision: string }
 export type SkillValidation = {
@@ -86,7 +91,8 @@ export function createSkillsClient(workspaceId?: number) {
       body: JSON.stringify(body),
     })
   return {
-    listSkills: (signal?: AbortSignal) => apiJson<SkillCatalog>(url(root), { signal }),
+    listSkills: (signal?: AbortSignal, sessionId?: string) =>
+      apiJson<SkillCatalog>(url(sessionId ? root + '?session_id=' + encodeURIComponent(sessionId) : root), { signal }),
     readSkill: (id: string, signal?: AbortSignal) => apiJson<SkillDetail>(url(skillPath(id)), { signal }),
     createSkill: (scope: SkillScope, document: string) => json<SkillDetail>(root, 'POST', { scope, document }),
     updateSkill: (id: string, document: string, expected_revision: string) =>

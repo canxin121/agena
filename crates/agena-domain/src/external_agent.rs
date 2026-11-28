@@ -75,6 +75,7 @@ impl ResolvedExternalAgent {
             builtin: self.builtin,
             command: self.command.clone(),
             args: self.args.clone(),
+            available: None,
         }
     }
 }
@@ -88,6 +89,9 @@ pub struct ExternalAgentCatalogEntry {
     pub command: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
+    /// Whether the configured executable currently resolves on the server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available: Option<bool>,
 }
 
 impl AcpConfig {

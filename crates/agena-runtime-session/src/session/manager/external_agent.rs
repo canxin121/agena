@@ -75,7 +75,12 @@ impl SessionManager {
             .acp
             .resolve_catalog()
             .into_iter()
-            .map(|entry| entry.catalog_entry())
+            .map(|resolved| {
+                let available = acp::is_agent_available(&resolved);
+                let mut entry = resolved.catalog_entry();
+                entry.available = Some(available);
+                entry
+            })
             .collect()
     }
 

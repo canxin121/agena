@@ -50,7 +50,7 @@ agena sessions create --workspace /path/to/project --external-agent codex
 agena tui --session <session-id>
 ```
 
-REST 客户端可通过 `GET /api/v1/acp/agents` 查询当前启用的 ACP Agent 目录（仅返回 `id`、`name`、`builtin`、`command`、`args`，不暴露 `env`），并向 `POST /api/v1/acp/sessions` 传入 `workspace_id`、`title` 和 `external_agent`（如 `"antigravity"`、`"claude-code"` 或全局配置中的自定义 ID）。可用 `GET /api/v1/acp/sessions` 列出当前内存中的临时 ACP 视图，用 `PUT /api/v1/acp/sessions/{session_id}` 更新视图标题、提示词或 Profile，用 `/api/v1/acp/sessions/{session_id}/messages` 发送消息。普通会话列表和项目会话历史仍由 `/api/v1/sessions` 提供。 Web 的 ACP 侧边栏会展示当前项目已打开的临时视图列表，便于在尚未发送消息的视图之间切换。
+REST 客户端可通过 `GET /api/v1/acp/agents` 查询当前启用的 ACP Agent 目录（仅返回 `id`、`name`、`builtin`、`command`、`args`、`available`，不暴露 `env`），并向 `POST /api/v1/acp/sessions` 传入 `workspace_id`、`title` 和 `external_agent`（如 `"antigravity"`、`"claude-code"` 或全局配置中的自定义 ID）。可用 `GET /api/v1/acp/sessions` 列出当前内存中的临时 ACP 视图，用 `PUT /api/v1/acp/sessions/{session_id}` 更新视图标题、提示词或 Profile，用 `/api/v1/acp/sessions/{session_id}/messages` 发送消息。普通会话列表和项目会话历史仍由 `/api/v1/sessions` 提供。 Web 的 ACP 侧边栏会展示当前项目已打开的临时视图列表，便于在尚未发送消息的视图之间切换。
 
 在 Web 点输入框下方的外部 Agent 名称，或在 TUI 运行 `/model`，可以查看当前 Agent 提供的模型、思考强度、模式和其他选项。Agena 向 Agent 核对所选值，在当前临时会话中应用。Agent 在会话中主动变更选项时，Web 会同步显示最新值。选用「遵循外部 Agent 设置」时，会话采用该 Agent 的原生设置。
 

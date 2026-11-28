@@ -1,10 +1,13 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
-    path::{Path, PathBuf},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    ffi::{OsStr, OsString},
+    path::{Component, Path, PathBuf},
     process::Stdio,
     sync::{Arc, Mutex, Weak},
     time::Duration,
 };
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt as _;
 
 use agena_domain::{
     ExternalAgent, ExternalAgentAuthStatus, ExternalAgentOption, ExternalAgentOptionKind,
@@ -454,15 +457,181 @@ impl OpenedSession {
     }
 }
 
-fn agent_environment(command: &mut Command) {
+fn explicit_path_override(env: &BTreeMap<String, String>) -> Option<&str> {
+    env.iter()
+        .find(|(key, _)| {
+            if cfg!(windows) {
+                key.eq_ignore_ascii_case("PATH")
+            } else {
+                key.as_str() == "PATH"
+            }
+        })
+        .map(|(_, value)| value.as_str())
+}
+
+fn augment_agent_path(inherited: Option<&OsStr>, home: Option<&Path>) -> Option<OsString> {
+    let mut entries = Vec::new();
+    if let Some(existing) = inherited {
+        for entry in std::env::split_paths(existing) {
+            if !entry.as_os_str().is_empty() && !entries.contains(&entry) {
+                entries.push(entry);
+            }
+        }
+    }
+    if let Some(home) = home {
+        for extra in [
+            home.join(".local").join("bin"),
+            home.join(".gemini").join("antigravity-cli").join("bin"),
+            home.join(".claude").join("local"),
+            home.join(".bun").join("bin"),
+            home.join(".cargo").join("bin"),
+            home.join(".npm-global").join("bin"),
+            home.join(".local").join("share").join("pnpm"),
+        ] {
+            if extra.is_dir() && !entries.contains(&extra) {
+                entries.push(extra);
+            }
+        }
+    }
+    #[cfg(windows)]
+    if let Some(appdata) = std::env::var_os("APPDATA").filter(|v| !v.is_empty()) {
+        let npm = PathBuf::from(appdata).join("npm");
+        if npm.is_dir() && !entries.contains(&npm) {
+            entries.push(npm);
+        }
+    }
+    #[cfg(target_os = "macos")]
+    for extra in [
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/opt/homebrew/sbin"),
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/usr/local/sbin"),
+    ] {
+        if extra.is_dir() && !entries.contains(&extra) {
+            entries.push(extra);
+        }
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let extra = PathBuf::from("/usr/local/bin");
+        if extra.is_dir() && !entries.contains(&extra) {
+            entries.push(extra);
+        }
+    }
+    if entries.is_empty() {
+        return None;
+    }
+    std::env::join_paths(entries).ok()
+}
+
+fn is_bare_program_name(program: &str) -> bool {
+    let mut components = Path::new(program).components();
+    matches!((components.next(), components.next()), (Some(Component::Normal(_)), None))
+}
+
+#[cfg(unix)]
+fn is_executable_file(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .is_ok_and(|meta| meta.is_file() && (meta.permissions().mode() & 0o111) != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable_file(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|meta| meta.is_file())
+}
+
+fn find_agent_program(program: &str, path_env: Option<&OsStr>) -> Option<PathBuf> {
+    if !is_bare_program_name(program) {
+        let candidate = PathBuf::from(program);
+        if is_executable_file(&candidate) {
+            return Some(candidate);
+        }
+        #[cfg(windows)]
+        if candidate.extension().is_none() {
+            for ext in windows_pathext() {
+                let with_ext = PathBuf::from(format!("{program}{ext}"));
+                if is_executable_file(&with_ext) {
+                    return Some(with_ext);
+                }
+            }
+        }
+        return None;
+    }
+    let path_env = path_env.filter(|value| !value.is_empty())?;
+    #[cfg(windows)]
+    let pathext = windows_pathext();
+    #[cfg(windows)]
+    let has_extension = Path::new(program).extension().is_some();
+
+    for dir in std::env::split_paths(path_env) {
+        if dir.as_os_str().is_empty() {
+            continue;
+        }
+        let candidate = dir.join(program);
+        if is_executable_file(&candidate) {
+            return Some(candidate);
+        }
+        #[cfg(windows)]
+        if !has_extension {
+            for ext in &pathext {
+                let with_ext = dir.join(format!("{program}{ext}"));
+                if is_executable_file(&with_ext) {
+                    return Some(with_ext);
+                }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(windows)]
+fn windows_pathext() -> Vec<String> {
+    std::env::var("PATHEXT")
+        .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".into())
+        .split(';')
+        .map(str::trim)
+        .filter(|ext| !ext.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn resolve_agent_program(program: &str, path_env: Option<&OsStr>) -> PathBuf {
+    find_agent_program(program, path_env).unwrap_or_else(|| PathBuf::from(program))
+}
+
+fn effective_agent_path(spec: &ResolvedExternalAgent) -> Option<OsString> {
+    let effective_home = spec
+        .env
+        .get("HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(policy::native_home);
+    explicit_path_override(&spec.env)
+        .map(OsString::from)
+        .or_else(|| {
+            augment_agent_path(
+                std::env::var_os("PATH").as_deref(),
+                effective_home.as_deref(),
+            )
+        })
+}
+
+pub(super) fn is_agent_available(spec: &ResolvedExternalAgent) -> bool {
+    let effective_path = effective_agent_path(spec);
+    find_agent_program(&spec.command, effective_path.as_deref()).is_some()
+}
+
+fn agent_environment(command: &mut Command, effective_path: Option<&OsStr>) {
     // Inherit the user's native environment and strip only Agena's own variables.
     command.env_clear().envs(
         std::env::vars_os().filter(|(key, _)| {
-            !key.to_string_lossy()
-                .to_ascii_uppercase()
-                .starts_with("AGENA_")
+            let upper = key.to_string_lossy().to_ascii_uppercase();
+            !upper.starts_with("AGENA_") && upper != "PATH"
         }),
     );
+    if let Some(path) = effective_path {
+        command.env("PATH", path);
+    }
     let no_proxy = match std::env::var("no_proxy").or_else(|_| std::env::var("NO_PROXY")) {
         Ok(existing) if !existing.trim().is_empty() => format!("{existing},127.0.0.1,localhost,::1"),
         _ => "127.0.0.1,localhost,::1".into(),
@@ -482,9 +651,11 @@ impl AcpClient {
         cwd: &Path,
         directories: &[PathBuf],
     ) -> Result<Self, AppError> {
-        let mut command = Command::new(&spec.command);
+        let effective_path = effective_agent_path(&spec);
+        let program = resolve_agent_program(&spec.command, effective_path.as_deref());
+        let mut command = Command::new(&program);
         command.args(&spec.args);
-        agent_environment(&mut command);
+        agent_environment(&mut command, effective_path.as_deref());
         command.envs(&spec.env);
         command.current_dir(cwd);
         let isolation = isolation::wrap(&mut command, &spec, cwd, directories)?;
@@ -495,10 +666,19 @@ impl AcpClient {
 
         let mut child = agena_process::spawn(command).map_err(|error| {
             let setup = match &spec.id {
-                ExternalAgent::Antigravity => "Install the official Antigravity CLI with ACP support and sign in from the ACP session.".to_owned(),
-                ExternalAgent::ClaudeCode => "Install Claude Code and the claude-agent-acp adapter on the server's PATH, then sign in using claude.".to_owned(),
+                ExternalAgent::Antigravity => format!(
+                    "Install the official Antigravity CLI (`{}`) on the server's PATH (or configure an absolute path under `acp.agents.antigravity` in global settings), then sign in with `agy acp --login` or from the ACP session.",
+                    spec.command
+                ),
+                ExternalAgent::ClaudeCode if spec.command == "claude-agent-acp" => {
+                    "Install Claude Code and run `npm install -g @agentclientprotocol/claude-agent-acp` (or `bun add -g @agentclientprotocol/claude-agent-acp`) on the server host, or configure `acp.agents.claude-code` in global settings, then sign in with `claude`.".to_owned()
+                }
+                ExternalAgent::ClaudeCode => format!(
+                    "Install Claude Code and `{}` on the server's PATH (or configure `acp.agents.claude-code` in global settings), then sign in with `claude`.",
+                    spec.command
+                ),
                 ExternalAgent::Custom(_) => format!(
-                    "Check that `{}` is installed on the server's PATH or configured with an absolute path under acp.agents.{}.",
+                    "Check that `{}` is installed on the server's PATH or configured with an absolute path under `acp.agents.{}` in global settings.",
                     spec.command,
                     spec.id.id()
                 ),
@@ -2731,5 +2911,96 @@ impl AcpClient {
         if let Err(error) = self.child.terminate(Duration::from_millis(500)).await {
             tracing::debug!(%error, "external agent process cleanup");
         }
+    }
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::*;
+
+    #[test]
+    fn augment_agent_path_preserves_precedence_and_adds_user_local_bin() {
+        let home = tempfile::tempdir().unwrap();
+        let local_bin = home.path().join(".local").join("bin");
+        let agy_bin = home.path().join(".gemini").join("antigravity-cli").join("bin");
+        std::fs::create_dir_all(&local_bin).unwrap();
+        std::fs::create_dir_all(&agy_bin).unwrap();
+
+        let inherited = std::env::join_paths([PathBuf::from("/usr/bin"), PathBuf::from("/bin")])
+            .unwrap();
+        let augmented = augment_agent_path(Some(inherited.as_os_str()), Some(home.path())).unwrap();
+        let entries: Vec<PathBuf> = std::env::split_paths(&augmented).collect();
+
+        assert_eq!(entries[0], PathBuf::from("/usr/bin"));
+        assert_eq!(entries[1], PathBuf::from("/bin"));
+        assert!(entries.contains(&local_bin));
+        assert!(entries.contains(&agy_bin));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_agent_program_finds_executable_in_augmented_local_bin() {
+        let home = tempfile::tempdir().unwrap();
+        let local_bin = home.path().join(".local").join("bin");
+        std::fs::create_dir_all(&local_bin).unwrap();
+        let agy = local_bin.join("agy");
+        std::fs::write(&agy, "#!/bin/sh\nexit 0\n").unwrap();
+        let mut perms = std::fs::metadata(&agy).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&agy, perms).unwrap();
+
+        let path = augment_agent_path(Some(OsStr::new("/nonexistent-dir")), Some(home.path()));
+        assert_eq!(resolve_agent_program("agy", path.as_deref()), agy);
+        assert_eq!(
+            resolve_agent_program("/explicit/path/agy", path.as_deref()),
+            PathBuf::from("/explicit/path/agy")
+        );
+        assert_eq!(
+            resolve_agent_program("definitely-missing-acp-bin", path.as_deref()),
+            PathBuf::from("definitely-missing-acp-bin")
+        );
+    }
+
+    #[test]
+    fn explicit_path_override_wins_over_augmented_default() {
+        let mut env = BTreeMap::new();
+        assert_eq!(explicit_path_override(&env), None);
+        env.insert("PATH".into(), "/custom/only".into());
+        assert_eq!(explicit_path_override(&env), Some("/custom/only"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn is_agent_available_detects_existing_and_missing_commands() {
+        let home = tempfile::tempdir().unwrap();
+        let local_bin = home.path().join(".local").join("bin");
+        std::fs::create_dir_all(&local_bin).unwrap();
+        let bin = local_bin.join("custom-acp-test-bin");
+        std::fs::write(&bin, "#!/bin/sh\nexit 0\n").unwrap();
+        let mut perms = std::fs::metadata(&bin).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&bin, perms).unwrap();
+
+        let mut env = BTreeMap::new();
+        env.insert("HOME".into(), home.path().to_string_lossy().into_owned());
+        env.insert("PATH".into(), local_bin.to_string_lossy().into_owned());
+
+        let present = ResolvedExternalAgent {
+            id: ExternalAgent::Custom("custom-present".into()),
+            name: "Custom Present".into(),
+            builtin: false,
+            command: "custom-acp-test-bin".into(),
+            args: Vec::new(),
+            env: env.clone(),
+            client_tools: true,
+            writable_paths: Vec::new(),
+        };
+        assert!(is_agent_available(&present));
+
+        let missing = ResolvedExternalAgent {
+            command: "definitely-missing-acp-bin".into(),
+            ..present
+        };
+        assert!(!is_agent_available(&missing));
     }
 }

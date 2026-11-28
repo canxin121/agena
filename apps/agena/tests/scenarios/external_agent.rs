@@ -1377,7 +1377,8 @@ async fn custom_generic_acp_agent_catalog_and_execution() -> TestResult {
                 custom.name == "Codex Custom"
                     && !custom.builtin
                     && custom.command == expected_bin
-                    && custom.args == vec!["--acp-stdio", "--profile", "smoke"],
+                    && custom.args == vec!["--acp-stdio", "--profile", "smoke"]
+                    && custom.available == Some(true),
                 "{custom:?}"
             );
 

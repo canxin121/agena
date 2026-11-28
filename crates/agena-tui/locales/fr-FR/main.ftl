@@ -2755,6 +2755,7 @@ provider-adapter-rule-none-ollama-detail = Adaptateur Ollama ; les champs d’au
 provider-adapter-rule-api-openai-detail = Adaptateur OpenAI Responses ou Chat Completions explicite ; utilise base_url pour l’authentification du fournisseur et permet de répertorier les modèles en brouillon.
 provider-adapter-rule-api-anthropic-detail = Adaptateur HTTP Anthropic ; utilise base_url pour l’authentification du fournisseur et permet de répertorier les modèles en brouillon.
 provider-adapter-rule-api-gemini-detail = Adaptateur HTTP Gemini ; utilise base_url pour l’authentification du fournisseur et permet de répertorier les modèles en brouillon.
+provider-adapter-rule-api-gemini-interactions-detail = Adaptateur HTTP Gemini Interactions (/v1beta/interactions) ; utilise base_url de l’authentification du fournisseur et prend en charge la liste des modèles du brouillon.
 provider-adapter-rule-cline-api-openai-detail = API Cline via l’adaptateur openai_chat_completions ; base_url et la découverte des modèles restent fixés au point de terminaison hébergé de Cline.
 provider-adapter-rule-gitlab-auth-openai-detail = Passerelle GitLab acheminée par l’adaptateur OpenAI Responses ou Chat Completions sélectionné.
 provider-adapter-rule-gitlab-auth-anthropic-detail = Passerelle GitLab acheminée par l’adaptateur anthropic.

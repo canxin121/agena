@@ -1415,6 +1415,7 @@ provider-adapter-rule-none-ollama-detail = Ollama 어댑터입니다. 인증 필
 provider-adapter-rule-api-openai-detail = OpenAI Responses 또는 Chat Completions 어댑터를 명시적으로 선택합니다. 공급자 인증의 base_url을 사용하며 초안 모델 목록 조회를 지원합니다.
 provider-adapter-rule-api-anthropic-detail = Anthropic HTTP 어댑터입니다. 공급자 인증의 base_url을 사용하며 초안 모델 목록 조회를 지원합니다.
 provider-adapter-rule-api-gemini-detail = Gemini HTTP 어댑터입니다. 공급자 인증의 base_url을 사용하며 초안 모델 목록 조회를 지원합니다.
+provider-adapter-rule-api-gemini-interactions-detail = Gemini Interactions HTTP 어댑터(/v1beta/interactions)입니다. 공급자 인증의 base_url을 사용하며 초안 모델 목록 조회를 지원합니다.
 provider-adapter-rule-cline-api-openai-detail = openai_chat_completions 어댑터를 통한 Cline API입니다. base_url과 모델 검색은 호스팅된 Cline 엔드포인트로 고정됩니다.
 provider-adapter-rule-gitlab-auth-openai-detail = 선택한 OpenAI Responses 또는 Chat Completions 어댑터를 통해 라우팅되는 GitLab 게이트웨이입니다.
 provider-adapter-rule-gitlab-auth-anthropic-detail = anthropic 어댑터를 통해 라우팅되는 GitLab 게이트웨이입니다.

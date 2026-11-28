@@ -1278,6 +1278,8 @@ pub enum ProviderKind {
     Anthropic,
     #[serde(rename = "gemini")]
     Gemini,
+    #[serde(rename = "gemini_interactions")]
+    GeminiInteractions,
     #[serde(rename = "gitlab")]
     Gitlab,
     #[serde(rename = "amazon_bedrock")]
@@ -1294,6 +1296,7 @@ impl std::str::FromStr for ProviderKind {
             "openai_chat_completions" => Ok(Self::OpenAiChatCompletions),
             "anthropic" => Ok(Self::Anthropic),
             "gemini" => Ok(Self::Gemini),
+            "gemini_interactions" => Ok(Self::GeminiInteractions),
             "gitlab" => Ok(Self::Gitlab),
             "amazon_bedrock" => Ok(Self::AmazonBedrock),
             _ => Err(ConfigError::InvalidOverride(format!(

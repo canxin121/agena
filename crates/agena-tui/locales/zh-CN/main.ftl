@@ -1223,6 +1223,7 @@ provider-adapter-rule-none-ollama-detail = Ollama adapter；认证字段保持�
 provider-adapter-rule-api-openai-detail = 显式的 OpenAI Responses 或 Chat Completions adapter；使用 provider auth 的 base_url，并支持 draft model listing。
 provider-adapter-rule-api-anthropic-detail = Anthropic HTTP adapter；使用 provider auth 的 base_url，并支持 draft model listing。
 provider-adapter-rule-api-gemini-detail = Gemini HTTP adapter；使用 provider auth 的 base_url，并支持 draft model listing。
+provider-adapter-rule-api-gemini-interactions-detail = Gemini Interactions HTTP adapter（/v1beta/interactions）；使用 provider auth 的 base_url，并支持 draft model listing。
 provider-adapter-rule-cline-api-openai-detail = 通过 openai_chat_completions adapter 访问 Cline API；base_url 和模型发现都固定到托管的 Cline endpoint。
 provider-adapter-rule-gitlab-auth-openai-detail = 通过所选 OpenAI Responses 或 Chat Completions adapter 路由的 GitLab gateway。
 provider-adapter-rule-gitlab-auth-anthropic-detail = 通过 anthropic adapter 路由的 GitLab gateway。

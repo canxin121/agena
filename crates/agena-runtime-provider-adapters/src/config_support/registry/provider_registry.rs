@@ -7,18 +7,18 @@ use agena_provider::{
 use super::{
     AdapterBuildContext, AmazonBedrockAdapter, AnthropicAdapter, AnthropicAdapterOptions, Arc,
     AuthData, CatalogedModelsProvider, ConfigEnvironment, ConfigError, GeminiAdapter,
-    GeminiAdapterOptions, GitlabProvider, GitlabRoutedAdapter, GitlabRoutedBackend,
-    HttpAdapterKind, ManagedCredential, ModelCatalogSnapshot, ModelId, ModelRuntime,
-    MultiAdapterProvider, OllamaAdapter, OpenAiChatCompletionsAdapter,
-    OpenAiChatCompletionsAdapterOptions, OpenAiResponsesAdapter, OpenAiResponsesAdapterOptions,
-    Path, ProviderAdapterDefinition, ProviderAuthConfig, ProviderModelRoute, ProviderRegistry,
-    ResolvedProviderAdapterConfig, ResolvedProviderConfig, api_auth_managed_credential,
-    copilot_base_url, gitlab_auth_managed_credential, gitlab_credential_instance_url,
-    gitlab_credential_runtime_config, gitlab_runtime_config, http_adapter_default_user_agent,
-    http_adapter_extra_headers, openai_adapter_api_credential, openai_adapter_capability_family,
-    parse_adapter_model_ref, require_provider_auth_credential, required_api_auth_credential,
-    resolve_adapter_default_models, resolve_http_adapter_base_url, runtime_adapter_provider_id,
-    static_bedrock_credentials, to_hash_map,
+    GeminiAdapterOptions, GeminiInteractionsAdapter, GeminiInteractionsAdapterOptions,
+    GitlabProvider, GitlabRoutedAdapter, GitlabRoutedBackend, HttpAdapterKind, ManagedCredential,
+    ModelCatalogSnapshot, ModelId, ModelRuntime, MultiAdapterProvider, OllamaAdapter,
+    OpenAiChatCompletionsAdapter, OpenAiChatCompletionsAdapterOptions, OpenAiResponsesAdapter,
+    OpenAiResponsesAdapterOptions, Path, ProviderAdapterDefinition, ProviderAuthConfig,
+    ProviderModelRoute, ProviderRegistry, ResolvedProviderAdapterConfig, ResolvedProviderConfig,
+    api_auth_managed_credential, copilot_base_url, gitlab_auth_managed_credential,
+    gitlab_credential_instance_url, gitlab_credential_runtime_config, gitlab_runtime_config,
+    http_adapter_default_user_agent, http_adapter_extra_headers, openai_adapter_api_credential,
+    openai_adapter_capability_family, parse_adapter_model_ref, require_provider_auth_credential,
+    required_api_auth_credential, resolve_adapter_default_models, resolve_http_adapter_base_url,
+    runtime_adapter_provider_id, static_bedrock_credentials, to_hash_map,
 };
 
 fn config_adapter_error(error: crate::ProviderError) -> ConfigError {
@@ -821,6 +821,37 @@ pub(crate) fn build_adapter_provider(
                     ),
                     stream_mode: adapter.options.stream_mode.into(),
                     realtime_ws_url: adapter.options.realtime_ws_url.clone(),
+                },
+            ))
+        }
+        ProviderAdapterDefinition::GeminiInteractions(adapter) => {
+            let credential = api_auth_managed_credential(
+                provider_id,
+                "api_key",
+                auth,
+                AuthSecretSelector::AccessOrApiKey,
+                AuthRefreshStrategy::ReloadFromStore,
+                env,
+                true,
+            )?
+            .credential;
+            Arc::new(GeminiInteractionsAdapter::new_managed_with_options(
+                runtime_provider_id.as_str(),
+                client,
+                credential,
+                resolve_http_adapter_base_url(provider_id, auth, HttpAdapterKind::Gemini)?,
+                adapter_default_model.to_owned(),
+                GeminiInteractionsAdapterOptions {
+                    client_identity: client_identity.clone(),
+                    auth_header: adapter
+                        .options
+                        .auth_header
+                        .clone()
+                        .map(|header| (header, adapter.options.auth_scheme.clone())),
+                    extra_headers: http_adapter_extra_headers(
+                        adapter,
+                        Some(client_identity.agena_user_agent()),
+                    ),
                 },
             ))
         }

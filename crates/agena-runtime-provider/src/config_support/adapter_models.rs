@@ -21,8 +21,8 @@ pub struct ProviderAdapterModelsResult {
 
 use super::{
     AmazonBedrockProviderOptions, AnthropicProviderOptions, ConfigEnvironment, ConfigError,
-    GeminiProviderOptions, HttpProviderAdapterConfig, OllamaProviderOptions,
-    OpenAiChatCompletionsProviderOptions, OpenAiResponsesProviderOptions,
+    GeminiInteractionsProviderOptions, GeminiProviderOptions, HttpProviderAdapterConfig,
+    OllamaProviderOptions, OpenAiChatCompletionsProviderOptions, OpenAiResponsesProviderOptions,
     ProviderAdapterDefinition, ProviderApiAuthConfig, ProviderAuthConfig,
     ResolvedProviderAdapterConfig, ResolvedProviderConfig,
 };
@@ -394,6 +394,20 @@ fn default_adapter_model_list_adapters(
                         realtime_ws_url: None,
                     },
                 }),
+            },
+            "gemini_interactions" => ResolvedProviderAdapterConfig {
+                enabled: true,
+                model_discovery: Default::default(),
+                definition: ProviderAdapterDefinition::GeminiInteractions(
+                    HttpProviderAdapterConfig {
+                        user_agent: None,
+                        extra_headers: BTreeMap::new(),
+                        options: GeminiInteractionsProviderOptions {
+                            auth_header: None,
+                            auth_scheme: None,
+                        },
+                    },
+                ),
             },
             "ollama" => ResolvedProviderAdapterConfig {
                 enabled: true,

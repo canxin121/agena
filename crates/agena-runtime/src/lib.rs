@@ -118,10 +118,11 @@ pub(crate) use agena_runtime_config::project_config_path;
 pub use agena_runtime_config::runtime_config_settings_service::list_json_path;
 pub use agena_runtime_config::{
     AmazonBedrockProviderOptions, AnthropicProviderOptions, AppliedLayer, ConfigResolution,
-    ConfigResolutionMeta, ConfigSource, GeminiProviderOptions, GitlabProviderOptions,
-    HttpProviderAdapterConfig, OllamaProviderOptions, OpenAiChatCompletionsProviderOptions,
-    OpenAiResponsesProviderOptions, ProviderAdapterDefinition, ProviderApiAuthConfig,
-    ProviderAuthConfig, ProviderClientVersionSettings, ProviderGitlabAuthConfig, ResolvedConfig,
+    ConfigResolutionMeta, ConfigSource, GeminiInteractionsProviderOptions, GeminiProviderOptions,
+    GitlabProviderOptions, HttpProviderAdapterConfig, OllamaProviderOptions,
+    OpenAiChatCompletionsProviderOptions, OpenAiResponsesProviderOptions,
+    ProviderAdapterDefinition, ProviderApiAuthConfig, ProviderAuthConfig,
+    ProviderClientVersionSettings, ProviderGitlabAuthConfig, ResolvedConfig,
     ResolvedProviderAdapterConfig, ResolvedProviderConfig, RuntimeConfig, RuntimeProvidersConfig,
     SessionCompactionConfig, SessionConfig, SimpleHttpProviderOptions, UiConfig,
     config_resolution_json_value, resolved_config_json_value,

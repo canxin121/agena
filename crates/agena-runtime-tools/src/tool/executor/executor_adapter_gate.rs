@@ -24,7 +24,7 @@ impl ToolExecutor {
         let required: &[&str] = match cloud.provider {
             "chatgpt" => &["openai_responses", "openai_chat_completions"],
             "claude" => &["anthropic"],
-            "gemini" => &["gemini"],
+            "gemini" => &["gemini", "gemini_interactions"],
             _ => {
                 return Err(ToolError::invalid_input(
                     "unknown cloud-tool adapter requirement",

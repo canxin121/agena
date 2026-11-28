@@ -90,9 +90,11 @@ impl Default for CapabilityRegistry {
                                 "gemini-1.5-",
                                 "gemini-2",
                                 "gemini-3",
+                                "gemini-4",
                                 "models/gemini-1.5-",
                                 "models/gemini-2",
                                 "models/gemini-3",
+                                "models/gemini-4",
                             ]),
                             ModelCapabilities {
                                 audio_input: CapabilitySupport::Supported,

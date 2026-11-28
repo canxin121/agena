@@ -1195,6 +1195,7 @@ provider-adapter-rule-none-ollama-detail = Ollama adapter; auth fields stay empt
 provider-adapter-rule-api-openai-detail = Explicit OpenAI Responses or Chat Completions adapter; uses provider auth base_url and supports draft model listing.
 provider-adapter-rule-api-anthropic-detail = Anthropic HTTP adapter; uses provider auth base_url and supports draft model listing.
 provider-adapter-rule-api-gemini-detail = Gemini HTTP adapter; uses provider auth base_url and supports draft model listing.
+provider-adapter-rule-api-gemini-interactions-detail = Gemini Interactions HTTP adapter (/v1beta/interactions); uses provider auth base_url and supports draft model listing.
 provider-adapter-rule-cline-api-openai-detail = Cline API through the openai_chat_completions adapter; base_url and model discovery stay fixed to the hosted Cline endpoint.
 provider-adapter-rule-gitlab-auth-openai-detail = GitLab gateway routed through the selected OpenAI Responses or Chat Completions adapter.
 provider-adapter-rule-gitlab-auth-anthropic-detail = GitLab gateway routed through the anthropic adapter.

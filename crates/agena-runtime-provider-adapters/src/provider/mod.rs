@@ -22,6 +22,7 @@ pub(crate) use agena_runtime_provider::provider_sse as sse;
 pub mod amazon_bedrock;
 pub mod anthropic;
 pub mod gemini;
+pub mod gemini_interactions;
 pub mod gitlab;
 mod model_pagination;
 pub mod ollama;
@@ -30,6 +31,7 @@ pub mod openai;
 pub use amazon_bedrock::AmazonBedrockAdapter;
 pub use anthropic::{AnthropicAdapter, AnthropicAdapterOptions};
 pub use gemini::{GeminiAdapter, GeminiAdapterOptions};
+pub use gemini_interactions::{GeminiInteractionsAdapter, GeminiInteractionsAdapterOptions};
 pub use gitlab::GitlabProvider;
 pub use gitlab::{
     default_ai_gateway_headers as default_gitlab_ai_gateway_headers,

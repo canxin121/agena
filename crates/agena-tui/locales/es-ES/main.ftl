@@ -2741,6 +2741,7 @@ command-btw-summary = Pregunta por separado mientras continúa la conversación 
 
 provider-adapter-rule-api-anthropic-detail = Adaptador HTTP de Anthropic; usa base_url de autenticación del proveedor y permite listar modelos en borrador.
 provider-adapter-rule-api-gemini-detail = Adaptador HTTP de Gemini; usa base_url de autenticación del proveedor y permite listar modelos en borrador.
+provider-adapter-rule-api-gemini-interactions-detail = Adaptador HTTP de Gemini Interactions (/v1beta/interactions); usa la base_url de autenticación del proveedor y admite listado de modelos en borrador.
 provider-adapter-rule-api-openai-detail = Adaptador explícito de OpenAI Responses o Chat Completions; usa base_url de autenticación del proveedor y permite listar modelos en borrador.
 provider-adapter-rule-bedrock-sigv4-amazon-bedrock-detail = Adaptador de Amazon Bedrock firmado con AWS SigV4.
 provider-adapter-rule-cline-api-openai-detail = API de Cline mediante el adaptador openai_chat_completions; base_url y la detección de modelos se mantienen fijos en el endpoint alojado de Cline.

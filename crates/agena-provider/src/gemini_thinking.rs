@@ -58,6 +58,30 @@ pub fn gemini_thinking_config(
         });
     }
 
+    if normalized.contains("gemini-4") {
+        let effort = match thinking {
+            ThinkingRequest::Budget { budget_tokens } if *budget_tokens < 12_000 => {
+                ReasoningEffort::Low
+            }
+            ThinkingRequest::Budget { budget_tokens } if *budget_tokens < 24_000 => {
+                ReasoningEffort::Medium
+            }
+            ThinkingRequest::Budget { budget_tokens } if *budget_tokens < 32_000 => {
+                ReasoningEffort::High
+            }
+            ThinkingRequest::Budget { .. } => ReasoningEffort::Xhigh,
+            ThinkingRequest::Adaptive { effort, .. } => effort.unwrap_or(ReasoningEffort::High),
+            ThinkingRequest::Effort { effort } => *effort,
+            ThinkingRequest::Disabled => ReasoningEffort::Low,
+        };
+        let thinking_level = Some(gemini_4_thinking_level_upper(&normalized, effort));
+        return Some(GeminiThinkingConfig {
+            thinking_budget: None,
+            thinking_level,
+            include_thoughts,
+        });
+    }
+
     if normalized.contains("gemini-3") {
         let thinking_level = match thinking {
             ThinkingRequest::Budget { budget_tokens } if *budget_tokens < 4_000 => Some(
@@ -142,4 +166,91 @@ fn gemini_3_thinking_level(model: &str, effort: ReasoningEffort) -> &'static str
         ReasoningEffort::Medium => "MEDIUM",
         ReasoningEffort::High | ReasoningEffort::Xhigh | ReasoningEffort::Max => "HIGH",
     }
+}
+
+fn gemini_4_supports_xhigh(model: &str) -> bool {
+    model.contains("hydrogen") || model.contains("neon")
+}
+
+fn gemini_4_thinking_level_upper(model: &str, effort: ReasoningEffort) -> &'static str {
+    match effort {
+        ReasoningEffort::Minimal | ReasoningEffort::Low => "LOW",
+        ReasoningEffort::Medium => "MEDIUM",
+        ReasoningEffort::High => "HIGH",
+        ReasoningEffort::Xhigh | ReasoningEffort::Max if gemini_4_supports_xhigh(model) => "XHIGH",
+        ReasoningEffort::Xhigh | ReasoningEffort::Max => "HIGH",
+    }
+}
+
+/// Map a provider-neutral thinking request to Google's Interactions API lowercase
+/// `generation_config.thinking_level` value, clamping unsupported levels to the
+/// nearest level accepted by the model.
+///
+/// Gemini 4 models reject `"minimal"` and cannot disable thinking; `Disabled`
+/// clamps to `"low"`. Gemini 3 models support `"minimal".."high"` and omit
+/// `thinking_level` when disabled.
+pub fn gemini_interactions_thinking_level(
+    model: &str,
+    thinking: Option<&ThinkingRequest>,
+) -> Option<&'static str> {
+    let thinking = thinking?;
+    let normalized = model.to_ascii_lowercase();
+
+    if normalized.contains("gemini-4") {
+        let effort = match thinking {
+            ThinkingRequest::Budget { budget_tokens } if *budget_tokens < 12_000 => {
+                ReasoningEffort::Low
+            }
+            ThinkingRequest::Budget { budget_tokens } if *budget_tokens < 24_000 => {
+                ReasoningEffort::Medium
+            }
+            ThinkingRequest::Budget { budget_tokens } if *budget_tokens < 32_000 => {
+                ReasoningEffort::High
+            }
+            ThinkingRequest::Budget { .. } => ReasoningEffort::Xhigh,
+            ThinkingRequest::Adaptive { effort, .. } => effort.unwrap_or(ReasoningEffort::High),
+            ThinkingRequest::Effort { effort } => *effort,
+            ThinkingRequest::Disabled => ReasoningEffort::Low,
+        };
+        return Some(match effort {
+            ReasoningEffort::Minimal | ReasoningEffort::Low => "low",
+            ReasoningEffort::Medium => "medium",
+            ReasoningEffort::High => "high",
+            ReasoningEffort::Xhigh | ReasoningEffort::Max
+                if gemini_4_supports_xhigh(&normalized) =>
+            {
+                "xhigh"
+            }
+            ReasoningEffort::Xhigh | ReasoningEffort::Max => "high",
+        });
+    }
+
+    if normalized.contains("gemini-3") {
+        if matches!(thinking, ThinkingRequest::Disabled) {
+            return None;
+        }
+        let effort = match thinking {
+            ThinkingRequest::Budget { budget_tokens } if *budget_tokens < 4_000 => {
+                ReasoningEffort::Minimal
+            }
+            ThinkingRequest::Budget { budget_tokens } if *budget_tokens < 12_000 => {
+                ReasoningEffort::Low
+            }
+            ThinkingRequest::Budget { budget_tokens } if *budget_tokens < 24_000 => {
+                ReasoningEffort::Medium
+            }
+            ThinkingRequest::Budget { .. } => ReasoningEffort::High,
+            ThinkingRequest::Adaptive { effort, .. } => effort.unwrap_or(ReasoningEffort::High),
+            ThinkingRequest::Effort { effort } => *effort,
+            ThinkingRequest::Disabled => unreachable!("handled above"),
+        };
+        return Some(match gemini_3_thinking_level(&normalized, effort) {
+            "MINIMAL" => "minimal",
+            "LOW" => "low",
+            "MEDIUM" => "medium",
+            _ => "high",
+        });
+    }
+
+    None
 }

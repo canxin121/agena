@@ -60,6 +60,11 @@ impl ProviderClientIdentity {
             gemini_node_architecture()
         )
     }
+
+    /// Agena's own `<app>/<version>` identity used for first-party HTTP requests.
+    pub fn agena_user_agent(&self) -> String {
+        format!("agena/{}", env!("CARGO_PKG_VERSION"))
+    }
 }
 
 fn gemini_node_platform() -> &'static str {

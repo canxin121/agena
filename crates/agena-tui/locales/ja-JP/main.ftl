@@ -2679,6 +2679,7 @@ provider-adapter-rule-none-ollama-detail = Ollama アダプターです。認証
 provider-adapter-rule-api-openai-detail = OpenAI Responses または Chat Completions を明示的に選択するアダプターです。プロバイダー認証の base_url を使用し、モデルの仮登録に対応します。
 provider-adapter-rule-api-anthropic-detail = Anthropic HTTP アダプターです。プロバイダー認証の base_url を使用し、モデルの仮登録に対応します。
 provider-adapter-rule-api-gemini-detail = Gemini HTTP アダプターです。プロバイダー認証の base_url を使用し、モデルの仮登録に対応します。
+provider-adapter-rule-api-gemini-interactions-detail = Gemini Interactions HTTP アダプター（/v1beta/interactions）。プロバイダー認証の base_url を使用し、モデルの仮登録に対応します。
 provider-adapter-rule-cline-api-openai-detail = openai_chat_completions アダプター経由の Cline API です。base_url とモデル検出先はホストされた Cline エンドポイントに固定されています。
 provider-adapter-rule-gitlab-auth-openai-detail = GitLab ゲートウェイを、選択した OpenAI Responses または Chat Completions アダプター経由で利用します。
 provider-adapter-rule-gitlab-auth-anthropic-detail = GitLab ゲートウェイを anthropic アダプター経由で利用します。

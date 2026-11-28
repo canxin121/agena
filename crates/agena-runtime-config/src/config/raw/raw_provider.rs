@@ -322,6 +322,32 @@ fn resolve_adapter_config(
                 },
             })
         }
+        ProviderKind::GeminiInteractions => {
+            if normalize_optional(base_url.clone()).is_some() {
+                return Err(ConfigError::InvalidProviderConfig {
+                    provider_id: provider_id.to_owned(),
+                    message:
+                        "gemini_interactions adapter does not support `base_url`; configure provider auth endpoint instead"
+                            .to_owned(),
+                });
+            }
+            if stream_mode.is_some() || normalize_optional(realtime_ws_url).is_some() {
+                return Err(ConfigError::InvalidProviderConfig {
+                    provider_id: provider_id.to_owned(),
+                    message:
+                        "gemini_interactions adapter does not accept Gemini live WebSocket transport fields"
+                            .to_owned(),
+                });
+            }
+            ProviderAdapterDefinition::GeminiInteractions(HttpProviderAdapterConfig {
+                user_agent: normalize_optional(user_agent),
+                extra_headers,
+                options: crate::GeminiInteractionsProviderOptions {
+                    auth_header: normalize_optional(auth_header),
+                    auth_scheme: normalize_optional(auth_scheme),
+                },
+            })
+        }
         ProviderKind::Gitlab => ProviderAdapterDefinition::Gitlab(crate::GitlabProviderOptions {
             instance_url: normalize_optional(instance_url),
             ai_gateway_url: normalize_optional(ai_gateway_url),
@@ -855,6 +881,7 @@ fn validate_provider_auth<'a>(
                         }
                         ProviderAdapterDefinition::Anthropic(_) => "anthropic",
                         ProviderAdapterDefinition::Gemini(_) => "gemini",
+                        ProviderAdapterDefinition::GeminiInteractions(_) => "gemini_interactions",
                         ProviderAdapterDefinition::Gitlab(_) => "gitlab",
                         ProviderAdapterDefinition::Ollama(_) => "ollama",
                         ProviderAdapterDefinition::AmazonBedrock(_) => "amazon_bedrock",
@@ -961,6 +988,7 @@ fn api_auth_requires_base_url(definition: &ProviderAdapterDefinition) -> bool {
             | ProviderAdapterDefinition::OpenAiChatCompletions(_)
             | ProviderAdapterDefinition::Anthropic(_)
             | ProviderAdapterDefinition::Gemini(_)
+            | ProviderAdapterDefinition::GeminiInteractions(_)
     )
 }
 

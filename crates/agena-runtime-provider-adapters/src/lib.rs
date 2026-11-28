@@ -9,7 +9,7 @@ pub mod provider;
 
 pub use provider::{
     AmazonBedrockAdapter, AnthropicAdapter, AnthropicAdapterOptions, GeminiAdapter,
-    GeminiAdapterOptions, GitlabProvider, MultiAdapterProvider, OllamaAdapter,
-    OpenAiChatCompletionsAdapter, OpenAiChatCompletionsAdapterOptions, OpenAiResponsesAdapter,
-    OpenAiResponsesAdapterOptions,
+    GeminiAdapterOptions, GeminiInteractionsAdapter, GeminiInteractionsAdapterOptions,
+    GitlabProvider, MultiAdapterProvider, OllamaAdapter, OpenAiChatCompletionsAdapter,
+    OpenAiChatCompletionsAdapterOptions, OpenAiResponsesAdapter, OpenAiResponsesAdapterOptions,
 };

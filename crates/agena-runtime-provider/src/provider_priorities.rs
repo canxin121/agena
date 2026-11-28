@@ -23,7 +23,8 @@ pub fn provider_model_catalog_priorities(
                     .filter(|adapter| adapter.enabled)
                     .map(|adapter| match &adapter.definition {
                         ProviderAdapterDefinition::Anthropic(_)
-                        | ProviderAdapterDefinition::Gemini(_) => 500,
+                        | ProviderAdapterDefinition::Gemini(_)
+                        | ProviderAdapterDefinition::GeminiInteractions(_) => 500,
                         ProviderAdapterDefinition::OpenAiResponses(config) => {
                             provider_capability_family_priority(
                                 config.options.capability_family.as_ref(),

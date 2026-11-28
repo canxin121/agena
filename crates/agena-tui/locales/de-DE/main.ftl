@@ -1230,6 +1230,7 @@ provider-adapter-rule-none-ollama-detail = Ollama-Adapter; Authentifizierungsfel
 provider-adapter-rule-api-openai-detail = Expliziter OpenAI-Responses- oder Chat-Completions-Adapter; verwendet die providerseitige Authentifizierungsoption base_url und unterstützt das Auflisten von Modellen im Entwurf.
 provider-adapter-rule-api-anthropic-detail = Anthropic-HTTP-Adapter; verwendet die providerseitige Authentifizierungsoption base_url und unterstützt das Auflisten von Modellen im Entwurf.
 provider-adapter-rule-api-gemini-detail = Gemini-HTTP-Adapter; verwendet die providerseitige Authentifizierungsoption base_url und unterstützt das Auflisten von Modellen im Entwurf.
+provider-adapter-rule-api-gemini-interactions-detail = Gemini-Interactions-HTTP-Adapter (/v1beta/interactions); verwendet die base_url der Anbieter-Authentifizierung und unterstützt Entwurfs-Modelllisten.
 provider-adapter-rule-cline-api-openai-detail = Cline API über den openai_chat_completions-Adapter; base_url und Modellerkennung bleiben auf den gehosteten Cline-Endpunkt festgelegt.
 provider-adapter-rule-gitlab-auth-openai-detail = GitLab-Gateway über den ausgewählten OpenAI-Responses- oder Chat-Completions-Adapter.
 provider-adapter-rule-gitlab-auth-anthropic-detail = GitLab-Gateway über den anthropic-Adapter.

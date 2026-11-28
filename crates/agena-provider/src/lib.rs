@@ -99,7 +99,18 @@ pub use anthropic_thinking::{
     merge_anthropic_cache_creation_usage, merge_anthropic_usage,
 };
 mod gemini_thinking;
-pub use gemini_thinking::{GeminiThinkingConfig, gemini_thinking_config};
+pub use gemini_thinking::{
+    GeminiThinkingConfig, gemini_interactions_thinking_level, gemini_thinking_config,
+};
+mod gemini_interactions_wire;
+pub use gemini_interactions_wire::{
+    GEMINI_SKIP_THOUGHT_SIGNATURE, GeminiInteractionsContent,
+    GeminiInteractionsFunctionResultPayload, GeminiInteractionsGenerationConfig,
+    GeminiInteractionsRequest, GeminiInteractionsStep, GeminiInteractionsTool,
+    GeminiInteractionsUsage, GoogleInteractionsErrorClassification,
+    classify_google_interactions_error, gemini_interactions_finish_reason,
+    gemini_interactions_usage_to_completion,
+};
 mod gemini_usage;
 pub use gemini_usage::{GeminiUsageMetadata, gemini_usage_to_completion};
 mod gemini_models;

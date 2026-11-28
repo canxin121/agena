@@ -356,11 +356,13 @@ pub(crate) fn resolved_adapter_models_base_url(
                 HttpAdapterKind::Anthropic,
             )?)),
         },
-        ProviderAdapterDefinition::Gemini(_) => Ok(Some(resolve_http_adapter_base_url(
-            provider_id,
-            auth,
-            HttpAdapterKind::Gemini,
-        )?)),
+        ProviderAdapterDefinition::Gemini(_) | ProviderAdapterDefinition::GeminiInteractions(_) => {
+            Ok(Some(resolve_http_adapter_base_url(
+                provider_id,
+                auth,
+                HttpAdapterKind::Gemini,
+            )?))
+        }
         ProviderAdapterDefinition::Ollama(adapter) => Ok(Some(
             adapter
                 .base_url

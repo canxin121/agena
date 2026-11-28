@@ -26,6 +26,7 @@ fn compatible(definition: &ProviderAdapterDefinition, protocol: &str) -> bool {
             )
             | (ProviderAdapterDefinition::Anthropic(_), "claude")
             | (ProviderAdapterDefinition::Gemini(_), "gemini")
+            | (ProviderAdapterDefinition::GeminiInteractions(_), "gemini")
     )
 }
 
@@ -162,6 +163,13 @@ pub async fn resolve_provider_tool_connection(
             }
             ProviderAdapterDefinition::Gemini(config) => {
                 realtime_ws_url = config.options.realtime_ws_url.clone();
+                if let Some(header) = &config.options.auth_header {
+                    auth_header = header.clone();
+                    auth_scheme = config.options.auth_scheme.clone();
+                }
+                adapter_headers!(config);
+            }
+            ProviderAdapterDefinition::GeminiInteractions(config) => {
                 if let Some(header) = &config.options.auth_header {
                     auth_header = header.clone();
                     auth_scheme = config.options.auth_scheme.clone();

@@ -256,6 +256,7 @@ pub enum ProviderAdapterDefinition {
     OpenAiChatCompletions(HttpProviderAdapterConfig<OpenAiChatCompletionsProviderOptions>),
     Anthropic(HttpProviderAdapterConfig<AnthropicProviderOptions>),
     Gemini(HttpProviderAdapterConfig<GeminiProviderOptions>),
+    GeminiInteractions(HttpProviderAdapterConfig<GeminiInteractionsProviderOptions>),
     Gitlab(GitlabProviderOptions),
     AmazonBedrock(AmazonBedrockProviderOptions),
 }
@@ -338,6 +339,13 @@ pub struct GeminiProviderOptions {
     pub auth_scheme: Option<String>,
     pub stream_mode: StreamTransportMode,
     pub realtime_ws_url: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// Options for the Gemini Interactions adapter (`/interactions`).
+pub struct GeminiInteractionsProviderOptions {
+    pub auth_header: Option<String>,
+    pub auth_scheme: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

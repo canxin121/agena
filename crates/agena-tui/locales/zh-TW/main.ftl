@@ -2599,6 +2599,7 @@ workbench-tool-completed-no-output = 工具已成功完成，沒有輸出。
 
 provider-adapter-rule-api-anthropic-detail = Anthropic HTTP 介接器；使用 provider 驗證設定中的 base_url，並支援列出草稿模型。
 provider-adapter-rule-api-gemini-detail = Gemini HTTP 介接器；使用 provider 驗證設定中的 base_url，並支援列出草稿模型。
+provider-adapter-rule-api-gemini-interactions-detail = Gemini Interactions HTTP 介接器（/v1beta/interactions）；使用 provider 驗證設定中的 base_url，並支援列出草稿模型。
 provider-adapter-rule-api-openai-detail = 明確指定的 OpenAI Responses 或 Chat Completions 介接器；使用 provider 驗證設定中的 base_url。
 provider-adapter-rule-bedrock-sigv4-amazon-bedrock-detail = 使用 AWS SigV4 簽署的 Amazon Bedrock 介接器。
 provider-adapter-rule-cline-api-openai-detail = 透過 openai_chat_completions 介接器連線至 Cline API；base_url 和模型探索固定使用 Cline 託管端點。

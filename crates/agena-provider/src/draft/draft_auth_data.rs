@@ -62,6 +62,12 @@ pub(crate) const API_ADAPTER_RULES: &[ProviderDraftAdapterRule] = &[
         requires_base_url: true,
         supports_draft_model_listing: true,
     },
+    ProviderDraftAdapterRule {
+        adapter_id: "gemini_interactions",
+        detail_key: "provider-adapter-rule-api-gemini-interactions-detail",
+        requires_base_url: true,
+        supports_draft_model_listing: true,
+    },
 ];
 
 pub(crate) const CLINE_API_ADAPTER_RULES: &[ProviderDraftAdapterRule] =

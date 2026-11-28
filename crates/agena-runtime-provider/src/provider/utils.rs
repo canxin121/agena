@@ -26,7 +26,7 @@ const ADAPTER_LOG_STRING_LIMIT: usize = 2_048;
 static REQUEST_CODECS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 static RESPONSE_CODECS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 const MAX_PROVIDER_JSON_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
-pub(crate) const MAX_PROVIDER_ERROR_RESPONSE_BYTES: usize = 1024 * 1024;
+pub const MAX_PROVIDER_ERROR_RESPONSE_BYTES: usize = 1024 * 1024;
 
 fn pretty_adapter_log_json(value: &serde_json::Value, context: &str) -> String {
     match serde_json::to_string_pretty(value) {
@@ -314,7 +314,7 @@ pub async fn project_response_with<T: Send + 'static>(
 
 // ─── HTTP response helpers ────────────────────────────────────────────────────
 
-pub(crate) async fn response_text_bounded(
+pub async fn response_text_bounded(
     mut response: reqwest::Response,
     max_bytes: usize,
     context: &str,

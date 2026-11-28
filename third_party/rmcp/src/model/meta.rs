@@ -472,7 +472,10 @@ impl RequestMetaObject {
     }
 
     /// Set the client capabilities carried in `_meta`.
-    pub fn set_client_capabilities(&mut self, client_capabilities: ClientCapabilities) {
+    pub fn set_client_capabilities(&mut self, mut client_capabilities: ClientCapabilities) {
+        // The 2026-07-28 request context uses the Tasks extension. The
+        // experimental top-level capability belongs to initialize only.
+        client_capabilities.legacy_tasks = None;
         self.0
             .insert_serialized(Self::META_KEY_CLIENT_CAPABILITIES, client_capabilities);
     }

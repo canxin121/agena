@@ -24,17 +24,24 @@ use std::{
 
 static POLICY_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(8);
 
+pub(crate) struct PrivateShellFile {
+    pub directory: PathBuf,
+    pub path: PathBuf,
+    pub writable: bool,
+}
+
 /// Trusted process default; individual MCP invocations can also disable MXC.
 pub fn enabled() -> Result<bool, ToolError> {
     Ok(agena_process::sandbox::enabled())
 }
 
-pub(crate) async fn protect_async(
+pub(crate) async fn protect_async_with_files(
     executor: &ToolExecutor,
     command: Vec<String>,
     cwd: &Path,
     input: &ShellCommandInput,
     env: HashMap<String, String>,
+    files: Vec<PrivateShellFile>,
 ) -> Result<(Vec<String>, HashMap<String, String>), ToolError> {
     executor.ensure_not_cancelled()?;
     if !executor.sandbox_enabled() {
@@ -48,7 +55,7 @@ pub(crate) async fn protect_async(
     let cwd = cwd.to_path_buf();
     let preparation = POLICY_WORKERS.run(move || {
         let mut env = env;
-        let command = protect(&executor, command, &cwd, &input, &mut env)?;
+        let command = protect_with_files(&executor, command, &cwd, &input, &mut env, files)?;
         Ok((command, env))
     });
     tokio::select! {
@@ -61,12 +68,24 @@ pub(crate) async fn protect_async(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn protect(
     executor: &ToolExecutor,
     command: Vec<String>,
     cwd: &Path,
     input: &ShellCommandInput,
     env: &mut HashMap<String, String>,
+) -> Result<Vec<String>, ToolError> {
+    protect_with_files(executor, command, cwd, input, env, Vec::new())
+}
+
+pub(crate) fn protect_with_files(
+    executor: &ToolExecutor,
+    command: Vec<String>,
+    cwd: &Path,
+    input: &ShellCommandInput,
+    env: &mut HashMap<String, String>,
+    files: Vec<PrivateShellFile>,
 ) -> Result<Vec<String>, ToolError> {
     let began = std::time::Instant::now();
     executor.ensure_not_cancelled()?;
@@ -75,6 +94,14 @@ pub(crate) fn protect(
     }
     executor.validate_sandbox_workdir(cwd)?;
     let mut policy = policy_from_settings(executor)?;
+    for file in files {
+        policy.private_paths.push(file.directory);
+        if file.writable {
+            policy.readwrite_paths.push(file.path);
+        } else {
+            policy.readonly_paths.push(file.path);
+        }
+    }
     executor.ensure_not_cancelled()?;
     policy.timeout_ms = input.timeout_ms.map(|timeout| {
         timeout.saturating_sub(u64::try_from(began.elapsed().as_millis()).unwrap_or(u64::MAX))
@@ -941,10 +968,16 @@ mod tests {
         .unwrap();
         let argv = vec!["/bin/sh".into(), "-c".into(), "echo direct".into()];
         let env = HashMap::from([("HOME".into(), "original-home".into())]);
-        let (protected, environment) =
-            protect_async(&direct, argv.clone(), &root, &input, env.clone())
-                .await
-                .unwrap();
+        let (protected, environment) = protect_async_with_files(
+            &direct,
+            argv.clone(),
+            &root,
+            &input,
+            env.clone(),
+            Vec::new(),
+        )
+        .await
+        .unwrap();
         assert_eq!(protected, argv);
         assert_eq!(environment, env);
         let policy = policy_for_paths(&direct, &[root.clone()], &[], &input.network).unwrap();

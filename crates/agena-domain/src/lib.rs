@@ -29,6 +29,7 @@ mod activity_kind;
 mod attachment;
 mod auto_compaction;
 mod background_activity;
+pub mod claude_channels;
 mod command_events;
 mod config_setting_source;
 mod content;
@@ -83,6 +84,7 @@ mod session_cost;
 mod session_state;
 mod session_summary;
 mod session_usage;
+mod session_working_directories;
 mod stream_error;
 mod structured;
 mod thinking;
@@ -101,7 +103,10 @@ mod user_input;
 mod user_input_events;
 
 pub mod activity_view;
+pub mod mcp_app_tools;
 pub mod mcp_connections;
+pub mod mcp_elicitation;
+pub mod mcp_sampling;
 pub mod session_kernel;
 pub use access::{AccessKind, AccessSelector, PathKind};
 pub use access_control::{
@@ -127,8 +132,10 @@ pub use attachment::{
 };
 pub use auto_compaction::SessionAutoCompactionConfig;
 pub use background_activity::{
-    BackgroundActivity, BackgroundActivityChangedEvent, BackgroundActivityEventReason,
-    BackgroundActivityKind, BackgroundActivityStatus,
+    ActivityOutputChannel, ActivityOutputChunk, ActivityOutputRetention, BackgroundActivity,
+    BackgroundActivityChangedEvent, BackgroundActivityEventReason, BackgroundActivityKind,
+    BackgroundActivityStatus, MAX_ACTIVITY_OUTPUT_BYTES, MAX_ACTIVITY_SPILL_PATHS,
+    valid_activity_spill_path,
 };
 pub use command_events::CommandOutputStream;
 pub use config_setting_source::{
@@ -181,7 +188,10 @@ pub use model_metadata::{
     normalize_model_output_modalities,
 };
 pub use model_request_override::ModelSpeedModeRequestOverride;
-pub use model_selection::{ApprovalModelSelection, ModelSelectionConfig};
+pub use model_selection::{
+    ApprovalModelSelection, ModelSelectionConfig, ModelSwitchConfirmation, ModelSwitchInteraction,
+    ModelSwitchSource,
+};
 pub use model_values::{CapabilitySupport, ModelInputModality, ModelLifecycle};
 pub use network_decision::{
     validate_persisted_network_decision, validate_persisted_network_rule_key,
@@ -217,7 +227,8 @@ pub use permission_resolution::{
 };
 pub use plugin_invocation::PluginInvocation;
 pub use process_values::{
-    ProcessEvent, ProcessShell, ProcessStatus, ProcessStream, ProcessSummary, TerminalScreen,
+    ProcessEvent, ProcessShell, ProcessStatus, ProcessStream, ProcessSummary, ShellInvocation,
+    ShellLaunchCall, ShellLaunchMode, TerminalScreen,
 };
 pub use prompt_compaction::{
     PromptCompactionActivity, PromptCompactionCompletedEvent, PromptCompactionStrategy,
@@ -235,6 +246,9 @@ pub use session_state::{
     WorkflowState,
 };
 pub use session_summary::{SessionListRequest, SessionSummary};
+pub use session_working_directories::{
+    RegisterSessionWorkingDirectory, SessionWorkingDirectoryRegistration,
+};
 pub use session_usage::{SessionUsage, SessionUsageLimitBasis};
 pub use stream_error::StreamErrorEvent;
 pub use structured::{StructuredField, StructuredObject, StructuredValue};

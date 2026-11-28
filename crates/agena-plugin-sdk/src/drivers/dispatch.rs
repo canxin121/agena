@@ -265,9 +265,83 @@ impl<P: Plugin> PluginDispatcher<P> {
                 plugin.session_end(i).await?;
                 Ok(Value::Object(Default::default()))
             }
+            method::HOOK_SESSION_FILE_CHANGED => {
+                let input = serde_json::from_value(params)?;
+                ok_json(&plugin.session_file_changed(input).await?)
+            }
+            method::HOOK_SESSION_CWD_CHANGED => {
+                let input = serde_json::from_value(params)?;
+                plugin.session_cwd_changed(input).await?;
+                Ok(Value::Null)
+            }
+            method::HOOK_IMPORTED_INSTRUCTIONS_LOADED => {
+                plugin
+                    .imported_instructions_loaded(serde_json::from_value(params)?)
+                    .await?;
+                Ok(Value::Null)
+            }
+            method::HOOK_IMPORTED_SESSION_SETUP => {
+                let input = serde_json::from_value(params)?;
+                plugin.imported_session_setup(input).await?;
+                Ok(Value::Null)
+            }
+            method::HOOK_IMPORTED_MESSAGE_DISPLAY => {
+                let input = serde_json::from_value(params)?;
+                ok_json(&plugin.imported_message_display(input).await?)
+            }
+            method::HOOK_IMPORTED_CONFIG_CHANGE => {
+                let input = serde_json::from_value(params)?;
+                ok_json(&plugin.imported_config_change(input).await?)
+            }
+            method::HOOK_IMPORTED_DIRECTORY_ADDED => {
+                plugin.imported_directory_added(serde_json::from_value(params)?).await?;
+                Ok(Value::Null)
+            }
+            method::HOOK_IMPORTED_TASK_BEFORE => {
+                let input = serde_json::from_value(params)?;
+                ok_json(&plugin.imported_task_before(input).await?)
+            }
+            method::HOOK_IMPORTED_TURN_COMPLETED => {
+                plugin
+                    .imported_turn_completed(serde_json::from_value(params)?)
+                    .await?;
+                Ok(Value::Null)
+            }
+            method::HOOK_IMPORTED_MCP_ELICITATION
+            | method::HOOK_IMPORTED_MCP_ELICITATION_RESULT => {
+                let input = serde_json::from_value(params)?;
+                ok_json(&plugin.imported_mcp_elicitation(input).await?)
+            }
+            method::HOOK_IMPORTED_SKILL_SHELL_BEFORE => {
+                let input = serde_json::from_value(params)?;
+                ok_json(&plugin.imported_skill_shell_before(input).await?)
+            }
+            method::HOOK_IMPORTED_MODEL_SWITCH_BEFORE
+            | method::HOOK_IMPORTED_MODEL_SWITCH_AFTER => {
+                let input = serde_json::from_value(params)?;
+                let before = method_name == method::HOOK_IMPORTED_MODEL_SWITCH_BEFORE;
+                ok_json(&plugin.imported_model_switch(input, before).await?)
+            }
+            method::HOOK_IMPORTED_MODEL_ATTEMPT_BEFORE
+            | method::HOOK_IMPORTED_MODEL_ATTEMPT_AFTER => {
+                let input = serde_json::from_value(params)?;
+                ok_json(&plugin.imported_model_attempt(input).await?)
+            }
+            method::HOOK_WORKTREE_CREATE | method::HOOK_WORKTREE_REMOVE => {
+                let input = serde_json::from_value(params)?;
+                ok_json(&plugin.worktree_hook(input).await?)
+            }
             method::HOOK_USER_PROMPT_SUBMIT => {
                 let i: UserPromptSubmitInput = serde_json::from_value(params)?;
                 ok_json(&plugin.user_prompt_submit(i).await?)
+            }
+            method::HOOK_USER_PROMPT_EXPANSION => {
+                let i: UserPromptExpansionInput = serde_json::from_value(params)?;
+                ok_json(&plugin.user_prompt_expansion(i).await?)
+            }
+            method::HOOK_TOOL_BATCH_AFTER => {
+                let i: ToolBatchInput = serde_json::from_value(params)?;
+                ok_json(&plugin.tool_batch_after(i).await?)
             }
             method::HOOK_TOOL_FAILURE => {
                 let i: ToolFailureInput = serde_json::from_value(params)?;
@@ -293,16 +367,20 @@ impl<P: Plugin> PluginDispatcher<P> {
                         .await?,
                 )
             }
-            method::HOOK_AGENT_STOP => {
+            method::HOOK_AGENT_STOP | method::HOOK_IMPORTED_CLAUDE_STOP => {
                 let i: AgentStopInput = serde_json::from_value(params)?;
                 let ctx = crate::host_api::HostCallbackContext {
                     session_id: Some(i.session_id),
                     ..crate::host_api::HostCallbackContext::default()
                 };
-                ok_json(
-                    &crate::host_api::run_in_host_callback_context(ctx, plugin.agent_stop(i))
-                        .await?,
-                )
+                let stop = async {
+                    if method_name == method::HOOK_IMPORTED_CLAUDE_STOP {
+                        plugin.imported_claude_stop(i).await
+                    } else {
+                        plugin.agent_stop(i).await
+                    }
+                };
+                ok_json(&crate::host_api::run_in_host_callback_context(ctx, stop).await?)
             }
             method::HOOK_AGENT_CANCEL => {
                 let i: AgentCancelInput = serde_json::from_value(params)?;
@@ -382,17 +460,23 @@ impl<P: Plugin> PluginDispatcher<P> {
                     session_id: Some(input.session_id),
                     ..Default::default()
                 };
-                crate::host_api::run_in_host_callback_context(
-                    context,
-                    plugin.compaction_after(input),
+                ok_json(
+                    &crate::host_api::run_in_host_callback_context(
+                        context,
+                        plugin.compaction_after_control(input),
+                    )
+                    .await?,
                 )
-                .await?;
-                Ok(Value::Object(Default::default()))
             }
             method::HOOK_SUBAGENT_START => {
                 let input: SubagentStartInput = serde_json::from_value(params)?;
+                // Imported adapters run against the child's authority even
+                // though their hook payload describes the parent's launch.
+                let session_id = crate::host_api::current_host_callback_context()
+                    .and_then(|context| context.session_id)
+                    .unwrap_or(input.session_id);
                 let context = crate::host_api::HostCallbackContext {
-                    session_id: Some(input.session_id),
+                    session_id: Some(session_id),
                     ..Default::default()
                 };
                 ok_json(

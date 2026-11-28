@@ -1,5 +1,5 @@
 use crate::{App, ChoiceOverlayAction, I18n, ModelRef, RunOptions, SessionModelModeStep};
-use agena_domain::ExecutionSelection;
+use agena_domain::{ExecutionSelection, ModelSwitchSource};
 
 pub(crate) fn model_selection_only(selection: &ExecutionSelection) -> ExecutionSelection {
     let mut selection = selection.clone();
@@ -169,7 +169,7 @@ impl App {
         };
         let selected = self.current_raw_model_selection();
         if session_model_route_is_local(&selected) {
-            self.open_session_model_source();
+            self.open_session_model_source(ModelSwitchSource::Picker);
             return;
         }
         if self.session_is_busy(session_id) {
@@ -258,7 +258,7 @@ impl App {
         }
     }
 
-    pub(crate) fn open_session_model_source(&mut self) {
+    pub(crate) fn open_session_model_source(&mut self, model_switch_source: ModelSwitchSource) {
         let Some(session_id) = self.transcript.session_id else {
             return;
         };
@@ -272,7 +272,12 @@ impl App {
             .as_ref()
             .map(|execution| model_selection_only(&execution.execution.inherited_selection));
         let selected = model_selection_only(&self.current_raw_model_selection());
-        let picker = self.build_session_model_source_picker(session_id, selected, parent);
+        let picker = self.build_session_model_source_picker(
+            session_id,
+            selected,
+            parent,
+            model_switch_source,
+        );
         self.open_choice_overlay(picker);
     }
 
@@ -281,6 +286,7 @@ impl App {
         session_id: i64,
         selected: ExecutionSelection,
         parent: Option<ExecutionSelection>,
+        model_switch_source: ModelSwitchSource,
     ) -> crate::ChoiceOverlay {
         let local = session_model_route_is_local(&selected);
         let local_value = parent
@@ -317,6 +323,7 @@ impl App {
                 model: self.current_session_model_ref(),
                 selected,
                 local_value,
+                model_switch_source,
             },
             false,
             agena_tui::choice::ChoicePresentationStyle::SelectOnly,
@@ -329,6 +336,7 @@ impl App {
         model: Option<ModelRef>,
         selected: ExecutionSelection,
         local_value: ExecutionSelection,
+        model_switch_source: ModelSwitchSource,
         value: &str,
     ) -> bool {
         if !model_source_context_matches(
@@ -358,6 +366,7 @@ impl App {
                 self.open_model_chooser_with_source(
                     agena_tui::model_chooser::SessionModelChooserPurpose::RuntimeOverride,
                     true,
+                    model_switch_source,
                 );
                 return true;
             }
@@ -367,7 +376,7 @@ impl App {
         self.run_options.raw_selection = Some(selection);
         self.run_options.pending_mode_clears = [false; 3];
         self.run_options.explicit_model_stack = true;
-        if !self.persist_current_session_model_stack(previous.clone()) {
+        if !self.persist_model_stack(previous.clone(), model_switch_source, None) {
             self.run_options = previous;
             return false;
         }
@@ -475,13 +484,21 @@ mod tests {
             Some("low".into()),
             Some(false),
         );
-        assert!(app.apply_model_override_from_source(model, false));
+        assert!(app.apply_model_override_from_source(
+            model,
+            false,
+            agena_domain::ModelSwitchSource::Picker
+        ));
         let same = app.current_raw_model_selection();
         assert_eq!(same.thinking_mode.as_deref(), Some("high"));
         assert_eq!(same.speed_mode.as_deref(), Some("fast"));
         assert_eq!(same.verbosity.as_deref(), Some("low"));
         assert_eq!(same.parallel_tool_calls, Some(false));
-        assert!(app.apply_model_override_from_source(ModelRef::new("p", "next"), false));
+        assert!(app.apply_model_override_from_source(
+            ModelRef::new("p", "next"),
+            false,
+            agena_domain::ModelSwitchSource::Picker
+        ));
         let next = app.current_raw_model_selection();
         assert!(
             next.thinking_mode.is_none() && next.speed_mode.is_none() && next.verbosity.is_none()
@@ -498,7 +515,7 @@ mod tests {
         app.transcript.session_id = Some(10);
         let raw = selection(json!({"thinking_mode":"high","parallel_tool_calls":false}));
         app.run_options.raw_selection = Some(raw.clone());
-        app.open_session_model_source();
+        app.open_session_model_source(ModelSwitchSource::Command);
         let Some(crate::Overlay::Choice(mut picker)) = app.overlay.take() else {
             panic!("unknown parent still needs a source chooser");
         };
@@ -519,6 +536,7 @@ mod tests {
             panic!("explicit local model draft missing");
         };
         assert!(dialog.meta.editable && dialog.meta.explicit_local);
+        assert_eq!(dialog.meta.model_switch_source, ModelSwitchSource::Command);
         assert_eq!(app.current_raw_model_selection(), raw);
     }
 
@@ -712,8 +730,12 @@ mod tests {
             (ExecutionSelection::default(), "inherit"),
             (selection(json!({"thinking_mode":"high"})), "inherit"),
         ] {
-            let picker =
-                app.build_session_model_source_picker(10, selected.clone(), Some(parent.clone()));
+            let picker = app.build_session_model_source_picker(
+                10,
+                selected.clone(),
+                Some(parent.clone()),
+                ModelSwitchSource::Picker,
+            );
             assert_eq!(
                 agena_tui::choice::selection(&picker.presentation),
                 Some(agena_tui::choice::ChoiceSelection::Item {

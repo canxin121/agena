@@ -2,7 +2,7 @@
 use super::*;
 use agena_plugin_host::sdk::host_api::{
     AgentMessageReceipt, AgentMessageRequest, AgentTargetRequest, AgentWaitRequest,
-    AgentWaitResponse, AgentWakeReason,
+    AgentWaitResponse, AgentWakeReason, ImportedPluginAgentState,
 };
 
 impl SessionManager {
@@ -103,11 +103,6 @@ impl SessionManager {
         caller: SessionId,
         message: &str,
     ) -> Result<serde_json::Value, AppError> {
-        if message.trim().is_empty() || message.len() > 12 * 1024 {
-            return Err(AppError::Config(
-                "agent message must contain 1–12288 bytes".into(),
-            ));
-        }
         let config = self
             .kernel()
             .reader
@@ -119,10 +114,7 @@ impl SessionManager {
             .as_ref()
             .map(|agent| agent.name.as_str())
             .unwrap_or("parent");
-        bounded_agent_payload(serde_json::json!({
-            "kind":"agent_message", "sender_agent_id":caller.get(), "sender_name":name,
-            "text": format!("Message from {name} ({}):\n{message}", caller.get()), "wake":false
-        }))
+        agent_message(caller, name, message, false)
     }
 
     pub async fn message_agent(
@@ -170,6 +162,151 @@ impl SessionManager {
         let control = self.agent_callback(caller, call)?;
         let session = session_id(caller)?;
         self.agent_group(session).await?;
+        let reason = self
+            .with_agent_wait_permit(
+                caller,
+                call,
+                control.as_deref(),
+                self.wait_agent_mailbox(
+                    session,
+                    control.as_deref(),
+                    Duration::from_millis(timeout),
+                ),
+            )
+            .await?;
+        Ok(AgentWaitResponse { reason })
+    }
+
+    pub async fn find_imported_plugin_agent(
+        &self,
+        caller: i64,
+        call: Option<i64>,
+        name: &str,
+    ) -> Result<Option<ImportedPluginAgentState>, AppError> {
+        self.agent_callback(caller, call)?;
+        let parent = session_id(caller)?;
+        let Some(child) = *read_with_busy_retry(parent, "find_workflow_agent", || {
+            self.kernel().reader.find_agent(parent, name)
+        })
+        .await?
+        else {
+            return Ok(None);
+        };
+        let configuration = read_with_busy_retry(child, "workflow_agent_configuration", || {
+            self.kernel().reader.configuration(child)
+        })
+        .await?;
+        let Some(agent) = &configuration.agent else {
+            return Ok(None);
+        };
+        Ok(Some(match agent.status {
+            AgentStatus::Completed => ImportedPluginAgentState::Completed(child.get()),
+            status if status.is_terminal() => ImportedPluginAgentState::Failed,
+            _ => ImportedPluginAgentState::Active,
+        }))
+    }
+
+    pub async fn wait_imported_plugin_agent(
+        &self,
+        caller: i64,
+        call: Option<i64>,
+        child: i64,
+        timeout_ms: u64,
+    ) -> Result<agena_plugin_host::sdk::ToolInvokeOutput, AppError> {
+        let control = self.agent_callback(caller, call)?;
+        let cancel = control
+            .as_ref()
+            .map(|control| control.cancel.clone())
+            .or_else(agena_plugin_host::sdk::current_cancellation_token)
+            .unwrap_or_else(|| self.shutdown.child_token());
+        let wait = self.wait_imported_child(caller, child, timeout_ms, cancel);
+        self.with_agent_wait_permit(caller, call, control.as_deref(), wait)
+            .await
+    }
+
+    pub(in crate::session::manager) async fn wait_imported_child(
+        &self,
+        caller: i64,
+        child: i64,
+        timeout_ms: u64,
+        cancel: CancellationToken,
+    ) -> Result<agena_plugin_host::sdk::ToolInvokeOutput, AppError> {
+        let child = self
+            .resolve_agent_target(session_id(caller)?, &child.to_string(), true)
+            .await?;
+        let wait = async {
+            loop {
+                let running = self
+                    .active
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .values()
+                    .find(|task| task.session == child)
+                    .cloned();
+                let config = self
+                    .kernel()
+                    .reader
+                    .configuration(child)
+                    .await
+                    .map_err(kernel_error)?;
+                let agent = config.agent.as_ref().ok_or_else(|| {
+                    AppError::Config("the plugin task is not a child agent".into())
+                })?;
+                if agent.status.is_terminal() {
+                    if agent.status != AgentStatus::Completed {
+                        let failure = agent
+                            .failure
+                            .as_ref()
+                            .map(|failure| failure.user.fallback.as_str())
+                            .unwrap_or(agent.status.as_ref());
+                        return Err(AppError::Internal(format!(
+                            "imported plugin task failed: {failure}"
+                        )));
+                    }
+                    if let Some(message) = self.latest_origin_message(child).await? {
+                        let input = read_with_busy_retry(child, "plugin_agent_result", || {
+                            self.kernel().reader.entry(child, message)
+                        })
+                        .await?;
+                        if let Some(text) = self
+                            .final_execution_text(
+                                child,
+                                input.execution_id,
+                                Some(input.execution_generation),
+                                64 * 1024,
+                            )
+                            .await?
+                        {
+                            return Ok(agena_plugin_host::sdk::ToolInvokeOutput::text(text));
+                        }
+                    }
+                    return Err(AppError::Internal(
+                        "imported plugin task completed without text output".into(),
+                    ));
+                }
+                if let Some(task) = running {
+                    task.wait_settled().await;
+                } else {
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+            }
+        };
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => Err(AppError::Cancelled),
+            result = tokio::time::timeout(Duration::from_millis(timeout_ms.clamp(1, 300_000)), wait) => {
+                result.map_err(|_| AppError::Internal("imported plugin task timed out".into()))?
+            }
+        }
+    }
+
+    pub(in crate::session::manager) async fn with_agent_wait_permit<T>(
+        &self,
+        caller: i64,
+        call: Option<i64>,
+        control: Option<&RunControl>,
+        wait: impl std::future::Future<Output = Result<T, AppError>>,
+    ) -> Result<T, AppError> {
         // Gateway calls may contain nested tool invocations. Release the actual
         // outer tool permit, rather than recognizing just a top-level name.
         let slot = call.and_then(|call| {
@@ -186,11 +323,9 @@ impl SessionManager {
         let released = slot_guard
             .as_mut()
             .is_some_and(|slot| slot.take().is_some());
-        let outcome = self
-            .wait_agent_mailbox(session, control.as_deref(), Duration::from_millis(timeout))
-            .await;
+        let outcome = wait.await;
         if released {
-            let control = control.as_ref().expect("a live tool owns its permit");
+            let control = control.expect("a live tool owns its permit");
             let permit = tokio::select! {
                 biased;
                 _ = control.cancel.cancelled() => return Err(AppError::Cancelled),
@@ -198,10 +333,10 @@ impl SessionManager {
             };
             **slot_guard.as_mut().expect("released permit slot") = Some(permit);
         }
-        outcome.map(|reason| AgentWaitResponse { reason })
+        outcome
     }
 
-    async fn wait_agent_mailbox(
+    pub(super) async fn wait_agent_mailbox(
         &self,
         session: SessionId,
         control: Option<&RunControl>,
@@ -329,6 +464,7 @@ impl SessionManager {
                 let launch = AgentLaunch {
                     parent_session_id: caller,
                     launch_call_id: call,
+                    workflow: None,
                     name: agent.name,
                     prompt: request.message.clone(),
                     profile: None,
@@ -337,11 +473,13 @@ impl SessionManager {
                     timeout_ms: agent.limits.timeout_ms,
                     max_tokens: agent.limits.max_tokens,
                     max_cost_microusd: agent.limits.max_cost_microusd,
+                    inherit_parent_context: false,
                     existing: Some(child),
+                    cordis: None,
                 };
                 match self.launch_agent(launch).await {
                     Err(AppError::ExecutionAlreadyActive(_)) => continue,
-                    result => return result,
+                    result => return result.map(|launch| launch.handle),
                 }
             }
             drop(preparation);
@@ -392,6 +530,7 @@ impl SessionManager {
             self.kernel().reader.query_summaries(SummaryQuery {
                 parent_id: Some(owner),
                 agents_only: true,
+                exclude_workflow_agents: true,
                 limit: MAX_AGENTS_PER_PARENT,
                 ..Default::default()
             })
@@ -415,4 +554,16 @@ impl SessionManager {
         }
         Ok(text)
     }
+}
+
+pub(super) fn agent_message(
+    caller: SessionId, name: &str, message: &str, wake: bool,
+) -> Result<serde_json::Value, AppError> {
+    if message.trim().is_empty() || message.len() > 12 * 1024 {
+        return Err(AppError::Config("agent message must contain 1–12288 bytes".into()));
+    }
+    bounded_agent_payload(serde_json::json!({
+        "kind":"agent_message", "sender_agent_id":caller.get(), "sender_name":name,
+        "text": format!("Message from {name} ({}):\n{message}", caller.get()), "wake":wake,
+    }))
 }

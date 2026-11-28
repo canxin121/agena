@@ -34,7 +34,32 @@ pub trait PluginRuntimeService: Send + Sync {
 
     fn plugin_status(&self, plugin_id: &str) -> Option<agena_plugin_host::status::PluginStatus>;
 
+    fn agent_plugin_skill_dirs(&self) -> Vec<std::path::PathBuf> {
+        Vec::new()
+    }
+
+    async fn agent_plugin_provided_skills(
+        &self,
+        _cwd: &std::path::Path,
+    ) -> Vec<agena_plugin_host::AgentPluginSkill> {
+        Vec::new()
+    }
+
+    async fn agent_plugin_session_skills(
+        &self,
+        _session_id: i64,
+    ) -> Result<Option<(std::path::PathBuf, Vec<agena_plugin_host::AgentPluginSkill>)>, agena_failure::Failure> {
+        Ok(None)
+    }
+
     fn plugin_surface_catalog(&self) -> agena_plugin_host::PluginSurfaceCatalog;
+    fn plugin_surface_catalog_for_session(
+        &self,
+        _session_id: i64,
+    ) -> agena_plugin_host::PluginSurfaceCatalog {
+        self.plugin_surface_catalog()
+    }
+
     fn plugin_architecture_catalog(&self) -> agena_plugin_host::PluginArchitectureCatalog {
         agena_plugin_host::PluginArchitectureCatalog::default()
     }
@@ -78,6 +103,17 @@ pub trait PluginRuntimeService: Send + Sync {
 
     fn command_catalog(&self) -> Vec<agena_plugin_host::CommandCatalogItem>;
 
+    async fn prepare_session_plugin_commands(&self, _session_id: i64) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn command_catalog_for_session(
+        &self,
+        _session_id: Option<i64>,
+    ) -> Vec<agena_plugin_host::CommandCatalogItem> {
+        self.command_catalog()
+    }
+
     fn tool_registry_generation(&self) -> u64;
 
     /// Atomic projection identity across configuration reloads and dynamic
@@ -99,11 +135,12 @@ pub trait PluginRuntimeService: Send + Sync {
         limit: usize,
     ) -> Vec<agena_plugin_host::PluginLogRecord>;
 
-    fn resolve_plugin_tool(
+    async fn resolve_plugin_tool(
         &self,
         plugin_id: Option<&str>,
         tool_name: &str,
-    ) -> Option<PluginToolDescriptor>;
+        session_id: i64,
+    ) -> Result<Option<PluginToolDescriptor>, String>;
 
     async fn invoke_plugin_command(
         &self,

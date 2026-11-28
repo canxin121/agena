@@ -31,7 +31,7 @@ pub struct McpOAuthStart {
 
 /// Optional client identity supplied before OAuth sign-in. Debug output never
 /// includes registration credentials or a potentially sensitive metadata URL.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct McpOAuthRegistration {
     pub client_id: Option<String>,
     pub client_secret: Option<String>,

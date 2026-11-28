@@ -489,16 +489,25 @@ impl<R> JsonRpcRequest<R> {
 }
 
 type DefaultResponse = JsonObject;
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct JsonRpcResponse<R = JsonObject> {
     pub jsonrpc: JsonRpcVersion2_0,
     pub id: RequestId,
     pub result: R,
+    #[serde(skip)]
+    #[cfg_attr(feature = "schemars", schemars(skip))]
+    pub extensions: Extensions,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+impl<R: PartialEq> PartialEq for JsonRpcResponse<R> {
+    fn eq(&self, other: &Self) -> bool {
+        self.jsonrpc == other.jsonrpc && self.id == other.id && self.result == other.result
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[expect(clippy::exhaustive_structs, reason = "intentionally exhaustive")]
 pub struct JsonRpcError {
@@ -509,6 +518,15 @@ pub struct JsonRpcError {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<RequestId>,
     pub error: ErrorData,
+    #[serde(skip)]
+    #[cfg_attr(feature = "schemars", schemars(skip))]
+    pub extensions: Extensions,
+}
+
+impl PartialEq for JsonRpcError {
+    fn eq(&self, other: &Self) -> bool {
+        self.jsonrpc == other.jsonrpc && self.id == other.id && self.error == other.error
+    }
 }
 
 impl JsonRpcError {
@@ -518,6 +536,7 @@ impl JsonRpcError {
             jsonrpc: JsonRpcVersion2_0,
             id,
             error,
+            extensions: Extensions::new(),
         }
     }
 }
@@ -700,6 +719,7 @@ impl<Req, Resp, Not> JsonRpcMessage<Req, Resp, Not> {
             jsonrpc: JsonRpcVersion2_0,
             id,
             result: response,
+            extensions: Extensions::new(),
         })
     }
     #[inline]
@@ -708,6 +728,7 @@ impl<Req, Resp, Not> JsonRpcMessage<Req, Resp, Not> {
             jsonrpc: JsonRpcVersion2_0,
             id,
             error,
+            extensions: Extensions::new(),
         })
     }
     #[inline]
@@ -3811,9 +3832,8 @@ pub struct CallToolResult {
 
 // Custom Deserialize implementation that:
 // 1. Defaults `content` to `[]` when the field is missing (lenient per Postel's law)
-// 2. Requires at least one known field to be present, so that `CallToolResult` doesn't
-//    greedily match arbitrary JSON objects when used inside `#[serde(untagged)]` enums
-//    (e.g. `ServerResult`), which would shadow `CustomResult`.
+// 2. Retains metadata-only tool results while leaving extension results that
+//    carry their own fields alongside `_meta` for `CustomResult`.
 // 3. Rejects non-`complete` result types so other `ServerResult` variants can match.
 impl<'de> Deserialize<'de> for CallToolResult {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -3830,6 +3850,8 @@ impl<'de> Deserialize<'de> for CallToolResult {
             is_error: Option<bool>,
             #[serde(rename = "_meta")]
             meta: Option<MetaObject>,
+            #[serde(flatten)]
+            extra: std::collections::BTreeMap<String, serde::de::IgnoredAny>,
         }
 
         let helper = Helper::deserialize(deserializer)?;
@@ -3847,7 +3869,7 @@ impl<'de> Deserialize<'de> for CallToolResult {
         if helper.content.is_none()
             && helper.structured_content.is_none()
             && helper.is_error.is_none()
-            && helper.meta.is_none()
+            && (helper.meta.is_none() || !helper.extra.is_empty())
         {
             return Err(serde::de::Error::custom(
                 "expected at least one known CallToolResult field \

@@ -1,7 +1,10 @@
 //! Shell-tool adapter for persistent PTYs. Authorization remains in the tool
 //! executor; live-process ownership is additionally checked here for every action.
 
-use super::{ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput};
+use super::{
+    ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution, ToolPayloadOutput,
+    imported_shell::ImportedShellFiles,
+};
 use crate::part::{ShellOpenInput, ShellSignal, ShellToolInput};
 use crate::{TerminalOwner, TerminalRead, TerminalStartParams};
 use agena_domain::{FilesystemEffects, ProcessShell};
@@ -78,7 +81,9 @@ pub(super) fn start_prepared(
     launch: Option<&agena_tool::shell::ShellLaunchSpec>,
     process_id: Option<String>,
     owner: TerminalOwner,
+    launch_call: Option<agena_domain::ShellLaunchCall>,
     output: Option<crate::tool::ToolOutputStreams>,
+    files: ImportedShellFiles,
     cancel: CancellationToken,
 ) -> Result<ToolPayloadExecution, ToolError> {
     let mut env = super::shell::sanitize_env(&env);
@@ -92,22 +97,25 @@ pub(super) fn start_prepared(
     // stale after resize and would make tools ignore the kernel's size.
     env.remove("COLUMNS");
     env.remove("LINES");
-    let argv = crate::shell_sandbox::protect(
+    let sourced = files.source(&command);
+    let script = sourced.as_deref().unwrap_or(&command);
+    let argv = crate::shell_sandbox::protect_with_files(
         executor,
         match launch {
-            Some(spec) => spec.argv(command.as_str()),
+            Some(spec) => spec.argv(script),
             None if shell == ProcessShell::Powershell => {
-                let mut argv = agena_tool::shell::powershell_command_for_windows(&command);
+                let mut argv = agena_tool::shell::powershell_command_for_windows(script);
                 if let Some(index) = argv.iter().position(|arg| arg == "-NonInteractive") {
                     argv.remove(index);
                 }
                 argv
             }
-            None => agena_tool::shell::shell_command_for_platform(&command),
+            None => agena_tool::shell::shell_command_for_platform(script),
         },
         &workdir,
         &input.command,
         &mut env,
+        files.readonly_mounts(),
     )?;
     let read = registry(executor)?
         .start_cancellable_with_output(
@@ -129,8 +137,10 @@ pub(super) fn start_prepared(
             input.include_screen,
             cancel,
             Some(executor.execution_policy_identity()?),
+            launch_call,
         )
         .map_err(error)?;
+    drop(files);
     let mut execution = render("open", read, input.include_screen);
     if let Some(spec) = launch {
         for (key, value) in spec.metadata() {

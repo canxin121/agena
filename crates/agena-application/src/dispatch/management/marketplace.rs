@@ -1,6 +1,6 @@
 //! Marketplace business operations shared by HTTP and plugin clients.
 use super::wire;
-use crate::{Application, ApplicationError};
+use crate::{Application, ApplicationError, agent_packages};
 use agena_api::management::marketplace::*;
 use serde_json::Value;
 
@@ -15,8 +15,21 @@ impl Application {
         request: MarketplaceSearchRequest,
     ) -> Result<Value, ApplicationError> {
         let config_path = self.config_path()?;
+        let cwd = self.workspace_root().to_owned();
         MARKETPLACE_READS
             .run(move || {
+                if let Some(ecosystem) = request.ecosystem.as_deref() {
+                    return wire(
+                        agent_packages::search(
+                            &config_path,
+                            &cwd,
+                            ecosystem,
+                            request.registry.registry_url.as_deref(),
+                            request.query.as_deref().unwrap_or_default(),
+                        )
+                        .map_err(ApplicationError::service_unavailable)?,
+                    );
+                }
                 let registry_spec = marketplace_registry_spec(
                     request.registry.registry_id.as_deref(),
                     request.registry.registry_url.as_deref(),
@@ -100,6 +113,9 @@ impl Application {
                             });
                         MarketplacePluginResource {
                             plugin_id: plugin.id,
+                            install_spec: None,
+                            install_registry: None,
+                            package_source: None,
                             name: plugin.name,
                             description: plugin.description,
                             homepage: plugin.homepage,
@@ -199,8 +215,38 @@ impl Application {
                         require_signature: record.require_signature,
                         require_github_distribution: record.require_github_distribution,
                         archive_extracted: record.archive_extracted,
+                        has_install_source: false,
                     })
                     .collect::<Vec<_>>();
+                for package in
+                    agent_packages::list(&config_path).map_err(ApplicationError::internal)?
+                {
+                    let Some(source) = package.source else {
+                        continue;
+                    };
+                    let updated_at = std::fs::metadata(&package.root)
+                        .and_then(|info| info.modified())
+                        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                    entries.push(MarketplaceInstalledPluginResource {
+                        plugin_id: package.id,
+                        version: package.version.unwrap_or_default(),
+                        kind: "agent_plugin".into(),
+                        platform: "any".into(),
+                        binary_path: package.root.display().to_string(),
+                        config_path: config_path.display().to_string(),
+                        sha256: None,
+                        installed_at: updated_at.into(),
+                        registry_id: source.ecosystem.as_str().to_owned(),
+                        registry_url: source
+                            .registry
+                            .or(source.package_source)
+                            .unwrap_or_default(),
+                        require_signature: false,
+                        require_github_distribution: false,
+                        archive_extracted: false,
+                        has_install_source: true,
+                    });
+                }
                 entries.sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
                 Ok(serde_json::json!({ "items": entries }))
             })
@@ -234,6 +280,13 @@ impl Application {
         &self,
         request: MarketplaceInstallRequest,
     ) -> Result<Value, ApplicationError> {
+        if agena_plugin_marketplace::agent_packages::AgentEcosystem::parse_selector(
+            request.spec.trim(),
+        )
+        .is_some()
+        {
+            return self.install_external_marketplace_plugin(request).await;
+        }
         let locator = agena_plugin_marketplace::parse_plugin_install_locator(request.spec.as_str())
             .map_err(|error| {
                 ApplicationError::bad_request_with_diagnostic(
@@ -342,6 +395,74 @@ impl Application {
         .await
     }
 
+    async fn install_external_marketplace_plugin(
+        &self,
+        request: MarketplaceInstallRequest,
+    ) -> Result<Value, ApplicationError> {
+        if request.require_signature || request.allow_unverified {
+            return Err(ApplicationError::bad_request(
+                "Marketplace artifact signature options apply to Agena packages.",
+            ));
+        }
+        let config_path = self.config_path()?;
+        let cwd = self.workspace_root().to_owned();
+        let spec = request.spec.trim().to_owned();
+        let title = if request.dry_run {
+            format!("Preview installation of {spec}")
+        } else {
+            format!("Install {spec}")
+        };
+        let options = request.agent_options;
+        let args = agent_packages::AgentInstallRequest {
+            spec: spec.clone(),
+            registry: request.registry.registry_url,
+            package_source: options.package_source,
+            force: request.force,
+            dry_run: request.dry_run,
+            refresh: request.refresh,
+            enable_hooks: options.enable_hooks,
+            environment: options.environment,
+            option_env: options.option_env,
+            accept_command: options.accept_command,
+            ..agent_packages::AgentInstallRequest::default()
+        };
+        spawn_marketplace_background_task(
+            self,
+            agena_runtime::RuntimeBackgroundTaskKind::MarketplacePluginInstall,
+            title,
+            None,
+            "install agent plugin task failed",
+            move || {
+                let (mut message, diagnostics) =
+                    match agent_packages::install(&config_path, &cwd, args)? {
+                        agent_packages::AgentInstallOutcome::Preview(preview) => {
+                            (preview.summary(), preview.diagnostics)
+                        }
+                        agent_packages::AgentInstallOutcome::Package {
+                            id,
+                            version,
+                            diagnostics,
+                            ..
+                        } => {
+                            let message = match version {
+                                Some(version) => format!("Installed {id} v{version}."),
+                                None => format!("Installed {id}."),
+                            };
+                            (message, diagnostics)
+                        }
+                    };
+                if !diagnostics.is_empty() {
+                    message.push('\n');
+                    message.extend(diagnostics.join("\n").chars().take(4_096));
+                }
+                Ok(agena_runtime::RuntimeBackgroundTaskOutcome::succeeded(
+                    message,
+                ))
+            },
+        )
+        .await
+    }
+
     pub async fn uninstall_marketplace_plugin(
         &self,
         request: MarketplaceUninstallRequestBody,
@@ -363,6 +484,12 @@ impl Application {
             Some(dedupe_key),
             "uninstall marketplace plugin task failed",
             move || {
+                let removed = agent_packages::uninstall(&config_path, &plugin_id, cascade)?;
+                if !removed.is_empty() {
+                    return Ok(agena_runtime::RuntimeBackgroundTaskOutcome::succeeded(
+                        format!("Uninstalled {}.", removed.join(", ")),
+                    ));
+                }
                 let client = marketplace_client(&config_path)?;
                 let entries = client.uninstall_with(plugin_id.as_str(), cascade)?;
                 let message = format!(
@@ -449,6 +576,7 @@ impl Application {
             format!("marketplace_plugin_upgrade:{}", selected_ids[0])
         };
         let all = request.all;
+        let registry_override = request.registry.registry_url;
         spawn_marketplace_background_task(
             self,
             agena_runtime::RuntimeBackgroundTaskKind::MarketplacePluginUpgrade,
@@ -458,10 +586,15 @@ impl Application {
             move || {
                 let client = marketplace_client(&config_path)?;
                 let targets = if all {
+                    let agent_ids = agent_packages::list(&config_path)?
+                        .into_iter()
+                        .filter(|entry| entry.source.is_some())
+                        .map(|entry| entry.id);
                     client
                         .list_installed()?
                         .into_iter()
                         .map(|record| record.plugin_id)
+                        .chain(agent_ids)
                         .collect::<Vec<_>>()
                 } else {
                     selected_ids.clone()
@@ -469,6 +602,16 @@ impl Application {
 
                 let mut upgraded = Vec::new();
                 for plugin_id in targets.into_iter().filter(|item| !item.is_empty()) {
+                    if let Some(outcome) = agent_packages::upgrade(
+                        &config_path,
+                        &plugin_id,
+                        registry_override.as_deref(),
+                    )? {
+                        if outcome.upgraded {
+                            upgraded.push(plugin_id);
+                        }
+                        continue;
+                    }
                     let outcome = client.upgrade(plugin_id.as_str(), override_spec.clone())?;
                     if outcome.upgraded {
                         upgraded.push(outcome.plugin_id);

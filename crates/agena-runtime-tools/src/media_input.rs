@@ -191,6 +191,31 @@ pub fn read_local(
     } else {
         root.join(path)
     };
+    read_local_path(&target, expected_sha256)
+}
+
+pub fn read_local_path(
+    target: &Path,
+    expected_sha256: Option<&str>,
+) -> Result<PreparedMedia, String> {
+    let filename = target
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("input");
+    let prepared = from_bytes(filename, read_local_bytes(target)?, None)?;
+    if !matches_revision(&prepared.sha256, expected_sha256) {
+        return Err("media input revision changed; no content was sent".into());
+    }
+    Ok(prepared)
+}
+
+pub fn matches_revision(actual: &str, expected: Option<&str>) -> bool {
+    expected.is_none_or(|hash| hash.eq_ignore_ascii_case(actual))
+}
+
+/// Read an already authorized path without giving file names or MIME hints
+/// authority over its contents.
+pub fn read_local_bytes(target: &Path) -> Result<Vec<u8>, String> {
     // Caller must authorize the canonical target. Refuse final symlinks and
     // special files, and read/validate the same open descriptor throughout.
     let mut options = fs::OpenOptions::new();
@@ -201,7 +226,7 @@ pub fn read_local(
         options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
     }
     let file = options
-        .open(&target)
+        .open(target)
         .map_err(|error| format!("cannot open media input: {error}"))?;
     let before = file.metadata().map_err(|e| e.to_string())?;
     if !before.is_file() {
@@ -222,16 +247,23 @@ pub fn read_local(
     {
         return Err("media input changed while reading; select it again".into());
     }
-    let filename = target
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("input");
-    let prepared = from_bytes(filename, bytes, None)?;
-    if expected_sha256.is_some_and(|hash| !hash.eq_ignore_ascii_case(&prepared.sha256)) {
-        return Err("media input revision changed; no content was sent".into());
-    }
-    Ok(prepared)
+    Ok(bytes)
 }
+
+pub fn raster_mime(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("image/png")
+    } else if bytes.starts_with(b"\xff\xd8\xff") {
+        Some("image/jpeg")
+    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+        Some("image/gif")
+    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        Some("image/webp")
+    } else {
+        None
+    }
+}
+
 pub fn from_bytes(
     filename: &str,
     bytes: Vec<u8>,
@@ -246,18 +278,7 @@ pub fn from_bytes(
     } else {
         filename
     };
-    let raster = if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-        Some("image/png")
-    } else if bytes.starts_with(b"\xff\xd8\xff") {
-        Some("image/jpeg")
-    } else if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
-        Some("image/gif")
-    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
-        Some("image/webp")
-    } else {
-        None
-    };
-    let (kind, mime, width, height) = if let Some(mime) = raster {
+    let (kind, mime, width, height) = if let Some(mime) = raster_mime(&bytes) {
         let size = imagesize::blob_size(&bytes)
             .map_err(|_| "image has invalid or incomplete dimensions")?;
         if size.width == 0

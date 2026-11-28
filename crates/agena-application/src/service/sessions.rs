@@ -3,12 +3,81 @@ use super::{
     SessionCreateRequest, SessionResource, SessionState, SessionUpdateRequest, build_page,
     decode_cursor, non_empty, normalize_resource_limit, timestamp_millis_to_utc,
 };
+use agena_plugin_host::{SessionEndReason, SessionStartSource};
 use agena_storage::kernel::{
     MetadataChange, RequestId, SessionSummaryCursor, SessionSummaryView, SummaryQuery,
     SummarySelection,
 };
 
 impl ApplicationService {
+    pub async fn list_working_directories(
+        &self,
+        session_id: i64,
+    ) -> ApplicationResult<Vec<std::path::PathBuf>> {
+        let configuration = self
+            .session_kernel
+            .reader
+            .configuration(crate::kernel_session_id(session_id)?)
+            .await
+            .map_err(crate::kernel_error)?;
+        Ok(configuration.additional_working_directories.clone())
+    }
+
+    pub async fn register_working_directory(
+        &self,
+        session_id: i64,
+        request: agena_domain::RegisterSessionWorkingDirectory,
+    ) -> ApplicationResult<agena_domain::SessionWorkingDirectoryRegistration> {
+        self.ensure_session_exists(session_id).await?;
+        let commands = self.session_commands.as_ref().ok_or_else(|| {
+            ApplicationError::internal("Working directories require the session runtime")
+        })?;
+        commands
+            .register_working_directory(session_id, request)
+            .await
+            .map_err(|error| ApplicationError::from_failure(error.failure))
+    }
+
+    pub async fn list_claude_channels(
+        &self,
+        session_id: i64,
+    ) -> ApplicationResult<Vec<agena_domain::claude_channels::ClaudeChannelView>> {
+        let commands = self.session_commands.as_ref().ok_or_else(|| {
+            ApplicationError::internal("Claude channels require the session runtime")
+        })?;
+        commands
+            .list_claude_channels(session_id)
+            .await
+            .map_err(|error| ApplicationError::from_failure(error.failure))
+    }
+
+    pub async fn configure_claude_channel(
+        &self,
+        session_id: i64,
+        action: agena_domain::claude_channels::ClaudeChannelAction,
+    ) -> ApplicationResult<Vec<agena_domain::claude_channels::ClaudeChannelView>> {
+        let commands = self.session_commands.as_ref().ok_or_else(|| {
+            ApplicationError::internal("Claude channels require the session runtime")
+        })?;
+        commands
+            .configure_claude_channel(session_id, action)
+            .await
+            .map_err(|error| ApplicationError::from_failure(error.failure))
+    }
+
+    pub async fn list_declared_claude_channels(
+        &self,
+        session_id: i64,
+    ) -> ApplicationResult<Vec<agena_domain::claude_channels::ClaudeChannelDefinition>> {
+        let commands = self.session_commands.as_ref().ok_or_else(|| {
+            ApplicationError::internal("Claude channels require the session runtime")
+        })?;
+        commands
+            .list_declared_claude_channels(session_id)
+            .await
+            .map_err(|error| ApplicationError::from_failure(error.failure))
+    }
+
     pub async fn list_sessions(
         &self,
         query: crate::dto::SessionListQuery,
@@ -46,6 +115,8 @@ impl ApplicationService {
                 exclude_subagents: query.exclude_subagents,
                 temporary_only: false,
                 agents_only: false,
+                exclude_workflow_agents: false,
+                exclude_cordis_agents: false,
                 search: non_empty(query.pagination.search()).map(str::to_owned),
                 before,
                 offset: query.offset,
@@ -176,6 +247,21 @@ impl ApplicationService {
             )
             .await
             .map_err(crate::kernel_error)?;
+        if let Some(commands) = &self.session_commands {
+            if let Some(trigger) = request.setup {
+                commands
+                    .session_setup(agena_plugin_host::sdk::ImportedSessionSetupInput {
+                        session_id: created.value.id.get(),
+                        trigger,
+                    })
+                    .await
+                    .map_err(|error| ApplicationError::internal_error(&error))?;
+            }
+            commands
+                .session_started(created.value.id.get(), SessionStartSource::Startup)
+                .await
+                .map_err(|error| ApplicationError::internal_error(&error))?;
+        }
         self.get_session(created.value.id.get())
             .await?
             .ok_or_else(|| ApplicationError::not_found("The session was not found."))
@@ -256,19 +342,36 @@ impl ApplicationService {
             .await?
             .ok_or_else(|| ApplicationError::not_found("The session was not found."))?;
         let mode = if context_only {
-            agena_storage::kernel::ClearMode::Context
+            agena_runtime::session::SessionClearMode::Context
         } else {
-            agena_storage::kernel::ClearMode::History
+            agena_runtime::session::SessionClearMode::History
         };
+        if let Some(commands) = &self.session_commands
+            && commands
+                .clear_runtime_session(session_id, mode)
+                .await
+                .map_err(|error| ApplicationError::from_failure(error.failure))?
+        {
+            return Ok(resource);
+        }
         self.session_kernel
             .sessions
             .clear(
                 RequestId::new(),
                 crate::kernel_session_id(session_id)?,
-                mode,
+                mode.into(),
             )
             .await
             .map_err(crate::kernel_error)?;
+        if let Some(commands) = &self.session_commands {
+            commands
+                .session_ended(session_id, SessionEndReason::Clear)
+                .await;
+            commands
+                .session_started(session_id, SessionStartSource::Clear)
+                .await
+                .map_err(|error| ApplicationError::internal_error(&error))?;
+        }
         Ok(resource)
     }
 
@@ -277,6 +380,18 @@ impl ApplicationService {
             .get_session(session_id)
             .await?
             .ok_or_else(|| ApplicationError::not_found("The session was not found."))?;
+        if let Some(commands) = &self.session_commands {
+            if commands
+                .delete_runtime_session(session_id)
+                .await
+                .map_err(|error| ApplicationError::from_failure(error.failure))?
+            {
+                return Ok(resource);
+            }
+            commands
+                .session_ended(session_id, SessionEndReason::UserExit)
+                .await;
+        }
         self.session_kernel
             .sessions
             .delete(RequestId::new(), crate::kernel_session_id(session_id)?)

@@ -80,7 +80,11 @@ pub(crate) async fn append_execution_failures(
     let attempts_with_reply: HashSet<_> = entries
         .iter()
         .filter(|entry| {
-            entry.response_entry_id.is_some() && !matches!(entry.payload, EntryPayload::User { .. })
+            entry.response_entry_id.is_some()
+                && !matches!(
+                    entry.payload,
+                    EntryPayload::User { .. } | EntryPayload::PluginPrompt(_)
+                )
         })
         .map(attempt)
         .collect();
@@ -92,7 +96,9 @@ pub(crate) async fn append_execution_failures(
         .filter_map(|part| part.run_id)
         .collect();
     for entry in entries {
-        if entry.execution_phase != ExecutionPhase::Failed {
+        if entry.execution_phase != ExecutionPhase::Failed
+            || matches!(entry.payload, EntryPayload::PluginPrompt(_))
+        {
             continue;
         }
         let key = attempt(entry);
@@ -419,6 +425,7 @@ pub(crate) async fn project_kernel_entry(
             document,
             author,
             origin,
+            ..
         } => {
             part.author = author.clone().map(Box::new);
             part.origin = origin.clone().map(Box::new);
@@ -444,7 +451,19 @@ pub(crate) async fn project_kernel_entry(
                 "execution_id":entry.execution_id,"run_kind":"user_send",
                 "queue_only":!entry.execution_started});
         }
-        EntryPayload::Text { content_id } | EntryPayload::Reasoning { content_id } => {
+        EntryPayload::PluginPrompt(prompt) => {
+            part.author = Some(Box::new(prompt.author.clone()));
+            part.kind = "text".into();
+            part.role = "user".into();
+            part.run_id = Some(entry.id.get());
+            part.message_boundary = true;
+            part.run_state = Some("completed".into());
+            part.content = serde_json::json!({
+                "text":prompt.text, "document":prompt.document(),
+                "execution_id":entry.execution_id,"run_kind":"plugin_prompt",
+            });
+        }
+        EntryPayload::Text { content_id, .. } | EntryPayload::Reasoning { content_id } => {
             let reasoning = matches!(&entry.payload, EntryPayload::Reasoning { .. });
             if let Some(phase) = entry.compaction_phase {
                 let (outcome, state) = match phase {
@@ -477,9 +496,19 @@ pub(crate) async fn project_kernel_entry(
                 return Ok(part);
             }
             part.kind = if reasoning { "think" } else { "text" }.into();
+            let display_id = match &entry.payload {
+                EntryPayload::Text { display_id, .. } => *display_id,
+                _ => None,
+            };
             part.content = serde_json::json!({"text":"","resources":[agena_domain::ContentRef {
-                resource_id:*content_id,kind:agena_domain::ContentKind::Text }],
+                resource_id:display_id.unwrap_or(*content_id),kind:agena_domain::ContentKind::Text }],
                 "execution_id":entry.execution_id});
+            if display_id.is_some() {
+                part.content["original_text_resource"] = serde_json::json!(agena_domain::ContentRef {
+                    resource_id: *content_id,
+                    kind: agena_domain::ContentKind::Text,
+                });
+            }
         }
         EntryPayload::Compaction { summary, through } => {
             part.kind = "compaction".into();
@@ -497,6 +526,19 @@ pub(crate) async fn project_kernel_entry(
             part.state = "completed".into();
             part.content =
                 serde_json::json!({"cleared_through":through,"run_kind":"clear_context"});
+        }
+        EntryPayload::PluginCommand { plugin_id, command_id, operation } => {
+            let tool = reader.tool(session, *operation).await.map_err(crate::kernel_error)?;
+            apply_notice_text(&mut part, &format!("Plugin command {plugin_id}:{command_id}"));
+            part.visibility = "user".into();
+            part.content["plugin_id"] = serde_json::json!(plugin_id);
+            part.content["command_id"] = serde_json::json!(command_id);
+            part.content["resources"] = serde_json::to_value(
+                tool.outputs.iter().map(|output| agena_domain::ContentRef {
+                    resource_id: output.id,
+                    kind: output.kind,
+                }).collect::<Vec<_>>(),
+            ).map_err(|error| ApplicationError::internal_error(&error))?;
         }
         EntryPayload::Notice { text } => {
             match agena_runtime_contracts::part_content::decode_notice(text) {

@@ -320,6 +320,12 @@ impl Collector {
 pub(super) const SEGMENTS_SQL: &str = "SELECT * FROM (SELECT * FROM (SELECT sequence,segment_id,first_ordinal,end_ordinal FROM agena_session_segments WHERE session_id=? AND sequence>=? AND sequence<=? AND since_generation<=? ORDER BY sequence LIMIT ?) UNION ALL SELECT * FROM (SELECT sequence,segment_id,first_ordinal,end_ordinal FROM agena_retired_session_segments WHERE session_id=? AND sequence>=? AND sequence<=? AND since_generation<=? AND until_generation>? ORDER BY sequence LIMIT ?)) ORDER BY sequence LIMIT ?";
 const MEMBER_IDS_SQL: &str = "SELECT entry_id,ordinal FROM agena_segment_entries WHERE segment_id=? AND ordinal>=? AND ordinal<? ORDER BY ordinal LIMIT ?";
 const MEMBERS_SQL: &str = "SELECT m.entry_id,m.ordinal,e.body_bytes FROM agena_segment_entries m JOIN agena_entries e INDEXED BY idx_agena_entry_preflight ON e.id=m.entry_id WHERE m.segment_id=? AND m.ordinal>=? AND m.ordinal<? ORDER BY m.ordinal LIMIT ?";
+static SNAPSHOT_ENTRIES_SQL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "SELECT {} FROM agena_entries e WHERE e.id IN (SELECT value FROM json_each(?))",
+        reads::ENTRY_COLUMNS
+    )
+});
 
 /// Authorize a position through the pinned generation, including retired
 /// membership. Export details never rely on the session's current edges.
@@ -475,12 +481,11 @@ pub(super) async fn page(
     if !selected.is_empty() {
         metrics::add(&diagnostics.0.snapshot_queries, 1);
         let ids = selected.iter().map(|(id, _)| *id).collect::<Vec<_>>();
-        let rows =
-            sqlx::query("SELECT e.*,EXISTS(SELECT 1 FROM agena_attempts started WHERE started.execution_id=e.execution_id AND started.started_at_ms IS NOT NULL) AS execution_started,CASE WHEN e.kind='user' THEN (SELECT x.current_generation FROM agena_executions x WHERE x.id=e.execution_id) ELSE e.generation END AS execution_generation,(SELECT a.response_entry_id FROM agena_attempts a WHERE a.execution_id=e.execution_id AND a.generation=e.generation) AS response_entry_id,(SELECT a.phase FROM agena_attempts a WHERE a.execution_id=e.execution_id AND a.generation=CASE WHEN e.kind='user' THEN (SELECT x.current_generation FROM agena_executions x WHERE x.id=e.execution_id) ELSE e.generation END) AS execution_phase FROM agena_entries e WHERE e.id IN (SELECT value FROM json_each(?))")
-                .bind(encode(&ids)?)
-                .fetch_all(&mut *transaction)
-                .await
-                .map_err(sql_error)?;
+        let rows = sqlx::query(&SNAPSHOT_ENTRIES_SQL)
+            .bind(encode(&ids)?)
+            .fetch_all(&mut *transaction)
+            .await
+            .map_err(sql_error)?;
         let mut rows = rows
             .into_iter()
             .map(|row| Ok((row.try_get::<i64, _>("id").map_err(storage)?, row)))

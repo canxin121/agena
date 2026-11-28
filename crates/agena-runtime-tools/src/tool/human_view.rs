@@ -3444,7 +3444,7 @@ impl BuiltinHumanRenderer {
                     }
                 }
             }
-            "mcp.tools.call" => {
+            "mcp.tools.call" | "mcp.apps.call" => {
                 if object.get("is_error").and_then(Value::as_bool) == Some(true) {
                     blocks.push(Self::markdown_block(
                         "mcp-error",
@@ -5223,7 +5223,9 @@ impl BuiltinHumanRenderer {
             "repo.status" | "snapshot.status" | "snapshot.enter" | "snapshot.exit" => {
                 blocks.extend(Self::specific_repository_blocks(key.as_str(), &object));
             }
-            "notebook.edit_cell" => blocks.extend(Self::specific_notebook_blocks(&object)),
+            "notebook.edit" | "notebook.edit_cell" => {
+                blocks.extend(Self::specific_notebook_blocks(&object))
+            }
             _ => {}
         }
         if blocks.is_empty() && raw.text_content().trim().is_empty() && object.is_empty() {

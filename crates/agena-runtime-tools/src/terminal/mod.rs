@@ -141,7 +141,7 @@ impl TerminalRegistry {
         wait_ms: u64,
         cancel: CancellationToken,
     ) -> Result<TerminalRead, MonitorError> {
-        self.start_cancellable_with_output(params, wait_ms, None, true, cancel, None)
+        self.start_cancellable_with_output(params, wait_ms, None, true, cancel, None, None)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -153,6 +153,7 @@ impl TerminalRegistry {
         include_screen: bool,
         cancel: CancellationToken,
         execution_policy: Option<String>,
+        launch_call: Option<agena_domain::ShellLaunchCall>,
     ) -> Result<TerminalRead, MonitorError> {
         call::check(&cancel)?;
         validate_size(params.rows, params.cols)?;
@@ -240,6 +241,7 @@ impl TerminalRegistry {
                 tx,
                 self.listener.clone(),
                 execution_policy,
+                launch_call,
             ));
             sessions.insert(id, Arc::clone(&state));
         }
@@ -287,6 +289,27 @@ impl TerminalRegistry {
 
     pub fn authorize(&self, id: &str, owner: &TerminalOwner) -> Result<(), MonitorError> {
         self.lookup(id, Some(owner)).map(|_| ())
+    }
+
+    pub(crate) fn take_shell_invocation(
+        &self,
+        id: &str,
+        owner: &TerminalOwner,
+    ) -> Option<agena_domain::ShellInvocation> {
+        let state = self.lookup(id, Some(owner)).ok()?;
+        Some(agena_domain::ShellInvocation {
+            process_id: id.to_owned(),
+            mode: agena_domain::ShellLaunchMode::Open,
+            call: state.take_launch_call()?,
+            command: state.command.clone(),
+            cwd: state.workdir.to_string_lossy().into_owned(),
+        })
+    }
+
+    pub(crate) fn workdir(&self, id: &str, owner: &TerminalOwner) -> Option<PathBuf> {
+        self.lookup(id, Some(owner))
+            .ok()
+            .map(|session| session.workdir.clone())
     }
 
     pub fn list(&self) -> Vec<ProcessSummary> {
@@ -597,6 +620,7 @@ mod execution_policy_tests {
             sender,
             None,
             Some("old-policy".into()),
+            None,
         ));
         lock(&registry.sessions).insert("policy-test".into(), state);
         let error = registry
@@ -624,6 +648,7 @@ mod execution_policy_tests {
                 false,
                 CancellationToken::new(),
                 Some("new-policy".into()),
+                None,
             )
             .unwrap_err();
         assert!(replay.to_string().contains("launch identity"));

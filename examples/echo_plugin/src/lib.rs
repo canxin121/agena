@@ -53,6 +53,7 @@ impl EchoPlugin {
             payload: Some(json!({ "rendered": rendered })),
             metadata: BTreeMap::from([("plugin".to_string(), "echo".to_string())]),
             attachments: Vec::new(),
+            additional_context: Vec::new(),
         })
     }
 
@@ -111,6 +112,7 @@ impl EchoPlugin {
                 input.session_id
             )),
             initial_user_message: None,
+            ..Default::default()
         }
     }
 

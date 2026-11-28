@@ -43,5 +43,6 @@ pub fn tool_execution_to_invoke_output(execution: ToolPayloadExecution) -> ToolI
         payload,
         metadata: metadata.into_iter().collect(),
         attachments: execution.view.attachments,
+        additional_context: execution.view.additional_context,
     }
 }

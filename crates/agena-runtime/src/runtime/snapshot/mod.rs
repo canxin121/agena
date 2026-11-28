@@ -135,6 +135,8 @@ pub(crate) struct SnapshotDatabases {
 
 pub(crate) struct RuntimeSnapshot {
     client_identity: crate::ProviderClientIdentity,
+    pub(super) replaced: tokio_util::sync::CancellationToken,
+    pub(super) claude_instruction_settings: Arc<agena_runtime_tools::ClaudeInstructionSettings>,
     plugin_shutdown: agena_runtime::PluginShutdownCoordinator,
     global_plugins: Arc<PluginHost>,
     global_plugin_config: agena_plugin_host::PluginsConfig,
@@ -151,6 +153,22 @@ pub(crate) struct RuntimeSnapshot {
 }
 
 impl RuntimeSnapshot {
+    pub(super) async fn capture_claude_instruction_settings(
+        workspace: &Path,
+    ) -> Result<Arc<agena_runtime_tools::ClaudeInstructionSettings>, AppError> {
+        let workspace = workspace.to_owned();
+        crate::blocking::FILE_OPERATIONS
+            .run(move || {
+                Arc::new(agena_runtime_tools::ClaudeInstructionSettings::load(
+                    &workspace,
+                ))
+            })
+            .await
+            .map_err(|error| {
+                AppError::Internal(format!("Claude settings load worker failed: {error}"))
+            })
+    }
+
     pub(crate) async fn build(
         generation: u64,
         loader: &ConfigLoader<ProcessEnvironment>,
@@ -169,6 +187,7 @@ impl RuntimeSnapshot {
             existing_session_manager,
             None,
             monitor_registry,
+            Self::capture_claude_instruction_settings(workspace_root).await?,
         )
         .await
     }
@@ -189,6 +208,7 @@ impl RuntimeSnapshot {
         existing_session_manager: Option<Arc<SessionManager>>,
         previous: Arc<RuntimeSnapshot>,
         monitor_registry: Option<Arc<dyn crate::MonitorService>>,
+        claude_instruction_settings: Arc<agena_runtime_tools::ClaudeInstructionSettings>,
     ) -> Result<Self, AppError> {
         Self::build_inner(
             generation,
@@ -199,6 +219,7 @@ impl RuntimeSnapshot {
             existing_session_manager,
             Some(previous),
             monitor_registry,
+            claude_instruction_settings,
         )
         .await
     }
@@ -212,6 +233,7 @@ impl RuntimeSnapshot {
         existing_session_manager: Option<Arc<SessionManager>>,
         previous: Option<Arc<RuntimeSnapshot>>,
         monitor_registry: Option<Arc<dyn crate::MonitorService>>,
+        claude_instruction_settings: Arc<agena_runtime_tools::ClaudeInstructionSettings>,
     ) -> Result<Self, AppError> {
         let SnapshotDatabases {
             chat: session_kernel,
@@ -392,6 +414,18 @@ impl RuntimeSnapshot {
                     return Err(AppError::Internal(report.to_string()));
                 }
             };
+        tokio::join!(
+            crate::mcp_runtime::register_agent_plugin_mcp(
+                &plugins,
+                mcp_manager.as_deref(),
+                workspace_root,
+            ),
+            crate::mcp_runtime::register_agent_plugin_mcp(
+                &global_plugins,
+                global_mcp_manager.as_deref(),
+                &global_internal_root,
+            ),
+        );
         let (catalog_source_providers, model_catalog) = build_model_catalog_services(
             agena_runtime::ModelCatalogCompositionInputs {
                 providers: &resolution.config.providers,
@@ -421,8 +455,10 @@ impl RuntimeSnapshot {
             &client_identity,
         )
         .await?;
-        let global_session_config =
-            agena_runtime::session_build_config_from_resolved(&global_resolution.config);
+        let global_session_config = agena_runtime::session_build_config_from_resolved(
+            &global_resolution.config,
+            &global_plugins,
+        );
         // Notify plugins of the resolved config (best-effort).
         if let Ok(value) = agena_runtime::config_resolution_json_value(&resolution) {
             agena_runtime::dispatch_config_if_nonempty(Arc::clone(&plugins), value).await;
@@ -444,8 +480,15 @@ impl RuntimeSnapshot {
             client_identity.codex_package_version(),
         )
         .map_err(AppError::Config)?;
+        tokio::join!(
+            crate::lsp_config::register_agent_plugin_lsp(&plugins, lsp_registry.as_deref()),
+            crate::lsp_config::register_agent_plugin_lsp(
+                &global_plugins,
+                global_lsp_registry.as_deref()
+            ),
+        );
         let session_build_config =
-            agena_runtime::session_build_config_from_resolved(&resolution.config);
+            agena_runtime::session_build_config_from_resolved(&resolution.config, &plugins);
         let (session_manager, pending_session_reconfiguration) =
             if let Some(db) = session_kernel.as_ref() {
                 let (manager, pending) = build_or_prepare_session_manager(
@@ -467,6 +510,7 @@ impl RuntimeSnapshot {
                     global_lsp_registry,
                     &global_internal_root,
                     &global_session_config,
+                    Arc::clone(&claude_instruction_settings),
                 );
                 (Some(manager), pending)
             } else {
@@ -475,6 +519,14 @@ impl RuntimeSnapshot {
         // there is no persisted event store to resume: interrupted-run
         // reconciliation is deferred to `SessionManager::get_session` on open
         // (17.4), so there is nothing to do here.
+        let tasks = agena_runtime::RuntimeTaskState::new(agena_runtime::runtime_watch_paths(
+            resolution.meta.config_path.as_path(),
+            resolution.meta.project_config_path.as_path(),
+            workspace_root,
+            &resolution.config.plugins,
+            &global_resolution.config.plugins,
+            [&*plugins, &*global_plugins],
+        ));
         let services = agena_runtime::RuntimeServiceBundle::new(
             providers,
             catalog_source_providers,
@@ -487,15 +539,11 @@ impl RuntimeSnapshot {
             None,
             plugin_shutdown,
         );
-        let tasks = agena_runtime::RuntimeTaskState::new(agena_runtime::runtime_watch_paths(
-            resolution.meta.config_path.as_path(),
-            resolution.meta.project_config_path.as_path(),
-            &resolution.config.plugins,
-        ));
-
         let config = resolution.config;
         let meta = resolution.meta;
         Ok(Self {
+            replaced: tokio_util::sync::CancellationToken::new(),
+            claude_instruction_settings,
             plugin_shutdown: plugin_shutdown_coordinator,
             global_plugins,
             global_plugin_config: global_resolution.config.plugins,

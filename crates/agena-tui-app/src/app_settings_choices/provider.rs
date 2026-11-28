@@ -60,9 +60,13 @@ impl App {
         )
     }
 
-    pub(crate) fn open_settings_model_source(&mut self, purpose: Purpose) {
+    pub(crate) fn open_settings_model_source(
+        &mut self,
+        purpose: Purpose,
+        model_switch_source: agena_domain::ModelSwitchSource,
+    ) {
         if purpose == Purpose::RuntimeOverride {
-            self.open_session_model_source();
+            self.open_session_model_source(model_switch_source);
             return;
         }
         let Some((workspace, path)) = settings_model_target(purpose) else {

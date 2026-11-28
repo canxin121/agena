@@ -18,8 +18,8 @@ use agena_api::{
         DeleteSessionParams, DeleteWorkspaceParams, ForkSessionParams, ListSessionTreeParams,
         MarkInteractiveRequestPresentedParams, ReplacePermissionRuleParams, ReplyPermissionParams,
         ReplyUserInputParams, ResolveWorkspaceParams, RevokePermissionRuleParams,
-        RewindSessionParams, SessionClearMode, SubmitRunParams, UpdateSessionParams,
-        UpdateSessionSelectionParams, UpdateWorkspaceParams,
+        RewindSessionParams, SessionClearMode, UpdateSessionParams, UpdateSessionSelectionParams,
+        UpdateWorkspaceParams,
     },
     queries::{
         GetPermissionRuleParams, GetSessionParams, GetWorkspaceParams, ListPermissionRulesParams,

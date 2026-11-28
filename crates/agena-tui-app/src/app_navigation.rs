@@ -316,8 +316,22 @@ impl App {
         dialog.refresh_results();
     }
 
-    pub(crate) fn prepare_composer_command(&mut self, command_name: &str) {
-        self.composer.set_text(format!("/{command_name} "));
+    pub(crate) fn prepare_composer_command(&mut self, command_name: &str, keep_attachments: bool) {
+        let mut text = format!("/{command_name} ");
+        let cursor = text.len();
+        let mut elements = Vec::new();
+        if keep_attachments {
+            self.sync_composer_items_with_editor();
+            for item in &self.composer_items {
+                text.push(' ');
+                let start = text.len();
+                text.push_str(&item.placeholder);
+                elements.push(start..text.len());
+            }
+        }
+        self.composer.set_text(text);
+        self.composer.set_elements(elements);
+        self.composer.set_cursor(cursor);
         self.focus = Focus::Composer;
         self.sync_composer_suggestions();
     }
@@ -326,6 +340,15 @@ impl App {
         &mut self,
         rollback: RunOptionsState,
     ) -> bool {
+        self.persist_model_stack(rollback, agena_domain::ModelSwitchSource::Picker, None)
+    }
+
+    pub(crate) fn persist_model_stack(
+        &mut self,
+        rollback: RunOptionsState,
+        source: agena_domain::ModelSwitchSource,
+        selected_message: Option<String>,
+    ) -> bool {
         let Some(session_id) = self.transcript.session_id else {
             // No session is open: the run-options model stack is already
             // updated in memory and will be applied to the next session
@@ -333,6 +356,32 @@ impl App {
             // an error so model switching works before a session exists.
             return true;
         };
+        let Some(options) = self.run_options.model_stack_request() else {
+            self.flash_warning(self.i18n.text("settings-model-source-needs-model"));
+            return false;
+        };
+        self.request_model_stack_write(
+            session_id,
+            options,
+            rollback,
+            agena_domain::ModelSwitchInteraction {
+                source,
+                confirmation: None,
+            },
+            selected_message,
+        )
+    }
+
+    fn request_model_stack_write(
+        &mut self,
+        session_id: i64,
+        options: agena_api::resource::RunOptions,
+        rollback: RunOptionsState,
+        interaction: agena_domain::ModelSwitchInteraction,
+        selected_message: Option<String>,
+    ) -> bool {
+        use agena_api::resource::SessionSelectionResponse;
+
         // Dispatch is concurrent. Keep writes for one session ordered so an
         // older snapshot cannot reach storage after a later mode selection.
         if self
@@ -342,46 +391,80 @@ impl App {
             self.flash_warning(self.i18n.text("queue-saving"));
             return false;
         }
-        let Some(options) = self.run_options.model_stack_request() else {
-            self.flash_warning(self.i18n.text("settings-model-source-needs-model"));
-            return false;
-        };
         self.session_selection_revision = self.session_selection_revision.wrapping_add(1);
         let revision = self.session_selection_revision;
         self.pending_session_model_write = Some((session_id, revision));
+        let submitted = options.clone();
         self.dispatch_backend_operation(
             move |application| async move {
                 application
-                    .update_session_selection(session_id, options)
+                    .change_session_selection(session_id, submitted, interaction)
                     .await
             },
-            move |app, result| match result {
-                Ok(execution) => {
-                    if app.pending_session_model_write == Some((session_id, revision)) {
-                        app.pending_session_model_write = None;
-                    }
-                    if app.transcript.session_id == Some(session_id)
-                        && app.session_selection_revision == revision {
-                        if !app.apply_transcript_execution(execution) {
-                            app.sync_run_model_stack_from_execution();
-                        }
-                        if matches!(&app.current_route, Route::SessionModelChooser(dialog)
-                            if dialog.meta.purpose == crate::SessionModelChooserPurpose::RuntimeOverride) {
-                            app.open_session_model_chooser();
-                        }
-                    }
-                    app.request_sessions(false);
+            move |app, result| {
+                if app.pending_session_model_write == Some((session_id, revision)) {
+                    app.pending_session_model_write = None;
                 }
-                Err(error) => {
-                    if app.pending_session_model_write == Some((session_id, revision)) {
-                        app.pending_session_model_write = None;
+                let current = app.transcript.session_id == Some(session_id)
+                    && app.session_selection_revision == revision;
+                match result {
+                    Ok(SessionSelectionResponse::Applied {
+                        execution,
+                        system_messages,
+                    }) => {
+                        if current {
+                            if !app.apply_transcript_execution(*execution) {
+                                app.sync_run_model_stack_from_execution();
+                            }
+                            if let Route::SessionModelChooser(dialog) = &app.current_route
+                                && dialog.meta.purpose
+                                    == crate::SessionModelChooserPurpose::RuntimeOverride
+                            {
+                                app.open_model_chooser_with_source(
+                                    dialog.meta.purpose,
+                                    false,
+                                    dialog.meta.model_switch_source,
+                                );
+                            }
+                            if !system_messages.is_empty() {
+                                app.flash_info(system_messages.join("\n"));
+                            } else if let Some(message) = &selected_message {
+                                app.flash_success(message.clone());
+                            }
+                            if selected_message.is_some() {
+                                app.open_session_model_thinking_step_or_next();
+                            }
+                        }
+                        app.request_sessions(false);
                     }
-                    if app.transcript.session_id == Some(session_id)
-                        && app.session_selection_revision == revision
-                    {
-                        app.run_options = rollback;
+                    Ok(SessionSelectionResponse::ConfirmationRequired {
+                        confirmation,
+                        system_messages,
+                    }) => {
+                        if current {
+                            app.run_options = rollback;
+                            let body = std::iter::once(confirmation.reason)
+                                .chain(system_messages)
+                                .collect();
+                            app.overlay = Some(Overlay::Confirm(app.build_confirm_overlay(
+                                ui_text::t(&app.i18n, "overlay-model-switch-confirm-title"),
+                                body,
+                                ConfirmAction::ModelSwitch {
+                                    session_id,
+                                    revision,
+                                    options: Box::new(options),
+                                    token: confirmation.token,
+                                    selected_message,
+                                },
+                            )));
+                        }
                     }
-                    app.flash_error(error);
+                    Err(error) => {
+                        if current {
+                            app.run_options = rollback;
+                        }
+                        app.flash_error(error);
+                    }
                 }
             },
         );
@@ -392,6 +475,7 @@ impl App {
         &mut self,
         model: ModelRef,
         explicit_local: bool,
+        source: agena_domain::ModelSwitchSource,
     ) -> bool {
         if !self.settings_model_editable(
             agena_tui::model_chooser::SessionModelChooserPurpose::RuntimeOverride,
@@ -410,18 +494,19 @@ impl App {
             same_model.then_some(raw.verbosity).flatten(),
             raw.parallel_tool_calls,
         );
-        if !self.persist_current_session_model_stack(previous.clone()) {
+        let selected = self.i18n.text_args(
+            "flash-model-selected",
+            &agena_tui::fl_args!("model" => format!("{}/{}", model.provider_id, model.model_id)),
+        );
+        if !self.persist_model_stack(previous.clone(), source, Some(selected.clone())) {
             self.run_options = previous;
             return false;
         }
         self.focus = Focus::Composer;
-        self.flash_success(self.i18n.text_args(
-            "flash-model-selected",
-            &agena_tui::fl_args!(
-                "model" => format!("{}/{}", model.provider_id, model.model_id),
-            ),
-        ));
-        self.open_session_model_thinking_step_or_next();
+        if self.transcript.session_id.is_none() {
+            self.flash_success(selected);
+            self.open_session_model_thinking_step_or_next();
+        }
         true
     }
 
@@ -633,6 +718,28 @@ impl App {
 
     pub(crate) fn handle_confirm_action(&mut self, action: ConfirmAction) {
         match action {
+            ConfirmAction::ModelSwitch {
+                session_id,
+                revision,
+                options,
+                token,
+                selected_message,
+            } => {
+                if self.transcript.session_id == Some(session_id)
+                    && self.session_selection_revision == revision
+                {
+                    self.request_model_stack_write(
+                        session_id,
+                        *options,
+                        self.run_options.clone(),
+                        agena_domain::ModelSwitchInteraction {
+                            source: agena_domain::ModelSwitchSource::Command,
+                            confirmation: Some(token),
+                        },
+                        selected_message,
+                    );
+                }
+            }
             ConfirmAction::Rewind {
                 session_id,
                 at_message_id,

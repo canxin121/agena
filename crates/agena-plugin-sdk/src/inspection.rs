@@ -241,6 +241,12 @@ pub struct CommandCatalogItem {
     pub accepts_empty_input: bool,
     /// Deterministic editor/invocation seed produced by the shared contract.
     pub default_input: serde_json::Value,
+    /// This imported command expands into the user message submitted to a session.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub submits_prompt: bool,
+    /// This Cordis command accepts files and images from the session composer.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub accepts_attachments: bool,
     #[serde(flatten)]
     pub command: CommandDefinition,
 }

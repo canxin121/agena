@@ -577,7 +577,7 @@ impl App {
         purpose: agena_tui::model_chooser::SessionModelChooserPurpose,
     ) {
         self.route_stack.push(self.current_route.clone());
-        self.open_model_chooser_with_source(purpose, true);
+        self.open_model_chooser_with_source(purpose, true, agena_domain::ModelSwitchSource::Picker);
     }
 
     /// Keep the value typed: false, zero and an empty string are all explicit

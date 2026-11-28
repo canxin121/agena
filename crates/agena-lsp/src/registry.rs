@@ -9,7 +9,7 @@ use agena_process::sandbox::SandboxPolicy;
 use thiserror::Error;
 use tokio::sync::{Mutex, RwLock};
 
-use crate::client::LspClient;
+use crate::client::{LspClient, LspClientOptions};
 use crate::error::{LspError, LspResult};
 use crate::server_spec::LspServerSpec;
 use crate::transport::StdioTransport;
@@ -25,11 +25,27 @@ pub type LspSandboxPolicyBuilder =
 
 /// An allowed persistent scope may reuse a server; None confines its lifetime
 /// to the returned client handle, as required by one-invocation approval.
-pub type LspScopedSandboxBuilder =
-    Arc<dyn Fn(&Path) -> std::io::Result<(SandboxPolicy, Option<String>)> + Send + Sync>;
+pub type LspScopedSandboxBuilder = Arc<
+    dyn Fn(&Path, &[PathBuf]) -> std::io::Result<(SandboxPolicy, Option<String>)> + Send + Sync,
+>;
 
 fn registry_policy(builder: LspSandboxPolicyBuilder) -> LspScopedSandboxBuilder {
-    Arc::new(move |root| Ok((builder(root)?, Some("registry".into()))))
+    Arc::new(move |root, reads| {
+        let policy = builder(root)?;
+        if !reads.iter().all(|path| {
+            policy
+                .readonly_paths
+                .iter()
+                .chain(&policy.readwrite_paths)
+                .any(|grant| path.starts_with(grant))
+        }) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "language server requires authorization for its plugin files",
+            ));
+        }
+        Ok((policy, Some("registry".into())))
+    })
 }
 
 fn readonly_project_policy() -> LspSandboxPolicyBuilder {
@@ -158,9 +174,25 @@ struct ClientKey {
     server: String,
     root: PathBuf,
     scope: String,
+    plugin_workspace: Option<PathBuf>,
     // Keep the complete policy as part of equality, rather than relying on a
     // lossy fingerprint. Different session capabilities never share a child.
     sandbox: SandboxPolicy,
+}
+
+pub struct PluginLspLaunch {
+    pub spec: LspServerSpec,
+    pub root: PathBuf,
+    pub reads: Vec<PathBuf>,
+    pub options: LspClientOptions,
+}
+
+pub type PluginLspResolver = Arc<dyn Fn(&Path) -> Result<PluginLspLaunch, String> + Send + Sync>;
+
+#[derive(Clone)]
+struct RegisteredServer {
+    spec: LspServerSpec,
+    plugin: Option<PluginLspResolver>,
 }
 
 /// File-system discovery, not a claim that a server can initialize successfully.
@@ -176,7 +208,7 @@ pub struct LspRegistry {
     workspace_root: PathBuf,
     client_name: String,
     client_version: String,
-    servers: RwLock<BTreeMap<String, LspServerSpec>>,
+    servers: RwLock<BTreeMap<String, RegisteredServer>>,
     spawned: RwLock<HashMap<ClientKey, Arc<LspClient>>>,
     starting: Mutex<HashMap<ClientKey, Weak<Mutex<()>>>>,
     lifecycle: RwLock<()>,
@@ -200,16 +232,30 @@ impl LspRegistry {
     }
 
     pub async fn register(&self, spec: LspServerSpec) {
+        self.register_server(spec, None).await;
+    }
+
+    pub async fn register_plugin(&self, spec: LspServerSpec, resolver: PluginLspResolver) {
+        self.register_server(spec, Some(resolver)).await;
+    }
+
+    async fn register_server(&self, spec: LspServerSpec, plugin: Option<PluginLspResolver>) {
         // Serialize configuration replacement with startup and shutdown. A
         // changed command/options must never reuse a client of the old spec.
         let _lifecycle_guard = self.lifecycle.write().await;
         let name = spec.name.clone();
-        let old = self
-            .servers
-            .write()
-            .await
-            .insert(name.clone(), spec.clone());
-        if old.as_ref().is_none_or(|old| old == &spec) {
+        let is_plugin = plugin.is_some();
+        let old = self.servers.write().await.insert(
+            name.clone(),
+            RegisteredServer {
+                spec: spec.clone(),
+                plugin,
+            },
+        );
+        if old
+            .as_ref()
+            .is_none_or(|old| !is_plugin && old.plugin.is_none() && old.spec == spec)
+        {
             return;
         }
         let clients = {
@@ -235,7 +281,12 @@ impl LspRegistry {
     /// file_extensions). Used by host APIs that surface the configured LSP
     /// fleet to plugins or operators.
     pub async fn server_specs(&self) -> Vec<LspServerSpec> {
-        self.servers.read().await.values().cloned().collect()
+        self.servers
+            .read()
+            .await
+            .values()
+            .map(|server| server.spec.clone())
+            .collect()
     }
 
     /// Inspect commands from the configured process PATH without starting them.
@@ -314,8 +365,13 @@ impl LspRegistry {
             .to_string();
         let g = self.servers.read().await;
         g.values()
+            .map(|server| &server.spec)
             .find(|s| !s.file_extensions.is_empty() && s.handles_extension(&ext))
-            .or_else(|| g.values().find(|s| s.file_extensions.is_empty()))
+            .or_else(|| {
+                g.values()
+                    .map(|server| &server.spec)
+                    .find(|s| s.file_extensions.is_empty())
+            })
             .cloned()
     }
 
@@ -348,25 +404,44 @@ impl LspRegistry {
         // cannot drain the map and then have an in-flight initializer insert
         // a live child after shutdown has returned.
         let _lifecycle_guard = self.lifecycle.read().await;
-        let spec = self
+        let server = self
             .servers
             .read()
             .await
             .get(server_name)
             .cloned()
             .ok_or_else(|| LspError::UnknownServer(server_name.to_string()))?;
-        let root_spec = spec.clone();
         let hint_dir = hint_dir.to_owned();
         let fallback = fallback.to_owned();
-        let (root_dir, sandbox, cache_scope) = ROOT_RESOLVERS
+        let (spec, options, root_dir, sandbox, cache_scope, plugin_workspace) = ROOT_RESOLVERS
             .run(move || {
-                let root = root_spec.resolve_root(&hint_dir, &fallback);
+                let plugin_workspace = server.plugin.as_ref().map(|_| fallback.clone());
+                let (spec, options, root, reads) = if let Some(resolve) = server.plugin {
+                    let launch = resolve(&fallback).map_err(std::io::Error::other)?;
+                    (launch.spec, launch.options, launch.root, launch.reads)
+                } else {
+                    let root = server.spec.resolve_root(&hint_dir, &fallback);
+                    (server.spec, LspClientOptions::default(), root, Vec::new())
+                };
                 let root = std::fs::canonicalize(&root).unwrap_or(root);
-                let (mut sandbox, scope) = policy_builder(&root)?;
-                sandbox
-                    .runtime_paths
-                    .extend(configured_runtime_paths(&root_spec, &root));
-                Ok::<_, std::io::Error>((root, sandbox, scope))
+                let reads = reads
+                    .into_iter()
+                    .map(|path| path.canonicalize())
+                    .collect::<std::io::Result<Vec<_>>>()?;
+                let (mut sandbox, scope) = policy_builder(&root, &reads)?;
+                if plugin_workspace.is_some() {
+                    if sandbox.disabled || !agena_process::sandbox::enabled() {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::PermissionDenied,
+                            "plugin language servers require Agena process sandboxing",
+                        ));
+                    }
+                } else {
+                    sandbox
+                        .runtime_paths
+                        .extend(configured_runtime_paths(&spec, &root));
+                }
+                Ok::<_, std::io::Error>((spec, options, root, sandbox, scope, plugin_workspace))
             })
             .await
             .map_err(|error| LspError::transport_error(&error))??;
@@ -375,6 +450,7 @@ impl LspRegistry {
             server: server_name.to_owned(),
             root: root_dir.clone(),
             scope: cache_scope.unwrap_or_default(),
+            plugin_workspace,
             sandbox: sandbox.clone(),
         };
         if cacheable && let Some(client) = self.spawned.read().await.get(&key).cloned() {
@@ -415,7 +491,7 @@ impl LspRegistry {
             &sandbox,
         )
         .await?;
-        let client = LspClient::new(transport);
+        let client = LspClient::with_options(transport, options);
         let root_uri = url::Url::from_directory_path(&root_dir)
             .ok()
             .and_then(|u| u.as_str().parse::<lsp_types::Uri>().ok());
@@ -610,6 +686,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn imported_lsp_authorizes_its_package_and_resolved_workspace() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let workspace = root.join("workspace");
+        let package = root.join("plugin");
+        std::fs::create_dir(&workspace).unwrap();
+        std::fs::create_dir(&package).unwrap();
+        let registry = LspRegistry::new(root, "test", "0");
+        let spec = test_spec("agena-test-missing-language-server", vec![]);
+        let resolver_spec = spec.clone();
+        let resolver_package = package.clone();
+        registry
+            .register_plugin(
+                spec,
+                Arc::new(move |workspace| {
+                    Ok(PluginLspLaunch {
+                        spec: resolver_spec.clone(),
+                        root: workspace.to_path_buf(),
+                        reads: vec![resolver_package.clone()],
+                        options: Default::default(),
+                    })
+                }),
+            )
+            .await;
+        let expected_workspace = workspace.clone();
+        let error = registry
+            .client_for_path_scoped(
+                &workspace.join("test.txt"),
+                Some(&workspace),
+                Arc::new(move |root, reads| {
+                    assert_eq!(root, expected_workspace);
+                    assert_eq!(reads, std::slice::from_ref(&package));
+                    Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "plugin denied",
+                    ))
+                }),
+            )
+            .await
+            .err()
+            .unwrap();
+        assert!(
+            matches!(error, LspError::Io(error) if error.kind() == std::io::ErrorKind::PermissionDenied)
+        );
+    }
+
+    #[tokio::test]
     async fn current_session_policy_is_checked_before_reusing_a_cached_client() {
         let directory = tempfile::tempdir().unwrap();
         let project = std::fs::canonicalize(directory.path()).unwrap();
@@ -629,6 +752,7 @@ mod tests {
                 server: "sandbox-test".into(),
                 root: project.clone(),
                 scope: "registry".into(),
+                plugin_workspace: None,
                 sandbox: policy.clone(),
             },
             Arc::clone(&cached),
@@ -675,7 +799,7 @@ mod tests {
                     .client_for_path_scoped(
                         &file,
                         Some(&project),
-                        Arc::new(move |_| Ok((allowed.clone(), scope.clone()))),
+                        Arc::new(move |_, _| Ok((allowed.clone(), scope.clone()))),
                     )
                     .await
                     .is_err()

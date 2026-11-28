@@ -13,8 +13,8 @@ use crate::registry::validate_tool_definition;
 use crate::sdk::rpc::method;
 use crate::sdk::{PluginKey, PluginManifest};
 use crate::transport::{
-    PluginTransport, cdylib::CdylibTransport, http::HttpTransport, quiescent::QuiescentTransport,
-    stdio::scoped::ScopedStdioTransport,
+    PluginTransport, cdylib::CdylibTransport, http::HttpTransport, inproc::InProcessTransport,
+    quiescent::QuiescentTransport, stdio::scoped::ScopedStdioTransport,
 };
 
 const TRANSPORT_INITIALIZATION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -82,6 +82,7 @@ pub struct PreparedPlugin {
     pub effect_scope: Arc<crate::effect_scope::PluginEffectScope>,
     pub trust_level: String,
     pub provenance: Vec<String>,
+    agent_plugin: Option<Arc<crate::AgentPluginDescriptor>>,
 }
 
 impl PreparedPlugin {
@@ -109,6 +110,7 @@ pub async fn prepare_entry(
     env_lookup: &(dyn Fn(&str) -> Option<String> + Send + Sync),
     trusted_keys: &std::collections::BTreeMap<String, String>,
 ) -> Result<PreparedPlugin, HostError> {
+    let mut agent_plugin = None;
     let raw_transport: Arc<dyn PluginTransport> = match &configured_plugin.package {
         PluginPackage::Static { .. } => {
             let plugin_key: PluginKey = plugin_id.parse().map_err(|err| HostError::Load {
@@ -123,6 +125,78 @@ pub async fn prepare_entry(
                         message: format!("no static plugin registered with id `{plugin_id}`"),
                     })?;
             (registration.builder)()
+        }
+
+        PluginPackage::AgentPlugin {
+            path,
+            environment,
+            user_config_env,
+            bridge,
+            enable_hooks,
+            source,
+        } => {
+            let resolved = if path.is_absolute() {
+                path.clone()
+            } else {
+                workspace_root.join(path)
+            };
+            let load_error = |message| HostError::Load {
+                plugin: plugin_id.to_owned(),
+                message,
+            };
+            let key: PluginKey = plugin_id
+                .parse()
+                .map_err(|error| load_error(format!("invalid plugin id: {error}")))?;
+            let (environment, user_config_env, bridge) =
+                (environment.clone(), user_config_env.clone(), bridge.clone());
+            let key_for_load = key.clone();
+            let enable_hooks = *enable_hooks;
+            let ecosystem = source.as_ref().map(|source| source.ecosystem).or_else(|| {
+                use agena_plugin_sdk::configuration::{AgentPluginEcosystem, AgentPluginRuntime};
+                match &bridge.as_ref()?.runtime {
+                    AgentPluginRuntime::Codex { .. } => Some(AgentPluginEcosystem::Codex),
+                    AgentPluginRuntime::ClaudeCode { .. } => Some(AgentPluginEcosystem::Claude),
+                    AgentPluginRuntime::DeepseekHarness { .. } => {
+                        Some(AgentPluginEcosystem::DeepSeek)
+                    }
+                }
+            });
+            let (package, adapter) = NATIVE_LOADERS
+                .run(move || {
+                    let path = crate::agent_plugin::resolve_agent_plugin_path(
+                        &resolved,
+                        bridge.as_deref(),
+                    )?;
+                    let mut package = crate::agent_plugin::load_agent_plugin_config(
+                        &path,
+                        &environment,
+                        &user_config_env,
+                        enable_hooks,
+                        ecosystem,
+                    )?;
+                    let adapter = crate::agent_plugin::AgentPluginAdapter::new(
+                        &key_for_load,
+                        &mut package,
+                        &environment,
+                        &user_config_env,
+                        enable_hooks,
+                    )?;
+                    Ok::<_, String>((package, adapter))
+                })
+                .await
+                .map_err(|error| load_error(format!("Agent Plugin load worker failed: {error}")))?
+                .map_err(load_error)?;
+            for message in &package.diagnostics {
+                host_handle.log_store().append(
+                    &key,
+                    "warn",
+                    "agent_plugin",
+                    message.clone(),
+                    JsonValue::Null,
+                );
+            }
+            agent_plugin = Some(Arc::new(package));
+            Arc::new(InProcessTransport::new(adapter))
         }
 
         PluginPackage::Cdylib {
@@ -253,7 +327,15 @@ pub async fn prepare_entry(
     .await;
 
     match preparation {
-        Ok(prepared) => Ok(prepared),
+        Ok(mut prepared) => {
+            if let Some(package) = &agent_plugin {
+                prepared
+                    .provenance
+                    .push(format!("format:{}", package.format.as_str()));
+            }
+            prepared.agent_plugin = agent_plugin;
+            Ok(prepared)
+        }
         Err(primary_error) => {
             // A stdio transport owns a child process and does not kill it merely
             // because the final Arc is dropped. Failed preparation must close
@@ -330,6 +412,7 @@ async fn prepare_transport(
         effect_scope,
         trust_level,
         provenance,
+        agent_plugin: None,
     })
 }
 
@@ -356,7 +439,7 @@ pub async fn activate_entry(
             plugin: plugin_id.clone(),
             message: agena_failure::diagnostic::format_error_chain(&error),
         })?;
-    let plugin = LoadedPlugin::new_with_scope(
+    let mut plugin = LoadedPlugin::new_with_scope(
         prepared.kind,
         prepared.configured_plugin,
         prepared.transport,
@@ -365,6 +448,7 @@ pub async fn activate_entry(
         prepared.trust_level,
         prepared.provenance,
     );
+    plugin.agent_plugin = prepared.agent_plugin;
     plugin
         .initialize_web_assets()
         .await
@@ -418,6 +502,7 @@ fn plugin_trust_level(
 ) -> String {
     match &configured_plugin.package {
         PluginPackage::Static { .. } => "static".to_string(),
+        PluginPackage::AgentPlugin { .. } => "unverified".to_string(),
         PluginPackage::Cdylib {
             signature, sha256, ..
         } => {
@@ -454,6 +539,9 @@ fn plugin_provenance(
     let mut provenance = vec![format!("transport:{}", configured_plugin.kind_str())];
     match &configured_plugin.package {
         PluginPackage::Static { .. } => provenance.push("static registration".to_string()),
+        PluginPackage::AgentPlugin { path, .. } => {
+            provenance.push(format!("path:{}", path.display()));
+        }
         PluginPackage::Cdylib {
             path,
             sha256,

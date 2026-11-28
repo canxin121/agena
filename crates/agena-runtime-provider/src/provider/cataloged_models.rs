@@ -151,6 +151,7 @@ impl ModelRuntime for CatalogedModelsProvider {
 
     impl_model_runtime_target_methods! {
         fn native_compaction_enabled / native_compaction_enabled_for_adapter (&self, model: &ModelId) -> bool;
+        fn supports_native_compaction / supports_native_compaction_for_adapter (&self, model: &ModelId) -> bool;
         fn agena_tool_mode_override / agena_tool_mode_override_for_adapter (&self, model: &ModelId) -> Option<AgenaToolMode>;
     }
 

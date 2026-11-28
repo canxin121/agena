@@ -17,6 +17,7 @@
 //!   projections. The current design dropped the global runtime event projection (D11):
 //!   chat history is per-session ordered parts, never a global event log.
 
+pub mod agent_packages;
 mod application;
 mod application_bridge;
 mod application_live;
@@ -27,6 +28,8 @@ mod application_content;
 mod application_conversations;
 mod application_file_changes;
 mod application_inline_ui;
+mod application_mcp_apps;
+pub use application_mcp_apps::mcp_app_view_error;
 mod application_mcp_connections;
 mod application_models;
 mod application_parts;

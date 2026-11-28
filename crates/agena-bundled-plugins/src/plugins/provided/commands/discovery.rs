@@ -288,10 +288,14 @@ pub(crate) fn default_roots(workspace: Option<&Path>) -> Vec<PathBuf> {
 /// Standard command-file roots, ordered from lower to higher precedence.
 pub(crate) fn default_command_roots(workspace: Option<&Path>) -> Vec<PathBuf> {
     let mut roots = Vec::new();
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+        roots.push(PathBuf::from(home).join(".claude/commands"));
+    }
     if let Some(home) = agena_home_dir() {
         roots.push(home.join("commands"));
     }
     if let Some(workspace) = workspace {
+        roots.push(workspace.join(".claude/commands"));
         roots.push(workspace.join(".agena/commands"));
     }
     roots
@@ -329,6 +333,36 @@ pub(crate) fn scan_packages_filtered(
         |path| DiscoveredCommand::from_package_path(path),
         access,
     )
+}
+
+/// Agent plugin discovery has already selected each skill package directory.
+pub(crate) fn scan_agent_plugin_skills(
+    directories: Vec<PathBuf>,
+    access: Option<&agena_tool::path_filter::PathPredicate>,
+) -> DiscoveryReport {
+    let mut commands = Vec::new();
+    let mut diagnostics = Vec::new();
+    for directory in directories {
+        let path = directory.join("SKILL.md");
+        if access.is_some_and(|access| {
+            !access.allows(&path) || !access.allows(&directory.join(".agena-skill.json"))
+        }) || !directory
+            .canonicalize()
+            .is_ok_and(|resolved| resolved == directory)
+            || !std::fs::symlink_metadata(&path).is_ok_and(|metadata| metadata.is_file())
+            || !agena_skills::package_enabled(&path)
+        {
+            continue;
+        }
+        match DiscoveredCommand::from_package_path(&path) {
+            Ok(command) => commands.push(command),
+            Err(error) => diagnostics.push(discovery_diagnostic(path, error.to_string())),
+        }
+    }
+    DiscoveryReport {
+        commands,
+        diagnostics,
+    }
 }
 
 /// Scan command files: every `.md` under the given roots, except the

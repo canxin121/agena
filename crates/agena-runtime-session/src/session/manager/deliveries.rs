@@ -4,6 +4,38 @@ use super::*;
 use serde_json::Value;
 
 impl SessionManager {
+    pub async fn queue_imported_plugin_notice(
+        &self,
+        id: i64,
+        plugin: &str,
+        text: String,
+        wake: bool,
+    ) -> Result<(), AppError> {
+        if self.shutdown.is_cancelled() || text.trim().is_empty() {
+            return Ok(());
+        }
+        self.require_writable_bot_history(id).await?;
+        let session = session_id(id)?;
+        let mut text = format!("Plugin {plugin}:\n{text}");
+        text.truncate(text.floor_char_boundary(text.len().min(16 * 1024)));
+        let key = format!("plugin-notice:{}", uuid::Uuid::new_v4().simple());
+        let payload = serde_json::json!({
+            "kind": "integration_notice",
+            "notice_id": key,
+            "text": text,
+            "wake": wake,
+        });
+        let request = RequestId::new();
+        persist(|| {
+            self.kernel()
+                .executor
+                .deliver(request, session, key.clone(), payload.clone())
+        })
+        .await
+        .map_err(kernel_error)?;
+        Ok(())
+    }
+
     pub(super) async fn stop_conditions(
         &self,
         session: SessionId,
@@ -91,16 +123,22 @@ impl SessionManager {
             }
             after = page.last().map(|delivery| delivery.id);
             for delivery in page.iter() {
+                let plugin_prompt = delivery.payload["kind"] == "plugin_prompt";
                 if delivery
                     .target_execution
                     .is_some_and(|target| target != execution)
+                    || (plugin_prompt && delivery.target_execution.is_none())
                 {
                     continue;
                 }
                 let target = self
                     .delivery_message(session, &delivery.payload, message)
                     .await?;
-                let text = delivery_text(&delivery.payload)?;
+                let text = if plugin_prompt {
+                    String::new()
+                } else {
+                    delivery_text(&delivery.payload)?
+                };
                 let request = request_key("consume-delivery", &delivery.id.to_string());
                 persist(|| {
                     self.kernel().executor.consume_delivery(
@@ -169,14 +207,13 @@ impl SessionManager {
             {
                 continue;
             }
-            if self
+            let configuration = self
                 .kernel()
                 .reader
                 .configuration(summary.id)
                 .await
-                .map_err(kernel_error)?
-                .message_queue_paused
-            {
+                .map_err(kernel_error)?;
+            if configuration.message_queue_paused {
                 continue;
             }
             if summary.queued_executions > 0 {
@@ -197,7 +234,7 @@ impl SessionManager {
                 .map_err(kernel_error)?;
             let Some(delivery) = pending.iter().find(|delivery| {
                 delivery.target_execution.is_none()
-                    && delivery.payload.get("kind").and_then(Value::as_str) != Some("agent_message")
+                    && (delivery.payload["kind"] != "agent_message" || delivery.wakes_agent())
             }) else {
                 continue;
             };
@@ -220,6 +257,59 @@ impl SessionManager {
                 Ok(options) => options,
                 Err(_) => continue,
             };
+            if delivery.payload["kind"] == "plugin_prompt" {
+                let permit = match self.reserve_execution() {
+                    Ok(permit) => permit,
+                    Err(_) => break,
+                };
+                let request = request_key("resume-plugin-prompt", &delivery.id.to_string());
+                let execution = persist(|| {
+                    self.kernel()
+                        .executor
+                        .resume_plugin_prompt(request, summary.id, delivery.id)
+                })
+                .await
+                .map_err(kernel_error)?
+                .value;
+                self.supervise(execution, options, false, permit).await?;
+                self.schedule_title(summary.id);
+                recovered += 1;
+                continue;
+            }
+            if delivery.wakes_agent() {
+                let is_cordis_child = configuration.relation_kind.is_subagent()
+                    && configuration
+                        .agent
+                        .as_ref()
+                        .and_then(|agent| agent.cordis.as_ref())
+                        .is_some();
+                let preparation = if is_cordis_child {
+                    let Ok(guard) = self.agent_preparation.try_lock() else {
+                        continue;
+                    };
+                    match self
+                        .cordis_agent_wake_allowed(summary.id, &configuration)
+                        .await
+                    {
+                        Ok(true) => Some(guard),
+                        Ok(false) => continue,
+                        Err(error) => {
+                            tracing::debug!(%error, "Cordis agent inbox recovery deferred");
+                            continue;
+                        }
+                    }
+                } else {
+                    None
+                };
+                match self
+                    .resume_agent_delivery_with_preparation(delivery, options, preparation)
+                    .await
+                {
+                    Ok(()) => recovered += 1,
+                    Err(error) => tracing::debug!(%error, "agent inbox wake deferred"),
+                }
+                continue;
+            }
             let Some(fallback) = self.latest_origin_message(summary.id).await? else {
                 continue;
             };
@@ -236,7 +326,16 @@ impl SessionManager {
             if !live.executions.is_empty() {
                 continue;
             }
-            if delivery.payload.get("wake").and_then(Value::as_bool) == Some(false) {
+            let mut wake = delivery.payload.get("wake").and_then(Value::as_bool) != Some(false);
+            if wake && let Some(budget) = delivery.payload.get("wake_budget")
+                .and_then(|value| serde_json::from_value::<BackgroundActivityWakeBudget>(value.clone()).ok())
+            {
+                let used = read_with_busy_retry(summary.id, "notice_wake_budget", || {
+                    self.kernel().reader.notice_wakes_since_user_message(summary.id, &budget.source)
+                }).await?;
+                wake = used < budget.limit as u64;
+            }
+            if !wake {
                 let command = request_key("consume-delivery", &delivery.id.to_string());
                 persist(|| {
                     self.kernel().executor.consume_delivery(
@@ -273,6 +372,68 @@ impl SessionManager {
             recovered += 1;
         }
         Ok(recovered)
+    }
+
+    /// An active recipient will take the durable message at its next provider
+    /// boundary. An idle recipient can claim a system-origin continuation.
+    pub(super) async fn wake_agent_inbox(&self, session: SessionId) -> Result<(), AppError> {
+        if self.shutdown.is_cancelled() {
+            return Ok(());
+        }
+        let preparation = self.agent_preparation.lock().await;
+        let dispatch = self.session_dispatch(session);
+        let Ok(_submission) = dispatch.submission.try_lock() else {
+            return Ok(());
+        };
+        let Ok(_execution) = dispatch.execution.try_lock() else {
+            return Ok(());
+        };
+        if self.active.lock().unwrap_or_else(|p| p.into_inner()).values().any(|run| run.session == session) {
+            return Ok(());
+        }
+        let snapshot = read_with_busy_retry(session, "agent_inbox", || {
+            self.kernel().reader.control_snapshot(session, 1)
+        }).await?;
+        if snapshot.configuration.message_queue_paused || !snapshot.active_executions.executions.is_empty() {
+            return Ok(());
+        }
+        if !self
+            .cordis_agent_wake_allowed(session, &snapshot.configuration)
+            .await?
+        {
+            return Ok(());
+        }
+        let pending = read_with_busy_retry(session, "agent_inbox", || {
+            self.kernel().reader.pending_deliveries(session, None, 64)
+        }).await?;
+        let Some(delivery) = pending.iter().find(|delivery| {
+            delivery.target_execution.is_none() && delivery.wakes_agent()
+        }) else {
+            return Ok(());
+        };
+        self.require_writable_bot_history(session.get()).await?;
+        let options = self.options_for_session(
+            session, &snapshot.metadata.selection.clone().unwrap_or_default(),
+        ).await?;
+        self.resume_agent_delivery_with_preparation(delivery, options, Some(preparation))
+            .await
+    }
+
+    async fn resume_agent_delivery_with_preparation(
+        &self,
+        delivery: &DeliveryView,
+        options: SessionRunOptions,
+        preparation: Option<tokio::sync::MutexGuard<'_, ()>>,
+    ) -> Result<(), AppError> {
+        let permit = self.reserve_execution()?;
+        let text = delivery_text(&delivery.payload)?;
+        let command = request_key("resume-agent-inbox", &delivery.id.to_string());
+        let execution = persist(|| self.kernel().executor.resume_agent_delivery(
+            command, delivery.session, delivery.id, text.clone(),
+        )).await.map_err(kernel_error)?.value;
+        drop(preparation);
+        self.supervise(execution, options, false, permit).await?;
+        Ok(())
     }
 
     /// Called under the session submission lock, including before accepting a
@@ -362,7 +523,7 @@ impl SessionManager {
         if matches!(entry.payload, EntryPayload::User { .. }) {
             return Ok(true);
         }
-        if !matches!(entry.payload, EntryPayload::Notice { .. }) {
+        if !matches!(entry.payload, EntryPayload::Notice { .. } | EntryPayload::PluginCommand { .. }) {
             return Ok(false);
         }
         // Only an explicitly typed control execution may use a notice as its
@@ -641,11 +802,16 @@ pub(super) fn delivery_text(payload: &Value) -> Result<String, AppError> {
                 .get("text")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            Some(encode_delivery_notification(
+            let mut notification =
                 agena_runtime_contracts::part_content::SystemNotificationContent::agent_message(
                     sender, name, body,
-                ),
-            )?)
+                );
+            if let Some(attachments) = payload.get("attachments").filter(|value| value.is_array()) {
+                notification
+                    .extra
+                    .insert("attachments".into(), attachments.clone());
+            }
+            Some(encode_delivery_notification(notification)?)
         }
         _ => None,
     };

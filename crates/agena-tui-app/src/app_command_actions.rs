@@ -56,7 +56,7 @@ impl App {
             }
             ClientCommandAction::Timeline => self.open_timeline_overlay(TIMELINE_EVENT_LIMIT),
             ClientCommandAction::Settings => self.open_settings_studio(),
-            ClientCommandAction::Model => self.open_session_model_chooser(),
+            ClientCommandAction::Model => self.open_session_model_command(),
             ClientCommandAction::Commit => self.handle_commit_command(args),
             ClientCommandAction::Pr => self.handle_pr_command(args),
             ClientCommandAction::Export => self.handle_export_command(args),
@@ -110,11 +110,82 @@ impl App {
         &mut self,
         entry: agena_plugin_sdk::inspection::CommandCatalogItem,
         args: &str,
+        draft: Option<ComposerDraft>,
     ) {
         let session_id = self
             .transcript
             .session_id
             .or_else(|| self.sessions.current_selected_id());
+        if let Some(session_id) = session_id
+            && entry.submits_prompt
+            && let Some(slash) = &entry.command.slash
+        {
+            if self.run_activity.has_operation(
+                RunActivityTarget::Session(session_id),
+                RunOperation::SubmitMessage,
+            ) {
+                if let Some(draft) = draft {
+                    self.restore_composer_draft(draft);
+                }
+                self.flash_warning(ui_text::t(&self.i18n, "flash-send-in-flight"));
+                return;
+            }
+            let text = if args.is_empty() {
+                slash.clone()
+            } else {
+                format!("{slash} {args}")
+            };
+            let command = agena_api::commands::SessionPromptCommand {
+                plugin_id: entry.plugin_id.to_string(),
+                command_id: entry.command.id,
+                args: args.to_owned(),
+            };
+            let draft = draft.unwrap_or_else(|| ComposerDraft {
+                document: agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+                    text,
+                }]),
+            });
+            self.request_submit_message(session_id, draft, Some(command));
+            return;
+        }
+        let mut captured = None;
+        let composer = if entry.accepts_attachments {
+            let Some(session_id) = session_id else {
+                if let Some(draft) = draft {
+                    self.restore_composer_draft(draft);
+                }
+                self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
+                return;
+            };
+            let target = RunActivityTarget::Session(session_id);
+            if self
+                .run_activity
+                .has_operation(target, RunOperation::SubmitMessage)
+            {
+                if let Some(draft) = draft {
+                    self.restore_composer_draft(draft);
+                }
+                self.flash_warning(ui_text::t(&self.i18n, "flash-send-in-flight"));
+                return;
+            }
+            let document = draft
+                .as_ref()
+                .map(|draft| draft.document.clone())
+                .unwrap_or_default();
+            self.begin_run_operation(target, RunOperation::SubmitMessage);
+            if let Some(draft) = &draft {
+                self.session_composer.pending_restore_draft = Some(draft.clone());
+                self.set_draft_for_slot(DraftSlot::Session(session_id), draft.clone());
+                self.persist_draft_store_with_feedback(true);
+            }
+            captured = Some((session_id, draft));
+            Some(agena_api::management::PluginCommandComposer {
+                document,
+                options: self.run_options.submission_request(),
+            })
+        } else {
+            None
+        };
         let args = args.to_string();
         self.dispatch_backend_operation(
             move |application| async move {
@@ -123,12 +194,42 @@ impl App {
                     &entry,
                     session_id,
                     &args,
+                    composer,
                 )
                 .await
             },
-            move |app, result| match result {
-                Ok(result) => app.apply_plugin_command_result(result, session_id),
-                Err(error) => app.flash_error(error),
+            move |app, result| {
+                if let Some((id, draft)) = captured {
+                    app.finish_run_operation(
+                        RunActivityTarget::Session(id),
+                        RunOperation::SubmitMessage,
+                    );
+                    let succeeded = result
+                        .as_ref()
+                        .is_ok_and(|result| result.status == CommandStatus::Succeeded);
+                    if let Some(draft) = draft {
+                        if app.session_composer.pending_restore_draft.as_ref() == Some(&draft) {
+                            app.session_composer.pending_restore_draft = None;
+                        }
+                        let slot = DraftSlot::Session(id);
+                        if succeeded {
+                            if app.draft_store.get(slot) == Some(&draft) {
+                                app.clear_draft_for_slot(slot);
+                            }
+                            app.sync_current_draft_slot();
+                            app.persist_draft_store_with_feedback(true);
+                        } else {
+                            app.restore_submitted_composer_draft(id, draft);
+                        }
+                    }
+                    if succeeded {
+                        app.request_refresh(id, true);
+                    }
+                }
+                match result {
+                    Ok(result) => app.apply_plugin_command_result(result, session_id),
+                    Err(error) => app.flash_error(error),
+                }
             },
         );
     }
@@ -178,7 +279,7 @@ impl App {
                         ]),
                     };
                     match session_id {
-                        Some(session_id) => self.request_submit_message(session_id, draft),
+                        Some(session_id) => self.request_submit_message(session_id, draft, None),
                         None => self.create_session(Some(draft)),
                     }
                 }
@@ -311,7 +412,7 @@ impl App {
         self.apply_transcript_execution(state);
         self.focus = Focus::Composer;
         if let Some(draft) = draft {
-            self.request_submit_message(id, draft);
+            self.request_submit_message(id, draft, None);
         }
     }
 
@@ -445,8 +546,9 @@ enum ForkKind {
 use crate::app_backend::PluginCommandEffect;
 use crate::commands::ClientCommand;
 use crate::{
-    App, AppMessage, ComposerDraft, Path, TIMELINE_EVENT_LIMIT, UiAction, non_empty_owned,
-    parse_pr_command_args, ui_text,
+    App, AppMessage, ComposerDraft, DraftSlot, Path, RunActivityTarget, RunOperation,
+    TIMELINE_EVENT_LIMIT, UiAction, non_empty_owned, parse_pr_command_args, ui_text,
 };
 use agena_api::client_command::ClientCommandAction;
+use agena_plugin_sdk::CommandStatus;
 use agena_tui::main_focus::Focus;

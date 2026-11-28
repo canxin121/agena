@@ -22,6 +22,11 @@ impl SandboxPermissionSnapshot {
         if !self.workspace_root.as_os_str().is_empty() {
             candidates.push(self.workspace_root.clone());
         }
+        candidates.extend(
+            self.path_layers
+                .iter()
+                .flat_map(|layer| layer.additional_working_directories.iter().cloned()),
+        );
         candidates.extend(self.protected_paths.native_readonly_paths().cloned());
         candidates.extend(self.protected_paths.git_directories().cloned());
         candidates.extend(self.protected_paths.private_roots().cloned());

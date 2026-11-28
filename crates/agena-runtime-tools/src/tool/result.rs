@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::part::AttachmentItem;
 use agena_domain::ToolOutput;
+use agena_domain::mcp_connections::{APP_METADATA_KEY, APP_RESULT_METADATA_KEY};
 
 use super::ToolPayloadOutput;
 use agena_tool::ApplyPatchExecution;
@@ -12,6 +13,8 @@ pub struct ToolExecutionView {
     pub title: String,
     pub summary: String,
     pub output_text: String,
+    pub additional_context: Vec<String>,
+    pub model_output: Option<String>,
     pub metadata: BTreeMap<String, String>,
     pub attachments: Vec<AttachmentItem>,
 }
@@ -26,6 +29,8 @@ impl ToolExecutionView {
             title: agena_tool::normalize_tool_title(title.into()),
             summary: agena_tool::normalize_tool_summary(summary.into()),
             output_text: output_text.into(),
+            additional_context: Vec::new(),
+            model_output: None,
             metadata: BTreeMap::new(),
             attachments: Vec::new(),
         }
@@ -39,7 +44,10 @@ impl ToolExecutionView {
             summary: self.summary.clone(),
             output_text: self.output_text.clone(),
             payload: None,
-            metadata: self.metadata.clone(),
+            metadata: self
+                .public_metadata()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
             attachments: self
                 .attachments
                 .iter()
@@ -54,39 +62,43 @@ impl ToolExecutionView {
         }
     }
 
+    fn public_metadata(&self) -> impl Iterator<Item = (&String, &String)> {
+        self.metadata.iter().filter(|(name, _)| {
+            !matches!(name.as_str(), APP_METADATA_KEY | APP_RESULT_METADATA_KEY)
+        })
+    }
+
     pub fn raw_output(&self, output: &ToolOutput) -> agena_domain::RawOutput {
-        let mut payload: serde_json::Map<String, serde_json::Value> = output
-            .payload
-            .fields
-            .iter()
-            .map(|field| {
-                (
-                    field.name.clone(),
-                    serde_json::Value::from(field.value.clone()),
-                )
-            })
-            .collect();
+        let mut payload = output
+            .to_json_payload()
+            .unwrap_or_else(|| serde_json::Value::Object(Default::default()));
         // Presentation metadata is string-valued. Keeping it out of the
         // result's field namespace also preserves typed defaults that serde
         // omits, such as Read::truncated=false. Tool-owned metadata wins.
-        if !self.metadata.is_empty()
-            && let serde_json::Value::Object(metadata) = payload
-                .entry("metadata".to_owned())
-                .or_insert_with(|| serde_json::Value::Object(Default::default()))
-        {
-            for (key, value) in &self.metadata {
-                metadata
-                    .entry(key.clone())
-                    .or_insert_with(|| serde_json::Value::String(value.clone()));
+        if let Some(object) = payload.as_object_mut() {
+            let mut metadata_fields = self.public_metadata().peekable();
+            if metadata_fields.peek().is_some()
+                && let serde_json::Value::Object(metadata) = object
+                    .entry("metadata".to_owned())
+                    .or_insert_with(|| serde_json::Value::Object(Default::default()))
+            {
+                for (key, value) in metadata_fields {
+                    metadata
+                        .entry(key.clone())
+                        .or_insert_with(|| serde_json::Value::String(value.clone()));
+                }
+            }
+            if output.payload.is_empty() && !self.output_text.is_empty() {
+                object
+                    .entry("text".to_owned())
+                    .or_insert_with(|| serde_json::Value::String(self.output_text.clone()));
             }
         }
-        if output.payload.is_empty() && !self.output_text.is_empty() {
-            payload
-                .entry("text".to_owned())
-                .or_insert_with(|| serde_json::Value::String(self.output_text.clone()));
-        }
         agena_domain::RawOutput::from_parts(
-            (!payload.is_empty()).then_some(serde_json::Value::Object(payload)),
+            payload
+                .as_object()
+                .is_none_or(|object| !object.is_empty())
+                .then_some(payload),
             self.output_text.clone(),
             self.attachments.clone(),
             output.managed_outputs.clone(),

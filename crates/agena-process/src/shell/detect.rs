@@ -226,6 +226,51 @@ fn resolve_override(raw: &str, host: &dyn ShellHost) -> Result<DetectedShell, St
     Ok(DetectedShell::new(kind, path, ShellSource::Override))
 }
 
+pub(crate) fn detect_bash(settings: &ShellSettings, host: &dyn ShellHost) -> Option<DetectedShell> {
+    if let Some(shell) = settings
+        .shell_override()
+        .and_then(|raw| resolve_override(raw, host).ok())
+        .filter(|shell| shell.kind == ShellKind::Bash)
+    {
+        return Some(shell);
+    }
+    let git_bash = || {
+        ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"]
+            .into_iter()
+            .filter_map(|variable| host.var(variable).map(PathBuf::from))
+            .flat_map(|root| {
+                [
+                    root.join("Git/bin/bash.exe"),
+                    root.join("Programs/Git/bin/bash.exe"),
+                ]
+            })
+            .find(|path| host.is_executable_file(path))
+    };
+    let path = if cfg!(windows) {
+        // Prefer Git Bash to the WSL launcher that Windows also calls bash.exe.
+        git_bash().or_else(|| {
+            let path = lookup(ShellKind::Bash, host)?;
+            let wsl_launcher = host
+                .var("SystemRoot")
+                .map(|root| PathBuf::from(root).join("System32/bash.exe"));
+            if wsl_launcher
+                .as_ref()
+                .is_some_and(|wsl| wsl.as_os_str().eq_ignore_ascii_case(path.as_os_str()))
+            {
+                return None;
+            }
+            Some(path)
+        })?
+    } else {
+        lookup(ShellKind::Bash, host)?
+    };
+    Some(DetectedShell::new(
+        ShellKind::Bash,
+        path,
+        ShellSource::Detected,
+    ))
+}
+
 fn resolve_powershell(host: &dyn ShellHost, notes: &mut Vec<String>) -> DetectedShell {
     match lookup(ShellKind::Powershell, host) {
         Some(path) => DetectedShell::new(ShellKind::Powershell, path, ShellSource::Detected),

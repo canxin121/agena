@@ -65,6 +65,20 @@ struct ResponseHead {
     url: String,
     version: String,
     headers: Vec<(String, Vec<u8>)>,
+    #[serde(default)]
+    remote_addr: Option<SocketAddr>,
+}
+
+#[derive(Clone, Copy)]
+struct ResponsePeer(SocketAddr);
+
+/// The numeric address used by the worker, including sandboxed requests.
+pub fn response_peer_addr(response: &reqwest::Response) -> Option<SocketAddr> {
+    response
+        .extensions()
+        .get::<ResponsePeer>()
+        .map(|peer| peer.0)
+        .or_else(|| response.remote_addr())
 }
 
 fn wire_headers(headers: &http::HeaderMap) -> Vec<(String, Vec<u8>)> {
@@ -162,6 +176,9 @@ fn response(head: ResponseHead, body: reqwest::Body) -> io::Result<reqwest::Resp
         .body(body)
         .map_err(io::Error::other)?;
     *result.headers_mut() = headers(head.headers)?;
+    if let Some(address) = head.remote_addr {
+        result.extensions_mut().insert(ResponsePeer(address));
+    }
     Ok(reqwest::Response::from(result))
 }
 
@@ -171,6 +188,7 @@ fn response_head(response: &reqwest::Response) -> ResponseHead {
         url: response.url().to_string(),
         version: format!("{:?}", response.version()),
         headers: wire_headers(response.headers()),
+        remote_addr: response.remote_addr(),
     }
 }
 
@@ -614,10 +632,15 @@ mod tests {
                 ("set-cookie".into(), b"two=2".to_vec()),
                 ("x-binary".into(), vec![0x80]),
             ],
+            remote_addr: Some("192.0.2.5:443".parse().unwrap()),
         };
         let result = response(head, reqwest::Body::from("body")).unwrap();
         assert_eq!(result.url().as_str(), "https://example.com/a/b");
         assert_eq!(result.headers().get_all("set-cookie").iter().count(), 2);
         assert_eq!(result.headers()["x-binary"].as_bytes(), &[0x80]);
+        assert_eq!(
+            response_peer_addr(&result),
+            Some("192.0.2.5:443".parse().unwrap())
+        );
     }
 }

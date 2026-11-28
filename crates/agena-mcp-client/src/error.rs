@@ -40,8 +40,14 @@ pub enum McpError {
     #[error("client shutting down")]
     Shutdown,
 
+    #[error("MCP transport closure could not be confirmed")]
+    UnconfirmedClosure,
+
     #[error("sampling not supported by this client")]
     SamplingUnsupported,
+
+    #[error("the MCP sampling request was declined or cancelled")]
+    SamplingDeclined,
 
     #[error("server '{0}' not connected")]
     ServerNotConnected(String),
@@ -78,9 +84,11 @@ impl McpError {
                 "The MCP server returned an incompatible protocol response.".into()
             }
             Self::Shutdown => "The MCP client is shutting down.".into(),
+            Self::UnconfirmedClosure => "The previous MCP connection did not confirm closure.".into(),
             Self::SamplingUnsupported | Self::CapabilityUnavailable { .. } => {
                 "The MCP connection does not support this capability.".into()
             }
+            Self::SamplingDeclined => "The MCP sampling request was declined or cancelled.".into(),
             Self::ToolDisallowed { .. } => {
                 "The MCP tool is disabled by the connection's tool filters.".into()
             }

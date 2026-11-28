@@ -496,6 +496,7 @@ mod tests {
             revision: "package-revision".to_owned(),
             source: None,
             diagnostics: Vec::new(),
+            invocation: None,
         };
         let mut state = SkillsWorkbench::new(1);
         state.install_detail(SkillDetail {
@@ -512,6 +513,7 @@ mod tests {
                 path: "references/notes.txt".to_owned(),
                 size: 25,
             }],
+            resource_base: None,
         });
         state.pane = SkillPane::Files;
         state.file_index = 1;

@@ -1,4 +1,6 @@
-use agena_domain::{ComposerDocument, ComposerNode, SessionRelationKind, SessionStateKind};
+use agena_domain::{
+    AgentStatus, ComposerDocument, ComposerNode, SessionRelationKind, SessionStateKind,
+};
 use agena_storage::kernel::*;
 use agena_storage_sqlite::{SqliteKernel, open_kernel_runtime};
 
@@ -14,6 +16,347 @@ async fn send(runtime: &SqliteKernel, session: SessionId, text: &str) -> Executi
         .await
         .unwrap()
         .value
+}
+
+async fn seed_agent(runtime: &SqliteKernel, parent: SessionId, request: RequestId) -> SessionId {
+    runtime
+        .ports
+        .sessions
+        .create_seeded_agent(
+            request,
+            parent,
+            "Context worker".into(),
+            SessionConfiguration {
+                parent_session_id: Some(parent),
+                relation_kind: SessionRelationKind::Subagent,
+                agent: Some(SessionAgentConfiguration {
+                    origin_message_id: None,
+                    workflow: None,
+                    cordis: None,
+                    name: "context_worker".into(),
+                    status: AgentStatus::Running,
+                    started_at_ms: Some(1),
+                    finished_at_ms: None,
+                    failure: None,
+                    limits: Default::default(),
+                }),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .value
+        .id
+}
+
+#[tokio::test]
+async fn seeded_agent_freezes_completed_turns_across_interleaved_queue_entries() {
+    let directory = tempfile::tempdir().unwrap();
+    let url = format!(
+        "sqlite://{}?mode=rwc",
+        directory.path().join("seed.db").display()
+    );
+    let runtime = open_kernel_runtime(&url).await.unwrap();
+    let workspace = runtime
+        .workspaces
+        .ensure_id("/agent-seed-tests")
+        .await
+        .unwrap();
+    let parent = runtime
+        .ports
+        .sessions
+        .create(RequestId::new(), workspace, "Parent".into())
+        .await
+        .unwrap()
+        .value
+        .id;
+    let first = completed_input(&runtime, parent).await;
+    let second = send(&runtime, parent, "Previous completed question").await;
+    let attempt = runtime
+        .ports
+        .executor
+        .claim_next(RequestId::new(), parent, second.id)
+        .await
+        .unwrap()
+        .value;
+    let inflight = send(
+        &runtime,
+        parent,
+        "Future question admitted before the response",
+    )
+    .await;
+    let round = attempt
+        .begin_current_round(RequestId::new())
+        .await
+        .unwrap()
+        .value;
+    let answer = round
+        .begin_text(RequestId::new(), false)
+        .await
+        .unwrap()
+        .value;
+    answer.append("Frozen parent answer").await.unwrap();
+    round.finish(RequestId::new(), None, true).await.unwrap();
+    attempt
+        .finish(RequestId::new(), ExecutionPhase::Succeeded)
+        .await
+        .unwrap();
+    let running = runtime
+        .ports
+        .executor
+        .claim_next(RequestId::new(), parent, inflight.id)
+        .await
+        .unwrap()
+        .value;
+    let pending = send(&runtime, parent, "Future queued question").await;
+    let cancelled = send(&runtime, parent, "Never showed this to the model").await;
+    runtime
+        .ports
+        .sessions
+        .cancel_queued(RequestId::new(), parent, cancelled.id)
+        .await
+        .unwrap();
+    let current_round = running
+        .begin_current_round(RequestId::new())
+        .await
+        .unwrap()
+        .value;
+    let partial = current_round
+        .begin_text(RequestId::new(), false)
+        .await
+        .unwrap()
+        .value;
+    partial.append("Unfinished answer").await.unwrap();
+
+    let request = RequestId::new();
+    let child = seed_agent(&runtime, parent, request).await;
+    let child_state = runtime
+        .ports
+        .reader
+        .control_snapshot(child, 1)
+        .await
+        .unwrap();
+    assert_eq!(child_state.configuration.parent_session_id, Some(parent));
+    assert_eq!(
+        child_state.configuration.relation_kind,
+        SessionRelationKind::Subagent
+    );
+    assert_eq!(child_state.summary.queued_executions, 0);
+    assert_eq!(child_state.summary.running_executions, 0);
+    let own = send(&runtime, child, "Child instruction").await;
+    let child_attempt = runtime
+        .ports
+        .executor
+        .claim_next(RequestId::new(), child, own.id)
+        .await
+        .unwrap()
+        .value;
+    let child_round = child_attempt
+        .begin_current_round(RequestId::new())
+        .await
+        .unwrap()
+        .value;
+    let expected = [
+        first.message_id,
+        second.message_id,
+        answer.entry_id(),
+        own.message_id,
+    ];
+    let prompt = child_round.prompt().await.unwrap();
+    assert_eq!(
+        prompt
+            .entries
+            .iter()
+            .map(|entry| entry.entry.id)
+            .collect::<Vec<_>>(),
+        expected
+    );
+    drop(prompt);
+
+    current_round
+        .finish(RequestId::new(), None, true)
+        .await
+        .unwrap();
+    running
+        .finish(RequestId::new(), ExecutionPhase::Succeeded)
+        .await
+        .unwrap();
+    runtime
+        .ports
+        .sessions
+        .cancel_queued(RequestId::new(), parent, pending.id)
+        .await
+        .unwrap();
+    runtime
+        .ports
+        .sessions
+        .clear(RequestId::new(), parent, ClearMode::History)
+        .await
+        .unwrap();
+    assert_eq!(seed_agent(&runtime, parent, request).await, child);
+    child_round
+        .finish(RequestId::new(), None, true)
+        .await
+        .unwrap();
+    child_attempt
+        .finish(RequestId::new(), ExecutionPhase::Succeeded)
+        .await
+        .unwrap();
+
+    let content = answer.id();
+    runtime.ports.clone().shutdown().await.unwrap();
+    drop((
+        runtime,
+        attempt,
+        round,
+        answer,
+        running,
+        current_round,
+        partial,
+        child_attempt,
+        child_round,
+    ));
+    let restored = open_kernel_runtime(&url).await.unwrap();
+    let history = restored
+        .ports
+        .reader
+        .history(child, None, 16)
+        .await
+        .unwrap();
+    assert_eq!(
+        history
+            .entries
+            .iter()
+            .map(|entry| entry.id)
+            .collect::<Vec<_>>(),
+        expected
+    );
+    let text = restored
+        .ports
+        .reader
+        .text_range(child, content, None, 1024)
+        .await
+        .unwrap();
+    assert_eq!(text.bytes, b"Frozen parent answer");
+    assert!(
+        restored
+            .ports
+            .reader
+            .execution_text_sources(child, own.id, Some(own.generation))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    restored.ports.clone().shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn seeded_agent_pins_a_completed_retry_generation_and_its_prompt_checkpoint() {
+    let runtime = open_kernel_runtime("sqlite::memory:").await.unwrap();
+    let parent = runtime
+        .ports
+        .sessions
+        .create_global(RequestId::new(), "Parent".into(), Default::default())
+        .await
+        .unwrap()
+        .value
+        .id;
+    let concealed = completed_input(&runtime, parent).await;
+    runtime
+        .ports
+        .sessions
+        .clear(RequestId::new(), parent, ClearMode::Context)
+        .await
+        .unwrap();
+    let retained = send(&runtime, parent, "Question after context reset").await;
+    let attempt = runtime
+        .ports
+        .executor
+        .claim_next(RequestId::new(), parent, retained.id)
+        .await
+        .unwrap()
+        .value;
+    let compact = attempt
+        .begin_compaction(RequestId::new(), 8)
+        .await
+        .unwrap()
+        .value;
+    let summary = compact
+        .begin_text(RequestId::new(), false)
+        .await
+        .unwrap()
+        .value;
+    summary.append("Compacted retained context").await.unwrap();
+    let checkpoint = compact
+        .commit_compaction(RequestId::new(), summary.id(), retained.message_id, None)
+        .await
+        .unwrap()
+        .value;
+    attempt
+        .finish(RequestId::new(), ExecutionPhase::Succeeded)
+        .await
+        .unwrap();
+    runtime
+        .ports
+        .sessions
+        .retry(RequestId::new(), parent, retained.id)
+        .await
+        .unwrap();
+
+    let child = seed_agent(&runtime, parent, RequestId::new()).await;
+    let version = runtime
+        .ports
+        .reader
+        .entry(child, retained.message_id)
+        .await
+        .unwrap();
+    assert_eq!(version.execution_phase, ExecutionPhase::Succeeded);
+    assert_eq!(version.execution_generation, retained.generation);
+    assert!(
+        runtime
+            .ports
+            .reader
+            .execution_text_sources(child, retained.id, Some(retained.generation))
+            .await
+            .unwrap()
+            .is_empty(),
+        "a prompt summary is not an assistant answer"
+    );
+    assert!(matches!(
+        runtime
+            .ports
+            .reader
+            .entry(child, concealed.message_id)
+            .await,
+        Err(KernelError::NotFound(_))
+    ));
+    let input = send(&runtime, child, "Child instruction").await;
+    let own = runtime
+        .ports
+        .executor
+        .claim_next(RequestId::new(), child, input.id)
+        .await
+        .unwrap()
+        .value;
+    let round = own
+        .begin_current_round(RequestId::new())
+        .await
+        .unwrap()
+        .value;
+    let prompt = round.prompt().await.unwrap();
+    assert_eq!(
+        prompt
+            .entries
+            .iter()
+            .map(|item| item.entry.id)
+            .collect::<Vec<_>>(),
+        [checkpoint, input.message_id]
+    );
+    round.finish(RequestId::new(), None, true).await.unwrap();
+    own.finish(RequestId::new(), ExecutionPhase::Succeeded)
+        .await
+        .unwrap();
+    runtime.ports.clone().shutdown().await.unwrap();
 }
 
 async fn pause(runtime: &SqliteKernel, session: SessionId) {
@@ -828,7 +1171,7 @@ async fn archives_restore_control_purpose_and_the_original_inherited_content_cut
         .entries
         .iter()
         .find_map(|entry| match entry.payload {
-            EntryPayload::Text { content_id } => Some(content_id),
+            EntryPayload::Text { content_id, .. } => Some(content_id),
             _ => None,
         })
         .unwrap();

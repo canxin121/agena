@@ -221,6 +221,7 @@ async fn oversized_compaction_prefix_fails_with_budget_error_without_changing_co
         generation: execution.generation,
         model: options.model.clone(),
         state: state.clone(),
+        cordis_child_jobs: Default::default(),
         cancel: CancellationToken::new(),
         phase: StdMutex::new(agena_domain::ExecutionPhase::PreparingModel),
         done: Notify::new(),

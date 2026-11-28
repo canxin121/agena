@@ -16,7 +16,7 @@ use agena_api::{
     },
 };
 use agena_application::dto::{
-    CommandRequestContext, GitCommitRequest, GitPullRequestCreateRequest, GitStageRequest,
+    GitCommitRequest, GitPullRequestCreateRequest, GitStageRequest,
     HealthResponse, ItemsResponse, MemoryWriteRequest, OperatorToolInvokeRequest,
     PermissionRuleBatchRequest, PermissionRuleRevokeRequest, PluginLogListQuery,
     PluginSettingsUpdateRequest, PluginToolInvokeRequest, RuntimeBackgroundTaskCancelResponse,
@@ -57,6 +57,7 @@ mod conversations;
 mod file_changes;
 mod git;
 mod marketplace;
+mod mcp_apps;
 mod mcp_connections;
 mod memory;
 mod model_catalog;
@@ -77,6 +78,7 @@ pub use assistant::*;
 mod workspaces;
 
 pub use file_changes::*;
+pub use mcp_apps::*;
 pub use mcp_connections::*;
 pub use permissions::*;
 pub use runs::*;

@@ -16,6 +16,8 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
 use crate::KernelDatabase;
 
 mod activity;
+mod activity_output;
+mod agent_seed;
 
 mod archive;
 
@@ -264,12 +266,15 @@ pub(crate) struct UserEntryBody {
     pub(crate) document: agena_domain::ComposerDocument,
     pub(crate) author: Option<agena_domain::MessageAuthor>,
     pub(crate) origin: Option<agena_domain::MessageOrigin>,
+    #[serde(default)]
+    pub(crate) model_context: Vec<String>,
 }
 
 pub(crate) fn encode_user_body(
     document: &agena_domain::ComposerDocument,
     author: Option<&agena_domain::MessageAuthor>,
     origin: Option<&agena_domain::MessageOrigin>,
+    model_context: &[String],
 ) -> Result<String> {
     #[derive(serde::Serialize)]
     struct Body<'a> {
@@ -278,12 +283,55 @@ pub(crate) fn encode_user_body(
         author: Option<&'a agena_domain::MessageAuthor>,
         #[serde(skip_serializing_if = "Option::is_none")]
         origin: Option<&'a agena_domain::MessageOrigin>,
+        #[serde(skip_serializing_if = "<[String]>::is_empty")]
+        model_context: &'a [String],
     }
-    encode(&Body {
+    let mut entry = Body {
         document,
         author,
         origin,
-    })
+        model_context: &[],
+    };
+    let body = encode(&entry)?;
+    if body.len() > 256 * 1024 {
+        return Err(invalid("composer document exceeds 256 KiB"));
+    }
+    if model_context.is_empty() {
+        return Ok(body);
+    }
+    if model_context.len() > MAX_USER_CONTEXT_BLOCKS
+        || model_context
+            .iter()
+            .any(|block| block.len() > MAX_USER_CONTEXT_BLOCK_BYTES)
+        || model_context.iter().map(String::len).sum::<usize>() > MAX_USER_CONTEXT_BYTES
+    {
+        return Err(invalid(
+            "user message model context exceeds its byte budget",
+        ));
+    }
+    entry.model_context = model_context;
+    encode(&entry)
+}
+
+fn encode_plugin_prompt(prompt: &PluginPrompt) -> Result<String> {
+    if prompt.text.trim().is_empty()
+        || !matches!(prompt.author.kind, agena_domain::AuthorKind::Plugin { .. })
+        || prompt.author.channel_authority.is_some()
+        || prompt
+            .author
+            .id
+            .strip_prefix("plugin:")
+            .is_none_or(str::is_empty)
+    {
+        return Err(invalid("plugin prompt requires text and a plugin author"));
+    }
+    encode_user_body(
+        &prompt.document(),
+        Some(&prompt.author),
+        None,
+        &prompt.model_context,
+    )?;
+    encode(&EntryPayload::PluginPrompt(prompt.clone()))
 }
 
 pub(crate) fn decode_user_body(text: &str) -> Result<UserEntryBody> {
@@ -469,6 +517,32 @@ impl KernelBackend for Backend {
     ) -> Result<ReadView<Vec<BackgroundActivityView>>> {
         lifecycle::background_activities(self, session, after, active_only, limit).await
     }
+    async fn activity_output_position(
+        &self,
+        session: SessionId,
+        id: agena_domain::ActivityId,
+    ) -> Result<ActivityOutputPosition> {
+        activity::output_position(self, session, id).await
+    }
+
+    async fn activity_output(
+        &self,
+        session: SessionId,
+        id: agena_domain::ActivityId,
+        from: Option<u64>,
+    ) -> Result<ReadView<Option<ActivityOutputPage>>> {
+        activity_output::read(self, session, id, from).await
+    }
+
+    async fn session_activities_by_label(
+        &self,
+        session: SessionId,
+        prefix: &str,
+        limit: usize,
+    ) -> Result<ReadView<Vec<BackgroundActivityView>>> {
+        activity::session_activities_by_label(self, session, prefix, limit).await
+    }
+
     async fn import_archive(
         &self,
         request: RequestId,
@@ -520,6 +594,18 @@ impl KernelBackend for Backend {
         agent_name: &str,
     ) -> Result<ReadView<Option<SessionId>>> {
         lifecycle::find_agent(self, parent, agent_name).await
+    }
+
+    async fn agent_catalog(
+        &self,
+        parent: SessionId,
+        limit: usize,
+    ) -> Result<ReadView<Vec<AgentCatalogMember>>> {
+        lifecycle::agent_catalog(self, parent, limit).await
+    }
+
+    async fn active_agent_count(&self, root: SessionId) -> Result<ReadView<u64>> {
+        lifecycle::active_agent_count(self, root).await
     }
 
     async fn latest_round(
@@ -600,6 +686,12 @@ impl KernelBackend for Backend {
         };
         let bytes = modeled_read_bytes(&value)?;
         self.wrap_read(session, value, bytes)
+    }
+    async fn session_resume_facts(
+        &self,
+        session: SessionId,
+    ) -> Result<ReadView<Option<SessionResumeFacts>>> {
+        lifecycle::session_resume_facts(self, session).await
     }
     async fn configuration(&self, session: SessionId) -> Result<ReadView<SessionConfiguration>> {
         self.cached_read(
@@ -708,6 +800,37 @@ impl KernelBackend for Backend {
             .watch_all(after)
             .with_lease(self.views.subscribe_global()?))
     }
+    async fn notice_wakes_since_user_message(
+        &self,
+        session: SessionId,
+        source: &str,
+    ) -> Result<u64> {
+        self.cache.ensure_open()?;
+        let _read = self.control_reads.clone().try_acquire_owned()
+            .map_err(|_| KernelError::Busy)?;
+        let count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM agena_deliveries d
+             WHERE d.session_id=? AND d.resume_execution_id IS NOT NULL
+               AND json_extract(d.payload_json, '$.wake_budget.source')=?
+               AND d.result_entry_id > COALESCE((
+                   SELECT max(e.id) FROM agena_entries e
+                   JOIN agena_segment_entries m ON m.entry_id=e.id
+                   JOIN agena_session_segments s ON s.segment_id=m.segment_id
+                   WHERE e.origin_session_id=d.session_id AND e.kind='user'
+                     AND s.session_id=d.session_id
+                     AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal
+                     AND COALESCE(json_extract(e.body_json,'$.author.kind.kind'),'instance_operator')
+                         IN ('instance_operator','channel_member')
+               ), 0)",
+        )
+        .bind(session.get())
+        .bind(source)
+        .fetch_one(self.reader.get_sqlite_connection_pool())
+        .await
+        .map_err(sql_error)?;
+        u64::try_from(count).map_err(storage)
+    }
+
     async fn export_jsonl(
         &self,
         lease: port::HistorySnapshotLease,
@@ -1203,8 +1326,9 @@ impl KernelBackend for Backend {
         &self,
         session: SessionId,
         id: agena_domain::ActivityId,
+        listed_only: bool,
     ) -> Result<ReadView<BackgroundActivityView>> {
-        activity::read(self, session, id).await
+        activity::read(self, session, id, listed_only).await
     }
     async fn active_activities(
         &self,
@@ -1345,13 +1469,18 @@ impl KernelBackend for Backend {
         } else {
             None
         };
-        let encoded = blobs::command_bytes(&command)?;
-        let bytes = encoded.len() + 512;
-        if bytes > MAX_COMMAND_BYTES {
-            return Err(invalid(
-                "command exceeds 1 MiB; large output needs a content stream",
-            ));
-        }
+        let (digest, bytes) = if let Command::AppendActivityOutput { chunks, .. } = &command {
+            activity_output::command_admission(&command, chunks)?
+        } else {
+            let encoded = blobs::command_bytes(&command)?;
+            let bytes = encoded.len() + 512;
+            if bytes > MAX_COMMAND_BYTES {
+                return Err(invalid(
+                    "command exceeds 1 MiB; large output needs a content stream",
+                ));
+            }
+            (Sha256::digest(&encoded).into(), bytes)
+        };
         let permit = self
             .budget
             .clone()
@@ -1361,13 +1490,12 @@ impl KernelBackend for Backend {
         let pending = Pending {
             request,
             command,
-            digest: Sha256::digest(&encoded).into(),
+            digest,
             bytes,
             response,
             _permit: permit,
             _retention_read,
         };
-        drop(encoded);
         self.sender
             .try_send(Work::Command(Box::new(pending)))
             .map_err(|error| match error {
@@ -2118,15 +2246,21 @@ async fn commit_batch(
                 | Command::OpenActivityOutput { .. }
         ) && let Ok(receipt) = result
             && receipt.position.sequence == sequence
-            && let Mutation::Content(head) = &receipt.value
         {
-            match content::stored_head(&mut transaction, head.id).await {
-                Ok(final_head) => {
-                    opened_heads.insert(head.id, final_head);
-                }
-                Err(error) => {
-                    let error = abort_transaction(transaction).await.err().unwrap_or(error);
-                    return aborted_batch(results, batch.len(), sequence, error);
+            let heads = match &receipt.value {
+                Mutation::Content(head) => [Some(head.id), None],
+                Mutation::TextWithDisplay { original, display } => [Some(original.id), Some(display.id)],
+                _ => [None, None],
+            };
+            for id in heads.into_iter().flatten() {
+                match content::stored_head(&mut transaction, id).await {
+                    Ok(final_head) => {
+                        opened_heads.insert(id, final_head);
+                    }
+                    Err(error) => {
+                        let error = abort_transaction(transaction).await.err().unwrap_or(error);
+                        return aborted_batch(results, batch.len(), sequence, error);
+                    }
                 }
             }
         }
@@ -2167,22 +2301,20 @@ async fn commit_batch(
                         if let Mutation::BlobPin(pin) = &receipt.value {
                             blob_pins.install(pin.lease);
                         }
-                        if let (
-                            Command::OpenText {
-                                scope, round, tool, ..
-                            },
-                            Mutation::Content(head),
-                        ) = (&pending.command, &receipt.value)
-                        {
-                            live.install_open(
-                                port::OutputScope::Attempt(*scope),
-                                Some(*round),
-                                *tool,
-                                opened_heads
-                                    .get(&head.id)
-                                    .expect("newly opened final head")
-                                    .clone(),
-                            );
+                        if let Command::OpenText { scope, round, tool, .. } = &pending.command {
+                            let heads = match &receipt.value {
+                                Mutation::Content(head) => [Some(head), None],
+                                Mutation::TextWithDisplay { original, display } => [Some(original), Some(display)],
+                                _ => [None, None],
+                            };
+                            for head in heads.into_iter().flatten() {
+                                live.install_open(
+                                    port::OutputScope::Attempt(*scope),
+                                    Some(*round),
+                                    *tool,
+                                    opened_heads.get(&head.id).expect("newly opened final head").clone(),
+                                );
+                            }
                         }
                         if let (
                             Command::OpenEvents {
@@ -2301,6 +2433,7 @@ fn previous_list_session(command: &Command) -> Option<SessionId> {
         Command::CreateConfigured { .. }
         | Command::CreateGlobal { .. }
         | Command::CreateSession { .. }
+        | Command::CreateSeededAgent { .. }
         | Command::Fork { .. } => {
             return None;
         }
@@ -2310,6 +2443,7 @@ fn previous_list_session(command: &Command) -> Option<SessionId> {
         Command::PresentInteraction { session, .. }
         | Command::DetachGlobal { session, .. }
         | Command::Configure { session, .. }
+        | Command::RegisterWorkingDirectory { session, .. }
         | Command::RecoverChannelAuthority { session, .. }
         | Command::FinishAgent { session, .. }
         | Command::Withdraw { session, .. }
@@ -2323,6 +2457,8 @@ fn previous_list_session(command: &Command) -> Option<SessionId> {
         | Command::DeliverAndResume { session, .. }
         | Command::ResumeDelivery { session, .. }
         | Command::ConsumeDelivery { session, .. }
+        | Command::AcknowledgeActivityOutput { session, .. }
+        | Command::UnlistSettledActivity { session, .. }
         | Command::Metadata { session, .. }
         | Command::SelectionPatch { session, .. }
         | Command::QueueControl { session, .. }
@@ -2331,6 +2467,7 @@ fn previous_list_session(command: &Command) -> Option<SessionId> {
         | Command::EditQueued { session, .. }
         | Command::Claim { session, .. }
         | Command::ClaimNext { session, .. }
+        | Command::CancelNext { session, .. }
         | Command::Cancel { session, .. }
         | Command::CancelQueued { session, .. }
         | Command::ClearQueued { session }
@@ -2352,10 +2489,13 @@ fn previous_list_session(command: &Command) -> Option<SessionId> {
         | Command::OpenText { scope, .. }
         | Command::OpenEvents { scope, .. }
         | Command::BeginActivity { scope, .. }
+        | Command::BeginPluginCommandActivity { scope, .. }
         | Command::CompleteTool { scope, .. }
         | Command::PrepareStop { scope, .. }
         | Command::Finish { scope, .. } => scope.session,
-        Command::EndActivity { scope, .. } | Command::OpenActivityOutput { scope, .. } => {
+        Command::EndActivity { scope, .. } | Command::OpenActivityOutput { scope, .. }
+        | Command::AppendActivityOutput { scope, .. }
+        | Command::SetActivityOutputSpillPaths { scope, .. } => {
             scope.session
         }
         Command::SealContent { scope, .. } => scope.session(),
@@ -2430,12 +2570,16 @@ fn change_target(command: &Command, mutation: &Mutation) -> (SessionId, ChangeKi
             _ => unreachable!("validated local Bot session result"),
         },
         Command::PresentInteraction { session, .. } => (*session, ChangeKind::Interaction),
-        Command::Fork { session, .. } => match mutation {
+        Command::Fork { session, .. }
+        | Command::CreateSeededAgent {
+            parent: session, ..
+        } => match mutation {
             Mutation::Session(value) => (value.id, ChangeKind::Membership),
             Mutation::Rewind(value) => (value.session.id, ChangeKind::Membership),
             _ => (*session, ChangeKind::Membership),
         },
         Command::Configure { session, .. }
+        | Command::RegisterWorkingDirectory { session, .. }
         | Command::RecoverChannelAuthority { session, .. }
         | Command::DetachGlobal { session, .. }
         | Command::FinishAgent { session, .. } => (*session, ChangeKind::Metadata),
@@ -2443,6 +2587,7 @@ fn change_target(command: &Command, mutation: &Mutation) -> (SessionId, ChangeKi
         | Command::Truncate { session, .. }
         | Command::Clear { session, .. }
         | Command::DeleteSession { session, .. }
+        | Command::CancelNext { session, .. }
         | Command::ConsumeDelivery { session, .. } => (*session, ChangeKind::Membership),
         Command::Continue { session, .. }
         | Command::ResumeDelivery { session, .. }
@@ -2492,8 +2637,13 @@ fn change_target(command: &Command, mutation: &Mutation) -> (SessionId, ChangeKi
         Command::OpenEvents { scope, .. } => (scope.session, ChangeKind::Content),
         Command::SealContent { scope, .. } => (scope.session(), ChangeKind::Content),
         Command::BeginActivity { scope, .. } => (scope.session, ChangeKind::Activity),
+        Command::BeginPluginCommandActivity { scope, .. } => (scope.session, ChangeKind::Membership),
         Command::EndActivity { scope, .. } => (scope.session, ChangeKind::Activity),
         Command::OpenActivityOutput { scope, .. } => (scope.session, ChangeKind::Content),
+        Command::AppendActivityOutput { scope, .. }
+        | Command::SetActivityOutputSpillPaths { scope, .. } => (scope.session, ChangeKind::Content),
+        Command::AcknowledgeActivityOutput { session, .. }
+        | Command::UnlistSettledActivity { session, .. } => (*session, ChangeKind::Activity),
         Command::CompleteTool { scope, .. } => (scope.session, ChangeKind::Tool),
         Command::PrepareBlob { session, .. } | Command::PinBlob { session, .. } => {
             (*session, ChangeKind::Content)
@@ -2526,15 +2676,19 @@ async fn execute(
     // installing the checkpoint. Rollback preserves accepted live tails for a
     // retry, just as other failed terminal barriers do.
     let compaction = matches!(pending.command, Command::CommitCompaction { .. });
-    let forking = matches!(pending.command, Command::Fork { .. });
+    let branch_source = match &pending.command {
+        Command::Fork { session, .. } => Some(*session),
+        Command::CreateSeededAgent { parent, .. } => Some(*parent),
+        _ => None,
+    };
     let mut updates = if compaction {
         live.terminal(pending.request, &pending.command)
-    } else if let Command::Fork { session, .. } = pending.command {
+    } else if let Some(session) = branch_source {
         live.branch_snapshot(session)
     } else {
         Vec::new()
     };
-    if compaction || forking {
+    if compaction || branch_source.is_some() {
         content::persist(connection, &mut updates).await?;
         if compaction {
             content::seal_stored(connection, &pending.command).await?;
@@ -2545,7 +2699,7 @@ async fn execute(
         None => None,
     };
     let mut value = commands::apply(connection, &pending.command).await?;
-    if !compaction && !forking {
+    if !compaction && branch_source.is_none() {
         updates = live.terminal(pending.request, &pending.command);
         content::persist(connection, &mut updates).await?;
         content::seal_stored(connection, &pending.command).await?;
@@ -2620,6 +2774,7 @@ async fn entry_changes(
     };
     match command {
         Command::Fork { .. }
+        | Command::CreateSeededAgent { .. }
         | Command::Withdraw { .. }
         | Command::Truncate { .. }
         | Command::Clear { .. }
@@ -2637,6 +2792,7 @@ async fn entry_changes(
         Mutation::InteractionView(view)=>sqlx::query_scalar("SELECT id FROM agena_entries WHERE interaction_id=? OR tool_id=? ORDER BY id LIMIT 129").bind(view.id.get()).bind(view.tool_id.get()).fetch_all(&mut *connection).await.map_err(sql_error)?,
         Mutation::Decision(_)=>if let Command::Reply{interaction,..}=command {sqlx::query_scalar("SELECT id FROM agena_entries WHERE interaction_id=? OR tool_id=(SELECT tool_id FROM agena_interactions WHERE id=?) ORDER BY id LIMIT 129").bind(interaction.get()).bind(interaction.get()).fetch_all(&mut *connection).await.map_err(sql_error)?}else{Vec::new()},
         Mutation::Content(head)=>vec![head.entry.get()],
+        Mutation::TextWithDisplay { original, .. }=>vec![original.entry.get()],
         Mutation::Retention(retention)=>vec![retention.stream.entry.get()],
         Mutation::Checkpoint(id)=>vec![id.get()],
         Mutation::Activity(id)=>sqlx::query_scalar("SELECT entry_id FROM agena_background_activities WHERE id=?").bind(id.to_string()).fetch_all(&mut *connection).await.map_err(sql_error)?,

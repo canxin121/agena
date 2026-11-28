@@ -176,6 +176,7 @@ impl SessionManager {
         let prepared = executor
             .prepare_invocation(invocation, OPERATOR_SESSION, call)
             .await?;
+        require_live_tool_for_hook_approval(&prepared)?;
         let (invocation, shell) = executor
             .prepare_shell_invocation(&prepared.invocation, OPERATOR_SESSION, call)
             .await?;
@@ -207,6 +208,10 @@ impl SessionManager {
             execution.view.set_title(title);
         }
         execution.view.metadata.extend(prepared.metadata);
+        execution
+            .view
+            .additional_context
+            .splice(..0, prepared.additional_context);
         Ok(execution)
     }
 

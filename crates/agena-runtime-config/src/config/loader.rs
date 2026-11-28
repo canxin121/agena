@@ -1,3 +1,7 @@
+use std::path::Path;
+
+use agena_plugin_host::{PluginPackage, PluginProfileEntry};
+
 use crate::{
     ConfigError, ConfigResolution, LoadConfigRequest, PromptLayersConfig, RawConfig, RawConfigFile,
     apply_config_override,
@@ -106,11 +110,12 @@ where
         } else {
             RawConfig::default()
         };
+        resolve_agent_package_paths(&mut merged, &config_path)?;
         if project_file_state.found {
-            merged.merge_project_from_with_keys(
-                project_file_state.config.clone(),
-                project_file_state.merge_keys,
-            );
+            let mut project = project_file_state.config;
+            validate_project_agent_hooks(&project)?;
+            resolve_agent_package_paths(&mut project, &project_config_path)?;
+            merged.merge_project_from_with_keys(project, project_file_state.merge_keys);
         }
 
         if environment_applied {
@@ -123,6 +128,7 @@ where
             }
         }
 
+        resolve_agent_package_paths(&mut merged, &config_path)?;
         let mut config = merged.resolve()?;
         super::raw::validate_permission_config_in_workspace(
             &config.permission,
@@ -156,6 +162,78 @@ where
             ),
         })
     }
+}
+
+fn validate_project_agent_hooks(config: &RawConfig) -> Result<(), ConfigError> {
+    let Some(plugins) = &config.plugins else {
+        return Ok(());
+    };
+    for (id, entry) in &plugins.list {
+        if matches!(
+            entry.package,
+            PluginPackage::AgentPlugin {
+                enable_hooks: true,
+                ..
+            }
+        ) {
+            return Err(ConfigError::Validation(format!(
+                "plugins.list.{id}.package.enable_hooks must be set in the instance configuration"
+            )));
+        }
+    }
+    for (profile_id, profile) in &plugins.profiles {
+        for (id, entry) in &profile.plugins {
+            let package = match entry {
+                PluginProfileEntry::Replace { plugin } => Some(&plugin.package),
+                PluginProfileEntry::Patch { package, .. } => package.as_ref(),
+                _ => None,
+            };
+            if matches!(
+                package,
+                Some(PluginPackage::AgentPlugin {
+                    enable_hooks: true,
+                    ..
+                })
+            ) {
+                return Err(ConfigError::Validation(format!(
+                    "automatic hooks for {id} in profile {profile_id} must be set in the instance configuration"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn resolve_agent_package_paths(config: &mut RawConfig, file: &Path) -> Result<(), ConfigError> {
+    let Some(plugins) = config.plugins.as_mut() else {
+        return Ok(());
+    };
+    let resolve = |package: &mut PluginPackage| -> Result<(), ConfigError> {
+        if let PluginPackage::AgentPlugin { path, .. } = package
+            && path.is_relative()
+        {
+            let base = file.parent().unwrap_or_else(|| Path::new("."));
+            *path = std::path::absolute(base.join(&*path))
+                .map_err(|source| ConfigError::CurrentDirectory { source })?;
+        }
+        Ok(())
+    };
+    for plugin in plugins.list.values_mut() {
+        resolve(&mut plugin.package)?;
+    }
+    for profile in plugins.profiles.values_mut() {
+        for entry in profile.plugins.values_mut() {
+            match entry {
+                PluginProfileEntry::Replace { plugin } => resolve(&mut plugin.package)?,
+                PluginProfileEntry::Patch {
+                    package: Some(package),
+                    ..
+                } => resolve(package)?,
+                _ => {}
+            }
+        }
+    }
+    Ok(())
 }
 
 fn prompt_dir(config_path: &std::path::Path) -> std::path::PathBuf {

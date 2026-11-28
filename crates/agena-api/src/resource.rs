@@ -19,10 +19,11 @@ pub use agena_session_api::resource::{
     RunRole, RunSource, RunUsage, ScheduledJobResource, ScheduledJobRunResource,
     ScheduledJobRunStatus, ServerIdentityResource, SessionAutomationResource,
     SessionExecutionContextResource, SessionExecutionReceiptResource, SessionExecutionResource,
-    SessionResource, SessionState, SessionUsageLimitBasis, SessionUsageResource,
-    ToolPermissionConfigResource, ToolPermissionRulesResource, UserInputOption, UserInputQuestion,
-    UserInputReply, UserInputReplyKind, WorkspaceFileKind, WorkspaceFileNode,
-    WorkspaceFileTreeResource, WorkspaceResource, WorkspaceSessionStats,
+    SessionResource, SessionSelectionRequest, SessionSelectionResponse, SessionState,
+    SessionUsageLimitBasis, SessionUsageResource, ToolPermissionConfigResource,
+    ToolPermissionRulesResource, UserInputOption, UserInputQuestion, UserInputReply,
+    UserInputReplyKind, WorkspaceFileKind, WorkspaceFileNode, WorkspaceFileTreeResource,
+    WorkspaceResource, WorkspaceSessionStats,
 };
 
 use std::collections::BTreeMap;

@@ -1432,21 +1432,40 @@ impl Peer<RoleClient> {
         &self,
         params: ReadResourceRequestParams,
     ) -> Result<ReadResourceResponse, ServiceError> {
+        match self
+            .read_resource_once_with(params, |request| self.send_request(request))
+            .await?
+        {
+            ServerResult::ReadResourceResult(result) => Ok(ReadResourceResponse::Complete(result)),
+            ServerResult::InputRequiredResult(result) => {
+                Ok(ReadResourceResponse::InputRequired(result))
+            }
+            _ => Err(ServiceError::UnexpectedResponse),
+        }
+    }
+
+    /// Use the normal resource cache with a caller-owned request exchange.
+    /// The exchange may service callbacks before receiving the final response.
+    pub async fn read_resource_once_with<Fut>(
+        &self,
+        params: ReadResourceRequestParams,
+        exchange: impl FnOnce(ClientRequest) -> Fut,
+    ) -> Result<ServerResult, ServiceError>
+    where
+        Fut: std::future::Future<Output = Result<ServerResult, ServiceError>>,
+    {
         let cache_key = resource_read_cache_key(&params);
         if let Some(key) = cache_key.as_deref()
             && let Some(ServerResult::ReadResourceResult(result)) = self.cached_response(key).await
         {
-            return Ok(ReadResourceResponse::Complete(result));
+            return Ok(ServerResult::ReadResourceResult(result));
         }
 
         let generation = self.capture_response_cache_generation().await;
-        let result = self
-            .send_request(ClientRequest::ReadResourceRequest(ReadResourceRequest {
-                method: Default::default(),
-                params,
-                extensions: Default::default(),
-            }))
-            .await;
+        let result = exchange(ClientRequest::ReadResourceRequest(
+            ReadResourceRequest::new(params),
+        ))
+        .await;
         let result = match result {
             Ok(result) => result,
             Err(error) => {
@@ -1454,28 +1473,22 @@ impl Peer<RoleClient> {
                     && let Some(ServerResult::ReadResourceResult(result)) =
                         self.stale_cached_response(key).await
                 {
-                    return Ok(ReadResourceResponse::Complete(result));
+                    return Ok(ServerResult::ReadResourceResult(result));
                 }
                 return Err(error);
             }
         };
-        match result {
-            ServerResult::ReadResourceResult(result) => {
-                self.cache_result(
-                    cache_key,
-                    result.ttl_ms,
-                    result.cache_scope,
-                    generation,
-                    ServerResult::ReadResourceResult(result.clone()),
-                )
-                .await;
-                Ok(ReadResourceResponse::Complete(result))
-            }
-            ServerResult::InputRequiredResult(result) => {
-                Ok(ReadResourceResponse::InputRequired(result))
-            }
-            _ => Err(ServiceError::UnexpectedResponse),
+        if let ServerResult::ReadResourceResult(contents) = &result {
+            self.cache_result(
+                cache_key,
+                contents.ttl_ms,
+                contents.cache_scope,
+                generation,
+                result.clone(),
+            )
+            .await;
         }
+        Ok(result)
     }
 
     method!(peer_req complete CompleteRequest(CompleteRequestParams) => CompleteResult);

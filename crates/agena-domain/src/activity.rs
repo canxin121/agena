@@ -139,9 +139,8 @@ pub struct CommandReferenceActivity {
 }
 
 impl CommandReferenceActivity {
-    /// Safe, message-scoped lazy reference projection. The command's
-    /// instructions are read on demand through the plugin named in `source`,
-    /// never embedded in this message.
+    /// Model guidance for either a lazy reference or a managed plugin skill
+    /// whose instructions the host has attached to the user message.
     pub fn model_context_text(&self) -> String {
         let mut command = serde_json::json!({
             "name": self.name,
@@ -153,10 +152,16 @@ impl CommandReferenceActivity {
         if let Some(id) = &self.skill_id {
             command["skill_id"] = serde_json::json!(id);
         }
-        let read_guidance = if self.source == "agena.skills" && self.skill_id.is_some() {
-            "Read this skill through the `agena.skills` plugin's `get` tool, passing the exact `skill_id` value as `id`. Use the returned instructions as task guidance."
-        } else {
-            "The instructions are not embedded. Read them through the plugin named in `source` before applying the command, then use the result as task guidance."
+        let read_guidance = match (self.skill_id.as_deref(), self.source.as_str()) {
+            (Some(_), "agena.skills") => {
+                "Read this skill through the `agena.skills` plugin's `get` tool, passing the exact `skill_id` value as `id`. Use the returned instructions as task guidance."
+            }
+            (Some(id), _) if id.starts_with("declared-") => {
+                "Apply the selected skill using the instructions Agena attached to this message."
+            }
+            _ => {
+                "The instructions are not embedded. Read them through the plugin named in `source` before applying the command, then use the result as task guidance."
+            }
         };
         let payload = serde_json::json!({
             "semantics": "turn_scoped_user_selected_command_reference",

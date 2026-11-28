@@ -54,6 +54,7 @@ pub(super) fn build_or_prepare_session_manager(
     global_lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
     global_internal_root: &Path,
     global_build_config: &agena_runtime::RuntimeSessionBuildConfig,
+    claude_instruction_settings: Arc<agena_runtime_tools::ClaudeInstructionSettings>,
 ) -> (Arc<SessionManager>, Option<PendingSessionReconfiguration>) {
     let agena_runtime::SessionCompositionInputs {
         existing,
@@ -67,16 +68,8 @@ pub(super) fn build_or_prepare_session_manager(
         monitor_registry,
         scheduler_database,
     } = inputs;
-    let permission_inspector = mcp_manager.map(|manager| {
-        Arc::new(McpRiskPermissionInspector { manager })
-            as Arc<dyn agena_runtime_tools::tool::ExecutionPermissionInspector>
-    });
     let processor = SessionProcessor::new(Arc::clone(&plugins));
     let global_processor = SessionProcessor::new(Arc::clone(&global_plugins));
-    let global_inspector = global_mcp_manager.map(|manager| {
-        Arc::new(McpRiskPermissionInspector { manager })
-            as Arc<dyn agena_runtime_tools::tool::ExecutionPermissionInspector>
-    });
     let config = agena_runtime::RuntimeSessionManagerConfig {
         default_selection: build_config.default_selection.clone(),
         auxiliary_selection: build_config.auxiliary_selection.clone(),
@@ -120,8 +113,9 @@ pub(super) fn build_or_prepare_session_manager(
                 monitor_registry: monitor_registry.clone(),
                 scheduler_database: scheduler_database.clone(),
             },
-            permission_inspector,
-        );
+            mcp_manager,
+        )
+        .with_claude_instruction_settings(claude_instruction_settings);
         let global_executor = build_tool_executor(
             agena_runtime::ToolCompositionInputs {
                 sandbox: global_build_config.sandbox,
@@ -133,7 +127,7 @@ pub(super) fn build_or_prepare_session_manager(
                 monitor_registry: monitor_registry.clone(),
                 scheduler_database: scheduler_database.clone(),
             },
-            global_inspector,
+            global_mcp_manager,
         );
         // The shared manager is already serving the published snapshot. Keep
         // its replacement execution state private until lifecycle publication.
@@ -163,8 +157,9 @@ pub(super) fn build_or_prepare_session_manager(
             monitor_registry: monitor_registry.clone(),
             scheduler_database: scheduler_database.clone(),
         },
-        permission_inspector.clone(),
-    );
+        mcp_manager.clone(),
+    )
+    .with_claude_instruction_settings(claude_instruction_settings.clone());
     let manager = Arc::new(SessionManager::new(
         Arc::clone(db),
         Arc::clone(&providers),
@@ -184,8 +179,9 @@ pub(super) fn build_or_prepare_session_manager(
             monitor_registry: monitor_registry.clone(),
             scheduler_database: scheduler_database.clone(),
         },
-        permission_inspector,
-    );
+        mcp_manager,
+    )
+    .with_claude_instruction_settings(claude_instruction_settings);
     manager.reconfigure(
         Arc::clone(&providers),
         ContextGovernor::new(ContextPolicy::default()),
@@ -204,7 +200,7 @@ pub(super) fn build_or_prepare_session_manager(
             monitor_registry,
             scheduler_database,
         },
-        global_inspector,
+        global_mcp_manager,
     );
     manager.reconfigure_global(
         global_providers,
@@ -296,7 +292,7 @@ pub(super) async fn build_plugin_services(
 
 pub(super) fn build_tool_executor(
     inputs: ToolCompositionInputs<'_>,
-    permission_inspector: Option<Arc<dyn agena_runtime_tools::tool::ExecutionPermissionInspector>>,
+    mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
 ) -> ToolExecutor {
     let agena_runtime::ToolCompositionInputs {
         sandbox,
@@ -318,6 +314,10 @@ pub(super) fn build_tool_executor(
             .cloned()
             .unwrap_or_else(|| build_scheduler(session_manager, scheduler_database))
     });
+    let permission_inspector = mcp_manager.as_ref().map(|manager| {
+        Arc::new(McpRiskPermissionInspector { manager: Arc::clone(manager) })
+            as Arc<dyn agena_runtime_tools::tool::ExecutionPermissionInspector>
+    });
     let mut executor = ToolExecutor::new(
         workspace_root.to_path_buf(),
         principal,
@@ -326,6 +326,7 @@ pub(super) fn build_tool_executor(
         lsp_registry,
     )
     .with_execution_settings(sandbox, resource_guard)
+    .with_mcp_manager(mcp_manager)
     .with_permission_inspector(permission_inspector);
     if let Some(registry) = monitor_registry {
         executor = executor.with_monitor_registry(registry);

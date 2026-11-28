@@ -1,5 +1,6 @@
 //! Top-level marketplace API: registries, fetch, install, uninstall.
 
+pub mod agent_packages;
 pub mod cache;
 pub mod error;
 pub mod installer;
@@ -10,7 +11,12 @@ pub mod project;
 mod web_package_tests;
 
 use std::time::Duration;
-use std::{collections::BTreeMap, io::Read, path::Path};
+use std::{
+    collections::BTreeMap,
+    io::Read,
+    path::Path,
+    sync::{Arc, OnceLock},
+};
 
 pub use cache::{
     InstalledRecord, InstalledRecords, MarketplaceCache, default_cache_root, write_secure_file,
@@ -80,6 +86,19 @@ pub fn trusted_keys_from_config(
 /// Pluggable HTTP fetcher so tests can supply local bytes without a network.
 pub trait HttpFetcher: Send + Sync {
     fn fetch(&self, url: &str) -> Result<Vec<u8>, MarketplaceError>;
+
+    fn fetch_bounded(
+        &self,
+        url: &str,
+        limit: u64,
+        _timeout: Duration,
+    ) -> Result<Vec<u8>, MarketplaceError> {
+        let bytes = self.fetch(url)?;
+        if bytes.len() as u64 > limit {
+            return Err(fetch_size_error(url, limit));
+        }
+        Ok(bytes)
+    }
 }
 
 /// Default fetcher: reqwest blocking client. `file://` urls are supported by
@@ -87,12 +106,12 @@ pub trait HttpFetcher: Send + Sync {
 /// vendored offline registries.
 #[derive(Debug, Clone, Default)]
 pub struct ReqwestFetcher {
-    client: Option<reqwest::blocking::Client>,
+    client: Arc<OnceLock<Result<reqwest::blocking::Client, String>>>,
 }
 
 const FETCH_TIMEOUT: Duration = Duration::from_secs(60);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-const MAX_FETCH_BYTES: usize = 64 * 1024 * 1024;
+const MAX_FETCH_BYTES: u64 = 64 * 1024 * 1024;
 
 impl ReqwestFetcher {
     pub fn new() -> Self {
@@ -102,50 +121,65 @@ impl ReqwestFetcher {
 
 impl HttpFetcher for ReqwestFetcher {
     fn fetch(&self, url: &str) -> Result<Vec<u8>, MarketplaceError> {
+        self.fetch_bounded(url, MAX_FETCH_BYTES, FETCH_TIMEOUT)
+    }
+
+    fn fetch_bounded(
+        &self,
+        url: &str,
+        limit: u64,
+        timeout: Duration,
+    ) -> Result<Vec<u8>, MarketplaceError> {
+        let limit = limit.min(MAX_FETCH_BYTES);
         if let Some(path) = url.strip_prefix("file://") {
             let file = std::fs::File::open(path)?;
-            if file.metadata()?.len() > MAX_FETCH_BYTES as u64 {
-                return Err(MarketplaceError::Http(format!(
-                    "file exceeds the {MAX_FETCH_BYTES}-byte marketplace download limit"
-                )));
+            if file.metadata()?.len() > limit {
+                return Err(fetch_size_error(path, limit));
             }
-            return read_bounded(file, path);
+            return read_bounded(file, path, limit);
         }
-        let client = match &self.client {
-            Some(client) => client.clone(),
-            None => reqwest::blocking::Client::builder()
-                .connect_timeout(CONNECT_TIMEOUT)
-                .timeout(FETCH_TIMEOUT)
-                .build()
-                .map_err(|error| MarketplaceError::http_error(&error))?,
-        };
+        let client = self
+            .client
+            .get_or_init(|| {
+                reqwest::blocking::Client::builder()
+                    .user_agent(concat!("Agena/", env!("CARGO_PKG_VERSION")))
+                    .connect_timeout(CONNECT_TIMEOUT)
+                    .timeout(FETCH_TIMEOUT)
+                    .build()
+                    .map_err(|error| agena_failure::diagnostic::format_error_chain(&error))
+            })
+            .as_ref()
+            .map_err(|error| MarketplaceError::Http(error.clone()))?;
         let response = client
             .get(url)
+            .timeout(timeout)
             .send()
             .and_then(|r| r.error_for_status())
             .map_err(|e| MarketplaceError::Http(format!("GET {url}: {e}")))?;
         if response
             .content_length()
-            .is_some_and(|length| length > MAX_FETCH_BYTES as u64)
+            .is_some_and(|length| length > limit)
         {
-            return Err(MarketplaceError::Http(format!(
-                "GET {url}: response exceeds the {MAX_FETCH_BYTES}-byte marketplace download limit"
-            )));
+            return Err(fetch_size_error(url, limit));
         }
-        read_bounded(response, url)
+        read_bounded(response, url, limit)
     }
 }
 
-fn read_bounded(reader: impl Read, source: &str) -> Result<Vec<u8>, MarketplaceError> {
+fn fetch_size_error(source: &str, limit: u64) -> MarketplaceError {
+    MarketplaceError::Http(format!(
+        "{source}: response exceeds the {limit}-byte marketplace download limit"
+    ))
+}
+
+fn read_bounded(reader: impl Read, source: &str, limit: u64) -> Result<Vec<u8>, MarketplaceError> {
     let mut bytes = Vec::new();
     reader
-        .take(MAX_FETCH_BYTES as u64 + 1)
+        .take(limit + 1)
         .read_to_end(&mut bytes)
         .map_err(|error| MarketplaceError::Http(format!("read body {source}: {error}")))?;
-    if bytes.len() > MAX_FETCH_BYTES {
-        return Err(MarketplaceError::Http(format!(
-            "{source}: response exceeds the {MAX_FETCH_BYTES}-byte marketplace download limit"
-        )));
+    if bytes.len() as u64 > limit {
+        return Err(fetch_size_error(source, limit));
     }
     Ok(bytes)
 }

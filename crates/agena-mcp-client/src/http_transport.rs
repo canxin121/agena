@@ -5,17 +5,22 @@
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use agena_process::sandbox::SandboxPolicy;
 use agena_process::sandbox_http::{HttpOptions, WorkerCancellation, execute};
 use async_trait::async_trait;
+use rmcp::model::{ClientJsonRpcMessage, ClientRequest, GetExtensions};
 use rmcp::transport::streamable_http_client::{
     HttpRequestExecutor, RequestExecutingHttpClient, StreamableHttpError,
 };
 use url::{Host, Url};
 
 use crate::{McpError, McpResult};
+
+mod app_events;
+pub(crate) use app_events::AppHttpEvents;
 
 #[cfg(test)]
 mod tests;
@@ -36,9 +41,20 @@ pub trait McpHttpNetworkAuthorizer: Send + Sync {
         Err(McpError::PermissionDenied)
     }
 
+    /// Compile the session policy for a trusted connection's local header provider.
+    async fn header_helper_policy(&self, _cwd: &std::path::Path) -> McpResult<SandboxPolicy> {
+        Err(McpError::PermissionDenied)
+    }
+
     /// Lifetime of this authority, independent of whether an SSE body is being
     /// polled. Return a child token so consumers cannot cancel the owning call.
     fn cancellation(&self) -> Option<WorkerCancellation> {
+        None
+    }
+
+    /// Optional detached authority for deleting the transport's own remote
+    /// session. It must resolve current policy just like the normal authority.
+    fn cleanup_authority(&self) -> Option<Arc<dyn McpHttpNetworkAuthorizer>> {
         None
     }
 }
@@ -115,8 +131,15 @@ pub(crate) async fn execute_authorized(
     max_response_bytes: Option<u64>,
 ) -> McpResult<reqwest::Response> {
     let mut options = authorized_options(request.url().as_str(), authorizer).await?;
-    options.total_timeout = request.timeout().copied();
     options.max_response_bytes = max_response_bytes;
+    execute_http(request, options).await
+}
+
+pub(crate) async fn execute_http(
+    request: reqwest::Request,
+    mut options: HttpOptions,
+) -> McpResult<reqwest::Response> {
+    options.total_timeout = request.timeout().copied();
     execute(request, options)
         .await
         .map_err(|error| McpError::Transport(format!("MCP HTTP execution failed: {error}")))
@@ -135,6 +158,59 @@ pub(crate) fn trusted_client() -> McpResult<reqwest::Client> {
 #[derive(Clone)]
 pub(crate) struct McpRequestExecutor {
     authorizer: Arc<dyn McpHttpNetworkAuthorizer>,
+    dynamic_headers: bool,
+    remote_session_open: Arc<AtomicBool>,
+    app_events: Option<AppHttpEvents>,
+}
+
+#[derive(Clone)]
+pub(crate) struct ScopedHttpRequest {
+    pub(crate) authority: Arc<dyn McpHttpNetworkAuthorizer>,
+    pub(crate) require_connection_authority: bool,
+}
+
+impl ScopedHttpRequest {
+    pub(crate) fn from_message(message: &ClientJsonRpcMessage) -> Option<&Self> {
+        match message {
+            ClientJsonRpcMessage::Request(request) => request.request.extensions().get(),
+            ClientJsonRpcMessage::Notification(notification) => {
+                notification.notification.extensions().get()
+            }
+            ClientJsonRpcMessage::Response(response) => response.extensions.get(),
+            ClientJsonRpcMessage::Error(error) => error.extensions.get(),
+        }
+    }
+}
+
+struct RequestAuthority<'a> {
+    connection: &'a dyn McpHttpNetworkAuthorizer,
+    caller: &'a dyn McpHttpNetworkAuthorizer,
+}
+
+#[async_trait]
+impl McpHttpNetworkAuthorizer for RequestAuthority<'_> {
+    fn cancellation(&self) -> Option<WorkerCancellation> {
+        self.caller.cancellation()
+    }
+
+    async fn authorize(&self, target: &str) -> McpResult<()> {
+        self.connection.authorize(target).await?;
+        self.caller.authorize(target).await
+    }
+
+    async fn authorize_resolved(&self, target: &str, address: SocketAddr) -> McpResult<bool> {
+        Ok(self.connection.authorize_resolved(target, address).await?
+            && self.caller.authorize_resolved(target, address).await?)
+    }
+
+    async fn sandbox_policy(&self, target: &str) -> McpResult<SandboxPolicy> {
+        let session = self.connection.sandbox_policy(target).await?;
+        let caller = self.caller.sandbox_policy(target).await?;
+        if !session.disabled && caller.disabled {
+            return Err(McpError::PermissionDenied);
+        }
+        Ok(caller)
+    }
 }
 
 impl HttpRequestExecutor for McpRequestExecutor {
@@ -142,7 +218,79 @@ impl HttpRequestExecutor for McpRequestExecutor {
         &self,
         request: reqwest::Request,
     ) -> Result<reqwest::Response, StreamableHttpError<reqwest::Error>> {
-        let mut options = authorized_options(request.url().as_str(), self.authorizer.as_ref())
+        if request.method() == http::Method::DELETE {
+            // Until DELETE succeeds, the remote session remains unconfirmed.
+            let authority = self.authorizer.cleanup_authority();
+            let response = self
+                .execute_with_authority(
+                    request,
+                    authority.as_deref().unwrap_or(self.authorizer.as_ref()),
+                )
+                .await;
+            if response.as_ref().is_ok_and(|response| {
+                response.status().is_success()
+                    || matches!(
+                        response.status(),
+                        http::StatusCode::NOT_FOUND | http::StatusCode::METHOD_NOT_ALLOWED
+                    )
+            }) {
+                self.remote_session_open.store(false, Ordering::Release);
+            }
+            return response;
+        }
+        self.execute_with_authority(request, self.authorizer.as_ref())
+            .await
+    }
+
+    async fn execute_message(
+        &self,
+        request: reqwest::Request,
+        message: &ClientJsonRpcMessage,
+    ) -> Result<reqwest::Response, StreamableHttpError<reqwest::Error>> {
+        let endpoint = self
+            .app_events
+            .as_ref()
+            .and_then(|_| app_events::LegacyEventEndpoint::from_request(&request));
+        let response = if let Some(scope) = ScopedHttpRequest::from_message(message) {
+            if scope.require_connection_authority {
+                let authority = RequestAuthority {
+                    connection: self.authorizer.as_ref(),
+                    caller: scope.authority.as_ref(),
+                };
+                self.execute_with_authority(request, &authority).await
+            } else {
+                self.execute_with_authority(request, scope.authority.as_ref())
+                    .await
+            }
+        } else {
+            self.execute(request).await
+        };
+        if matches!(message, ClientJsonRpcMessage::Request(request) if matches!(&request.request, ClientRequest::InitializeRequest(_)))
+            && let Ok(response) = &response
+        {
+            // Record the remote session as soon as the response supplies its
+            // ID. Local cancellation can otherwise skip DELETE altogether.
+            let opened = response.headers().contains_key("mcp-session-id");
+            if opened || response.status().is_success() {
+                self.remote_session_open.store(opened, Ordering::Release);
+            }
+        }
+        if response.as_ref().is_ok_and(|response| response.status().is_success())
+            && let (Some(events), Some(endpoint)) = (&self.app_events, endpoint)
+        {
+            events.remember(endpoint);
+        }
+        response
+    }
+}
+
+impl McpRequestExecutor {
+    async fn execute_with_authority(
+        &self,
+        request: reqwest::Request,
+        authority: &dyn McpHttpNetworkAuthorizer,
+    ) -> Result<reqwest::Response, StreamableHttpError<reqwest::Error>> {
+        let mut options = authorized_options(request.url().as_str(), authority)
             .await
             .map_err(|error| {
                 StreamableHttpError::Io(std::io::Error::new(
@@ -154,14 +302,36 @@ impl HttpRequestExecutor for McpRequestExecutor {
         // Streaming responses remain open for their MCP call lifetime. Dropping
         // the response, cancelling a request or retiring its manager kills its
         // worker, including reconnecting SSE streams.
-        execute(request, options)
+        let response = execute(request, options)
             .await
-            .map_err(StreamableHttpError::Io)
+            .map_err(StreamableHttpError::Io)?;
+        if self.dynamic_headers {
+            use rmcp::transport::streamable_http_client::{
+                AuthRequiredError, InsufficientScopeError,
+            };
+            match response.status() {
+                http::StatusCode::UNAUTHORIZED => {
+                    return Err(StreamableHttpError::AuthRequired(AuthRequiredError::new(
+                        String::new(),
+                    )));
+                }
+                http::StatusCode::FORBIDDEN => {
+                    return Err(StreamableHttpError::InsufficientScope(
+                        InsufficientScopeError::new(String::new(), None),
+                    ));
+                }
+                _ => {}
+            }
+        }
+        Ok(response)
     }
 }
 
 pub(crate) fn authorized_mcp_client(
     authorizer: Arc<dyn McpHttpNetworkAuthorizer>,
+    dynamic_headers: bool,
+    remote_session_open: Arc<AtomicBool>,
+    app_events: Option<AppHttpEvents>,
 ) -> McpResult<RequestExecutingHttpClient<McpRequestExecutor>> {
     Ok(RequestExecutingHttpClient::new(
         // This client only builds Request values; it never opens a connection.
@@ -170,6 +340,11 @@ pub(crate) fn authorized_mcp_client(
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|error| McpError::http_error(&error))?,
-        McpRequestExecutor { authorizer },
+        McpRequestExecutor {
+            authorizer,
+            dynamic_headers,
+            remote_session_open,
+            app_events,
+        },
     ))
 }

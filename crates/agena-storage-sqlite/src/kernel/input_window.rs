@@ -6,7 +6,7 @@ use agena_storage::backend::kernel::Scope;
 use super::*;
 
 const MAX_SCANNED: usize = 10_000;
-pub(super) const CANDIDATES_SQL: &str = "SELECT m.ordinal,e.id,e.kind,COALESCE(e.message_id,e.id) AS message_id,COALESCE((SELECT p.purpose FROM agena_execution_purposes p WHERE p.execution_id=e.execution_id),'message') AS execution_purpose,CASE WHEN f.entry_id IS NOT NULL THEN f.execution_phase ELSE a.phase END AS execution_phase,CASE WHEN f.entry_id IS NOT NULL THEN f.execution_started ELSE EXISTS(SELECT 1 FROM agena_attempts prior WHERE prior.execution_id=e.execution_id AND prior.started_at_ms IS NOT NULL) END AS ever_started,COALESCE(br.phase,r.phase) AS round_phase,c.round_id AS compaction_round FROM agena_segment_entries m JOIN agena_entries e ON e.id=m.entry_id LEFT JOIN agena_rounds r ON r.id=e.round_id LEFT JOIN agena_compaction_rounds c ON c.round_id=e.round_id LEFT JOIN agena_executions x ON x.id=e.execution_id LEFT JOIN agena_attempts a ON a.execution_id=x.id AND a.generation=x.current_generation LEFT JOIN agena_branch_entries f ON f.session_id=? AND f.entry_id=e.id LEFT JOIN agena_branch_rounds br ON br.session_id=f.session_id AND br.round_id=e.round_id WHERE m.segment_id=? AND m.ordinal>=? AND m.ordinal<? ORDER BY m.ordinal LIMIT ?";
+pub(super) const CANDIDATES_SQL: &str = "SELECT m.ordinal,e.id,e.kind,CASE WHEN e.kind='notice' THEN json_extract(e.body_json,'$.kind') END AS notice_kind,COALESCE(e.message_id,e.id) AS message_id,COALESCE((SELECT p.purpose FROM agena_execution_purposes p WHERE p.execution_id=e.execution_id),'message') AS execution_purpose,CASE WHEN f.entry_id IS NOT NULL THEN f.execution_phase ELSE a.phase END AS execution_phase,CASE WHEN f.entry_id IS NOT NULL THEN f.execution_started ELSE EXISTS(SELECT 1 FROM agena_attempts prior WHERE prior.execution_id=e.execution_id AND prior.started_at_ms IS NOT NULL) END AS ever_started,COALESCE(br.phase,r.phase) AS round_phase,c.round_id AS compaction_round FROM agena_segment_entries m JOIN agena_entries e ON e.id=m.entry_id LEFT JOIN agena_rounds r ON r.id=e.round_id LEFT JOIN agena_compaction_rounds c ON c.round_id=e.round_id LEFT JOIN agena_executions x ON x.id=e.execution_id LEFT JOIN agena_attempts a ON a.execution_id=x.id AND a.generation=x.current_generation LEFT JOIN agena_branch_entries f ON f.session_id=? AND f.entry_id=e.id LEFT JOIN agena_branch_rounds br ON br.session_id=f.session_id AND br.round_id=e.round_id WHERE m.segment_id=? AND m.ordinal>=? AND m.ordinal<? ORDER BY m.ordinal LIMIT ?";
 
 pub(super) struct Selection {
     pub entries: Vec<EntryId>,
@@ -76,6 +76,12 @@ pub(super) async fn select(
                     ));
                 }
                 let kind: &str = row.try_get("kind").map_err(storage)?;
+                if kind == "notice"
+                    && row.try_get::<Option<&str>, _>("notice_kind").map_err(storage)?
+                        == Some("plugin_command")
+                {
+                    continue;
+                }
                 if kind == "notice"
                     && row.try_get::<i64, _>("id").map_err(storage)?
                         == row.try_get::<i64, _>("message_id").map_err(storage)?

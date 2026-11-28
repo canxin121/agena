@@ -40,6 +40,13 @@ impl AgenaClient {
         .await
     }
 
+    pub async fn list_session_skills(&self, session_id: i64) -> Result<SkillCatalog, ClientError> {
+        let mut url = self.endpoint("/api/v1/skills");
+        url.query_pairs_mut().append_pair("session_id", &session_id.to_string());
+        let response = self.send_request(reqwest::Method::GET, url, None, None).await?;
+        self.parse_json(response).await
+    }
+
     pub async fn get_skill(&self, workspace_id: i64, id: &str) -> Result<SkillDetail, ClientError> {
         self.skill_request(
             workspace_id,

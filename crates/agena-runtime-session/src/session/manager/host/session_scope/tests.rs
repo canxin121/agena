@@ -254,6 +254,127 @@ impl Fixture {
 }
 
 #[tokio::test]
+async fn registered_working_directories_compile_into_only_the_owning_sandbox() {
+    use agena_domain::{AccessKind, RegisterSessionWorkingDirectory};
+
+    let fixture = Fixture::new("allow").await;
+    let extra = fixture.root.join("additional directory");
+    let git_config = extra.join(".git/config");
+    tokio::fs::create_dir_all(git_config.parent().unwrap())
+        .await
+        .unwrap();
+    tokio::fs::write(&git_config, "[core]\n").await.unwrap();
+    let extra = tokio::fs::canonicalize(extra).await.unwrap();
+    let manager = &fixture.manager;
+    let workspace = manager
+        .kernel()
+        .reader
+        .metadata(session_id(fixture.session).unwrap())
+        .await
+        .unwrap()
+        .workspace_id
+        .unwrap();
+    let other = manager
+        .kernel()
+        .sessions
+        .create_configured(
+            RequestId::new(),
+            workspace,
+            "Separate session".into(),
+            SessionConfiguration {
+                permission_ceiling: serde_json::from_value(json!({"path":{"external":"deny"}}))
+                    .unwrap(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap()
+        .value
+        .id
+        .get();
+    let request = RegisterSessionWorkingDirectory {
+        path: extra.clone(),
+    };
+    let (left, right) = tokio::join!(
+        manager.add_session_working_directory(fixture.session, request.clone()),
+        manager.add_session_working_directory(fixture.session, request.clone()),
+    );
+    let (left, right) = (left.unwrap(), right.unwrap());
+    assert_ne!(left.added, right.added);
+    assert_eq!(left.directories, [extra.clone()]);
+    assert_eq!(right.directories, [extra.clone()]);
+    assert!(matches!(
+        manager.add_session_working_directory(other, request).await,
+        Err(AppError::PolicyDenied(_))
+    ));
+
+    let owner = manager
+        .host_resource_callback_executor(Some(fixture.session), None)
+        .await
+        .unwrap();
+    let isolated = manager
+        .host_resource_callback_executor(Some(other), None)
+        .await
+        .unwrap();
+    let git_config = extra.join(".git/config");
+    let snapshot = owner.sandbox_permission_snapshot();
+    let native = snapshot.filesystem_policy().unwrap();
+    assert!(
+        native
+            .readwrite_paths
+            .iter()
+            .any(|path| path.canonicalize().is_ok_and(|root| root == extra))
+    );
+    assert!(
+        native
+            .readonly_paths
+            .iter()
+            .any(|path| path.canonicalize().is_ok_and(|file| file == git_config))
+    );
+    assert_eq!(
+        snapshot.authorized_additional_working_directories(),
+        [extra.clone()]
+    );
+    let isolated = isolated.sandbox_permission_snapshot();
+    assert!(matches!(
+        isolated.authorize_path_access(AccessKind::Read, &extra),
+        PermissionDecision::Deny { .. }
+    ));
+    assert!(
+        !isolated
+            .filesystem_policy()
+            .unwrap()
+            .readwrite_paths
+            .iter()
+            .any(|path| path.canonicalize().is_ok_and(|root| root == extra))
+    );
+
+    #[cfg(unix)]
+    {
+        let renamed = extra.with_file_name("moved directory");
+        tokio::fs::rename(&extra, &renamed).await.unwrap();
+        std::os::unix::fs::symlink(&renamed, &extra).unwrap();
+        let refreshed = manager
+            .host_resource_callback_executor(Some(fixture.session), None)
+            .await
+            .unwrap();
+        assert!(
+            refreshed
+                .sandbox_permission_snapshot()
+                .authorized_additional_working_directories()
+                .is_empty()
+        );
+        assert!(matches!(
+            refreshed
+                .sandbox_permission_snapshot()
+                .authorize_path_access(AccessKind::Read, &renamed),
+            PermissionDecision::Deny { .. }
+        ));
+    }
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
 async fn session_scoped_delegation_has_no_tool_call_authority() {
     let fixture = Fixture::new("allow").await;
     let execution = fixture

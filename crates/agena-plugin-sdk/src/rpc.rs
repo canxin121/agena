@@ -154,6 +154,7 @@ pub mod method {
 
     pub const HOOK_TOOL_BEFORE: &str = "hooks/tool.before";
     pub const HOOK_TOOL_AFTER: &str = "hooks/tool.after";
+    pub const HOOK_TOOL_BATCH_AFTER: &str = "hooks/tool.batch.after";
     pub const HOOK_TOOL_RENDER: &str = "hooks/tool.render";
     pub const HOOK_TOOL_INVOKE: &str = "hooks/tool.invoke";
     pub const HOOK_TOOL_INVOKE_STREAM: &str = "hooks/tool.invoke.stream";
@@ -176,10 +177,28 @@ pub mod method {
     pub const HOOK_CONFIG: &str = "hooks/config.resolved";
     pub const HOOK_SESSION_START: &str = "hooks/session.start";
     pub const HOOK_SESSION_END: &str = "hooks/session.end";
+    pub const HOOK_SESSION_FILE_CHANGED: &str = "hooks/session.file.changed";
+    pub const HOOK_SESSION_CWD_CHANGED: &str = "hooks/session.cwd.changed";
+    pub const HOOK_IMPORTED_INSTRUCTIONS_LOADED: &str = "hooks/instructions.loaded";
+    pub const HOOK_IMPORTED_MESSAGE_DISPLAY: &str = "hooks/message.display";
+    pub const HOOK_IMPORTED_CONFIG_CHANGE: &str = "hooks/config.change";
+    pub const HOOK_IMPORTED_DIRECTORY_ADDED: &str = "hooks/directory.added";
+    pub const HOOK_IMPORTED_SESSION_SETUP: &str = "hooks/session.setup";
+    pub const HOOK_IMPORTED_TASK_BEFORE: &str = "hooks/task.change.before";
+    pub const HOOK_IMPORTED_MCP_ELICITATION: &str = "hooks/mcp.elicitation";
+    pub const HOOK_IMPORTED_MCP_ELICITATION_RESULT: &str = "hooks/mcp.elicitation.result";
+    pub const HOOK_IMPORTED_SKILL_SHELL_BEFORE: &str = "hooks/skill.shell.before";
+    pub const HOOK_IMPORTED_MODEL_SWITCH_BEFORE: &str = "hooks/model.switch.before";
+    pub const HOOK_IMPORTED_MODEL_SWITCH_AFTER: &str = "hooks/model.switch.after";
+    pub const HOOK_IMPORTED_TURN_COMPLETED: &str = "hooks/imported.turn.completed";
+    pub const HOOK_WORKTREE_CREATE: &str = "hooks/worktree.create";
+    pub const HOOK_WORKTREE_REMOVE: &str = "hooks/worktree.remove";
     pub const HOOK_USER_PROMPT_SUBMIT: &str = "hooks/prompt.submit";
+    pub const HOOK_USER_PROMPT_EXPANSION: &str = "hooks/prompt.expand";
     pub const HOOK_TOOL_FAILURE: &str = "hooks/tool.failure";
     pub const HOOK_TOOL_DEFINITION: &str = "hooks/tool.definition";
     pub const HOOK_AGENT_STOP: &str = "hooks/agent.stop";
+    pub const HOOK_IMPORTED_CLAUDE_STOP: &str = "hooks/imported.claude.stop";
     pub const HOOK_AGENT_CANCEL: &str = "hooks/agent.cancel";
     pub const HOOK_COMMAND_AFTER: &str = "hooks/shell.after";
     pub const HOOK_CHAT_MESSAGES_TRANSFORM: &str = "hooks/chat.messages";
@@ -187,6 +206,8 @@ pub mod method {
     pub const HOOK_POST_RUN: &str = "hooks/run.post";
     pub const HOOK_MODEL_REQUEST_BEFORE: &str = "hooks/model.request.before";
     pub const HOOK_MODEL_REQUEST_AFTER: &str = "hooks/model.request.after";
+    pub const HOOK_IMPORTED_MODEL_ATTEMPT_BEFORE: &str = "hooks/model.attempt.before";
+    pub const HOOK_IMPORTED_MODEL_ATTEMPT_AFTER: &str = "hooks/model.attempt.after";
     pub const HOOK_MODEL_REQUEST_ERROR: &str = "hooks/model.request.error";
     pub const HOOK_COMPACTION_BEFORE: &str = "hooks/compaction.before";
     pub const HOOK_COMPACTION_AFTER: &str = "hooks/compaction.after";

@@ -185,7 +185,7 @@ impl PluginHost {
             _ => {}
         }
         let definition = self
-            .resolve_command(plugin_id, &input.command_id)
+            .resolve_command_for_session(input.session_id, plugin_id, &input.command_id)
             .ok_or(PluginWebError::NotFound)?;
         if !matches!(definition.target, crate::sdk::CommandTarget::Method { .. }) {
             return Err(PluginWebError::Forbidden);

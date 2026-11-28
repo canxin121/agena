@@ -64,6 +64,15 @@ pub struct AgentProfileConfig {
     /// `0` means unlimited, matching `session.max_turns`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<usize>,
+    /// Checkout isolation requested by an imported role.
+    #[serde(skip)]
+    pub worktree: bool,
+    #[serde(skip)]
+    pub tool_allowlist: Option<BTreeSet<String>>,
+    #[serde(skip)]
+    pub tool_denials: BTreeSet<String>,
+    #[serde(skip)]
+    pub claude_agent: Option<(agena_plugin_host::sdk::PluginKey, agena_plugin_host::agent_plugin::ClaudeAgentOptions)>,
 }
 
 /// A profile after resolving its single-parent inheritance chain. Prompt
@@ -80,6 +89,9 @@ pub struct ResolvedAgentProfile {
     pub permission_profile: Option<String>,
     pub selection: ExecutionSelection,
     pub max_turns: Option<usize>,
+    pub worktree: bool,
+    pub tool_allowlist: Option<BTreeSet<String>>,
+    pub tool_denials: BTreeSet<String>,
 }
 
 impl ResolvedAgentProfile {
@@ -191,6 +203,16 @@ pub fn resolve_agent_profile(
         if profile.max_turns.is_some() {
             resolved.max_turns = profile.max_turns;
         }
+        resolved.worktree |= profile.worktree;
+        if let Some(tools) = &profile.tool_allowlist {
+            match &mut resolved.tool_allowlist {
+                Some(existing) => existing.retain(|tool| tools.contains(tool)),
+                None => resolved.tool_allowlist = Some(tools.clone()),
+            }
+        }
+        resolved
+            .tool_denials
+            .extend(profile.tool_denials.iter().cloned());
     }
     Ok(resolved)
 }

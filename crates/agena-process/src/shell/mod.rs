@@ -148,6 +148,11 @@ impl ShellSettings {
     pub fn resolve(&self, preference: ShellPreference) -> DetectedShell {
         detect::resolve_with(self, preference, &detect::RealShellHost)
     }
+
+    /// Resolve a real Bash executable for callers that require Bash syntax.
+    pub fn detect_bash(&self) -> Option<DetectedShell> {
+        detect::detect_bash(self, &detect::RealShellHost)
+    }
 }
 
 fn parse_bool(value: &str) -> Option<bool> {

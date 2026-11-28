@@ -9,8 +9,8 @@ use common::handlers::TestClientHandler;
 use rmcp::{
     ServiceExt,
     model::{
-        ClientJsonRpcMessage, ErrorCode, ErrorData, InitializeResult, JsonRpcError,
-        JsonRpcVersion2_0, RequestId, ServerCapabilities, ServerJsonRpcMessage, ServerResult,
+        ClientJsonRpcMessage, ErrorCode, ErrorData, InitializeResult, RequestId, ServerCapabilities,
+        ServerJsonRpcMessage, ServerResult,
     },
     transport::{IntoTransport, Transport},
 };
@@ -134,15 +134,14 @@ async fn test_client_init_handles_jsonrpc_error() {
             .map(|(_, id)| id)
             .expect("client sent an initialize request");
 
-        let error_msg = ServerJsonRpcMessage::Error(JsonRpcError {
-            jsonrpc: JsonRpcVersion2_0,
-            id: Some(request_id),
-            error: ErrorData {
+        let error_msg = ServerJsonRpcMessage::error(
+            ErrorData {
                 code: ErrorCode(-32600),
                 message: Cow::Borrowed("Invalid Request"),
                 data: None,
             },
-        });
+            Some(request_id),
+        );
         let _: Result<(), _> = server.send(error_msg).await;
     });
 

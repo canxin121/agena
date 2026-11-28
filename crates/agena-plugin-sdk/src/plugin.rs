@@ -131,6 +131,10 @@ pub trait Plugin: Send + Sync + 'static {
         Ok(None)
     }
 
+    async fn tool_batch_after(&self, _input: ToolBatchInput) -> Result<Option<ToolBatchPatch>> {
+        Ok(None)
+    }
+
     /// Project one raw tool result for the model and/or a human at read time.
     /// Returning `None` delegates to the owning tool renderer and system
     /// fallback. The projection is never persisted.
@@ -243,6 +247,96 @@ pub trait Plugin: Send + Sync + 'static {
         Ok(())
     }
 
+    async fn session_file_changed(
+        &self,
+        _input: SessionFileChangedInput,
+    ) -> Result<Option<SessionFileChangedPatch>> {
+        Ok(None)
+    }
+
+    async fn session_cwd_changed(&self, _input: SessionCwdChangedInput) -> Result<()> {
+        Ok(())
+    }
+
+    async fn imported_instructions_loaded(
+        &self,
+        _input: crate::ImportedInstructionsLoadedInput,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn imported_message_display(
+        &self,
+        _input: crate::ImportedMessageDisplayInput,
+    ) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    async fn imported_config_change(
+        &self,
+        _input: crate::ImportedConfigChangeInput,
+    ) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    async fn imported_directory_added(&self, _input: crate::ImportedDirectoryAddedInput) -> Result<()> {
+        Ok(())
+    }
+
+    async fn imported_turn_completed(
+        &self,
+        _input: crate::ImportedTurnCompletedInput,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    async fn imported_session_setup(&self, _input: crate::ImportedSessionSetupInput) -> Result<()> {
+        Ok(())
+    }
+
+    async fn imported_task_before(
+        &self,
+        _input: crate::ImportedTaskBeforeInput,
+    ) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    async fn imported_mcp_elicitation(
+        &self,
+        _input: crate::ImportedMcpElicitationInput,
+    ) -> Result<Option<agena_domain::mcp_elicitation::McpElicitationReply>> {
+        Ok(None)
+    }
+
+    async fn imported_skill_shell_before(
+        &self,
+        _input: crate::ImportedSkillShellHookInput,
+    ) -> Result<Option<crate::ImportedSkillShellDecision>> {
+        Ok(None)
+    }
+
+    async fn imported_model_switch(
+        &self,
+        _input: crate::ImportedModelSwitchInput,
+        _before: bool,
+    ) -> Result<crate::ImportedModelSwitchPatch> {
+        Ok(Default::default())
+    }
+
+    async fn imported_model_attempt(
+        &self,
+        _input: crate::ImportedModelAttemptInput,
+    ) -> Result<crate::ImportedModelAttemptCharge> {
+        Ok(Default::default())
+    }
+
+    async fn worktree_hook(
+        &self,
+        _input: crate::WorktreeHookInput,
+    ) -> Result<Option<crate::WorktreeHookOutput>> {
+        Ok(None)
+    }
+
     // -------- user prompt --------
     async fn user_prompt_submit(
         &self,
@@ -251,8 +345,19 @@ pub trait Plugin: Send + Sync + 'static {
         Ok(None)
     }
 
+    async fn user_prompt_expansion(
+        &self,
+        _input: UserPromptExpansionInput,
+    ) -> Result<Option<UserPromptExpansionPatch>> {
+        Ok(None)
+    }
+
     // -------- agent stop --------
     async fn agent_stop(&self, _input: AgentStopInput) -> Result<Option<AgentStopPatch>> {
+        Ok(None)
+    }
+
+    async fn imported_claude_stop(&self, _input: AgentStopInput) -> Result<Option<AgentStopPatch>> {
         Ok(None)
     }
 
@@ -322,6 +427,15 @@ pub trait Plugin: Send + Sync + 'static {
 
     async fn compaction_after(&self, _input: CompactionAfterInput) -> Result<()> {
         Ok(())
+    }
+
+    /// Imported hooks may stop the continuation after an already committed compaction.
+    async fn compaction_after_control(
+        &self,
+        input: CompactionAfterInput,
+    ) -> Result<Option<String>> {
+        self.compaction_after(input).await?;
+        Ok(None)
     }
 
     async fn subagent_start(

@@ -40,24 +40,28 @@ pub(super) async fn execute_async(
             .shell_env_overrides_async(&cwd, context.session_id, context.call_id)
             .await?,
     );
+    env.extend(executor.imported_powershell_environment().await);
     let mut request = ShellRequest {
         command: powershell_command_for_windows(&input.command),
         cwd,
         env,
         timeout_ms: Some(input.timeout_ms.unwrap_or(DEFAULT_SHELL_TIMEOUT_MS)),
     };
-    (request.command, request.env) = crate::shell_sandbox::protect_async(
+    let files = executor.imported_shell_files(false).await;
+    (request.command, request.env) = crate::shell_sandbox::protect_async_with_files(
         executor,
         request.command,
         &request.cwd,
         input,
         request.env,
+        files.readonly_mounts(),
     )
     .await?;
     let _worker_permit = super::shell::acquire_worker_permit().await?;
     let execution = executor
         .execute_shell_command_with_live(&request, context.output.clone())
         .await?;
+    drop(files);
     executor.ensure_not_cancelled()?;
     let output_resource = context
         .output

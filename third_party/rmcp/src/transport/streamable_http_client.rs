@@ -37,6 +37,26 @@ type BoxedSseStream = BoxStream<'static, Result<Sse, SseError>>;
 type SseTaskResult<E> = (Option<RequestId>, Result<(), StreamableHttpError<E>>);
 const SESSION_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 
+fn may_replay_after_session_expiry(message: &ClientJsonRpcMessage) -> bool {
+    let ClientJsonRpcMessage::Request(request) = message else {
+        // A reply to a server request, or a cancellation, belongs to the
+        // expired session and must never be posted into its replacement.
+        return false;
+    };
+    match &request.request {
+        ClientRequest::CallToolRequest(request) => {
+            request.params.request_state.is_none() && request.params.input_responses.is_none()
+        }
+        ClientRequest::ReadResourceRequest(request) => {
+            request.params.request_state.is_none() && request.params.input_responses.is_none()
+        }
+        ClientRequest::GetPromptRequest(request) => {
+            request.params.request_state.is_none() && request.params.input_responses.is_none()
+        }
+        _ => true,
+    }
+}
+
 fn build_request_headers(
     base: &HashMap<HeaderName, HeaderValue>,
     message: &ClientJsonRpcMessage,
@@ -694,6 +714,9 @@ impl<C: StreamableHttpClient> StreamableHttpClientWorker<C> {
         sse_worker_tx: tokio::sync::mpsc::Sender<ServerJsonRpcMessage>,
         transport_task_ct: CancellationToken,
     ) {
+        if !config.listen_for_server_messages {
+            return;
+        }
         let uri = config.uri.clone();
         let auth_header = config.auth_header.clone();
         let retry_config = config.retry_config.clone();
@@ -1160,9 +1183,11 @@ impl<C: StreamableHttpClient> Worker for StreamableHttpClientWorker<C> {
                         .await;
                     let send_result = match response {
                         Err(StreamableHttpError::SessionExpired) => {
-                            if let Some(saved_init_request) = saved_init_request
-                                .as_ref()
-                                .filter(|_| config.reinit_on_expired_session)
+                            if let Some(saved_init_request) =
+                                saved_init_request.as_ref().filter(|_| {
+                                    config.reinit_on_expired_session
+                                        && may_replay_after_session_expiry(&message)
+                                })
                             {
                                 // The server discarded the session (HTTP 404). Perform a
                                 // fresh handshake once and replay the original message.
@@ -1683,6 +1708,8 @@ pub struct StreamableHttpClientTransportConfig {
     pub channel_buffer_capacity: usize,
     /// if true, the transport will not require a session to be established
     pub allow_stateless: bool,
+    /// Enable the standalone GET stream, independent of tool request responses.
+    pub listen_for_server_messages: bool,
     /// The value to send in the authorization header
     pub auth_header: Option<String>,
     /// Custom HTTP headers to include with every request
@@ -1778,6 +1805,7 @@ impl Default for StreamableHttpClientTransportConfig {
             retry_config: Arc::new(ExponentialBackoff::default()),
             channel_buffer_capacity: 16,
             allow_stateless: true,
+            listen_for_server_messages: true,
             auth_header: None,
             custom_headers: HashMap::new(),
             max_sse_event_size: DEFAULT_MAX_SSE_EVENT_SIZE,

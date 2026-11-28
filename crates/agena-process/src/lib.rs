@@ -15,6 +15,7 @@ pub mod sandbox;
 pub mod sandbox_check;
 pub mod sandbox_file;
 pub mod sandbox_http;
+pub mod sandbox_tcp;
 pub mod shell;
 #[cfg(unix)]
 mod unix;
@@ -115,7 +116,9 @@ pub async fn output(
     deadline: Duration,
     maximum_bytes_per_stream: usize,
 ) -> io::Result<Output> {
-    output_inner(command, None, deadline, maximum_bytes_per_stream, None).await
+    output_inner(command, None, deadline, maximum_bytes_per_stream, None)
+        .await?
+        .require_complete(maximum_bytes_per_stream)
 }
 
 /// Send structured input over stdin instead of exposing it in argv. Input
@@ -129,12 +132,16 @@ pub async fn output_with_input(
 ) -> io::Result<Output> {
     output_inner(
         command,
-        Some(input),
+        Some(ProcessInput {
+            bytes: input,
+            required: true,
+        }),
         deadline,
         maximum_bytes_per_stream,
         None,
     )
-    .await
+    .await?
+    .require_complete(maximum_bytes_per_stream)
 }
 
 /// Cooperatively cancel a process while keeping ownership until termination
@@ -149,7 +156,69 @@ pub async fn output_with_input_cancellable(
 ) -> io::Result<Output> {
     output_inner(
         command,
-        Some(input),
+        Some(ProcessInput {
+            bytes: input,
+            required: true,
+        }),
+        deadline,
+        maximum_bytes_per_stream,
+        cancellation,
+    )
+    .await?
+    .require_complete(maximum_bytes_per_stream)
+}
+
+/// Run a command that may deliberately finish without reading the event on stdin.
+pub async fn output_with_optional_input_cancellable(
+    command: Command,
+    input: &[u8],
+    deadline: Duration,
+    maximum_bytes_per_stream: usize,
+    cancellation: Option<tokio_util::sync::CancellationToken>,
+) -> io::Result<Output> {
+    capture_output(
+        command,
+        input,
+        deadline,
+        maximum_bytes_per_stream,
+        cancellation,
+    )
+    .await?
+    .require_complete(maximum_bytes_per_stream)
+}
+
+pub struct CapturedOutput {
+    pub output: Output,
+    pub stdout_truncated: bool,
+    pub stderr_truncated: bool,
+}
+
+impl CapturedOutput {
+    fn require_complete(self, maximum_bytes_per_stream: usize) -> io::Result<Output> {
+        if self.stdout_truncated || self.stderr_truncated {
+            return Err(io::Error::new(
+                io::ErrorKind::FileTooLarge,
+                format!("process output exceeded {maximum_bytes_per_stream} bytes per stream"),
+            ));
+        }
+        Ok(self.output)
+    }
+}
+
+/// Drain both pipes and report truncation to callers that can display partial output.
+pub async fn capture_output(
+    command: Command,
+    input: &[u8],
+    deadline: Duration,
+    maximum_bytes_per_stream: usize,
+    cancellation: Option<tokio_util::sync::CancellationToken>,
+) -> io::Result<CapturedOutput> {
+    output_inner(
+        command,
+        Some(ProcessInput {
+            bytes: input,
+            required: false,
+        }),
         deadline,
         maximum_bytes_per_stream,
         cancellation,
@@ -157,13 +226,19 @@ pub async fn output_with_input_cancellable(
     .await
 }
 
+#[derive(Clone, Copy)]
+struct ProcessInput<'a> {
+    bytes: &'a [u8],
+    required: bool,
+}
+
 async fn output_inner(
     mut command: Command,
-    input: Option<&[u8]>,
+    input: Option<ProcessInput<'_>>,
     deadline: Duration,
     maximum_bytes_per_stream: usize,
     cancellation: Option<tokio_util::sync::CancellationToken>,
-) -> io::Result<Output> {
+) -> io::Result<CapturedOutput> {
     if cancellation
         .as_ref()
         .is_some_and(|token| token.is_cancelled())
@@ -205,17 +280,21 @@ async fn output_inner(
                         let mut stdin = stdin.ok_or_else(|| {
                             io::Error::other("managed child stdin is unavailable")
                         })?;
-                        stdin.write_all(input).await?;
+                        stdin.write_all(input.bytes).await?;
                         stdin.shutdown().await?;
                     }
                     Ok::<_, io::Error>(())
                 }
             );
             let status = wait?;
-            // Failed children can close stdin early. Preserve their actual status
-            // and diagnostics; a successful child must have accepted the input.
-            if status.success() {
-                write?;
+            // Preserve the exit status of failed children. For event handlers,
+            // a closed input pipe also permits success without consuming stdin.
+            if status.success()
+                && let Err(error) = write
+                && (error.kind() != io::ErrorKind::BrokenPipe
+                    || input.is_some_and(|input| input.required))
+            {
+                return Err(error);
             }
             Ok::<_, io::Error>(status)
         };
@@ -261,16 +340,14 @@ async fn output_inner(
         }
     };
 
-    if stdout_exceeded || stderr_exceeded {
-        return Err(io::Error::new(
-            io::ErrorKind::FileTooLarge,
-            format!("process output exceeded {maximum_bytes_per_stream} bytes per stream"),
-        ));
-    }
-    Ok(Output {
-        status,
-        stdout,
-        stderr,
+    Ok(CapturedOutput {
+        output: Output {
+            status,
+            stdout,
+            stderr,
+        },
+        stdout_truncated: stdout_exceeded,
+        stderr_truncated: stderr_exceeded,
     })
 }
 
@@ -539,6 +616,21 @@ wait "$child"
             .unwrap_err();
         assert_eq!(too_large.kind(), ErrorKind::FileTooLarge, "{too_large}");
         assert!(too_large.to_string().contains("128"));
+
+        let captured = capture_output(
+            shell("printf 123456; printf err >&2; exit 3"),
+            b"",
+            Duration::from_secs(5),
+            4,
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(captured.output.status.code(), Some(3));
+        assert_eq!(captured.output.stdout, b"1234");
+        assert_eq!(captured.output.stderr, b"err");
+        assert!(captured.stdout_truncated);
+        assert!(!captured.stderr_truncated);
     }
 
     #[tokio::test]

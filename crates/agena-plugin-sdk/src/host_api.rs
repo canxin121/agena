@@ -22,14 +22,40 @@ use crate::manifest::{
 pub use agena_domain::{BackgroundActivity, BackgroundActivityKind};
 mod bot;
 mod companion;
+mod cordis_jobs;
+mod cordis_llm;
+mod cordis_subagents;
+mod cordis_workflows;
 mod integrations;
+mod mcp_apps;
 mod operations;
 pub use operations::HostClientExt;
 mod session;
 mod workspace;
 pub use bot::{BotAction, BotProfileRequest, BotRequest};
 pub use companion::{CompanionAction, CompanionRequest};
+pub use cordis_jobs::{
+    CordisJobCancelReply, CordisJobCancellation, CordisJobControl, CordisJobControlSender,
+    CordisJobEvent, CordisJobInvocation, CordisJobOutcome, CordisJobProducer, CordisJobQuery, CordisJobRegistry,
+    CordisJobSettlementCause, CordisJobSpec, CordisJobStart, CordisJobStarter, CordisJobStatus,
+    CordisJobUpdate,
+};
+pub use cordis_llm::{CordisLlmMessage, CordisLlmRequest, CordisLlmResponse, CordisLlmUsage};
+pub use cordis_subagents::{
+    CordisSubagentControl, CordisSubagentDelivery, CordisSubagentResult, CordisSubagentRun,
+    CordisSubagentStart, CordisSubagentStarted, CordisSubagentStopReason, CordisSubagentWait,
+};
+pub use cordis_workflows::{
+    CordisWorkflowJobHost, CordisWorkflowJobRequest, CordisWorkflowResult, CordisWorkflowRunner,
+    CordisWorkflowStart, CordisWorkflowStarted,
+    CordisWorkflowSettlement, CordisWorkflowStopReason,
+};
 pub use integrations::{IntegrationAction, IntegrationRequest};
+pub use mcp_apps::{
+    McpAppCatalogSnapshot, McpAppCatalogWatch, McpAppCatalogWatches, McpAppHostBinding,
+    McpAppHostRequest, McpAppLegacyTaskView, McpAppServerTaskPort, mcp_app_request_binding,
+    mcp_app_resource_catalog_wait, mcp_app_server_task, scope_mcp_app_request,
+};
 pub use session::{
     HostExecutionList, HostExecutionSummary, HostPartsPage, HostQueuedMessage, HostSessionAgent,
     HostSessionModel, HostSessionState, HostSessionStreamKind, HostSessionStreamRequest, SessionOp,
@@ -45,6 +71,9 @@ pub use workspace::{HostWorkspaceQuery, HostWorkspaceQueryRequest, HostWorkspace
 #[serde(default, deny_unknown_fields)]
 pub struct HostProcessResources {
     pub cwd: Option<String>,
+    /// Refuse native execution before requesting any fallback permissions.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub require_sandbox: bool,
     pub reads: Vec<String>,
     pub writes: Vec<String>,
     /// Optional fallback outbound targets, checked only for direct execution
@@ -61,11 +90,21 @@ pub struct HostPreparedProcessSandbox {
     pub workspace_root: String,
     pub cwd: String,
     pub policy: serde_json::Value,
+    /// Additional working directories the owning session can read.
+    pub additional_working_directories: Vec<std::path::PathBuf>,
     /// Current authority for trusted native workers that validate individual
     /// resources inside the kernel boundary. Never exposed through plugin RPC.
     pub permission_snapshot: Option<serde_json::Value>,
     /// A one-call approval or operator scope must end with its originating call.
     pub call_bound: bool,
+    /// Execution metadata when the originating callback belongs to a live tool.
+    pub execution: Option<HostProcessExecution>,
+}
+
+#[derive(Debug, Clone)]
+pub struct HostProcessExecution {
+    pub id: String,
+    pub model: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -96,6 +135,20 @@ pub enum HostMcpServerSpec {
 /// live tool authority accept this value and authorize under the session's
 /// policy instead. It never names a real `ToolId`, which is nonnegative.
 pub const SESSION_SCOPED_CALL_ID: i64 = -1;
+
+/// Bounded text and outcomes from the owning session, in transcript order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionHistoryEvent {
+    User(String),
+    Assistant(String),
+    ToolCompleted {
+        name: String,
+        output: String,
+        failed: bool,
+        user_declined: bool,
+    },
+    ContextCleared,
+}
 
 #[async_trait]
 /// Client interface used by plugins to call host capabilities.
@@ -174,6 +227,11 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
+    /// Root catalog for a native MCP bridge callback in a live project session.
+    async fn mcp_session_roots(&self) -> Result<Option<Vec<std::path::PathBuf>>> {
+        Ok(None)
+    }
+
     /// Check one numeric DNS result against the already-approved hostname and
     /// port, including IP/CIDR rules and inherited authority ceilings.
     /// Call `require_network_permission` first and pin the permitted addresses
@@ -238,6 +296,254 @@ pub trait HostClient: Send + Sync + 'static {
 
     async fn invoke_tool(&self, tool: String, input: serde_json::Value)
     -> Result<ToolInvokeOutput>;
+
+    /// Await a task launched by the in-process agent plugin adapter.
+    async fn wait_imported_plugin_agent(
+        &self,
+        _child: i64,
+        _timeout_ms: u64,
+    ) -> Result<ToolInvokeOutput> {
+        Err(unavailable())
+    }
+
+    async fn start_cordis_subagent(
+        &self,
+        _start: CordisSubagentStart,
+        _cancellation: tokio_util::sync::CancellationToken,
+    ) -> Result<CordisSubagentStarted> {
+        Err(unavailable())
+    }
+
+    async fn wait_for_cordis_subagent(&self, _wait: CordisSubagentWait) -> Result<()> {
+        Err(unavailable())
+    }
+
+    async fn cordis_subagent_control(
+        &self,
+        _request: CordisSubagentControl,
+        _cancel: tokio_util::sync::CancellationToken,
+    ) -> Result<serde_json::Value> {
+        Err(unavailable())
+    }
+
+    async fn cordis_llm_complete(
+        &self,
+        _request: CordisLlmRequest,
+        _cancel: tokio_util::sync::CancellationToken,
+    ) -> Result<CordisLlmResponse> {
+        Err(unavailable())
+    }
+
+    /// Admit a Cordis workflow under a live imported tool call. The worker gets
+    /// job-owned callbacks after the launching tool returns.
+    async fn start_cordis_workflow(
+        &self,
+        _start: CordisWorkflowStart,
+        _run: CordisWorkflowRunner,
+        _cancellation: tokio_util::sync::CancellationToken,
+    ) -> Result<CordisWorkflowStarted> {
+        Err(unavailable())
+    }
+
+    /// Admit a JobSpec under a live imported tool. Only its producer callbacks
+    /// survive the tool's host call scope.
+    async fn start_cordis_job(
+        &self,
+        _start: CordisJobStart,
+        _produce: CordisJobStarter,
+        _cancellation: tokio_util::sync::CancellationToken,
+    ) -> Result<String> {
+        Err(unavailable())
+    }
+
+    async fn open_cordis_job_registry(
+        &self,
+        _lifetime: tokio_util::sync::CancellationToken,
+    ) -> Result<Arc<dyn CordisJobRegistry>> {
+        Err(unavailable())
+    }
+
+    async fn cordis_workflow_job(
+        &self,
+        _request: CordisWorkflowJobRequest,
+        _cancellation: tokio_util::sync::CancellationToken,
+    ) -> Result<serde_json::Value> {
+        Err(unavailable())
+    }
+
+    /// Look up a direct child by its recorded launch name during workflow replay.
+    async fn find_imported_plugin_agent(
+        &self,
+        _name: String,
+    ) -> Result<Option<ImportedPluginAgentState>> {
+        Err(unavailable())
+    }
+
+    /// Evaluate an imported prompt hook with the session's Agena model configuration.
+    async fn evaluate_imported_plugin_prompt(&self, _prompt: String) -> Result<String> {
+        Err(unavailable())
+    }
+
+    /// Evaluate an imported agent hook with access to authorized read-only tools.
+    async fn evaluate_imported_plugin_agent(&self, _prompt: String) -> Result<String> {
+        Err(unavailable())
+    }
+
+    /// Obtain a notice sink bound to the current imported plugin generation
+    /// and its session. It remains usable after the originating hook returns.
+    async fn bind_imported_plugin_background(&self) -> Result<ImportedPluginBackground> {
+        Err(unavailable())
+    }
+
+    /// Submit text as the current imported plugin in its authorized session.
+    async fn submit_imported_plugin_prompt(
+        &self,
+        _request: ImportedPluginPromptRequest,
+    ) -> Result<serde_json::Value> {
+        Err(unavailable())
+    }
+
+    /// Inspect or invoke tools using the current imported Claude mod's session.
+    async fn imported_mod_tool(
+        &self,
+        _request: ImportedModToolRequest,
+    ) -> Result<serde_json::Value> {
+        Err(unavailable())
+    }
+
+    /// Update the current session's imported plugin file watches.
+    async fn configure_imported_plugin_files(
+        &self,
+        _paths: Option<Vec<std::path::PathBuf>>,
+        _callback_generation: Option<u64>,
+    ) -> Result<()> {
+        Err(unavailable())
+    }
+
+    /// The current shell environment file for a native imported hook.
+    async fn imported_hook_environment(
+        &self,
+        _callback_generation: Option<u64>,
+    ) -> Result<Option<ImportedHookEnvironment>> {
+        Ok(None)
+    }
+
+    /// Files for an in-process adapter's local command hook. Scope is relative
+    /// to the authorized callback session and cannot name a different session.
+    async fn imported_hook_transcripts(
+        &self,
+        _format: HookTranscriptFormat,
+        _scope: HookTranscriptScope,
+        _callback_generation: Option<u64>,
+    ) -> Result<ImportedHookTranscripts> {
+        Ok(ImportedHookTranscripts::default())
+    }
+
+    /// Read active work for a Claude Stop hook, relative to its callback
+    /// session. SubagentStop can request its verified parent's work.
+    async fn imported_claude_stop_work(
+        &self,
+        _parent: bool,
+        _callback_generation: Option<u64>,
+    ) -> Result<Option<crate::ImportedClaudeStopWork>> {
+        Ok(None)
+    }
+
+    /// Visit this session's durable history during an authorized native
+    /// disposal hook. The caller cannot name another session or retain a reader.
+    async fn visit_ending_session_history(
+        &self,
+        _visit: &mut (dyn FnMut(SessionHistoryEvent) + Send),
+    ) -> Result<()> {
+        Err(unavailable())
+    }
+
+    /// Effective role of the callback session for frontmatter hook filtering.
+    async fn imported_hook_profile(&self) -> Result<Option<String>> {
+        Ok(None)
+    }
+
+    /// Check a task mutation using the active imported hooks. This in-process
+    /// capability is restricted to the built-in task bridge.
+    async fn check_imported_task(&self, _input: crate::ImportedTaskBeforeInput) -> Result<()> {
+        Err(unavailable())
+    }
+
+    /// Identity of an active imported plugin's contribution to the MCP catalog.
+    async fn imported_mcp_server_identity(
+        &self,
+        _id: &str,
+    ) -> Result<Option<ImportedMcpServerIdentity>> {
+        Ok(None)
+    }
+
+    /// Invoke an MCP handler using the owning session's tool and resource policy.
+    async fn call_imported_plugin_mcp(
+        &self,
+        _server: String,
+        _tool: String,
+        _arguments: serde_json::Value,
+    ) -> Result<ToolInvokeOutput> {
+        Err(unavailable())
+    }
+
+    /// Read a resource on a server contributed by the current imported package.
+    async fn read_imported_plugin_mcp(
+        &self,
+        _server: String,
+        _uri: String,
+    ) -> Result<ToolInvokeOutput> {
+        Err(unavailable())
+    }
+
+    /// Session-scoped management of MCP servers declared by a DeepSeek bundle.
+    async fn deepseek_mcp_manager(
+        &self,
+        _request: DeepSeekMcpManagerRequest,
+        _cancellation: tokio_util::sync::CancellationToken,
+    ) -> Result<serde_json::Value> {
+        Err(unavailable())
+    }
+
+    /// Observe an imported Cordis module's project session across command calls.
+    /// Native adapters consume the stream without retaining callback authority.
+    async fn observe_deepseek_mcp_manager(
+        &self,
+        _cancellation: tokio_util::sync::CancellationToken,
+    ) -> Result<tokio::sync::watch::Receiver<serde_json::Value>> {
+        Err(unavailable())
+    }
+
+    /// Let the bundled MCP tool participate in a managed HTTP session if the
+    /// owning project's policy has all required grants independently of this call.
+    async fn prepare_managed_mcp_http(&self, _server: String) -> Result<bool> {
+        Ok(false)
+    }
+
+    /// Execute shell snippets from an imported Markdown command under its
+    /// session's existing authorization. Native Claude package adapter only.
+    async fn run_imported_skill_shell(
+        &self,
+        _request: crate::ImportedSkillShellRequest,
+    ) -> Result<crate::ImportedSkillShellResult> {
+        Err(unavailable())
+    }
+
+    /// Render an exact Claude skill already read by the built-in skills tool.
+    /// Native callback. No expansion applies to other skill sources.
+    async fn render_imported_skill(
+        &self,
+        _path: &std::path::Path,
+        _document: &str,
+        _arguments: &str,
+    ) -> Result<Option<crate::ImportedSkillRender>> {
+        Ok(None)
+    }
+
+    /// Read native provider skills visible to the built-in skills tool.
+    async fn imported_model_skills(&self) -> Result<Vec<agena_skills::DeclaredSkill>> {
+        Ok(Vec::new())
+    }
 
     /// Invoke one explicitly imported service. The host resolves the provider
     /// from the immutable manifest graph; callers cannot select or discover a
@@ -454,6 +760,21 @@ pub trait HostClient: Send + Sync + 'static {
         Err(unavailable())
     }
 
+    /// Atomically replace an in-process plugin record if its prior value matches.
+    async fn storage_compare_exchange(
+        &self,
+        _req: HostStorageSetRequest,
+        _expected: Option<String>,
+    ) -> Result<bool> {
+        Err(unavailable())
+    }
+
+    /// Private, instance-specific data directory for the native agent plugin
+    /// importer. This callback is only available to the in-process adapter.
+    async fn imported_plugin_storage_directory(&self) -> Result<std::path::PathBuf> {
+        Err(unavailable())
+    }
+
     /// Plugin-namespaced KV storage — delete.
     async fn storage_delete(&self, _req: HostStorageDeleteRequest) -> Result<()> {
         Err(unavailable())
@@ -507,6 +828,37 @@ pub trait HostClient: Send + Sync + 'static {
     /// Native host callback only; remote plugin transports do not expose this
     /// capability. Call before persisting an enabled connection or testing it.
     async fn require_mcp_server_permission(&self, _spec: HostMcpServerSpec) -> Result<()> {
+        Err(unavailable())
+    }
+
+    /// Resolve a server's input request under the built-in MCP bridge's live
+    /// tool callback. This capability is only available in-process.
+    async fn mcp_elicitation(
+        &self,
+        _server: &str,
+        _request: agena_domain::mcp_elicitation::McpElicitation,
+        _cancellation: tokio_util::sync::CancellationToken,
+    ) -> Result<agena_domain::mcp_elicitation::McpElicitationReply> {
+        Err(unavailable())
+    }
+
+    /// Request a model completion from the built-in MCP bridge for a live tool call.
+    async fn mcp_sampling(
+        &self,
+        _server: &str,
+        _request: agena_domain::mcp_sampling::McpSamplingRequest,
+        _cancellation: tokio_util::sync::CancellationToken,
+    ) -> Result<Option<agena_domain::mcp_sampling::McpSamplingReply>> {
+        Err(unavailable())
+    }
+
+    /// Invoke a browser view's tool under the bundled MCP bridge's live call.
+    async fn call_mcp_app_view_tool(
+        &self,
+        _target: uuid::Uuid,
+        _arguments: serde_json::Map<String, serde_json::Value>,
+        _cancellation: tokio_util::sync::CancellationToken,
+    ) -> Result<agena_domain::mcp_app_tools::McpAppToolResult> {
         Err(unavailable())
     }
 
@@ -569,6 +921,134 @@ pub trait HostClient: Send + Sync + 'static {
     ) -> Result<HostThemeRemoveResponse> {
         Err(unavailable())
     }
+}
+
+pub struct ImportedPluginBackground {
+    pub cancellation: tokio_util::sync::CancellationToken,
+    pub notices: std::sync::Arc<dyn ImportedPluginNotices>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ImportedPluginPromptRequest {
+    pub text: String,
+    pub wait: bool,
+    pub as_user: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case")]
+pub enum ImportedModToolRequest {
+    List,
+    Check {
+        tool: String,
+        input: serde_json::Value,
+    },
+    Call {
+        tool: String,
+        input: serde_json::Value,
+    },
+}
+
+#[async_trait::async_trait]
+pub trait ImportedPluginNotices: Send + Sync {
+    async fn deliver(&self, text: String, wake: bool) -> Result<()>;
+}
+
+pub struct ImportedPluginWatchPath {
+    pub requested: std::path::PathBuf,
+    pub resolved: std::path::PathBuf,
+}
+
+pub struct ImportedMcpServerIdentity {
+    pub package: String,
+    pub server: String,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
+pub enum DeepSeekMcpManagerRequest {
+    List,
+    Watch {
+        previous: Vec<serde_json::Value>,
+    },
+    Restart {
+        name: String,
+    },
+    Probe {
+        name: String,
+        options: DeepSeekMcpProbeOptions,
+    },
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeepSeekMcpProbeOptions {
+    pub timeout_ms: Option<f64>,
+    pub max_pages: Option<u64>,
+    pub max_tool_names: Option<u64>,
+    pub aborted: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum HookTranscriptFormat {
+    Claude,
+    Codex,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookTranscriptScope {
+    Current,
+    Parent,
+    ParentAndAgent,
+}
+
+#[derive(Clone, Default)]
+pub struct ImportedHookTranscripts {
+    pub transcript: Option<ImportedHookFile>,
+    pub agent: Option<ImportedHookFile>,
+}
+
+impl ImportedHookTranscripts {
+    pub fn files(&self) -> impl Iterator<Item = &ImportedHookFile> {
+        self.transcript.iter().chain(&self.agent)
+    }
+}
+
+/// Keeps a session's private file alive until the hook or shell exits.
+#[derive(Clone)]
+pub struct ImportedHookFile {
+    path: std::path::PathBuf,
+    _owner: std::sync::Arc<dyn Send + Sync>,
+}
+
+impl ImportedHookFile {
+    pub fn new(path: std::path::PathBuf, owner: std::sync::Arc<dyn Send + Sync>) -> Self {
+        Self {
+            path,
+            _owner: owner,
+        }
+    }
+
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+pub type ImportedHookEnvironment = ImportedHookFile;
+
+#[async_trait::async_trait]
+pub trait ImportedPluginFileEvents: Send + Sync {
+    async fn resolve_paths(
+        &self,
+        absolute: Vec<std::path::PathBuf>,
+    ) -> Result<Vec<ImportedPluginWatchPath>>;
+
+    async fn changed(
+        &self,
+        path: ImportedPluginWatchPath,
+        change: crate::SessionFileChange,
+    ) -> Result<()>;
 }
 
 /// Unified imperative notification entry for plugins (Phase 6). Replaces
@@ -640,9 +1120,21 @@ pub struct EventSubscription {
     pub id: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginCommandInvocation {
+    pub id: agena_domain::ExecutionId,
+    pub command_id: String,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 /// Context of a host callback executed on behalf of a plugin.
 pub struct HostCallbackContext {
+    /// Local app authority never travels over plugin RPC.
+    #[serde(skip)]
+    pub mcp_app: Option<McpAppHostBinding>,
+    /// In-process authority for a dispatched plugin command.
+    #[serde(skip)]
+    pub plugin_command: Option<PluginCommandInvocation>,
     /// Sender metadata frozen by the host for this execution. Plugins may only
     /// echo it with the matching authority token, never substitute another user.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -691,6 +1183,12 @@ where
     F: Future,
 {
     let mut current = current_host_callback_context().unwrap_or_default();
+    if let Some(binding) = patch.mcp_app {
+        current.mcp_app = Some(binding);
+    }
+    if let Some(command) = patch.plugin_command {
+        current.plugin_command = Some(command);
+    }
     if let Some(caller) = patch.caller {
         current.caller = Some(caller);
     }
@@ -731,7 +1229,11 @@ pub async fn run_in_isolated_host_callback_context<F>(
 where
     F: Future,
 {
-    let key = context.session_id.zip(context.call_id);
+    // MCP App invocations have unique scoped call IDs even before a task is
+    // handed off to a transcript tool.
+    let key = context.session_id.zip(context.call_id).filter(|(_, call)| {
+        *call >= 0 || context.mcp_app.as_ref().is_some_and(|app| app.view.is_some())
+    });
     agena_async::permission_wait::scope(key, HOST_CALLBACK_CONTEXT.scope(context, fut)).await
 }
 
@@ -912,7 +1414,6 @@ pub struct AgentSpawnRequest {
     /// Unique nonnumeric name: 1–64 lowercase letters, digits or underscores; `parent` and `self` are reserved.
     pub name: String,
     /// Scope, constraints, required context and output contracts, and expected final result.
-    /// Parent history is not copied; include any chart or UI contract the task needs.
     pub prompt: String,
     /// Role profile from the available subagent catalog. Choose the role that
     /// fits the task; omission uses the configured subagent default.
@@ -930,6 +1431,9 @@ pub struct AgentSpawnRequest {
     pub max_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_cost_microusd: Option<u64>,
+    /// Seed the subagent with the parent's completed turns as of creation.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub inherit_parent_context: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema, PartialEq, Eq)]
@@ -1348,6 +1852,13 @@ pub struct HostRegisteredToolListResponse {
     pub tools: Vec<HostRegisteredToolDescriptor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_event: Option<ToolRegistryChangedEvent>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImportedPluginAgentState {
+    Active,
+    Completed(i64),
+    Failed,
 }
 
 // ---------------- plugin storage ----------------

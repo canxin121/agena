@@ -179,12 +179,10 @@ impl SessionManager {
         state_override: Option<Arc<ExecutionState>>,
     ) -> Result<Session, AppError> {
         let session = session_id(id)?;
-        let snapshot = self
-            .kernel()
-            .reader
-            .control_snapshot(session, 1)
-            .await
-            .map_err(kernel_error)?;
+        let snapshot = read_with_busy_retry(session, "session_projection", || {
+            self.kernel().reader.control_snapshot(session, 1)
+        })
+        .await?;
         let metadata = &snapshot.metadata;
         let summary = &snapshot.summary;
         let configuration = &snapshot.configuration;
@@ -210,6 +208,11 @@ impl SessionManager {
                 &metadata.selection.clone().unwrap_or_default(),
             )
             .map_err(AppError::Config)?;
+        let workspace_root = self.execution_workspace_root(
+            metadata.workspace_id, configuration.effective_workspace_root.as_deref(),
+        ).await?;
+        let working_directory = workspace_root.as_ref().zip(configuration.working_directory.as_ref())
+            .map(|(root, relative)| root.join(relative));
         let mut context = ToolContext {
             global: metadata.workspace_id.is_none(),
             owner: configuration.owner.clone(),
@@ -238,13 +241,15 @@ impl SessionManager {
             permission_ceiling_layers: configuration.permission_ceiling_layers.clone(),
             channel_authority: configuration.channel_authority.clone(),
             channel_verifier: self.channel_verifier.get().cloned(),
-            capability_denied_tool_names: configuration.capability_denied_tool_names.clone(),
-            effective_workspace_root: self
-                .execution_workspace_root(
-                    metadata.workspace_id,
-                    configuration.effective_workspace_root.as_deref(),
-                )
-                .await?,
+            capability_denied_tool_names: configuration
+                .capability_denied_tool_names
+                .union(&profile.tool_denials)
+                .cloned()
+                .collect(),
+            profile_tool_allowlist: profile.tool_allowlist,
+            additional_working_directories: configuration.additional_working_directories.clone(),
+            effective_workspace_root: workspace_root,
+            working_directory,
         };
         context.channel_authority = self
             .channel_authority_for_execution(
@@ -623,6 +628,7 @@ impl SessionManager {
                 .effective_permission
                 .merged_with(&authority.permission_overlay)
         };
+        context.working_directory = None;
         if authority.source_admin || authority.grant.source_workspace {
             if let Some(root) = &authority.source_workspace_root {
                 context.effective_workspace_root = Some(root.clone());
@@ -721,6 +727,9 @@ impl SessionManager {
             read_with_busy_retry(id, "metadata", || reader.metadata(id)),
             read_with_busy_retry(id, "configuration", || reader.configuration(id)),
         )?;
+        if let Some(worktree) = &configuration.worktree {
+            super::worktrees::validate_existing_worktree(worktree.path.clone()).await?;
+        }
         let delegated = configuration.relation_kind.is_subagent();
         let baseline = configuration.channel_authority.as_ref();
         let authority = if let Some(submitted) = submitted_authority {
@@ -747,6 +756,18 @@ impl SessionManager {
                 .await
                 .map_err(AppError::Config)?;
         }
+        let profile = state
+            .config
+            .resolve_session_profile(
+                configuration.profile.as_deref(),
+                configuration.relation_kind,
+            )
+            .map_err(AppError::Config)?;
+        let workspace_root = self.execution_workspace_root(
+            metadata.workspace_id, configuration.effective_workspace_root.as_deref(),
+        ).await?;
+        let working_directory = workspace_root.as_ref().zip(configuration.working_directory.as_ref())
+            .map(|(root, relative)| root.join(relative));
         let mut context = ToolContext {
             global: metadata.workspace_id.is_none(),
             owner: configuration.owner.clone(),
@@ -764,23 +785,8 @@ impl SessionManager {
                     .to_owned(),
             ),
             profile_is_default: configuration.profile.is_none(),
-            profile_prompts: state
-                .config
-                .resolve_session_profile(
-                    configuration.profile.as_deref(),
-                    configuration.relation_kind,
-                )
-                .map_err(AppError::Config)?
-                .prompts,
-            max_turns: state
-                .config
-                .resolve_session_profile(
-                    configuration.profile.as_deref(),
-                    configuration.relation_kind,
-                )
-                .map_err(AppError::Config)?
-                .max_turns
-                .or(state.config.max_turns),
+            profile_prompts: profile.prompts,
+            max_turns: profile.max_turns.or(state.config.max_turns),
             selection: state
                 .config
                 .session_selection(
@@ -796,13 +802,15 @@ impl SessionManager {
             permission_ceiling_layers: configuration.permission_ceiling_layers.clone(),
             channel_authority: authority,
             channel_verifier: self.channel_verifier.get().cloned(),
-            capability_denied_tool_names: configuration.capability_denied_tool_names.clone(),
-            effective_workspace_root: self
-                .execution_workspace_root(
-                    metadata.workspace_id,
-                    configuration.effective_workspace_root.as_deref(),
-                )
-                .await?,
+            capability_denied_tool_names: configuration
+                .capability_denied_tool_names
+                .union(&profile.tool_denials)
+                .cloned()
+                .collect(),
+            profile_tool_allowlist: profile.tool_allowlist,
+            additional_working_directories: configuration.additional_working_directories.clone(),
+            effective_workspace_root: workspace_root,
+            working_directory,
         };
         Self::apply_channel_execution_context(
             &mut context,
@@ -952,6 +960,7 @@ impl SessionManager {
         ))
     }
     pub async fn session_usage_async(&self, session: &Session) -> Result<SessionUsage, AppError> {
+        let id = session_id(session.id)?;
         let state = if session.execution.global {
             self.global_state.load_full()
         } else {
@@ -964,12 +973,10 @@ impl SessionManager {
             .as_ref()
             .and_then(|m| state.providers.model_metadata(m).ok())
             .unwrap_or_default();
-        let latest = self
-            .kernel()
-            .reader
-            .latest_usage_round(session_id(session.id)?)
-            .await
-            .map_err(kernel_error)?;
+        let latest = read_with_busy_retry(id, "latest_usage_round", || {
+            self.kernel().reader.latest_usage_round(id)
+        })
+        .await?;
         let usage = latest
             .as_ref()
             .and_then(|r| r.provider_state.as_ref())
@@ -980,12 +987,10 @@ impl SessionManager {
         // Performance is useful even when the provider omitted token usage.
         // Read it independently so an unmeasured request cannot erase the last
         // known context size, or reuse an older request's speed.
-        let latest_round = self
-            .kernel()
-            .reader
-            .latest_round(session_id(session.id)?)
-            .await
-            .map_err(kernel_error)?;
+        let latest_round = read_with_busy_retry(id, "latest_performance_round", || {
+            self.kernel().reader.latest_round(id)
+        })
+        .await?;
         let last_performance = latest_round
             .as_ref()
             .and_then(|round| round.provider_state.as_ref())
@@ -1102,12 +1107,10 @@ impl SessionManager {
             let snapshot = if session == root.metadata.id {
                 root
             } else {
-                descendant = self
-                    .kernel()
-                    .reader
-                    .control_snapshot(session, 128 - result.len())
-                    .await
-                    .map_err(kernel_error)?;
+                descendant = read_with_busy_retry(session, "descendant_interactions", || {
+                    self.kernel().reader.control_snapshot(session, 128 - result.len())
+                })
+                .await?;
                 &descendant
             };
             let config = &snapshot.configuration;
@@ -1152,17 +1155,15 @@ impl SessionManager {
             }
             let mut before = None;
             loop {
-                let page = self
-                    .kernel()
-                    .reader
-                    .query_summaries(SummaryQuery {
+                let page = read_with_busy_retry(session, "interaction_descendants", || {
+                    self.kernel().reader.query_summaries(SummaryQuery {
                         parent_id: Some(session),
                         before,
                         limit: 200,
                         ..Default::default()
                     })
-                    .await
-                    .map_err(kernel_error)?;
+                })
+                .await?;
                 sessions.extend(
                     page.sessions
                         .iter()

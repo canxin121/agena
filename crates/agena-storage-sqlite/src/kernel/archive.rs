@@ -349,7 +349,9 @@ async fn bundle(
         .fetch_one(&mut *tx)
         .await
         .map_err(sql_error)?;
-    let tool = if let EntryPayload::Tool { tool_id } = entry.payload {
+    let tool = if let EntryPayload::Tool { tool_id }
+        | EntryPayload::PluginCommand { operation: tool_id, .. } = entry.payload
+    {
         let bytes: i64 = sqlx::query_scalar("SELECT input_bytes+result_bytes FROM agena_tool_calls INDEXED BY idx_agena_tool_bytes WHERE id=?")
             .bind(tool_id.get()).fetch_one(&mut *tx).await.map_err(sql_error)?;
         if bytes > MAX_FACT_BYTES {
@@ -1584,7 +1586,10 @@ pub(super) async fn export(
                 .line("support_entry", &json!({"facts":&*fact}), true)
                 .await?;
         }
-        if matches!(fact.entry.payload, EntryPayload::User { .. })
+        if matches!(
+            fact.entry.payload,
+            EntryPayload::User { .. } | EntryPayload::PluginCommand { .. }
+        )
             || (fact.execution_purpose.is_some()
                 && fact.entry.id == fact.entry.message_id
                 && matches!(fact.entry.payload, EntryPayload::Notice { .. }))

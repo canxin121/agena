@@ -17,7 +17,8 @@ pub mod provider_sse;
 
 pub use codex_user_agent::{RUNTIME_CODEX_ORIGINATOR, runtime_codex_user_agent};
 pub use provider::{
-    CatalogedModelsProvider, ManagedCredential, ModelRuntime, MultiAdapterProvider,
+    CatalogedModelsProvider, ManagedCredential, ModelAttemptHooks, ModelAttemptObserver,
+    ModelAttemptOutcome, ModelAttemptStatus, ModelRuntime, MultiAdapterProvider,
     ProviderModelRoute, ProviderRegistry, ProviderRequestHeaderHook, catalog_decoration_source,
     parse_sap_ai_core_service_key, project_classifier_input_run_text, with_request_cancellation,
     with_request_header_hook,

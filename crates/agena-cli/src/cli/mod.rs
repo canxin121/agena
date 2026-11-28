@@ -18,6 +18,7 @@ use agena_runtime::OutputFormat;
 use agena_tool::ApplyPatchExecution;
 use async_trait::async_trait;
 
+mod cli_agent_plugins;
 mod cli_auth_helpers;
 mod cli_permissions;
 #[cfg(test)]
@@ -590,11 +591,11 @@ pub enum PluginSubcommand {
     Package(PluginPackageArgs),
     /// Assemble platform release fragments into a publishable manifest.
     Release(PluginReleaseOperation),
-    /// Install a plugin from a marketplace registry into the active config.
+    /// Install from a marketplace, an agent ecosystem, or a local plugin directory.
     Install(PluginInstallArgs),
     /// Remove a plugin previously installed via `agena plugin install`.
     Uninstall(PluginUninstallArgs),
-    /// List plugins installed via the marketplace.
+    /// List marketplace and imported agent plugin registrations.
     ListInstalled,
     /// Refresh the cached registry index.
     Sync(PluginSyncArgs),
@@ -754,29 +755,56 @@ pub enum PluginLogOutputFormat {
 #[derive(Debug, Clone, Args)]
 /// Arguments for installing a plugin.
 pub struct PluginInstallArgs {
-    /// Plugin id, optionally with `@<version>`, or `owner/repo[@tag]` for GitHub Releases.
+    /// Plugin ID, GitHub release, local directory, or codex:, claude:, or deepseek: selector.
     pub spec: String,
-    /// Marketplace URL, local path, or GitHub `owner/repo[@ref]` shorthand.
-    #[arg(long)]
+    /// Marketplace URL, repository, local path, or DeepSeek npm registry.
+    #[arg(long, visible_alias = "marketplace")]
     pub registry: Option<String>,
+    /// Direct agent plugin source such as a local directory, archive, or Git URL.
+    #[arg(long)]
+    pub package_source: Option<String>,
     /// Registry id, used as a cache key (defaults to "default").
     #[arg(long, default_value = "default")]
     pub registry_id: String,
     /// Overwrite an existing plugin config with the same plugin id.
     #[arg(long, default_value_t = false)]
     pub force: bool,
-    /// Compute side-effects but skip writing the config or cache.
+    /// Preview installation and compatibility. Agent packages may be fetched for inspection.
     #[arg(long, default_value_t = false)]
     pub dry_run: bool,
     /// Allow installing artifacts that lack a sha256 in the registry record.
     #[arg(long, default_value_t = false)]
     pub allow_unverified: bool,
-    /// Refresh the cached registry index before resolving versions.
+    /// Refresh the marketplace or registry used for this install.
     #[arg(long, default_value_t = false)]
     pub refresh: bool,
     /// Treat the registry as requiring an ed25519 signature on every record.
     #[arg(long, default_value_t = false)]
     pub require_signature: bool,
+    /// Override the Agena plugin ID for an imported agent package.
+    #[arg(long)]
+    pub id: Option<String>,
+    /// Configuration directory to read with --installed.
+    #[arg(long)]
+    pub native_home: Option<PathBuf>,
+    /// DeepSeek Harness profile to import with --installed.
+    #[arg(long)]
+    pub profile: Option<String>,
+    /// Register an existing installation by reading it from disk.
+    #[arg(long)]
+    pub installed: bool,
+    /// Run supported lifecycle hooks in Agena project sessions.
+    #[arg(long)]
+    pub enable_hooks: bool,
+    /// Export this environment variable to the imported plugin. Repeatable.
+    #[arg(long = "env", value_name = "NAME")]
+    pub environment: Vec<String>,
+    /// Map a Claude user option to an environment variable. Repeatable.
+    #[arg(long, value_name = "KEY=NAME")]
+    pub option_env: Vec<String>,
+    /// Approve the exact Claude marketplace command hash reported by Agena.
+    #[arg(long)]
+    pub accept_command: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -803,8 +831,11 @@ pub struct PluginSyncArgs {
 pub struct PluginSearchArgs {
     pub query: String,
     /// Marketplace URL, local path, or GitHub `owner/repo[@ref]` shorthand.
-    #[arg(long, default_value = "canxin121/agena-plugin-marketplace")]
-    pub registry: String,
+    #[arg(long, visible_alias = "marketplace")]
+    pub registry: Option<String>,
+    /// Search a Codex, Claude Code, or DeepSeek Harness catalog.
+    #[arg(long, value_parser = ["codex", "claude", "deepseek"])]
+    pub ecosystem: Option<String>,
     #[arg(long, default_value = "default")]
     pub registry_id: String,
 }
@@ -1121,6 +1152,10 @@ pub enum SessionsSubcommand {
     Create(SessionCreateArgs),
     /// Change a session's named agent profile or restore its automatic role.
     Update(SessionUpdateArgs),
+    /// List or activate Claude MCP channels for one project session.
+    Channels(SessionChannelsArgs),
+    /// List or add working directories for one project session.
+    WorkingDirectories(SessionWorkingDirectoriesArgs),
     /// Export a session to a JSONL bundle (stdout). Pipe to a file to keep.
     Export(SessionExportArgs),
     /// Replay a JSONL bundle (read from stdin) as a fresh session in the
@@ -1128,6 +1163,30 @@ pub enum SessionsSubcommand {
     Import(SessionImportArgs),
     /// Print every session sharing the given tree root, in (depth, id) order.
     Tree(SessionTreeArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SessionWorkingDirectoriesArgs {
+    pub session_id: i64,
+    /// Add a directory. Relative paths are resolved from the session's project root.
+    #[arg(long, value_name = "PATH")]
+    pub add: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct SessionChannelsArgs {
+    pub session_id: i64,
+    /// List channel candidates and declared configuration fields from installed plugins.
+    #[arg(long, conflicts_with_all = ["enable", "disable"])]
+    pub catalog: bool,
+    /// Activate a configured stdio MCP server, such as plugin:claude.example:alerts.
+    #[arg(long, conflicts_with = "disable", value_name = "SERVER")]
+    pub enable: Option<String>,
+    #[arg(long, value_name = "SERVER")]
+    pub disable: Option<String>,
+    /// Relay one-time permission questions to this trusted channel.
+    #[arg(long, requires = "enable")]
+    pub permission_relay: bool,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -1141,6 +1200,9 @@ pub struct SessionCreateArgs {
     /// Named agent profile. An empty value uses the automatic main role.
     #[arg(long, env = "AGENA_PROFILE", value_name = "NAME")]
     pub profile: Option<String>,
+    /// Run imported Claude Setup hooks before SessionStart.
+    #[arg(long, value_enum)]
+    pub setup: Option<HookSetup>,
     #[arg(long, default_value = "json")]
     pub format: OutputFormat,
 }
@@ -1557,6 +1619,9 @@ pub struct ExecArgs {
     /// Named agent profile for the new session. Empty uses the automatic main role.
     #[arg(long, env = "AGENA_PROFILE", value_name = "NAME")]
     pub profile: Option<String>,
+    /// Run imported Claude Setup hooks before SessionStart.
+    #[arg(long, value_enum)]
+    pub setup: Option<HookSetup>,
     #[arg(long)]
     pub model: Option<String>,
     #[arg(long)]
@@ -1566,6 +1631,21 @@ pub struct ExecArgs {
     #[arg(long)]
     pub json: bool,
     pub prompt: String,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum HookSetup {
+    Init,
+    Maintenance,
+}
+
+impl From<HookSetup> for agena_api::commands::SessionSetupTrigger {
+    fn from(value: HookSetup) -> Self {
+        match value {
+            HookSetup::Init => Self::Init,
+            HookSetup::Maintenance => Self::Maintenance,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Args, Default)]
@@ -1889,6 +1969,8 @@ struct PluginValidateOutput {
     ok: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     manifest_hash: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    compatibility: Option<agena_plugin_host::agent_plugin::AgentPluginCompatibility>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     errors: Vec<PluginValidationMessage>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

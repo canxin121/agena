@@ -248,6 +248,7 @@ fn plugin_hook_kind_from_key(key: &str, span: impl quote::ToTokens) -> Result<Pl
         "shutdown" => Ok(PluginHookKind::Shutdown),
         "tool.before" => Ok(PluginHookKind::ToolExecuteBefore),
         "tool.after" => Ok(PluginHookKind::ToolExecuteAfter),
+        "tool.batch.after" => Ok(PluginHookKind::ToolBatchAfter),
         "tool.failure" => Ok(PluginHookKind::ToolExecuteFailure),
         "tool.definition" => Ok(PluginHookKind::ToolDefinition),
         "chat.message" => Ok(PluginHookKind::ChatMessage),
@@ -265,6 +266,7 @@ fn plugin_hook_kind_from_key(key: &str, span: impl quote::ToTokens) -> Result<Pl
         "session.start" => Ok(PluginHookKind::SessionStart),
         "session.end" => Ok(PluginHookKind::SessionEnd),
         "prompt.submit" => Ok(PluginHookKind::UserPromptSubmit),
+        "prompt.expand" => Ok(PluginHookKind::UserPromptExpansion),
         "agent.stop" => Ok(PluginHookKind::AgentStop),
         "agent.cancel" => Ok(PluginHookKind::AgentCancel),
         "config.resolved" => Ok(PluginHookKind::ConfigResolved),
@@ -428,6 +430,7 @@ pub fn plugin_hook_input_segment(hook: PluginHookKind) -> PluginHookExpectedInpu
         PluginHookKind::Init => PluginHookExpectedInput::Init,
         PluginHookKind::ToolExecuteBefore => PluginHookExpectedInput::Single("ToolBeforeInput"),
         PluginHookKind::ToolExecuteAfter => PluginHookExpectedInput::Single("ToolAfterInput"),
+        PluginHookKind::ToolBatchAfter => PluginHookExpectedInput::Single("ToolBatchInput"),
         PluginHookKind::ToolExecuteFailure => PluginHookExpectedInput::Single("ToolFailureInput"),
         PluginHookKind::ToolDefinition => PluginHookExpectedInput::Single("ToolDefinitionInput"),
         PluginHookKind::ChatMessage => PluginHookExpectedInput::Single("ChatMessageInput"),
@@ -452,6 +455,9 @@ pub fn plugin_hook_input_segment(hook: PluginHookKind) -> PluginHookExpectedInpu
         PluginHookKind::SessionEnd => PluginHookExpectedInput::Single("SessionEndInput"),
         PluginHookKind::UserPromptSubmit => {
             PluginHookExpectedInput::Single("UserPromptSubmitInput")
+        }
+        PluginHookKind::UserPromptExpansion => {
+            PluginHookExpectedInput::Single("UserPromptExpansionInput")
         }
         PluginHookKind::AgentStop => PluginHookExpectedInput::Single("AgentStopInput"),
         PluginHookKind::AgentCancel => PluginHookExpectedInput::Single("AgentCancelInput"),
@@ -489,6 +495,7 @@ pub fn plugin_hook_output_segment(hook: PluginHookKind) -> PluginHookExpectedOut
         | PluginHookKind::SessionEnd => PluginHookExpectedOutput::Unit,
         PluginHookKind::ToolExecuteBefore => PluginHookExpectedOutput::Option("ToolBeforePatch"),
         PluginHookKind::ToolExecuteAfter => PluginHookExpectedOutput::Option("ToolAfterPatch"),
+        PluginHookKind::ToolBatchAfter => PluginHookExpectedOutput::Option("ToolBatchPatch"),
         PluginHookKind::ToolDefinition => PluginHookExpectedOutput::Option("ToolDefinitionPatch"),
         PluginHookKind::ChatMessage => PluginHookExpectedOutput::Option("ChatMessagePatch"),
         PluginHookKind::ChatParams => PluginHookExpectedOutput::Option("ChatParamsPatch"),
@@ -510,6 +517,9 @@ pub fn plugin_hook_output_segment(hook: PluginHookKind) -> PluginHookExpectedOut
         PluginHookKind::SessionStart => PluginHookExpectedOutput::Option("SessionStartPatch"),
         PluginHookKind::UserPromptSubmit => {
             PluginHookExpectedOutput::Option("UserPromptSubmitPatch")
+        }
+        PluginHookKind::UserPromptExpansion => {
+            PluginHookExpectedOutput::Option("UserPromptExpansionPatch")
         }
         PluginHookKind::AgentStop => PluginHookExpectedOutput::Option("AgentStopPatch"),
         PluginHookKind::AgentCancel => PluginHookExpectedOutput::Unit,
@@ -615,6 +625,7 @@ pub fn plugin_hook_name(hook: PluginHookKind) -> &'static str {
         PluginHookKind::Shutdown => "shutdown",
         PluginHookKind::ToolExecuteBefore => "tool.before",
         PluginHookKind::ToolExecuteAfter => "tool.after",
+        PluginHookKind::ToolBatchAfter => "tool.batch.after",
         PluginHookKind::ToolExecuteFailure => "tool.failure",
         PluginHookKind::ToolDefinition => "tool.definition",
         PluginHookKind::ChatMessage => "chat.message",
@@ -632,6 +643,7 @@ pub fn plugin_hook_name(hook: PluginHookKind) -> &'static str {
         PluginHookKind::SessionStart => "session.start",
         PluginHookKind::SessionEnd => "session.end",
         PluginHookKind::UserPromptSubmit => "prompt.submit",
+        PluginHookKind::UserPromptExpansion => "prompt.expand",
         PluginHookKind::AgentStop => "agent.stop",
         PluginHookKind::AgentCancel => "agent.cancel",
         PluginHookKind::ConfigResolved => "config.resolved",

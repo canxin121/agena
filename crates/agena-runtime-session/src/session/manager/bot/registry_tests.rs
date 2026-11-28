@@ -1043,6 +1043,8 @@ async fn canonical_local_subagents_remain_writable_but_historical_branches_do_no
                     relation_kind: kind,
                     agent: kind.is_subagent().then(|| SessionAgentConfiguration {
                         origin_message_id: None,
+                        workflow: None,
+                        cordis: None,
                         name: name.into(),
                         status: agena_domain::AgentStatus::Created,
                         started_at_ms: None,

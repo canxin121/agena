@@ -227,6 +227,7 @@ async fn delete_owned_rows(connection: &mut SqliteConnection, session: SessionId
         "DELETE FROM agena_blob_pins WHERE blob_id IN (SELECT id FROM agena_blobs WHERE session_id=?)",
         "DELETE FROM agena_blobs WHERE session_id=?",
         "DELETE FROM agena_deliveries WHERE session_id=?",
+        "DELETE FROM agena_server_state WHERE key GLOB 'activity-output/' || ? || '/*'",
         "DELETE FROM agena_background_activities WHERE session_id=?",
         "DELETE FROM agena_interactions WHERE session_id=?",
         "DELETE FROM agena_tool_calls WHERE round_id IN (SELECT id FROM agena_rounds WHERE session_id=?)",

@@ -7,6 +7,7 @@ use freshness::PublishedDiagnostics;
 pub use freshness::{DiagnosticReport, DocumentReceipt};
 
 use portable_atomic::AtomicI64;
+use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
@@ -86,6 +87,7 @@ pub struct LspClient {
 
 struct Inner {
     transport: Arc<dyn LspTransport>,
+    options: LspClientOptions,
     next_id: AtomicI64,
     pending: DashMap<i64, oneshot::Sender<JsonRpcResponse>>,
     notifications: Mutex<Option<mpsc::Sender<ServerNotification>>>,
@@ -100,6 +102,15 @@ struct Inner {
     open_docs: DashMap<Uri, OpenDocState>,
 }
 
+#[derive(Clone, Default)]
+pub struct LspClientOptions {
+    pub language_ids: BTreeMap<String, String>,
+    pub settings: Option<Value>,
+    pub startup_timeout: Option<Duration>,
+    pub shutdown_timeout: Option<Duration>,
+    pub request_timeout: Option<Duration>,
+}
+
 #[derive(Debug, Clone)]
 struct OpenDocState {
     version: i32,
@@ -108,9 +119,17 @@ struct OpenDocState {
 
 impl LspClient {
     pub fn new(transport: Arc<dyn LspTransport>) -> Arc<Self> {
+        Self::with_options(transport, LspClientOptions::default())
+    }
+
+    pub(crate) fn with_options(
+        transport: Arc<dyn LspTransport>,
+        options: LspClientOptions,
+    ) -> Arc<Self> {
         let (shutdown, shutdown_rx) = watch::channel(false);
         let inner = Arc::new(Inner {
             transport: Arc::clone(&transport),
+            options,
             next_id: AtomicI64::new(1),
             pending: DashMap::new(),
             notifications: Mutex::new(None),
@@ -125,6 +144,14 @@ impl LspClient {
         let weak_inner = Arc::downgrade(&inner);
         tokio::spawn(async move { reader_loop(weak_inner, transport, shutdown_rx).await });
         Arc::new(Self { inner })
+    }
+
+    pub fn configured_language_id(&self, extension: &str) -> Option<&str> {
+        self.inner
+            .options
+            .language_ids
+            .get(&extension.to_ascii_lowercase())
+            .map(String::as_str)
     }
 
     /// Subscribe to every notification frame the server sends. Replaces
@@ -179,7 +206,15 @@ impl LspClient {
             root_path: None,
             root_uri,
             initialization_options,
-            capabilities: ClientCapabilities::default(),
+            capabilities: ClientCapabilities {
+                workspace: self.inner.options.settings.as_ref().map(|_| {
+                    lsp_types::WorkspaceClientCapabilities {
+                        configuration: Some(true),
+                        ..Default::default()
+                    }
+                }),
+                ..Default::default()
+            },
             trace: None,
             workspace_folders: None,
             client_info: Some(lsp_types::ClientInfo {
@@ -195,12 +230,24 @@ impl LspClient {
         // request — in practice servers tolerate either order, but we send
         // it eagerly for correctness.
         self.notify("initialized", serde_json::json!({})).await?;
+        if let Some(settings) = &self.inner.options.settings {
+            self.notify(
+                "workspace/didChangeConfiguration",
+                serde_json::json!({"settings": settings}),
+            )
+            .await?;
+        }
         Ok(result)
     }
 
     pub async fn shutdown(&self) -> LspResult<()> {
+        let timeout = self
+            .inner
+            .options
+            .shutdown_timeout
+            .unwrap_or(SHUTDOWN_REQUEST_TIMEOUT);
         let handshake = tokio::time::timeout(
-            SHUTDOWN_REQUEST_TIMEOUT,
+            timeout,
             self.request_opt::<Value, Value>("shutdown", Value::Null),
         )
         .await;
@@ -254,7 +301,7 @@ impl LspClient {
                 }
                 Err(LspError::Timeout {
                     operation: "LSP shutdown handshake".to_owned(),
-                    timeout_ms: SHUTDOWN_REQUEST_TIMEOUT.as_millis() as u64,
+                    timeout_ms: timeout.as_millis() as u64,
                     source,
                 })
             }
@@ -544,7 +591,14 @@ impl LspClient {
             self.inner.pending.remove(&id);
             return Err(err);
         }
-        let resp = match tokio::time::timeout(DEFAULT_REQUEST_TIMEOUT, rx).await {
+        let options = &self.inner.options;
+        let timeout = match method {
+            "initialize" => options.startup_timeout,
+            "shutdown" => options.shutdown_timeout,
+            _ => options.request_timeout,
+        }
+        .unwrap_or(DEFAULT_REQUEST_TIMEOUT);
+        let resp = match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(resp)) => resp,
             Ok(Err(error)) => {
                 return Err(LspError::transport_closed(
@@ -556,7 +610,7 @@ impl LspClient {
                 self.inner.pending.remove(&id);
                 return Err(LspError::Timeout {
                     operation: format!("LSP request `{method}` (id {id})"),
-                    timeout_ms: DEFAULT_REQUEST_TIMEOUT.as_millis() as u64,
+                    timeout_ms: timeout.as_millis() as u64,
                     source,
                 });
             }
@@ -669,22 +723,43 @@ async fn reader_loop(
                 handle_notification(&inner, n).await;
             }
             InboundMessage::Request(req) => {
-                // Reply with method-not-found so the server unblocks. We
-                // do not implement server→client requests beyond logging.
-                tracing::debug!(
-                    target: "agena_lsp::reader",
-                    method = %req.method,
-                    "ignoring server→client request"
-                );
+                let result = inner.options.settings.as_ref().and_then(|settings| {
+                    (req.method == "workspace/configuration").then(|| {
+                        let items = req
+                            .params
+                            .as_ref()
+                            .and_then(|params| params.get("items"))
+                            .and_then(Value::as_array);
+                        Value::Array(
+                            items
+                                .into_iter()
+                                .flatten()
+                                .map(|item| {
+                                    item.get("section")
+                                        .and_then(Value::as_str)
+                                        .filter(|section| !section.is_empty())
+                                        .map_or(Some(settings), |section| {
+                                            section
+                                                .split('.')
+                                                .try_fold(settings, |value, key| value.get(key))
+                                        })
+                                        .cloned()
+                                        .unwrap_or(Value::Null)
+                                })
+                                .collect(),
+                        )
+                    })
+                });
+                let error = result.is_none().then(|| crate::protocol::JsonRpcError {
+                    code: -32601,
+                    message: format!("method '{}' not handled by client", req.method),
+                    data: None,
+                });
                 let resp = JsonRpcResponse {
                     jsonrpc: JSONRPC_VERSION.to_string(),
                     id: req.id,
-                    result: None,
-                    error: Some(crate::protocol::JsonRpcError {
-                        code: -32601,
-                        message: format!("method '{}' not handled by client", req.method),
-                        data: None,
-                    }),
+                    result,
+                    error,
                 };
                 drop(inner);
                 let response = match serde_json::to_value(&resp) {
@@ -692,7 +767,7 @@ async fn reader_loop(
                     Err(error) => {
                         tracing::error!(
                             diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
-                            "failed to serialize the LSP method-not-found response"
+                            "failed to serialize the LSP server request response"
                         );
                         continue;
                     }
@@ -700,7 +775,7 @@ async fn reader_loop(
                 if let Err(error) = transport.send(response).await {
                     tracing::warn!(
                         diagnostic = %agena_failure::diagnostic::format_error_chain(&error),
-                        "failed to send the LSP method-not-found response"
+                        "failed to send the LSP server request response"
                     );
                 }
             }

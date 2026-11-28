@@ -108,6 +108,8 @@ fn administrative_declared_detail_preserves_catalog_shadow_status() {
             description: "Plugin example".into(),
             instructions: "Original".into(),
             aliases: Vec::new(),
+            invocation: None,
+            resource_base: None,
         }]);
     let declared = manager
         .list()

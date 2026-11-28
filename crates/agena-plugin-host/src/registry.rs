@@ -341,6 +341,15 @@ impl RegisteredTool {
         self.key.name()
     }
 
+    pub fn claude_mod_tool_name(&self) -> Option<&str> {
+        let name = self.tool_name();
+        (name.starts_with("mcp__")
+            && self.definition.tags.iter().any(|tag| {
+                tag.as_ref() == crate::agent_plugin::claude_mods::CLAUDE_MOD_TOOL_TAG
+            }))
+        .then_some(name)
+    }
+
     pub fn plugin_full_name(&self) -> String {
         self.key.plugin().to_string()
     }

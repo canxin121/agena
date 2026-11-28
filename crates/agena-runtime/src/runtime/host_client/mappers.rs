@@ -19,6 +19,7 @@ pub(super) fn tool_execution_to_invoke_output(
         payload: summary.payload,
         metadata: summary.metadata.into_iter().collect(),
         attachments: execution.view.attachments,
+        additional_context: execution.view.additional_context,
     }
 }
 

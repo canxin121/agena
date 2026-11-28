@@ -61,26 +61,32 @@ pub fn execution_tool_names(tools: &[ExecutionTool]) -> Vec<String> {
     let mut compact_name_counts = std::collections::HashMap::<String, usize>::new();
     for tool in tools {
         *compact_name_counts
-            .entry(compact_tool_call_name(tool.canonical_name().as_str()))
+            .entry(preferred_execution_name(tool))
             .or_default() += 1;
     }
     tools
         .iter()
         .map(|tool| {
-            let canonical = tool.canonical_name();
-            let compact = compact_tool_call_name(canonical.as_str());
+            let compact = preferred_execution_name(tool);
             if compact_name_counts
                 .get(compact.as_str())
                 .copied()
                 .unwrap_or_default()
                 > 1
             {
-                canonical
+                tool.canonical_name()
             } else {
                 compact
             }
         })
         .collect()
+}
+
+fn preferred_execution_name(tool: &RegisteredTool) -> String {
+    tool.claude_mod_tool_name().map_or_else(
+        || compact_tool_call_name(tool.canonical_name().as_str()),
+        str::to_owned,
+    )
 }
 
 pub fn suggest_tool_names<I, T>(requested: &str, candidates: I, limit: usize) -> Vec<String>
@@ -151,7 +157,7 @@ pub(crate) fn unknown_tool_hint(requested: &str, suggestions: Vec<String>) -> To
 
 pub fn registered_tool_matches_name(registered_tool: &RegisteredTool, name: &str) -> bool {
     registered_tool.canonical_name() == name
-        || compact_tool_call_name(registered_tool.canonical_name().as_str()) == name
+        || preferred_execution_name(registered_tool) == name
 }
 
 pub(crate) fn unique_registered_tool_match(
@@ -613,7 +619,9 @@ pub(super) struct CloudToolAdapterGate {
 pub struct ToolExecutor {
     pub(super) read_path_authorizer: Option<Arc<ReadPathAuthorizer>>,
     pub(super) path_effect_authorizer: Option<Arc<PathEffectAuthorizer>>,
+    pub(super) dispatch_tool_after: bool,
     pub(super) session_relation_kind: agena_domain::SessionRelationKind,
+    pub(super) cordis_agent_permission: Option<&'static str>,
     /// The conversation kind this executor serves, derived once from the
     /// session context. It gates tool applicability: a tool declared for one
     /// kind never enters the other kind's catalog, and the authorization path
@@ -621,8 +629,12 @@ pub struct ToolExecutor {
     pub(super) session_kind: agena_domain::SessionKind,
     pub(crate) conversation: Option<agena_domain::SessionConversation>,
     pub(super) workspace_root: PathBuf,
+    pub(super) permission_workspace_root: Option<PathBuf>,
     pub(super) global: bool,
     pub(super) session_id: Option<i64>,
+    pub(super) imported_shells: Option<Arc<super::ImportedShellSessions>>,
+    pub(crate) claude_instruction_settings: Option<Arc<crate::ClaudeInstructionSettings>>,
+    pub(super) claude_skill_config_directory: Option<Arc<str>>,
     pub(super) principal: ExecutionPrincipal,
     pub(super) sandbox_enabled: bool,
     pub(super) configured_sandbox_enabled: bool,
@@ -653,6 +665,7 @@ pub struct ToolExecutor {
     pub(super) plugins: Arc<PluginHost>,
     pub(super) scheduler: Option<Arc<agena_scheduler::Scheduler>>,
     pub(super) lsp_registry: Option<Arc<agena_lsp::LspRegistry>>,
+    pub(super) mcp_manager: Option<Arc<agena_mcp_client::McpConnectionManager>>,
     pub(super) cancellation_token: Option<tokio_util::sync::CancellationToken>,
     pub(super) permission_inspector: Option<Arc<dyn ExecutionPermissionInspector>>,
     pub(super) channel_authority: Option<agena_domain::ChannelAuthority>,

@@ -173,6 +173,8 @@ async fn usage_stats_preserves_legacy_permission_history_and_subagent_filters() 
                         },
                         agent: is_subagent.then(|| SessionAgentConfiguration {
                             origin_message_id: None,
+                            workflow: None,
+                            cordis: None,
                             name: "legacy_accounting".into(),
                             status: AgentStatus::Created,
                             started_at_ms: None,

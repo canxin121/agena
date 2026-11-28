@@ -16,7 +16,7 @@ use agena_storage::{backend::kernel::KernelPorts, kernel::*};
 use arc_swap::ArcSwap;
 use chrono::Utc;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     result::Result,
     sync::{Arc, Mutex as StdMutex},
     time::Duration,
@@ -28,21 +28,32 @@ mod agents;
 mod auxiliary;
 mod bot;
 mod channel_recovery;
+mod claude_channels;
 mod commands;
+mod cordis_workflows;
+pub(super) use cordis_workflows::cordis_job_capture_is_explicit;
+mod config_hooks;
+mod directory_hooks;
 mod deliveries;
 mod execution;
 mod host;
 mod integration_execution;
+mod imported_skills;
 mod managed;
 mod media;
 mod memory;
+mod model_switch;
 mod permission_config;
 mod queries;
 mod results;
 mod results_text;
+mod session_history;
 mod session_prompt;
+mod session_start;
 mod titles;
 mod tool_api;
+mod working_directories;
+mod worktrees;
 
 const MAX_ACTIVE_EXECUTIONS: usize = 128;
 const MAX_AUXILIARY_TASKS: usize = 4;
@@ -71,6 +82,7 @@ pub struct SessionScopeReconfiguration {
 struct AgentBudget {
     max_tokens: Option<u64>,
     max_cost_microusd: Option<u64>,
+    cordis: Option<agents::CordisExecution>,
 }
 struct RunControl {
     session: SessionId,
@@ -79,6 +91,7 @@ struct RunControl {
     model: ModelRef,
     state: Arc<ExecutionState>,
     cancel: CancellationToken,
+    cordis_child_jobs: cordis_workflows::ChildCordisJobs,
     phase: StdMutex<agena_domain::ExecutionPhase>,
     done: Notify,
     budget: Option<AgentBudget>,
@@ -94,8 +107,21 @@ struct LiveTool {
     /// One tool owns one interaction slot. Concurrent plugin callbacks must
     /// serialize approval and may reuse a grant only within this live call.
     permissions: Arc<tokio::sync::Mutex<std::collections::HashSet<String>>>,
+    cordis_reads: Arc<tokio::sync::Mutex<cordis_workflows::CordisToolReads>>,
 }
 type ActiveToolMap = HashMap<(i64, i64), LiveTool>;
+
+struct ActiveToolRegistration<'a> {
+    manager: &'a SessionManager,
+    key: (i64, i64),
+}
+
+impl Drop for ActiveToolRegistration<'_> {
+    fn drop(&mut self) {
+        self.manager.tools.lock().unwrap_or_else(|poison| poison.into_inner()).remove(&self.key);
+        self.manager.host_sequences.lock().unwrap_or_else(|poison| poison.into_inner()).remove(&self.key);
+    }
+}
 
 type AttemptControlKey = (i64, ExecutionId, AttemptGeneration);
 type AttemptControlOwners = Arc<StdMutex<HashMap<AttemptControlKey, usize>>>;
@@ -142,7 +168,9 @@ struct OperatorInvocationAuthority {
 type OperatorInvocationMap = HashMap<i64, Arc<OperatorInvocationAuthority>>;
 #[derive(Default)]
 struct SessionDispatch {
-    submission: tokio::sync::Mutex<()>,
+    submission: Arc<tokio::sync::Mutex<()>>,
+    disposal: tokio::sync::Mutex<()>,
+    model_selection: tokio::sync::Mutex<()>,
     execution: tokio::sync::Mutex<()>,
     tail: StdMutex<std::sync::Weak<RunControl>>,
     title: StdMutex<titles::TitleWork>,
@@ -177,6 +205,17 @@ pub struct SessionManager {
     auxiliary_tasks: Arc<Semaphore>,
     /// Accepted exact-attempt cancellations outlive their transport waiters.
     control_tasks: tokio_util::task::TaskTracker,
+    imported_file_watches: Arc<agena_plugin_host::agent_plugin::FileWatches>,
+    imported_shells: Arc<agena_runtime_tools::tool::ImportedShellSessions>,
+    /// Initialized conversations and their ordered, unconsumed SessionStart stops.
+    plugin_session_starts: Arc<parking_lot::Mutex<HashMap<SessionId, VecDeque<String>>>>,
+    config_hook_sessions: Arc<parking_lot::Mutex<std::collections::BTreeSet<SessionId>>>,
+    claude_channels: claude_channels::ClaudeChannels,
+    mcp_app_views: Arc<crate::McpAppViews>,
+    cordis_workflows: cordis_workflows::CordisWorkflows,
+    cordis_workflow_slots: Arc<Semaphore>,
+    started_at_ms: i64,
+    model_switches: Arc<parking_lot::Mutex<HashMap<SessionId, model_switch::SessionModelSwitch>>>,
     attempt_controls: AttemptControlOwners,
     /// Locks exist only while queued/running executions retain them.
     sessions: Arc<StdMutex<HashMap<SessionId, std::sync::Weak<SessionDispatch>>>>,
@@ -184,6 +223,7 @@ pub struct SessionManager {
     operator_calls: Arc<StdMutex<OperatorInvocationMap>>,
     bot_operations: Arc<tokio::sync::Mutex<()>>,
     agent_preparation: Arc<tokio::sync::Mutex<()>>,
+    cordis_tree_work: Arc<parking_lot::Mutex<HashMap<SessionId, usize>>>,
     pending_agent_settlements: Arc<StdMutex<HashMap<SessionId, agents::PendingAgentSettlement>>>,
     delivery_scan: Arc<StdMutex<Option<SessionSummaryCursor>>>,
     host_sequences: Arc<StdMutex<HashMap<(i64, i64), u64>>>,
@@ -208,11 +248,18 @@ impl SessionManager {
         executor: ToolExecutor,
         config: RuntimeSessionManagerConfig,
     ) -> Self {
+        let imported_file_watches =
+            Arc::new(agena_plugin_host::agent_plugin::FileWatches::default());
+        let imported_shells = Arc::new(agena_runtime_tools::tool::ImportedShellSessions::new(
+            imported_file_watches.clone(),
+            executor.plugin_manager(),
+            kernel.ports.reader.clone(),
+        ));
         let initial = Arc::new(ExecutionState {
             providers,
             governor,
             processor,
-            executor,
+            executor: executor.with_imported_shells(imported_shells.clone()),
             tools: Arc::new(Semaphore::new(config.max_concurrent_tools.max(1))),
             config,
         });
@@ -227,12 +274,23 @@ impl SessionManager {
             agent_settlements: Arc::new(Semaphore::new(MAX_ACTIVE_EXECUTIONS)),
             auxiliary_tasks: Arc::new(Semaphore::new(MAX_AUXILIARY_TASKS)),
             control_tasks: tokio_util::task::TaskTracker::new(),
+            imported_file_watches,
+            imported_shells,
+            plugin_session_starts: Default::default(),
+            config_hook_sessions: Default::default(),
+            claude_channels: Default::default(),
+            mcp_app_views: Default::default(),
+            cordis_workflows: Default::default(),
+            cordis_workflow_slots: Self::cordis_workflow_slots(),
+            started_at_ms: Utc::now().timestamp_millis(),
+            model_switches: Default::default(),
             attempt_controls: Default::default(),
             sessions: Default::default(),
             tools: Default::default(),
             operator_calls: Default::default(),
             host_sequences: Default::default(),
             agent_preparation: Default::default(),
+            cordis_tree_work: Default::default(),
             pending_agent_settlements: Default::default(),
             delivery_scan: Default::default(),
             bot_operations: Default::default(),
@@ -344,11 +402,18 @@ impl SessionManager {
         executor: ToolExecutor,
         config: RuntimeSessionManagerConfig,
     ) {
+        if !Arc::ptr_eq(
+            self.state.load().executor.plugin_manager(),
+            executor.plugin_manager(),
+        ) {
+            self.mcp_app_views.reset();
+        }
+        self.imported_shells.set_plugins(executor.plugin_manager());
         self.state.store(Arc::new(ExecutionState {
             providers,
             governor,
             processor,
-            executor,
+            executor: executor.with_imported_shells(self.imported_shells.clone()),
             tools: Arc::new(Semaphore::new(config.max_concurrent_tools.max(1))),
             config,
         }));
@@ -392,6 +457,7 @@ impl SessionManager {
         }
     }
     pub async fn maintenance_tick(&self) -> Result<(), AppError> {
+        self.mcp_app_views.prune();
         self.kernel_runtime
             .maintenance
             .collect_history_snapshots()
@@ -420,15 +486,17 @@ impl SessionManager {
             .map(|r| r.session)
             .collect::<std::collections::BTreeSet<_>>();
         let executor = self.tool_executor();
+        let shells = self.imported_shells.clone();
         async move {
             for session in sessions {
                 executor
                     .plugin_manager()
-                    .broadcast_session_end(agena_plugin_host::SessionEndInput {
+                    .broadcast_shutdown_session_end(agena_plugin_host::SessionEndInput {
                         session_id: session.get(),
                         reason,
                     })
                     .await;
+                shells.end_session(session.get());
             }
         }
     }
@@ -437,22 +505,48 @@ impl SessionManager {
         session_id: i64,
         reason: agena_plugin_host::SessionEndReason,
     ) -> impl std::future::Future<Output = ()> + Send + 'static + use<> {
+        if let Ok(session) = SessionId::try_from(session_id) {
+            self.plugin_session_starts.lock().remove(&session);
+            self.config_hook_sessions.lock().remove(&session);
+            self.claude_channels.stop_session(session);
+        }
         let executor = self.tool_executor();
+        let watches = self.imported_file_watches.clone();
+        let shells = self.imported_shells.clone();
         async move {
+            watches.end_session(session_id);
             executor
                 .plugin_manager()
                 .broadcast_session_end(agena_plugin_host::SessionEndInput { session_id, reason })
                 .await;
+            executor.release_session_mcp(session_id).await;
+            shells.end_session(session_id);
         }
     }
     /// Close admission and cancel owned work without dropping its supervisors.
     /// The asynchronous drain remains responsible for fencing/persisting it.
     pub fn request_shutdown(&self) {
         self.shutdown.cancel();
+        self.mcp_app_views.shutdown();
         self.control_tasks.close();
+        self.imported_file_watches.close();
+    }
+
+    pub fn imported_file_watches(&self) -> &agena_plugin_host::agent_plugin::FileWatches {
+        &self.imported_file_watches
+    }
+
+    pub fn imported_shells(&self) -> &Arc<agena_runtime_tools::tool::ImportedShellSessions> {
+        &self.imported_shells
     }
 
     pub async fn shutdown(&self) -> Result<(), AppError> {
+        self.drain_for_shutdown().await?;
+        self.imported_shells.close();
+        Ok(())
+    }
+
+    pub async fn drain_for_shutdown(&self) -> Result<(), AppError> {
         self.request_shutdown();
         let active = self
             .active

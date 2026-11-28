@@ -8,7 +8,7 @@ impl ToolExecutor {
     /// principal. No cached base policy can omit a later permission ceiling.
     pub fn sandbox_permission_snapshot(&self) -> SandboxPermissionSnapshot {
         self.principal
-            .sandbox_permission_snapshot(self.workspace_root())
+            .sandbox_permission_snapshot(self.permission_workspace_root())
             .with_persisted_rules(self.sandbox_persisted_rules.as_ref().clone())
     }
 

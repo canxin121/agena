@@ -17,10 +17,14 @@ pub mod server_spec;
 pub mod transport;
 
 pub use client::{
-    DiagnosticReport, DocumentReceipt, DocumentSyncStatus, LspClient, ServerNotification,
+    DiagnosticReport, DocumentReceipt, DocumentSyncStatus, LspClient, LspClientOptions,
+    ServerNotification,
 };
 pub use error::{LspError, LspResult};
-pub use registry::{LspRegistry, LspSandboxPolicyBuilder, LspScopedSandboxBuilder, ResolveError};
+pub use registry::{
+    LspRegistry, LspSandboxPolicyBuilder, LspScopedSandboxBuilder, PluginLspLaunch,
+    PluginLspResolver, ResolveError,
+};
 pub use server_spec::LspServerSpec;
 pub use transport::{LspTransport, StdioTransport};
 

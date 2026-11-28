@@ -113,6 +113,7 @@ impl App {
     ) -> Vec<agena_plugin_sdk::inspection::CommandCatalogItem> {
         crate::app_backend::plugin_effects::plugin_slash_commands(
             &self.application,
+            self.current_or_selected_session_id(),
             self.is_bot_session(),
         )
     }

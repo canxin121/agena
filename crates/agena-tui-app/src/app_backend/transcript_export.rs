@@ -103,6 +103,9 @@ impl TuiBackend {
         for part in &mut parts {
             if part.kind == "text" && part.role == "assistant" {
                 part.inline_ui = None;
+                if let Some(original) = part.content.get("original_text_resource").cloned() {
+                    part.content["resources"] = serde_json::json!([original]);
+                }
             }
         }
         let entries = parts_entries(&parts);

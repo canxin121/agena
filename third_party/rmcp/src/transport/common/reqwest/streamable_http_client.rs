@@ -55,6 +55,17 @@ pub trait HttpRequestExecutor: Clone + Send + Sync + 'static {
     ) -> impl std::future::Future<
         Output = Result<reqwest::Response, StreamableHttpError<reqwest::Error>>,
     > + Send;
+
+    /// Execute a JSON-RPC POST with access to its non-serialized extensions.
+    fn execute_message(
+        &self,
+        request: reqwest::Request,
+        _message: &ClientJsonRpcMessage,
+    ) -> impl std::future::Future<
+        Output = Result<reqwest::Response, StreamableHttpError<reqwest::Error>>,
+    > + Send {
+        self.execute(request)
+    }
 }
 
 impl HttpRequestExecutor for reqwest::Client {
@@ -252,7 +263,7 @@ impl<E: HttpRequestExecutor> StreamableHttpClient for RequestExecutingHttpClient
         }
         let response = self
             .executor
-            .execute(request.json(&message).build()?)
+            .execute_message(request.json(&message).build()?, &message)
             .await?;
         if response.status() == reqwest::StatusCode::UNAUTHORIZED
             && let Some(header) = response.headers().get(WWW_AUTHENTICATE)

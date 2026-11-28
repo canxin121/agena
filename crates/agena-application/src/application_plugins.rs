@@ -142,7 +142,9 @@ impl Application {
         })?;
         let entry = self
             .plugin_runtime()
-            .resolve_plugin_tool(Some(plugin_id), tool_name)
+            .resolve_plugin_tool(Some(plugin_id), tool_name, session_id)
+            .await
+            .map_err(ApplicationError::internal)?
             .ok_or_else(|| {
                 ApplicationError::internal(format!(
                     "plugin tool not found: {plugin_id}/{tool_name}"
@@ -233,15 +235,24 @@ impl Application {
         &self,
         plugin_id: &str,
         command_id: &str,
-        input: serde_json::Value,
-        session_id: Option<i64>,
-        workspace_root: Option<String>,
-        slash: Option<String>,
-        raw: String,
+        request: agena_api::resource::PluginCommandInvokeRequest,
     ) -> Result<CommandResult, ApplicationError> {
+        let agena_api::resource::CommandRequestContext {
+            input,
+            session_id,
+            slash,
+            raw,
+        } = request.context;
+        let workspace_root = self.plugin_command_workspace_root(session_id, true).await?;
+        if let Some(session_id) = session_id {
+            self.plugin_runtime()
+                .prepare_session_plugin_commands(session_id)
+                .await
+                .map_err(ApplicationError::internal)?;
+        }
         let entry = self
             .plugin_runtime()
-            .command_catalog()
+            .command_catalog_for_session(session_id)
             .into_iter()
             .find(|entry| {
                 entry.plugin_id.to_string() == plugin_id && entry.command.id == command_id
@@ -269,51 +280,87 @@ impl Application {
             ));
         }
 
-        let input_is_empty =
-            input.is_null() || input.as_object().is_some_and(serde_json::Map::is_empty);
-        let input = if input_is_empty && !raw.trim().is_empty() {
-            entry.command.input.parse_shorthand(raw.as_str())
-        } else if input_is_empty {
-            entry.command.input.default_value()
-        } else {
-            entry.command.input.validate_value(&input).map(|()| input)
-        }
-        .map_err(|error| {
-            ApplicationError::bad_request_with_diagnostic(
-                "The plugin operation input is invalid.",
-                error.to_string(),
-            )
-        })?;
+        let input =
+            agena_plugin_host::host::decode_plugin_command_input(&entry.command, input, &raw)
+                .map_err(|error| {
+                    ApplicationError::bad_request_with_diagnostic(
+                        "The plugin operation input is invalid.",
+                        error.diagnostic_message().to_owned(),
+                    )
+                })?;
 
-        let mut result = match &entry.command.target {
-            // A client target is executed by the client that renders the
-            // palette, never here. Reaching this branch means a client sent a
-            // command it should have short-circuited locally.
-            CommandTarget::Client { action } => CommandResult::unavailable(format!(
-                "`{}` runs in the client as `{action}` and cannot be invoked on the server.",
-                entry.command.id
-            )),
-            CommandTarget::Method { .. } => self
-                .plugin_runtime()
-                .invoke_plugin_command(
-                    plugin_id,
-                    CommandInvokeInput {
+        let mut result = if let Some(composer) = request.composer {
+            let session_id = session_id.ok_or_else(|| {
+                ApplicationError::bad_request("This operation requires a project session.")
+            })?;
+            if !entry.accepts_attachments {
+                return Err(ApplicationError::bad_request(
+                    "This operation does not accept composer attachments.",
+                ));
+            }
+            if !composer.document.is_empty() {
+                crate::session::validate_input_document(&composer.document)?;
+            }
+            self.session_execution_services()?
+                .plugin_commands
+                .invoke_session_plugin_command(
+                    agena_runtime::SessionPluginCommandRequest {
+                        session_id,
+                        plugin_id: plugin_id.to_owned(),
                         command_id: command_id.to_owned(),
                         input,
-                        session_id,
-                        call_id: None,
-                        workspace_root,
                         slash,
                         raw,
+                        document: composer.document,
                     },
+                    Box::new(move |document| {
+                        Box::pin(async move {
+                            crate::session::session_user_run_request(
+                                self,
+                                session_id,
+                                composer.options,
+                                document,
+                            )
+                            .await
+                            .map_err(|error| *error.failure)
+                        })
+                    }),
                 )
                 .await
-                .map_err(ApplicationError::internal)?,
-            CommandTarget::Tool { tool } => {
-                let tool_result = self
-                    .invoke_plugin_tool(plugin_id, tool.as_str(), input, session_id)
-                    .await?;
-                plugin_command_result_from_tool(plugin_id, tool_result)
+                .map_err(ApplicationError::from_failure)?
+        } else {
+            match &entry.command.target {
+                // A client target is executed by the client that renders the
+                // palette, never here. Reaching this branch means a client sent a
+                // command it should have short-circuited locally.
+                CommandTarget::Client { action } => CommandResult::unavailable(format!(
+                    "`{}` runs in the client as `{action}` and cannot be invoked on the server.",
+                    entry.command.id
+                )),
+                CommandTarget::Method { .. } => self
+                    .plugin_runtime()
+                    .invoke_plugin_command(
+                        plugin_id,
+                        CommandInvokeInput {
+                            command_id: command_id.to_owned(),
+                            input,
+                            session_id,
+                            call_id: None,
+                            workspace_root,
+                            slash,
+                            raw,
+                            prompt_context: String::new(),
+                            cordis_attachments: None,
+                        },
+                    )
+                    .await
+                    .map_err(ApplicationError::internal)?,
+                CommandTarget::Tool { tool } => {
+                    let tool_result = self
+                        .invoke_plugin_tool(plugin_id, tool.as_str(), input, session_id)
+                        .await?;
+                    plugin_command_result_from_tool(plugin_id, tool_result)
+                }
             }
         };
         if result.title.trim().is_empty() {

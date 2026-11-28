@@ -18,6 +18,7 @@ pub struct Usage {
     pub output_tokens: u64,
     pub cached_tokens: u64,
     pub reasoning_tokens: u64,
+    pub codex_rollout_budget_units: Option<serde_json::Number>,
 }
 
 impl Usage {
@@ -27,6 +28,7 @@ impl Usage {
             output_tokens,
             cached_tokens: 0,
             reasoning_tokens: 0,
+            codex_rollout_budget_units: None,
         }
     }
 
@@ -40,14 +42,24 @@ impl Usage {
         self
     }
 
+    pub fn codex_rollout_units(mut self, units: f64) -> Self {
+        self.codex_rollout_budget_units =
+            Some(serde_json::Number::from_f64(units).expect("finite fixture rollout units"));
+        self
+    }
+
     fn json(&self) -> Value {
-        json!({
+        let mut usage = json!({
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
             "total_tokens": self.input_tokens.saturating_add(self.output_tokens),
             "input_tokens_details": {"cached_tokens": self.cached_tokens},
             "output_tokens_details": {"reasoning_tokens": self.reasoning_tokens}
-        })
+        });
+        if let Some(units) = &self.codex_rollout_budget_units {
+            usage["codex_rollout_budget_units"] = json!(units);
+        }
+        usage
     }
 }
 

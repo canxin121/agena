@@ -11,6 +11,13 @@ pub struct SkillWorkspaceQuery {
     pub workspace_id: Option<i64>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct SkillCatalogQuery {
+    pub workspace_id: Option<i64>,
+    pub session_id: Option<i64>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SkillRevisionQuery {
@@ -28,9 +35,15 @@ pub struct SkillResourceQuery {
 
 pub async fn list_skills(
     State(state): State<AppState>,
-    AxumQuery(query): AxumQuery<SkillWorkspaceQuery>,
+    AxumQuery(query): AxumQuery<SkillCatalogQuery>,
 ) -> Result<impl IntoResponse, ServerError> {
-    json_http(state.application().list_skills(query.workspace_id)).await
+    json_http(async {
+        match query.session_id {
+            Some(id) => state.application().list_skills_for_session(id).await,
+            None => state.application().list_skills(query.workspace_id).await,
+        }
+    })
+    .await
 }
 
 pub async fn get_skill(

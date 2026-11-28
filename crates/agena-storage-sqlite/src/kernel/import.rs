@@ -285,16 +285,18 @@ async fn entry(
             document,
             author,
             origin,
+            model_context,
         } => {
             row["message_id"] = Value::Null;
             row["body_json"] = json!(encode_user_body(
                 document,
                 author.as_ref(),
-                origin.as_ref()
+                origin.as_ref(),
+                model_context,
             )?);
             "user"
         }
-        EntryPayload::Text { content_id } => {
+        EntryPayload::Text { content_id, .. } => {
             row["content_id"] = json!(content_id);
             "text"
         }
@@ -313,6 +315,15 @@ async fn entry(
         }
         EntryPayload::Notice { text } => {
             row["body_json"] = json!(encode(text)?);
+            "notice"
+        }
+        EntryPayload::PluginCommand { operation, .. } => {
+            row["tool_id"] = json!(operation.get());
+            row["body_json"] = json!(encode(&e.payload)?);
+            "notice"
+        }
+        EntryPayload::PluginPrompt(prompt) => {
+            row["body_json"] = json!(encode_plugin_prompt(prompt)?);
             "notice"
         }
         EntryPayload::Compaction { summary, .. } => {
@@ -712,6 +723,11 @@ pub(super) async fn prepare(
                     serde_json::from_value(data["configuration"].clone()).map_err(invalid)?;
                 configuration.parent_session_id = None;
                 configuration.relation_kind = agena_domain::SessionRelationKind::Root;
+                configuration.additional_working_directories.clear();
+                // An archive carries history, not ownership of a live checkout.
+                if configuration.worktree.take().is_some() {
+                    configuration.effective_workspace_root = None;
+                }
                 lifecycle::normalize_configuration_permissions(&mut configuration)?;
                 validator(&configuration).map_err(invalid)?;
                 put(&mut db,&columns,"agena_sessions",&json!({"id":1,"workspace_id":1,"root_session_id":1,"title":metadata.title,"favorite":metadata.favorite,"pinned":metadata.pinned,"selection_json":metadata.selection.map(|value|encode(&value)).transpose()?,"configuration_json":encode(&configuration)?,"created_at_ms":now_ms(),"updated_at_ms":now_ms()}),&[]).await?;
@@ -1432,8 +1448,31 @@ async fn validate(connection: &mut SqliteConnection) -> Result<()> {
             "archive entry belongs to an inconsistent execution message",
         ),
         (
-            "SELECT EXISTS(SELECT 1 FROM agena_executions x JOIN agena_entries e ON e.id=x.message_id LEFT JOIN agena_execution_purposes p ON p.execution_id=x.id WHERE (p.execution_id IS NULL AND e.kind!='user') OR (p.execution_id IS NOT NULL AND (e.kind!='notice' OR e.message_id!=e.id OR e.origin_session_id!=x.session_id)))",
+            "SELECT EXISTS(SELECT 1 FROM agena_executions x JOIN agena_entries e ON e.id=x.message_id LEFT JOIN agena_execution_purposes p ON p.execution_id=x.id
+             WHERE (p.execution_id IS NULL AND e.kind!='user'
+                       AND (e.kind!='notice' OR json_extract(e.body_json,'$.kind') IS NOT 'plugin_command'))
+                OR (p.execution_id IS NOT NULL AND (e.kind!='notice' OR e.message_id!=e.id OR e.origin_session_id!=x.session_id)))",
             "archive execution purpose has an inconsistent input anchor",
+        ),
+        (
+            "SELECT EXISTS(
+                SELECT 1 FROM agena_entries e JOIN agena_executions x ON x.id=e.execution_id
+                WHERE e.kind='notice' AND json_extract(e.body_json,'$.kind')='plugin_command'
+                  AND (x.message_id!=e.id OR e.message_id IS NOT e.id OR e.origin_session_id!=x.session_id
+                    OR e.generation!=1 OR x.current_generation!=1 OR e.tool_id IS NULL
+                    OR json_extract(e.body_json,'$.operation') IS NOT e.tool_id
+                    OR EXISTS(SELECT 1 FROM agena_execution_purposes p WHERE p.execution_id=x.id)
+                    OR NOT EXISTS(
+                         SELECT 1 FROM agena_attempts a
+                         JOIN agena_rounds r ON r.execution_id=a.execution_id AND r.generation=a.generation
+                         JOIN agena_tool_calls t ON t.round_id=r.id
+                           AND t.execution_id=a.execution_id AND t.generation=a.generation
+                         WHERE a.execution_id=x.id AND a.generation=1 AND a.phase='succeeded'
+                           AND r.id=e.round_id AND r.phase='succeeded' AND r.ordinal=0
+                           AND t.id=e.tool_id AND t.execution_kind='runtime' AND t.phase='succeeded'
+                    ))
+             )",
+            "archive plugin command has an inconsistent operation",
         ),
         (
             "SELECT EXISTS(
@@ -1675,6 +1714,9 @@ async fn stage_json_remap(
         ("agena_entries", "body_json") if value["kind"] == "compaction" => {
             ("through", integer(value, "through")?.to_string(), None)
         }
+        ("agena_entries", "body_json") if value["kind"] == "plugin_command" => {
+            ("operation", integer(value, "operation")?.to_string(), None)
+        }
         ("agena_interactions", "request_json") if value.get("Input").is_some() => {
             if !value["Input"]["request"].is_object() {
                 return Err(invalid("archive input request has no request object"));
@@ -1828,6 +1870,13 @@ async fn publish_json(connection: &mut SqliteConnection, session: i64) -> Result
             "body_json",
             "entry",
             "json_set(t.body_json,'$.through',CAST(m.new AS INTEGER))",
+        ),
+        (
+            "operation",
+            "agena_entries",
+            "body_json",
+            "tool",
+            "json_set(t.body_json,'$.operation',CAST(m.new AS INTEGER))",
         ),
         (
             "input_request",

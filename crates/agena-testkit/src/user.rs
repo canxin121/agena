@@ -326,6 +326,8 @@ impl UserSession {
                         session_id: self.session_id,
                         options,
                         document,
+                        prompt_command: None,
+                        literal_leading_slash: false,
                     })
                     .await?)
             })

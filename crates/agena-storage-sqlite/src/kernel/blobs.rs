@@ -114,40 +114,64 @@ pub(super) fn command_bytes(command: &Command) -> Result<Vec<u8>> {
             blobs,
             author,
             origin,
-        } => serde_json::to_vec(&(
-            "send",
-            session,
-            document,
-            blobs.iter().map(|b| b.id).collect::<Vec<_>>(),
-            author,
-            origin,
-        )),
+            model_context,
+        } => {
+            let body = (
+                "send",
+                session,
+                document,
+                blobs.iter().map(|b| b.id).collect::<Vec<_>>(),
+                author,
+                origin,
+            );
+            if model_context.is_empty() {
+                serde_json::to_vec(&body)
+            } else {
+                serde_json::to_vec(&(body, model_context))
+            }
+        }
         Command::EditQueued {
             session,
             execution,
             expected_revision,
             document,
             blobs,
-        } => serde_json::to_vec(&(
-            "edit_queued",
-            session,
-            execution,
-            expected_revision,
-            document,
-            blobs.iter().map(|b| b.id).collect::<Vec<_>>(),
-        )),
+            model_context,
+        } => {
+            let body = (
+                "edit_queued",
+                session,
+                execution,
+                expected_revision,
+                document,
+                blobs.iter().map(|b| b.id).collect::<Vec<_>>(),
+            );
+            if model_context.is_empty() {
+                serde_json::to_vec(&body)
+            } else {
+                serde_json::to_vec(&(body, model_context))
+            }
+        }
         Command::CompleteTool {
             scope,
             tool,
             result,
             blobs,
-        } => serde_json::to_vec(&(
-            "complete_tool",
-            scope,
-            tool,
-            result,
-            blobs.iter().map(|b| b.id).collect::<Vec<_>>(),
-        )),
+            activity_reads,
+        } => {
+            let body = (
+                "complete_tool",
+                scope,
+                tool,
+                result,
+                blobs.iter().map(|b| b.id).collect::<Vec<_>>(),
+            );
+            if activity_reads.is_empty() {
+                serde_json::to_vec(&body)
+            } else {
+                serde_json::to_vec(&(body, activity_reads))
+            }
+        }
         _ => serde_json::to_vec(command),
     }
     .map_err(invalid)

@@ -42,6 +42,7 @@ pub(super) struct State {
 
 struct Inner {
     spawned: bool,
+    launch_call: Option<agena_domain::ShellLaunchCall>,
     status: ProcessStatus,
     exit_code: Option<i32>,
     reason: Option<String>,
@@ -95,6 +96,7 @@ impl State {
         controls: mpsc::SyncSender<Request>,
         listener: Option<Arc<dyn MonitorListener>>,
         execution_policy: Option<String>,
+        launch_call: Option<agena_domain::ShellLaunchCall>,
     ) -> Self {
         Self {
             output: params.output.clone(),
@@ -112,6 +114,7 @@ impl State {
             listener,
             inner: Mutex::new(Inner {
                 spawned: false,
+                launch_call,
                 status: ProcessStatus::Running,
                 exit_code: None,
                 reason: None,
@@ -149,6 +152,18 @@ impl State {
     pub fn is_running(&self) -> bool {
         lock(&self.inner).status == ProcessStatus::Running
     }
+
+    pub fn take_launch_call(&self) -> Option<agena_domain::ShellLaunchCall> {
+        let mut inner = lock(&self.inner);
+        let process_exited = inner.reason.as_deref().is_some_and(|reason| {
+            matches!(reason, "process_exit" | "timeout") || reason.starts_with("process_signal:")
+        });
+        if !process_exited {
+            return None;
+        }
+        inner.launch_call.take()
+    }
+
     pub fn output_matches(&self, output: &Option<crate::tool::ToolOutputStreams>) -> bool {
         self.output.as_ref() == output.as_ref()
     }

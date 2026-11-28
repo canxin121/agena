@@ -1,6 +1,9 @@
 //! Static analysis of shell command shapes for permissions and tooling.
 
 mod commands;
+mod file_reads;
+
+pub use file_reads::single_file_read;
 
 /// Parsed summary of a shell command used for policy and result handling.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -325,7 +328,7 @@ pub fn analyze_command(command: &str) -> CommandAnalysis {
         classification,
         single_command: command_segments(&tokens).len() == 1
             && !tokens.iter().any(|token| is_separator(token))
-            && !commands::has_uninspected_syntax(command),
+            && !commands::has_uninspected_syntax(command, false),
     }
 }
 
@@ -886,7 +889,7 @@ fn classify_command(command: &str, tokens: &[String]) -> CommandClassification {
     if segments.is_empty() {
         return CommandClassification::Unknown;
     }
-    let mut saw_unknown = commands::has_uninspected_syntax(command);
+    let mut saw_unknown = commands::has_uninspected_syntax(command, false);
     for segment in segments {
         match classify_segment(segment) {
             CommandClassification::Mutating { reason } => {

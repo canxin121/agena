@@ -97,6 +97,10 @@ pub enum AppError {
         estimated_tokens: u64,
         limit_tokens: u64,
     },
+    #[error("model switch blocked by plugin: {0}")]
+    ModelSwitchBlocked(String),
+    #[error("prompt dropped by a plugin hook: {0}")]
+    PromptSubmitBlocked(String),
     #[error("session {0} has no active execution")]
     NoActiveExecution(i64),
     #[error("{0}")]
@@ -210,6 +214,8 @@ impl AppError {
             Self::PromptBudgetExceeded { .. } => {
                 "The conversation is too large for the selected model. Compact the conversation or choose a model with a larger context window."
             }
+            Self::ModelSwitchBlocked(_) => "A plugin hook blocked the model switch.",
+            Self::PromptSubmitBlocked(_) => "A plugin hook dropped the prompt.",
             Self::NoActiveExecution(_) => "This session has no active response.",
             Self::BotNotFound(_) => "No active Bot; select a Bot or create one.",
             Self::BotConflict(reason) => reason,
@@ -303,6 +309,24 @@ impl AppError {
                 "The operation was blocked by permission policy.",
                 agena_failure::ModelFeedback::permission_denied(),
                 Some(denial.reason.as_str()),
+            )),
+            Self::ModelSwitchBlocked(reason) => Some((
+                "session.model_switch_blocked",
+                Responsibility::Policy,
+                Retry::AfterUserAction,
+                Recovery::ChooseAlternative,
+                "A plugin hook blocked the model switch.",
+                agena_failure::ModelFeedback::permission_denied(),
+                Some(reason.as_str()),
+            )),
+            Self::PromptSubmitBlocked(reason) => Some((
+                "session.prompt_submit_blocked",
+                Responsibility::Policy,
+                Retry::AfterUserAction,
+                Recovery::ChooseAlternative,
+                "A plugin hook dropped the prompt.",
+                agena_failure::ModelFeedback::permission_denied(),
+                Some(reason.as_str()),
             )),
             Self::UserDeclined(decline) => Some((
                 "permission.user_declined",
@@ -579,6 +603,8 @@ impl AppError {
                 Recovery::Retry,
             ),
             Self::PolicyDenied(_)
+            | Self::ModelSwitchBlocked(_)
+            | Self::PromptSubmitBlocked(_)
             | Self::UserDeclined(_)
             | Self::CapabilityUnavailable(_)
             | Self::ToolUnavailable(_)

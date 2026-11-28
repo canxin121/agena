@@ -195,15 +195,17 @@ pub use agena_runtime_session::{
 };
 pub use agena_runtime_session::{
     SessionExecutionCommandError, SessionExecutionCommandOutcome, SessionExecutionCommandService,
+    SessionModelSwitchOutcome,
 };
 pub use agena_runtime_session::{
     SessionExecutionContext, SessionPresentation, SessionQueryError, SessionQueryService,
 };
 pub use agena_runtime_session::{
-    SessionPluginCommandError, SessionPluginCommandRequest, SessionPluginCommandService,
+    SessionPluginCommandRequest, SessionPluginCommandService,
 };
 pub use agena_runtime_session::{
-    SessionToolExecutionError, SessionToolExecutionOutcome, SessionToolExecutionService,
+    McpAppServerTaskProtocol, McpAppViewError, McpAppViews, SessionToolExecutionError,
+    SessionToolExecutionOutcome, SessionToolExecutionService,
 };
 pub(crate) use agena_runtime_session::{
     estimate_auto_compaction_limit_tokens, estimate_auto_compaction_reserve_tokens,

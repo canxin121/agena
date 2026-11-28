@@ -55,6 +55,17 @@ impl SessionExecutionCommandOutcome {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum SessionModelSwitchOutcome {
+    Applied {
+        system_messages: Vec<String>,
+    },
+    ConfirmationRequired {
+        request: agena_domain::ModelSwitchConfirmation,
+        system_messages: Vec<String>,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 /// Error of a session execution command.
 pub struct SessionExecutionCommandError {
@@ -87,6 +98,58 @@ pub trait SessionExecutionCommandService: Send + Sync {
         requested: Option<String>,
         use_default: bool,
     ) -> Result<agena_storage::kernel::SessionConfiguration, SessionExecutionCommandError>;
+
+    async fn session_started(
+        &self,
+        _session: i64,
+        _source: agena_plugin_host::SessionStartSource,
+    ) -> Result<(), SessionExecutionCommandError> {
+        Ok(())
+    }
+
+    async fn session_setup(
+        &self,
+        _input: agena_plugin_host::sdk::ImportedSessionSetupInput,
+    ) -> Result<(), SessionExecutionCommandError> {
+        Ok(())
+    }
+
+    async fn clear_runtime_session(
+        &self,
+        _session: i64,
+        _mode: crate::SessionClearMode,
+    ) -> Result<bool, SessionExecutionCommandError> {
+        Ok(false)
+    }
+
+    async fn session_ended(&self, _session: i64, _reason: agena_plugin_host::SessionEndReason) {}
+
+    async fn list_claude_channels(
+        &self,
+        session: i64,
+    ) -> Result<Vec<agena_domain::claude_channels::ClaudeChannelView>, SessionExecutionCommandError>;
+
+    async fn list_declared_claude_channels(
+        &self,
+        session: i64,
+    ) -> Result<Vec<agena_domain::claude_channels::ClaudeChannelDefinition>, SessionExecutionCommandError>;
+
+    async fn configure_claude_channel(
+        &self,
+        session: i64,
+        action: agena_domain::claude_channels::ClaudeChannelAction,
+    ) -> Result<Vec<agena_domain::claude_channels::ClaudeChannelView>, SessionExecutionCommandError>;
+
+    async fn register_working_directory(
+        &self,
+        session: i64,
+        request: agena_domain::RegisterSessionWorkingDirectory,
+    ) -> Result<agena_domain::SessionWorkingDirectoryRegistration, SessionExecutionCommandError>;
+
+    /// Delete through the runtime when it owns the session lifecycle.
+    async fn delete_runtime_session(&self, _session: i64) -> Result<bool, SessionExecutionCommandError> {
+        Ok(false)
+    }
 
     async fn ensure_bot_session(&self) -> Result<i64, SessionExecutionCommandError>;
     async fn list_bots(
@@ -212,6 +275,13 @@ pub trait SessionExecutionCommandService: Send + Sync {
         session_id: i64,
         options: SessionRunOptions,
     ) -> Result<SessionExecutionCommandOutcome, SessionExecutionCommandError>;
+
+    async fn change_session_selection(
+        &self,
+        session_id: i64,
+        options: Option<SessionRunOptions>,
+        interaction: agena_domain::ModelSwitchInteraction,
+    ) -> Result<SessionModelSwitchOutcome, SessionExecutionCommandError>;
 
     /// Replace the persisted per-session permission selection using the
     /// domain-owned policy value.

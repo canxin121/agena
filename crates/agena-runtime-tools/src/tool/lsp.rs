@@ -240,22 +240,25 @@ pub(super) async fn client_for_target(
     path: &Path,
 ) -> Result<std::sync::Arc<agena_lsp::LspClient>, ToolError> {
     let scoped = executor.clone();
-    let policy: agena_lsp::LspScopedSandboxBuilder = std::sync::Arc::new(move |root| {
+    let policy: agena_lsp::LspScopedSandboxBuilder = std::sync::Arc::new(move |root, resources| {
         // A language server indexes its project root, not just the selected
         // file. Authorize the resolved root before every cache lookup so a
         // file grant cannot silently become a grant for its parent project.
+        let reads: Vec<_> = std::iter::once(root.to_path_buf())
+            .chain(resources.iter().cloned())
+            .collect();
         let access = scoped.read_path_filter();
-        access.predicate().allows(root);
+        for path in &reads {
+            access.predicate().allows(path);
+        }
         access
             .finish(Ok(()))
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::PermissionDenied, error))?;
-        let mut sandbox =
-            crate::shell_sandbox::policy_for_paths(&scoped, &[root.to_path_buf()], &[], &[])
-                .map_err(|error| {
-                    std::io::Error::new(std::io::ErrorKind::PermissionDenied, error)
-                })?;
+        let mut sandbox = crate::shell_sandbox::policy_for_paths(&scoped, &reads, &[], &[])
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::PermissionDenied, error))?;
         sandbox.private_build_cache = true;
-        Ok((sandbox, lsp_cache_scope(&scoped, root)))
+        let scope = lsp_cache_scope(&scoped, &reads);
+        Ok((sandbox, scope))
     });
     registry
         .client_for_path_scoped(
@@ -267,15 +270,16 @@ pub(super) async fn client_for_target(
         .map_err(map_lsp_err)
 }
 
-fn lsp_cache_scope(executor: &ToolExecutor, root: &Path) -> Option<String> {
+fn lsp_cache_scope(executor: &ToolExecutor, reads: &[std::path::PathBuf]) -> Option<String> {
     // A once-approved Ask/Auto root cannot leave a background reader alive.
     // Persistent Allow is still isolated by the owning session and full policy.
-    if matches!(
-        executor
-            .sandbox_permission_snapshot()
-            .authorize_path_access(agena_domain::AccessKind::Read, root,),
-        agena_domain::PermissionDecision::Allow
-    ) {
+    let snapshot = executor.sandbox_permission_snapshot();
+    if reads.iter().all(|path| {
+        matches!(
+            snapshot.authorize_path_access(agena_domain::AccessKind::Read, path),
+            agena_domain::PermissionDecision::Allow
+        )
+    }) {
         executor
             .session_id
             .map(|session| format!("session:{session}"))
@@ -422,7 +426,12 @@ async fn sync_document(
     uri: &Uri,
 ) -> Result<agena_lsp::DocumentReceipt, ToolError> {
     let text = load_document_text(executor, path).await?;
-    let language_id = language_id_for_path(path);
+    let language_id = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .and_then(|extension| client.configured_language_id(extension))
+        .map(str::to_owned)
+        .unwrap_or_else(|| language_id_for_path(path));
     client
         .sync_document_with_receipt(uri.clone(), text, &language_id)
         .await
@@ -481,10 +490,10 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(directory.path()).unwrap();
         let mut allowed = executor(&root);
-        assert_eq!(lsp_cache_scope(&allowed, &root), None);
+        assert_eq!(lsp_cache_scope(&allowed, std::slice::from_ref(&root)), None);
         allowed.session_id = Some(42);
         assert_eq!(
-            lsp_cache_scope(&allowed, &root).as_deref(),
+            lsp_cache_scope(&allowed, std::slice::from_ref(&root)).as_deref(),
             Some("session:42")
         );
         // One-call approval is transient authority, not a persisted path mode.
@@ -495,7 +504,7 @@ mod tests {
             ),
             ToolPermissionPolicy::allow_all(),
         );
-        assert_eq!(lsp_cache_scope(&allowed, &root), None);
+        assert_eq!(lsp_cache_scope(&allowed, std::slice::from_ref(&root)), None);
     }
 
     #[tokio::test]

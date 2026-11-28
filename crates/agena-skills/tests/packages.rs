@@ -323,6 +323,8 @@ fn compatible_roots_and_declared_skills_are_read_only() {
             description: "Legacy plugin declaration".into(),
             instructions: "Instructions".into(),
             aliases: vec!["declared".into()],
+            invocation: None,
+            resource_base: None,
         }]);
     let catalog = manager.list().unwrap();
     let shared = catalog

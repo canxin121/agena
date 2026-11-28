@@ -78,6 +78,10 @@ impl<T> SessionExecutionReplyRequest<T> {
 pub struct SessionUserRunRequest {
     pub run: SessionExecutionRequest,
     pub document: agena_domain::ComposerDocument,
+    pub prompt_command: Option<agena_session_api::commands::SessionPromptCommand>,
+    pub literal_leading_slash: bool,
+    /// Whether the ingress explicitly asked to queue behind the current turn.
+    pub wait_for_turn: bool,
     /// An opaque, stable delivery key supplied by an external scheduler or
     /// connector. It is persisted with the resulting user message so callers
     /// can detect replay after an interrupted acknowledgement.
@@ -118,6 +122,9 @@ impl SessionUserRunRequest {
         Self {
             run: SessionExecutionRequest::new(session_id, options),
             document,
+            prompt_command: None,
+            literal_leading_slash: false,
+            wait_for_turn: false,
             idempotency_key: None,
             author: None,
             origin: None,

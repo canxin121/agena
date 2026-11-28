@@ -122,8 +122,8 @@ impl PluginHost {
             ));
         }
         let PluginHostBuildConfig {
-            static_plugins,
-            config,
+            mut static_plugins,
+            mut config,
             workspace_root,
             agena_version,
             callback_base_url,
@@ -131,6 +131,7 @@ impl PluginHost {
             previous,
             mut previous_plugins,
         } = build;
+        crate::agent_plugin::tasks::register(&mut config, &mut static_plugins);
         let profile_resolution = config.profile_resolution.clone();
         let configured_plugins_for_inspect = config.list.clone();
         if previous
@@ -225,7 +226,10 @@ impl PluginHost {
                 .expect("activation plan references configured plugin");
             let plugin_key: PluginKey = id.parse().expect("activation planner validated ids");
             let reusable = reusable_plugin_ids.contains(id)
-                && !matches!(&configured.package, PluginPackage::Static { .. });
+                && !matches!(
+                    &configured.package,
+                    PluginPackage::Static { .. } | PluginPackage::AgentPlugin { .. }
+                );
             if reusable {
                 if let Some(previous_plugin) = previous_loaded.get(&plugin_key).cloned()
                     && previous_plugin
@@ -387,8 +391,7 @@ impl PluginHost {
                 .expect("effective activation entry exists");
             let failed_requirements = effective
                 .activation
-                .requires
-                .iter()
+                .required_keys()
                 .map(ToString::to_string)
                 .filter(|dependency| !activated.contains(dependency))
                 .collect::<Vec<_>>();
@@ -410,6 +413,35 @@ impl PluginHost {
                 record_activation_block(&statuses_shared, &logs_shared, &block);
                 continue;
             }
+            let mismatched =
+                effective
+                    .activation
+                    .imported_requires
+                    .iter()
+                    .find_map(|(key, version)| {
+                        let version = version.as_deref()?;
+                        let dependency = by_id.get(key)?;
+                        let resolved = &dependency.manifest.version;
+                        let matches =
+                        agena_plugin_marketplace::agent_packages::ClaudeDependencyVersion::parse(
+                            version,
+                        )
+                        .is_ok_and(|range| range.matches(resolved));
+                        (!matches).then(|| (key.to_string(), version, resolved))
+                    });
+            if let Some((dependency, required, resolved)) = mismatched {
+                let block = crate::activation::PluginActivationBlock {
+                    plugin_id: id.clone(),
+                    code: "required_dependency_version",
+                    message: format!(
+                        "plugin `{id}` requires `{dependency}` {required}, selected {resolved}"
+                    ),
+                    dependencies: vec![dependency],
+                };
+                activation_blocks.insert(id.clone(), block.clone());
+                record_activation_block(&statuses_shared, &logs_shared, &block);
+                continue;
+            }
             plugin_indices
                 .write()
                 .map_err(|_| HostError::Config("plugin index registry lock poisoned".into()))?
@@ -420,8 +452,7 @@ impl PluginHost {
 
             let replaced_dependencies = effective
                 .activation
-                .requires
-                .iter()
+                .required_keys()
                 .filter(|dependency| replaced_instances.contains(&dependency.to_string()))
                 .cloned()
                 .collect::<Vec<_>>();
@@ -859,10 +890,17 @@ impl PluginHost {
                             if let Some(input) = patch.input {
                                 dispatch.input.input = input;
                             }
+                            if dispatch.input.permission_ask.is_none() {
+                                dispatch.input.permission_ask = patch.permission_ask;
+                            }
                             if let Some(title) = patch.title_override {
                                 dispatch.input.title_override = Some(title);
                             }
                             dispatch.input.metadata.extend(patch.metadata);
+                            dispatch
+                                .input
+                                .additional_context
+                                .extend(patch.additional_context);
                             Ok(crate::event_pipeline::PluginTransformBailControl::Continue(
                                 dispatch,
                             ))
@@ -901,6 +939,14 @@ impl PluginHost {
                         let plugin = Arc::clone(&plugin);
                         let host_handle = Arc::clone(&callback_host_handle);
                         async move {
+                            if dispatch
+                                .input
+                                .metadata
+                                .get(crate::sdk::TOOL_MODEL_OUTPUT_WITHHELD)
+                                .is_some_and(|withheld| withheld == "true")
+                            {
+                                return Ok(dispatch);
+                            }
                             let params =
                                 serde_json::to_value(&dispatch.input).map_err(|error| {
                                     agena_failure::diagnostic::format_error_chain_with_context(
@@ -956,7 +1002,14 @@ impl PluginHost {
                                 if let Some(payload) = patch.payload {
                                     dispatch.input.payload = Some(payload);
                                 }
+                                if let Some(model_output) = patch.model_output {
+                                    dispatch.input.model_output = Some(model_output);
+                                }
                                 dispatch.input.metadata.extend(patch.metadata);
+                                dispatch
+                                    .input
+                                    .additional_context
+                                    .extend(patch.additional_context);
                             }
                             Ok(dispatch)
                         }

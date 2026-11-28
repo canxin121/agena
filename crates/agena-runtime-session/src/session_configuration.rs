@@ -50,6 +50,13 @@ impl Default for RuntimeSessionManagerConfig {
 }
 
 impl RuntimeSessionManagerConfig {
+    pub(crate) fn claude_agent(
+        &self,
+        profile: Option<&str>,
+    ) -> Option<&(agena_plugin_host::sdk::PluginKey, agena_plugin_host::agent_plugin::ClaudeAgentOptions)> {
+        self.profiles.get(profile?)?.claude_agent.as_ref()
+    }
+
     pub fn resolve_profile(
         &self,
         name: Option<&str>,

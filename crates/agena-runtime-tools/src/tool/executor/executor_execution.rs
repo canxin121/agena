@@ -1,6 +1,48 @@
 static BUILTIN_BLOCKING_WORKERS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(16);
 
+use std::path::PathBuf;
+
+use agena_domain::ProcessShell;
+use agena_process::shell::DetectedShell;
+
 impl ToolExecutor {
+    pub fn resolve_imported_skill_shell(
+        requested: Option<ProcessShell>,
+    ) -> Result<(ProcessShell, Option<DetectedShell>), ToolError> {
+        if cfg!(windows) && requested == Some(ProcessShell::Powershell) {
+            return Ok((ProcessShell::Powershell, None));
+        }
+        if let Some(bash) = crate::tool::shell_tools::shell_settings().detect_bash() {
+            return Ok((ProcessShell::Bash, Some(bash)));
+        }
+        if cfg!(windows) && requested != Some(ProcessShell::Bash) {
+            return Ok((ProcessShell::Powershell, None));
+        }
+        Err(ToolError::invalid_input(
+            "This Claude command requires Bash, but Bash was not found",
+        ))
+    }
+
+    pub fn shell_hook_cwd(
+        &self,
+        invocation: &ToolInvocation,
+        session_id: Option<i64>,
+    ) -> Result<Option<PathBuf>, ToolError> {
+        let Some(definition) = self.invocation_definition(invocation) else {
+            return Ok(None);
+        };
+        if definition.namespace() != "agena" || definition.plugin_name() != "shell" {
+            return Ok(None);
+        }
+        match ToolPayloadInput::from_executor_backed_invocation(&definition, invocation) {
+            Some(Ok(ToolPayloadInput::Shell(input))) => {
+                crate::tool::shell_tool::hook_cwd(self, &input, session_id)
+            }
+            Some(Err(error)) => Err(ToolError::invalid_input_error(&error)),
+            _ => Ok(None),
+        }
+    }
+
     /// Native async shell preparation, including environment and command
     /// policy hooks.
     pub async fn prepare_shell_invocation(
@@ -8,6 +50,37 @@ impl ToolExecutor {
         invocation: &ToolInvocation,
         session_id: i64,
         call_id: i64,
+    ) -> Result<(ToolInvocation, Option<PreparedShellCommand>), ToolError> {
+        self.prepare_shell_invocation_with_bash(invocation, session_id, call_id, None)
+            .await
+    }
+
+    pub async fn prepare_imported_skill_shell_invocation(
+        &self,
+        invocation: &ToolInvocation,
+        session_id: i64,
+        call_id: i64,
+        bash: Option<&DetectedShell>,
+    ) -> Result<(ToolInvocation, Option<PreparedShellCommand>), ToolError> {
+        let (mut invocation, prepared) = self
+            .prepare_shell_invocation_with_bash(invocation, session_id, call_id, bash)
+            .await?;
+        let cwd = match &prepared {
+            Some(shell) => shell.cwd.clone(),
+            None => crate::tool::shell_tools::resolve_workdir_in_folder(self, None, None)?,
+        };
+        let mut input = serde_json::Value::from(invocation.input);
+        input["workdir"] = cwd.to_string_lossy().into_owned().into();
+        invocation.input = StructuredObject::try_from(input).map_err(ToolError::invalid_input)?;
+        Ok((invocation, prepared))
+    }
+
+    async fn prepare_shell_invocation_with_bash(
+        &self,
+        invocation: &ToolInvocation,
+        session_id: i64,
+        call_id: i64,
+        bash: Option<&DetectedShell>,
     ) -> Result<(ToolInvocation, Option<PreparedShellCommand>), ToolError> {
         let Some(resolution) = self.invocation_definition(invocation) else {
             return Ok((invocation.clone(), None));
@@ -35,12 +108,15 @@ impl ToolExecutor {
             session_id,
             call_id,
             &resolution.canonical_name(),
+            bash,
         )
         .await?;
         let Some(prepared_shell) = prepared_shell.clone() else {
             return Ok((invocation.clone(), None));
         };
         if prepared_shell.command == process_input.command
+            && (!self.tracks_imported_shell_cwd()
+                || process_input.workdir.as_deref() == prepared_shell.cwd.to_str())
             && prepared_shell.cwd
                 == crate::tool::shell_tools::resolve_workdir_in_folder(
                     self,
@@ -94,8 +170,10 @@ impl ToolExecutor {
             prepared_invocation.plugin_name = Some("custom".into());
             return Ok(PreparedToolInvocation {
                 invocation: prepared_invocation,
+                permission_ask: None,
                 title_override: None,
                 metadata: Default::default(),
+                additional_context: Vec::new(),
             });
         };
         self.require_plugin_enabled(&definition)?;
@@ -108,6 +186,15 @@ impl ToolExecutor {
         let input_value: serde_json::Value =
             serde_json::from_str(&input_json).map_err(|e| ToolError::invalid_input_error(&e))?;
         let effective_tags = invocation_effective_tags(&definition, invocation);
+        let tool_cwd = if self
+            .plugins
+            .has_subscription(agena_plugin_host::HookSubscription::TOOL_BEFORE)
+        {
+            self.shell_hook_cwd(invocation, Some(session_id))?
+                .map(|path| path.to_string_lossy().into_owned())
+        } else {
+            None
+        };
         let hooked = self
             .plugins
             .dispatch_tool_before(
@@ -116,10 +203,13 @@ impl ToolExecutor {
                     session_id,
                     call_id,
                     workspace_root: self.workspace_root.to_string_lossy().to_string(),
+                    tool_cwd,
                     tags: effective_tags,
                     input: input_value,
+                    permission_ask: None,
                     title_override: None,
                     metadata: Default::default(),
+                    additional_context: Vec::new(),
                 },
                 self.cancellation_token.clone(),
             )
@@ -137,8 +227,10 @@ impl ToolExecutor {
 
         Ok(PreparedToolInvocation {
             invocation: prepared_invocation,
+            permission_ask: hooked.permission_ask,
             title_override: hooked.title_override,
             metadata: hooked.metadata.into_iter().collect(),
+            additional_context: hooked.additional_context,
         })
     }
 
@@ -290,14 +382,17 @@ impl ToolExecutor {
             .channel_authority
             .as_ref()
             .map(agena_plugin_host::sdk::CallerIdentity::from);
-        let mut result = agena_process::sandbox::scope_enabled(
-            executor.sandbox_enabled(),
-            agena_plugin_host::sdk::host_api::run_in_isolated_host_callback_context(
-                callback_context,
-                executor.execute_invocation_inner(invocation, context),
-            ),
-        )
-        .await;
+        let mut result = if agena_plugin_host::current_plugin_call_completion().is_some() {
+            let invocation = invocation.clone();
+            super::executor_imported_mods::run_tool_task(Box::pin(async move {
+                Box::pin(executor.execute_invocation_scoped(&invocation, context, callback_context))
+                    .await
+            }))
+            .await?
+        } else {
+            Box::pin(executor.execute_invocation_scoped(invocation, context, callback_context))
+                .await
+        };
         if let Some(error) = writer.and_then(|output| output.capture_diagnostic())
             && let Ok(execution) = &mut result
         {
@@ -312,6 +407,25 @@ impl ToolExecutor {
         }
 
         result
+    }
+
+    async fn execute_invocation_scoped(
+        &self,
+        invocation: &ToolInvocation,
+        context: crate::tool::ToolRuntimeContext,
+        callback_context: agena_plugin_host::sdk::host_api::HostCallbackContext,
+    ) -> Result<ToolInvocationExecution, ToolError> {
+        // Keep the executor state out of the task-local scope's by-value future.
+        let sandbox_enabled = self.sandbox_enabled();
+        let execution = Box::pin(self.execute_invocation_inner(invocation, context));
+        agena_process::sandbox::scope_enabled(
+            sandbox_enabled,
+            agena_plugin_host::sdk::host_api::run_in_isolated_host_callback_context(
+                callback_context,
+                execution,
+            ),
+        )
+        .await
     }
 
     async fn execute_invocation_inner(
@@ -356,6 +470,8 @@ impl ToolExecutor {
                     call_id,
                     execution,
                     Some(&payload),
+                    None,
+                    None,
                 )
                 .await;
         }
@@ -379,6 +495,8 @@ impl ToolExecutor {
                     call_id,
                     execution,
                     Some(&payload),
+                    None,
+                    None,
                 )
                 .await;
         }
@@ -387,13 +505,28 @@ impl ToolExecutor {
             ToolPayloadInput::from_executor_backed_invocation(&resolution, invocation)
         {
             let payload = payload.map_err(|error| ToolError::invalid_input_error(&error))?;
+            // Capture the launch directory before a foreground shell can change
+            // the session cwd or a terminal can disappear from the registry.
+            let tool_cwd = if let ToolPayloadInput::Shell(input) = &payload
+                && self.dispatch_tool_after
+                && self
+                    .plugins
+                    .has_subscription(agena_plugin_host::HookSubscription::TOOL_AFTER)
+            {
+                match &context.prepared_shell_command {
+                    Some(command) => Some(command.cwd.clone()),
+                    None => crate::tool::shell_tool::hook_cwd(self, input, context.session_id)?,
+                }
+            } else {
+                None
+            };
             // Each built-in branch can carry a large async state machine. Keep
             // that state on the heap so an ordinary plugin call does not poll
             // through the combined stack frame of every built-in tool.
-            let execution = Box::pin(async move {
+            let (execution, instruction_target) = Box::pin(async move {
                 let execution = match payload {
                     ToolPayloadInput::Shell(input) => {
-                        crate::tool::shell_tool::execute_async(self, &input, context).await?
+                        return crate::tool::shell_tool::execute_async(self, &input, context).await;
                     }
                     ToolPayloadInput::CronCreate(input) => {
                         crate::tool::cron::execute_create_async(self, &input, &context).await?
@@ -457,7 +590,7 @@ impl ToolExecutor {
                         })??
                     }
                 };
-                Ok::<_, ToolError>(execution)
+                Ok::<_, ToolError>((execution, None))
             })
             .await?;
             self.ensure_not_cancelled()?;
@@ -472,6 +605,8 @@ impl ToolExecutor {
                     call_id,
                     execution,
                     Some(&payload),
+                    tool_cwd.as_deref(),
+                    instruction_target,
                 )
                 .await;
         }
@@ -553,9 +688,13 @@ impl ToolExecutor {
                             output_text: end.output_text,
                             metadata: end.metadata.into_iter().collect(),
                             attachments: end.attachments,
+                            additional_context: end.additional_context,
+                            model_output: None,
                         },
                     },
                     end.payload.as_ref(),
+                    None,
+                    None,
                 )
                 .await;
         }
@@ -588,6 +727,8 @@ impl ToolExecutor {
             output_text: response.output_text.clone(),
             metadata: response.metadata.into_iter().collect(),
             attachments: response.attachments,
+            additional_context: response.additional_context,
+            model_output: None,
         };
         let output = ToolOutput::from_json_payload(response.payload.as_ref()).map_err(|error| {
             ToolError::from_plugin_error(agena_plugin_host::schema::output_contract_error(error))
@@ -604,6 +745,8 @@ impl ToolExecutor {
             call_id,
             execution,
             response.payload.as_ref(),
+            None,
+            None,
         ))
         .await
     }

@@ -30,6 +30,47 @@ pub const MAX_COMMAND_DIAGNOSTICS: usize = 32;
 pub const MAX_COMMAND_EFFECTS: usize = 8;
 pub const MAX_PLUGIN_SERVICES: usize = 128;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentPluginEcosystem {
+    Codex,
+    Claude,
+    DeepSeek,
+}
+
+impl AgentPluginEcosystem {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Codex => "codex",
+            Self::Claude => "claude",
+            Self::DeepSeek => "deepseek",
+        }
+    }
+
+    pub fn parse_selector(spec: &str) -> Option<(Self, &str)> {
+        let (ecosystem, selector) = spec.split_once(':')?;
+        let ecosystem = match ecosystem {
+            "codex" => Self::Codex,
+            "claude" => Self::Claude,
+            "deepseek" | "dsh" => Self::DeepSeek,
+            _ => return None,
+        };
+        Some((ecosystem, selector))
+    }
+}
+
+/// A package's original selector and source, retained with its registration.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentPluginSource {
+    pub ecosystem: AgentPluginEcosystem,
+    pub selector: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_source: Option<String>,
+}
+
 /// Tool presentation titles are compact scan labels, not result dumps.
 pub const TOOL_TITLE_MAX_DISPLAY_WIDTH: usize = 96;
 /// Durable Command summaries are compact result statements.
@@ -1436,6 +1477,12 @@ pub struct CommandInvokeInput {
     pub slash: Option<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub raw: String,
+    /// Context added by the host's prompt expansion hooks.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub prompt_context: String,
+    /// References admitted by the host for an imported Cordis command invocation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cordis_attachments: Option<Vec<Value>>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]

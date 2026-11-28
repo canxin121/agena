@@ -483,6 +483,7 @@ fn ensure_streaming_reasoning_item(
 fn openai_responses_metadata(
     response_id: Option<String>,
     reasoning_items: impl IntoIterator<Item = serde_json::Value>,
+    incomplete_reason: Option<&str>,
 ) -> Option<serde_json::Value> {
     let items = reasoning_items.into_iter().collect::<Vec<_>>();
     let mut metadata = serde_json::Map::new();
@@ -496,6 +497,12 @@ fn openai_responses_metadata(
         metadata.insert(
             "openai_reasoning_items".to_owned(),
             serde_json::Value::Array(items),
+        );
+    }
+    if let Some(reason) = incomplete_reason {
+        metadata.insert(
+            "response_incomplete_reason".to_owned(),
+            serde_json::Value::String(reason.to_owned()),
         );
     }
     (!metadata.is_empty()).then_some(serde_json::Value::Object(metadata))

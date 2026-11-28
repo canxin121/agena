@@ -176,6 +176,12 @@ pub async fn call_with_timeout(
     params: serde_json::Value,
     timeout: Duration,
 ) -> Result<serde_json::Value, TransportError> {
+    let timeout = plugin
+        .agent_plugin()
+        .and_then(|package| package.agent_hook_timeout(method_name))
+        .map_or(timeout, |budget| {
+            timeout.max(budget + Duration::from_secs(1))
+        });
     let hook_span = tracing::info_span!(
         "hook.call",
         plugin = %plugin.manifest.name,

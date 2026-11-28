@@ -40,12 +40,19 @@ pub use snapshot::{
     ExportReport, HistorySnapshot, HistorySnapshotInfo, SnapshotCursor, SnapshotEntry, SnapshotPage,
 };
 mod activity;
+mod activity_output;
 mod loss;
 pub use loss::{CaptureLoss, CaptureLossCounters, CaptureLossCursor, CaptureLossPage};
 mod events;
 pub use activity::{
-    ActiveActivityCursor, ActiveActivityPage, ActivityHandle, BackgroundActivityKind,
-    BackgroundActivityOutcome, BackgroundActivityStart, BackgroundActivityView,
+    ActiveActivityCursor, ActiveActivityPage, ActivityHandle, ActivityOutputPosition,
+    ActivityOutputRead, BackgroundActivityKind, BackgroundActivityNotice, BackgroundActivityOutcome,
+    BackgroundActivityStart, BackgroundActivityView, BackgroundActivityWakeBudget,
+    PluginCommandActivityOrigin,
+};
+pub use activity_output::{
+    ActivityOutputHead, ActivityOutputPage, ActivityOutputRetention, ActivityOutputTerminal,
+    MAX_ACTIVITY_OUTPUT_BYTES, MAX_ACTIVITY_OUTPUT_CHUNKS,
 };
 pub use blob::{BlobDescriptor, BlobRange, BlobReader, PreparedBlob};
 mod output;
@@ -274,6 +281,7 @@ pub enum ExecutionPurpose {
     Message,
     Continuation,
     Compaction,
+    PluginCommand,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -329,9 +337,17 @@ pub enum EntryPayload {
         /// Platform and exact external conversation the message arrived from.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         origin: Option<agena_domain::MessageOrigin>,
+        /// Context attached by trusted submission hooks, consumed during model
+        /// input assembly. Transcript surfaces render only the document.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        model_context: Vec<String>,
     },
+    /// A plugin's user input added at the next boundary of an existing turn.
+    PluginPrompt(PluginPrompt),
     Text {
         content_id: ContentId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        display_id: Option<ContentId>,
     },
     Reasoning {
         content_id: ContentId,
@@ -344,6 +360,12 @@ pub enum EntryPayload {
     },
     Notice {
         text: String,
+    },
+    /// A user-invoked plugin command that launched persistent work.
+    PluginCommand {
+        plugin_id: String,
+        command_id: String,
+        operation: ToolId,
     },
     Compaction {
         summary: ContentId,
@@ -358,6 +380,35 @@ pub enum EntryPayload {
     ContextCleared {
         through: EntryId,
     },
+}
+
+pub const MAX_USER_CONTEXT_BYTES: usize = 200_000;
+pub const MAX_USER_CONTEXT_BLOCK_BYTES: usize = 100_000;
+pub const MAX_USER_CONTEXT_BLOCKS: usize = 128;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PluginPrompt {
+    pub text: String,
+    pub author: agena_domain::MessageAuthor,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub model_context: Vec<String>,
+}
+
+impl PluginPrompt {
+    pub fn document(&self) -> ComposerDocument {
+        ComposerDocument(vec![agena_domain::ComposerNode::Text {
+            text: self.text.clone(),
+        }])
+    }
+}
+
+/// Prepared contents of one user message, including host-verified metadata.
+#[derive(Clone)]
+pub struct UserMessageInput {
+    pub document: ComposerDocument,
+    pub author: Option<agena_domain::MessageAuthor>,
+    pub origin: Option<agena_domain::MessageOrigin>,
+    pub model_context: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -789,20 +840,8 @@ impl SessionCommands {
         author: Option<agena_domain::MessageAuthor>,
         origin: Option<agena_domain::MessageOrigin>,
     ) -> Result<CommitReceipt<ExecutionView>> {
-        let result = self
-            .0
-            .command(
-                request,
-                Command::Send {
-                    session,
-                    document,
-                    blobs: Vec::new(),
-                    author,
-                    origin,
-                },
-            )
-            .await?;
-        execution_receipt(result)
+        self.send_with_blobs_as(request, session, document, &[], author, origin)
+            .await
     }
     pub async fn cancel(
         &self,
@@ -992,6 +1031,32 @@ impl ExecutorCommands {
         self.claim_ordered(request, session, execution, true, Some(expected_generation))
             .await
     }
+
+    /// Cancel the runnable FIFO head before claiming it, and record the reason
+    /// in the same transaction. Unstarted cancelled inputs stay out of prompts.
+    pub async fn cancel_next_generation(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        execution: ExecutionId,
+        expected_generation: AttemptGeneration,
+        notice: String,
+    ) -> Result<CommitReceipt<ExecutionView>> {
+        execution_receipt(
+            self.0
+                .command(
+                    request,
+                    Command::CancelNext {
+                        session,
+                        execution,
+                        expected_generation,
+                        notice,
+                    },
+                )
+                .await?,
+        )
+    }
+
     async fn claim_ordered(
         &self,
         request: RequestId,
@@ -1354,6 +1419,7 @@ impl ToolHandle {
                     tool: self.id,
                     result,
                     blobs: Vec::new(),
+                    activity_reads: Vec::new(),
                 },
             )
             .await?;
@@ -1494,7 +1560,8 @@ impl KernelReader {
             .execution_attempt(session, execution, generation)
             .await
     }
-    /// Visible text sources for one execution in newest-first transcript order.
+    /// Visible assistant text sources for one execution in newest-first transcript order.
+    /// Compaction summaries are available through the prompt window.
     pub async fn execution_text_sources(
         &self,
         session: SessionId,

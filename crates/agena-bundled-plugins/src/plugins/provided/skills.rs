@@ -10,10 +10,10 @@ use std::{
 use agena_domain::PathKind;
 use agena_plugin_host::sdk::host_api::HostProcessResources;
 use agena_plugin_host::sdk::{
-    ApplicableSessions, HookSubscription, HostClient, InitContext, InitOutcome, Plugin,
-    PluginError, PluginManifest, Result as SdkResult, ToolContract, ToolDefinition, ToolDocs,
-    ToolInvokeInput, ToolInvokeOutput, ToolRuntimePolicy, ToolStreamingMode, ToolTag,
-    macro_support,
+    ApplicableSessions, HookSubscription, HostClient, ImportedSkillRender, InitContext,
+    InitOutcome, Plugin, PluginError, PluginManifest, Result as SdkResult, ToolContract,
+    ToolDefinition, ToolDocs, ToolInvokeInput, ToolInvokeOutput, ToolRuntimePolicy,
+    ToolStreamingMode, ToolTag, macro_support,
 };
 use agena_skills::source::{
     SkillCreateRequest, SkillDeleteResult, SkillInstallRequest, SkillResourceWriteRequest,
@@ -23,7 +23,7 @@ use agena_skills::source::{
 use agena_skills::worker::{SkillWorkerOperation, SkillWorkerRequest};
 use agena_skills::{
     DeclaredSkill, SkillCatalog, SkillDetail, SkillError, SkillInstallPreview, SkillManager,
-    SkillScope, SkillSummary,
+    SkillResourceBase, SkillScope, SkillSummary,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -50,8 +50,10 @@ struct ListInput {
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct IdInput {
+struct GetInput {
     id: String,
+    #[serde(default)]
+    arguments: String,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -245,10 +247,10 @@ impl Plugin for SkillsPlugin {
                 "Search by name or description. By default return enabled, valid, effective entries. Set include_inactive to inspect disabled, invalid, and shadowed packages. IDs identify exact package copies; scope is global or workspace. Use get to load instructions only when relevant.",
                 read,
             ),
-            definition::<IdInput>(
+            definition::<GetInput>(
                 "get",
                 "Read a skill's full instructions and resource inventory.",
-                "Use an ID returned by list. Relative references resolve against the skill directory shown in path. Supporting resources are loaded separately with read_resource. Read-only plugin and compatibility packages can be installed into a managed scope for editing. allowed-tools is metadata and does not change existing tool permissions.",
+                "Use an ID returned by list. For an imported Claude skill, pass optional arguments to render its instructions. Its shell snippets use the session's shell permissions. Relative references resolve against the skill directory shown in path. Load supporting files with read_resource. allowed-tools is metadata and does not change existing tool permissions.",
                 read,
             ),
             definition::<SkillCreateRequest>(
@@ -380,17 +382,41 @@ impl Plugin for SkillsPlugin {
                 )
             }
             "get" => {
-                let input: IdInput = parse(value)?;
-                self.authorize_id(&input.id, false).await?;
-                let detail: SkillDetail =
-                    parse(self.run(SkillWorkerOperation::Get { id: input.id }).await?)?;
+                let input: GetInput = parse(value)?;
+                let manager = self.manager_with_providers().await?;
+                let path = self.authorize_id_with(manager.clone(), &input.id, false).await?;
+                let mut detail: SkillDetail =
+                    parse(self.run_with_manager(manager, SkillWorkerOperation::Get { id: input.id }).await?)?;
+                let mut metadata = BTreeMap::new();
+                if detail.summary.enabled
+                    && detail.summary.valid
+                    && let Some(rendered) = self
+                        .permission_host()?
+                        .render_imported_skill(&path, &detail.document, &input.arguments)
+                        .await?
+                {
+                    match rendered {
+                        ImportedSkillRender::Prompt(prompt) => detail.document = prompt,
+                        ImportedSkillRender::ForkResult(result) => {
+                            detail.document = result;
+                            metadata.insert("skip_skill_activation".into(), "true".into());
+                        }
+                        ImportedSkillRender::Inspection => {
+                            metadata.insert("skip_skill_activation".into(), "true".into());
+                        }
+                    }
+                }
                 let directory = detail
                     .summary
                     .path
                     .strip_suffix("/SKILL.md")
                     .unwrap_or(&detail.summary.path);
+                let resource_hint = match &detail.resource_base {
+                    Some(base) => base.hint(),
+                    None => format!("Skill directory: {directory}\nResolve relative references against this directory."),
+                };
                 let text = format!(
-                    "Skill directory: {directory}\nResolve relative references against this directory.\n\n{}\n\nResources:\n{}",
+                    "{resource_hint}\n\n{}\n\nResources:\n{}",
                     detail.document,
                     detail
                         .files
@@ -407,7 +433,7 @@ impl Plugin for SkillsPlugin {
                         serde_json::to_value(detail)
                             .map_err(|error| PluginError::internal_error(&error))?,
                     ),
-                    BTreeMap::new(),
+                    metadata,
                     Vec::new(),
                 ))
             }
@@ -504,12 +530,16 @@ impl Plugin for SkillsPlugin {
             }
             "read_resource" => {
                 let input: ResourceReadInput = parse(value)?;
-                let document = self.authorize_id(&input.id, false).await?;
+                let manager = self.manager_with_providers().await?;
+                let document = self.authorize_id_with(manager.clone(), &input.id, false).await?;
+                let document = manager.declared_resource_base(&input.id)
+                    .and_then(SkillResourceBase::directory)
+                    .map_or(document, |directory| directory.join("SKILL.md"));
                 let resource = resource_path(&document, &input.path)?;
                 self.require_path(&resource, PathKind::Read).await?;
                 output(
                     "Skill resource",
-                    self.run(SkillWorkerOperation::ReadResource {
+                    self.run_with_manager(manager, SkillWorkerOperation::ReadResource {
                         id: input.id,
                         path: input.path,
                     })
@@ -736,7 +766,9 @@ impl SkillsPlugin {
         let mut declared = Vec::new();
         let mut additional = Vec::new();
         let mut disabled = Vec::new();
+        let mut exact_skill_dirs = Vec::new();
         if let Some(host) = agena_runtime_plugins::plugin_slot::current_plugin_host() {
+            exact_skill_dirs = host.agent_plugin_skill_dirs();
             for plugin in host.plugins() {
                 let id = plugin.key().to_string();
                 if id == "agena.commands" {
@@ -760,6 +792,8 @@ impl SkillsPlugin {
                         description: skill.description.clone(),
                         instructions: skill.instructions.clone(),
                         aliases: skill.aliases.clone(),
+                        invocation: None,
+                        resource_base: None,
                     });
                 }
             }
@@ -774,6 +808,7 @@ impl SkillsPlugin {
         };
         let mut manager = SkillManager::new(workspace, instance_root.join("skills"))
             .with_additional_roots(additional)
+            .with_exact_skill_dirs(exact_skill_dirs)
             .with_declared_skills(declared)
             .with_disabled_names(disabled);
         if Self::is_global_session() {
@@ -783,8 +818,21 @@ impl SkillsPlugin {
     }
 
     async fn run(&self, operation: SkillWorkerOperation) -> SdkResult<Value> {
-        let host = self.permission_host()?;
+        let manager = self.manager_with_providers().await?;
+        self.run_with_manager(manager, operation).await
+    }
+
+    async fn manager_with_providers(&self) -> SdkResult<SkillManager> {
         let manager = self.manager()?;
+        if Self::is_global_session() {
+            return Ok(manager);
+        }
+        let provided = self.permission_host()?.imported_model_skills().await?;
+        Ok(manager.with_provided_skills(provided))
+    }
+
+    async fn run_with_manager(&self, manager: SkillManager, operation: SkillWorkerOperation) -> SdkResult<Value> {
+        let host = self.permission_host()?;
         if crate::sandbox_operations::enabled() {
             let mutation = operation.is_mutation();
             let snapshot = manager.worker_snapshot();
@@ -793,6 +841,9 @@ impl SkillsPlugin {
                     .roots
                     .iter()
                     .map(|root| root.path.clone())
+                    .chain(snapshot.declared.iter().filter_map(|skill| {
+                        skill.resource_base.as_ref()?.directory().map(|path| path.to_string_lossy().into_owned())
+                    }))
                     .collect(),
                 writes: if mutation {
                     snapshot
@@ -839,8 +890,13 @@ impl SkillsPlugin {
     }
 
     async fn authorize_id(&self, id: &str, write: bool) -> SdkResult<PathBuf> {
+        let manager = self.manager_with_providers().await?;
+        self.authorize_id_with(manager, id, write).await
+    }
+
+    async fn authorize_id_with(&self, manager: SkillManager, id: &str, write: bool) -> SdkResult<PathBuf> {
         let path: PathBuf = parse(
-            self.run(SkillWorkerOperation::ResolvePath { id: id.to_owned() })
+            self.run_with_manager(manager, SkillWorkerOperation::ResolvePath { id: id.to_owned() })
                 .await?,
         )?;
         if path.to_string_lossy().starts_with("plugin://") {

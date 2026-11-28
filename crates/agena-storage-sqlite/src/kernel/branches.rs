@@ -50,6 +50,11 @@ static CAPTURE_ENTRIES_SQL: LazyLock<String> = LazyLock::new(|| {
          CROSS JOIN agena_entries e ON e.id=m.entry_id
          CROSS JOIN agena_attempts original ON original.execution_id=e.execution_id AND original.generation=e.generation
          CROSS JOIN agena_attempts a ON a.execution_id=e.execution_id AND a.generation=CASE
+             WHEN e.kind='user' AND ?3 THEN (
+                 SELECT MAX(done.generation) FROM agena_attempts done
+                 WHERE done.execution_id=e.execution_id
+                   AND done.started_at_ms IS NOT NULL AND done.finished_at_ms IS NOT NULL
+             )
              WHEN e.kind='user' THEN (SELECT current_generation FROM agena_executions WHERE id=e.execution_id)
              ELSE e.generation END
          LEFT JOIN agena_content_streams c ON c.id=e.content_id
@@ -171,12 +176,14 @@ pub(super) async fn capture(
     connection: &mut SqliteConnection,
     source: SessionId,
     target: SessionId,
+    completed_turns_only: bool,
 ) -> Result<()> {
     // Copy small mutable facts only. User documents, tool payloads, replay and
     // content blocks retain their existing immutable identities and storage.
     sqlx::query(&CAPTURE_ENTRIES_SQL)
         .bind(source.get())
         .bind(target.get())
+        .bind(completed_turns_only)
         .execute(&mut *connection)
         .await
         .map_err(sql_error)?;

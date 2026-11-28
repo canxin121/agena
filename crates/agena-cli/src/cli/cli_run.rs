@@ -84,6 +84,12 @@ impl AgenaCli {
             generate_plugin_lockfile, package_plugin, scaffold_plugin,
         };
 
+        if let PluginSubcommand::Install(args) = &command.command {
+            if super::cli_agent_plugins::is_agent_source(&args.spec) {
+                return super::cli_agent_plugins::install(args.clone()).await;
+            }
+            super::cli_agent_plugins::reject_agent_options(args)?;
+        }
         if matches!(
             &command.command,
             PluginSubcommand::Install(_)
@@ -499,6 +505,15 @@ fn run_plugin_marketplace_lifecycle(command: PluginSubcommand) -> Result<(), App
             Ok(())
         }
         PluginSubcommand::Uninstall(args) => {
+            let removed =
+                super::cli_agent_plugins::uninstall(&config_path, &args.plugin_id, args.cascade)
+                    .map_err(|error| AppError::config_error(&error))?;
+            if !removed.is_empty() {
+                for id in removed {
+                    println!("Removed {id} from {}", config_path.display());
+                }
+                return Ok(());
+            }
             let outcomes = client
                 .uninstall_with(&args.plugin_id, args.cascade)
                 .map_err(|error| AppError::config_error(&error))?;
@@ -516,18 +531,22 @@ fn run_plugin_marketplace_lifecycle(command: PluginSubcommand) -> Result<(), App
             let records = client
                 .list_installed()
                 .map_err(|error| AppError::config_error(&error))?;
-            if records.is_empty() {
-                println!("(no plugins installed via agena marketplace)");
-            } else {
-                for record in records {
-                    println!(
-                        "{} v{} ({}) -> {}",
-                        record.plugin_id,
-                        record.version,
-                        record.kind,
-                        record.binary_path.display()
-                    );
-                }
+            let agent_plugins = super::cli_agent_plugins::list(&config_path)
+                .map_err(|error| AppError::config_error(&error))?;
+            if records.is_empty() && agent_plugins.is_empty() {
+                println!("(no installed plugins)");
+            }
+            for record in records {
+                println!(
+                    "{} v{} ({}) -> {}",
+                    record.plugin_id,
+                    record.version,
+                    record.kind,
+                    record.binary_path.display()
+                );
+            }
+            for entry in agent_plugins {
+                println!("{} (agent plugin) -> {}", entry.id, entry.root.display());
             }
             Ok(())
         }
@@ -546,9 +565,51 @@ fn run_plugin_marketplace_lifecycle(command: PluginSubcommand) -> Result<(), App
             Ok(())
         }
         PluginSubcommand::Search(args) => {
+            if let Some(ecosystem) = args.ecosystem.as_deref() {
+                let cwd =
+                    std::env::current_dir().map_err(|error| AppError::config_error(&error))?;
+                let result = agena_application::agent_packages::search(
+                    &config_path,
+                    &cwd,
+                    ecosystem,
+                    args.registry.as_deref(),
+                    &args.query,
+                )
+                .map_err(|error| AppError::config_error(&error))?;
+                if result.entries.is_empty() {
+                    println!("(no matches)");
+                }
+                for entry in result.entries {
+                    let Some(spec) = entry.install_spec else {
+                        continue;
+                    };
+                    println!(
+                        "{spec} — {}",
+                        if entry.description.is_empty() {
+                            &entry.name
+                        } else {
+                            &entry.description
+                        }
+                    );
+                    if let Some(source) = entry.package_source.as_deref() {
+                        println!("  Package source: {source}");
+                    } else if ecosystem == "deepseek"
+                        && let Some(registry) = entry.install_registry.as_deref()
+                    {
+                        println!("  Registry: {registry}");
+                    }
+                }
+                return Ok(());
+            }
             let registry = client.registry(
-                RegistrySpec::from_source(args.registry_id, args.registry, false)
-                    .map_err(|error| AppError::config_error(&error))?,
+                RegistrySpec::from_source(
+                    args.registry_id,
+                    args.registry
+                        .as_deref()
+                        .unwrap_or(DEFAULT_MARKETPLACE_SOURCE),
+                    false,
+                )
+                .map_err(|error| AppError::config_error(&error))?,
             );
             let index = registry
                 .fetch_index(false)
@@ -586,11 +647,17 @@ fn run_plugin_marketplace_lifecycle(command: PluginSubcommand) -> Result<(), App
                 .transpose()
                 .map_err(|error| AppError::config_error(&error))?;
             let targets: Vec<String> = if args.all {
+                let agent_ids = super::cli_agent_plugins::list(&config_path)
+                    .map_err(|error| AppError::config_error(&error))?
+                    .into_iter()
+                    .filter(|entry| entry.source.is_some())
+                    .map(|entry| entry.id);
                 client
                     .list_installed()
                     .map_err(|error| AppError::config_error(&error))?
                     .into_iter()
                     .map(|r| r.plugin_id)
+                    .chain(agent_ids)
                     .collect()
             } else {
                 let id = args.plugin_id.clone().ok_or_else(|| {
@@ -602,6 +669,32 @@ fn run_plugin_marketplace_lifecycle(command: PluginSubcommand) -> Result<(), App
             };
             let mut errors = Vec::new();
             for id in targets {
+                match agena_application::agent_packages::upgrade(
+                    &config_path,
+                    &id,
+                    args.registry.as_deref(),
+                ) {
+                    Ok(Some(outcome)) => {
+                        if outcome.upgraded {
+                            println!(
+                                "Upgraded {id} {} -> {}",
+                                outcome.previous_version.as_deref().unwrap_or("unknown"),
+                                outcome.installed_version.as_deref().unwrap_or("unknown"),
+                            );
+                        } else {
+                            println!("{id} is up to date.");
+                        }
+                        for diagnostic in outcome.diagnostics {
+                            eprintln!("{id}: {diagnostic}");
+                        }
+                        continue;
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        errors.push(format!("{id}: {error}"));
+                        continue;
+                    }
+                }
                 match client.upgrade(&id, override_spec.clone()) {
                     Ok(out) if out.upgraded => println!(
                         "Upgraded {} {} -> {}",

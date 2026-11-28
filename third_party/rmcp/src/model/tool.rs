@@ -31,6 +31,9 @@ pub struct Tool {
     #[serde(skip_serializing_if = "Option::is_none")]
     /// Optional additional tool information.
     pub annotations: Option<ToolAnnotations>,
+    /// Tool execution settings from the experimental 2025-11-25 Tasks schema.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution: Option<JsonObject>,
     /// Optional list of icons for the tool
     #[serde(skip_serializing_if = "Option::is_none")]
     pub icons: Option<Vec<Icon>>,
@@ -173,6 +176,7 @@ impl Tool {
             input_schema: input_schema.into(),
             output_schema: None,
             annotations: None,
+            execution: None,
             icons: None,
             meta: None,
         }
@@ -195,6 +199,7 @@ impl Tool {
             input_schema: input_schema.into(),
             output_schema: None,
             annotations: None,
+            execution: None,
             icons: None,
             meta: None,
         }

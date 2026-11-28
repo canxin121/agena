@@ -246,7 +246,7 @@ impl ToolExecutor {
             return self.workspace_root();
         }
         session_context
-            .and_then(crate::ToolSessionContext::effective_workspace_root)
+            .and_then(|context| context.working_directory().or_else(|| context.effective_workspace_root()))
             .unwrap_or(self.workspace_root())
     }
 
@@ -288,7 +288,7 @@ impl ToolExecutor {
         let canonical_workspace_root = if self.is_global() {
             PathBuf::new()
         } else {
-            canonicalize_path_for_execution(self.workspace_root())
+            canonicalize_path_for_execution(self.permission_workspace_root())
         };
         let canonical_target_path = canonicalize_path_for_execution(target_path);
         let workspace_root = normalize_path_for_display(&canonical_workspace_root);

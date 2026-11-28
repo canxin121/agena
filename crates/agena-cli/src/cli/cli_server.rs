@@ -1502,13 +1502,15 @@ impl AgenaCli {
             SessionsSubcommand::Create(args) => {
                 let session = server
                     .client
-                    .create_session_with_profile(
-                        server.workspace_id,
-                        args.title,
-                        args.parent,
-                        false,
-                        args.profile,
-                    )
+                    .create_session_with_options(agena_api::commands::CreateSessionParams {
+                        workspace_id: server.workspace_id,
+                        title: args.title,
+                        parent_id: args.parent,
+                        auto_title: false,
+                        profile: args.profile,
+                        prompts: None,
+                        setup: args.setup.map(Into::into),
+                    })
                     .await
                     .map_err(|error| {
                         client_error("failed to create session through server", error)
@@ -1536,6 +1538,55 @@ impl AgenaCli {
                         client_error("failed to read updated session from server", error)
                     })?;
                 render_serialized(args.format, &state)
+            }
+            SessionsSubcommand::WorkingDirectories(args) => match args.add {
+                Some(path) => {
+                    let registration = server
+                        .client
+                        .register_working_directory(args.session_id, path)
+                        .await
+                        .map_err(|error| {
+                            client_error("failed to add session working directory", error)
+                        })?;
+                    render_serialized(OutputFormat::Json, &registration)
+                }
+                None => {
+                    let directories = server
+                        .client
+                        .list_working_directories(args.session_id)
+                        .await
+                        .map_err(|error| {
+                            client_error("failed to list session working directories", error)
+                        })?;
+                    render_serialized(OutputFormat::Json, &directories)
+                }
+            },
+            SessionsSubcommand::Channels(args) => {
+                use agena_domain::claude_channels::ClaudeChannelAction;
+
+                if args.catalog {
+                    let catalog = server
+                        .client
+                        .claude_channel_catalog(args.session_id)
+                        .await
+                        .map_err(|error| client_error("failed to list Claude channels", error))?;
+                    render_serialized(OutputFormat::Json, &catalog)
+                } else {
+                    let action = match (args.enable, args.disable) {
+                        (Some(server), _) => Some(ClaudeChannelAction::Enable {
+                            server,
+                            permission_relay: args.permission_relay,
+                        }),
+                        (_, Some(server)) => Some(ClaudeChannelAction::Disable { server }),
+                        _ => None,
+                    };
+                    let channels = server
+                        .client
+                        .claude_channels(args.session_id, action)
+                        .await
+                        .map_err(|error| client_error("failed to configure Claude channels", error))?;
+                    render_serialized(OutputFormat::Json, &channels)
+                }
             }
             SessionsSubcommand::Import(args) => {
                 let source: Box<dyn tokio::io::AsyncRead + Unpin + Send> = match args.path {
@@ -1696,6 +1747,7 @@ impl AgenaCli {
             args.prompt.as_str(),
             title,
             args.profile.as_deref(),
+            args.setup.map(Into::into),
             args.model.as_deref(),
             args.temperature,
             args.max_output_tokens,
@@ -1714,6 +1766,7 @@ impl AgenaCli {
             prompt.as_str(),
             format!("Review changes against {}", args.base),
             args.profile.as_deref(),
+            None,
             args.model.as_deref(),
             args.temperature,
             args.max_output_tokens,
@@ -1729,6 +1782,7 @@ impl AgenaCli {
         prompt: &str,
         title: String,
         profile: Option<&str>,
+        setup: Option<agena_api::commands::SessionSetupTrigger>,
         model: Option<&str>,
         temperature: Option<f32>,
         max_output_tokens: Option<u32>,
@@ -1740,13 +1794,15 @@ impl AgenaCli {
             .await?;
         let session = server
             .client
-            .create_session_with_profile(
-                server.workspace_id,
+            .create_session_with_options(agena_api::commands::CreateSessionParams {
+                workspace_id: server.workspace_id,
                 title,
-                None,
-                true,
-                profile.map(str::to_owned),
-            )
+                parent_id: None,
+                auto_title: true,
+                profile: profile.map(str::to_owned),
+                prompts: None,
+                setup,
+            })
             .await
             .map_err(|error| client_error("failed to create session through server", error))?;
         let mut execution = server
@@ -1757,6 +1813,8 @@ impl AgenaCli {
                 document: agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
                     text: prompt.to_owned(),
                 }]),
+                prompt_command: None,
+                literal_leading_slash: false,
             })
             .await
             .map_err(|error| client_error("failed to submit run through server", error))?;

@@ -15,6 +15,7 @@ pub(super) const ENTRY_COLUMNS: &str = "e.*,
         CASE WHEN e.kind='user' THEN (SELECT current_generation FROM agena_executions WHERE id=e.execution_id)
              ELSE e.generation END) AS execution_phase,
     (SELECT c.capture_state FROM agena_content_streams c WHERE c.id=e.content_id) AS content_state,
+    CASE WHEN e.kind='text' THEN (SELECT c.id FROM agena_content_streams c WHERE c.entry_id=e.id AND c.ordinal=1 AND c.kind='text' AND c.id!=e.content_id LIMIT 1) END AS display_id,
     (SELECT r.phase FROM agena_rounds r JOIN agena_compaction_rounds cr ON cr.round_id=r.id WHERE r.id=e.round_id) AS compaction_phase,
     EXISTS(SELECT 1 FROM agena_entries checkpoint WHERE checkpoint.round_id=e.round_id AND checkpoint.kind='compaction') AS compaction_committed";
 static HISTORY_ENTRY_SQL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
@@ -240,7 +241,14 @@ pub(super) async fn execution_visible(
     let origin:Option<i64>=sqlx::query_scalar("SELECT x.session_id FROM agena_executions x WHERE x.id=? AND EXISTS(SELECT 1 FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id JOIN agena_sessions owner ON owner.id=s.session_id WHERE m.entry_id=x.message_id AND s.session_id=? AND owner.deleted_at_ms IS NULL AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal)").bind(id.to_string()).bind(session.get()).fetch_optional(&mut *connection).await.map_err(sql_error)?;
     let origin = SessionId::try_from(origin.ok_or(KernelError::Ownership)?).map_err(storage)?;
     // A tombstoned origin remains readable through a surviving branch.
-    let row=sqlx::query("SELECT x.message_id,x.current_generation,a.phase,COALESCE((SELECT p.purpose FROM agena_execution_purposes p WHERE p.execution_id=x.id),'message') AS purpose FROM agena_executions x JOIN agena_attempts a ON a.execution_id=x.id AND a.generation=x.current_generation WHERE x.id=?").bind(id.to_string()).fetch_one(&mut *connection).await.map_err(sql_error)?;
+    let row = sqlx::query(
+        "SELECT x.message_id,x.current_generation,a.phase,
+           CASE WHEN e.kind='notice' AND json_extract(e.body_json,'$.kind')='plugin_command'
+                THEN 'plugin_command' ELSE COALESCE(p.purpose,'message') END AS purpose
+         FROM agena_executions x JOIN agena_attempts a ON a.execution_id=x.id AND a.generation=x.current_generation
+         JOIN agena_entries e ON e.id=x.message_id
+         LEFT JOIN agena_execution_purposes p ON p.execution_id=x.id WHERE x.id=?",
+    ).bind(id.to_string()).fetch_one(&mut *connection).await.map_err(sql_error)?;
     let mut view = ExecutionView {
         id,
         session_id: origin,
@@ -306,7 +314,15 @@ pub(super) async fn execution(
     session: SessionId,
     execution: ExecutionId,
 ) -> Result<(ExecutionView, Option<KernelEpoch>)> {
-    let row = sqlx::query("SELECT e.message_id,e.current_generation,a.phase,a.owner_epoch,COALESCE((SELECT p.purpose FROM agena_execution_purposes p WHERE p.execution_id=e.id),'message') AS purpose FROM agena_executions e JOIN agena_attempts a ON a.execution_id=e.id AND a.generation=e.current_generation JOIN agena_sessions s ON s.id=e.session_id WHERE e.id=? AND e.session_id=? AND s.deleted_at_ms IS NULL")
+    let row = sqlx::query(
+        "SELECT x.message_id,x.current_generation,a.phase,a.owner_epoch,
+           CASE WHEN e.kind='notice' AND json_extract(e.body_json,'$.kind')='plugin_command'
+                THEN 'plugin_command' ELSE COALESCE(p.purpose,'message') END AS purpose
+         FROM agena_executions x JOIN agena_attempts a ON a.execution_id=x.id AND a.generation=x.current_generation
+         JOIN agena_sessions s ON s.id=x.session_id JOIN agena_entries e ON e.id=x.message_id
+         LEFT JOIN agena_execution_purposes p ON p.execution_id=x.id
+         WHERE x.id=? AND x.session_id=? AND s.deleted_at_ms IS NULL",
+    )
         .bind(execution.to_string()).bind(session.get()).fetch_optional(connection).await.map_err(sql_error)?
         .ok_or(KernelError::Ownership)?;
     let phase: String = row.try_get("phase").map_err(storage)?;
@@ -348,6 +364,7 @@ pub(super) fn entry_row(row: &SqliteRow) -> Result<EntryView> {
                 document: body.document,
                 author: body.author,
                 origin: body.origin,
+                model_context: body.model_context,
             }
         }
         "text" | "reasoning" => {
@@ -357,7 +374,15 @@ pub(super) fn entry_row(row: &SqliteRow) -> Result<EntryView> {
                 .parse()
                 .map_err(storage)?;
             if kind == "text" {
-                EntryPayload::Text { content_id }
+                EntryPayload::Text {
+                    content_id,
+                    display_id: row
+                        .try_get::<Option<&str>, _>("display_id")
+                        .unwrap_or(None)
+                        .map(str::parse)
+                        .transpose()
+                        .map_err(storage)?,
+                }
             } else {
                 EntryPayload::Reasoning { content_id }
             }
@@ -372,9 +397,19 @@ pub(super) fn entry_row(row: &SqliteRow) -> Result<EntryView> {
             )
             .map_err(storage)?,
         },
-        "notice" => EntryPayload::Notice {
-            text: decode(body.ok_or_else(|| storage("notice entry has no body"))?)?,
-        },
+        "notice" => {
+            let body = body.ok_or_else(|| storage("notice entry has no body"))?;
+            if body.trim_start().starts_with('"') {
+                EntryPayload::Notice {
+                    text: decode(body)?,
+                }
+            } else {
+                match decode(body)? {
+                    entry @ (EntryPayload::PluginPrompt(_) | EntryPayload::PluginCommand { .. }) => entry,
+                    _ => return Err(storage("unknown structured notice entry")),
+                }
+            }
+        }
         "compaction" => decode(body.ok_or_else(|| storage("compaction entry has no body"))?)?,
         _ => return Err(storage("unknown entry kind")),
     };
@@ -743,7 +778,7 @@ pub(super) async fn tool(
 ) -> Result<ToolView> {
     let mut transaction = pool.begin().await.map_err(storage)?;
     metrics::add(&diagnostics.0.detail_queries, 1);
-    let row=sqlx::query("SELECT t.round_id,t.execution_kind,t.phase,t.call_id,t.name,t.input_json,t.result_json,t.created_at_ms,t.finished_at_ms,e.id AS entry_id,e.revision FROM agena_tool_calls t JOIN agena_entries e ON e.tool_id=t.id AND e.kind='tool' WHERE t.id=? AND EXISTS(SELECT 1 FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id JOIN agena_sessions owner ON owner.id=s.session_id WHERE s.session_id=? AND owner.deleted_at_ms IS NULL AND m.entry_id=e.id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal)")
+    let row=sqlx::query("SELECT t.round_id,t.execution_kind,t.phase,t.call_id,t.name,t.input_json,t.result_json,t.created_at_ms,t.finished_at_ms,e.id AS entry_id,e.revision FROM agena_tool_calls t JOIN agena_entries e ON e.tool_id=t.id AND (e.kind='tool' OR (e.kind='notice' AND json_extract(e.body_json,'$.kind')='plugin_command')) WHERE t.id=? AND EXISTS(SELECT 1 FROM agena_segment_entries m JOIN agena_session_segments s ON s.segment_id=m.segment_id JOIN agena_sessions owner ON owner.id=s.session_id WHERE s.session_id=? AND owner.deleted_at_ms IS NULL AND m.entry_id=e.id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal)")
         .bind(tool.get()).bind(session.get()).fetch_optional(&mut *transaction).await.map_err(sql_error)?.ok_or_else(||KernelError::NotFound("tool".into()))?;
     let entry =
         EntryId::try_from(row.try_get::<i64, _>("entry_id").map_err(storage)?).map_err(storage)?;
@@ -1077,7 +1112,7 @@ mod user_body_tests {
         let document = document("hello");
         let author = agena_domain::MessageAuthor::instance_operator();
         let origin = agena_domain::MessageOrigin::local(LocalSurface::Tui, "session-1");
-        let encoded = encode_user_body(&document, Some(&author), Some(&origin)).unwrap();
+        let encoded = encode_user_body(&document, Some(&author), Some(&origin), &[]).unwrap();
         let decoded = decode_user_body(&encoded).unwrap();
         assert_eq!(decoded.document, document);
         assert_eq!(decoded.author, Some(author));
@@ -1087,11 +1122,24 @@ mod user_body_tests {
     #[test]
     fn envelope_without_identity_still_round_trips() {
         let document = document("anonymous");
-        let encoded = encode_user_body(&document, None, None).unwrap();
+        let encoded = encode_user_body(&document, None, None, &[]).unwrap();
         let decoded = decode_user_body(&encoded).unwrap();
         assert_eq!(decoded.document, document);
         assert_eq!(decoded.author, None);
         assert_eq!(decoded.origin, None);
+        assert!(decoded.model_context.is_empty());
+        assert!(!encoded.contains("model_context"));
+    }
+
+    #[test]
+    fn user_model_context_round_trips_with_a_separate_input_budget() {
+        let document = document(&"x".repeat(250_000));
+        let context = vec!["a".repeat(99_999), "b".repeat(100_000)];
+        let encoded = encode_user_body(&document, None, None, &context).unwrap();
+        let decoded = decode_user_body(&encoded).unwrap();
+        assert_eq!(decoded.document, document);
+        assert_eq!(decoded.model_context, context);
+        assert!(encode_user_body(&document, None, None, &["a".repeat(100_001)]).is_err());
     }
 
     #[test]
@@ -1108,7 +1156,7 @@ mod user_body_tests {
             agena_domain::ChannelRole::Member,
             Some("Ann".into()),
         );
-        let encoded = encode_user_body(&document, Some(&author), Some(&origin)).unwrap();
+        let encoded = encode_user_body(&document, Some(&author), Some(&origin), &[]).unwrap();
         let decoded = decode_user_body(&encoded).unwrap();
         assert_eq!(decoded.author, Some(author));
         assert_eq!(decoded.origin, Some(origin));

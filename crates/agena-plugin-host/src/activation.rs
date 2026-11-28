@@ -230,6 +230,13 @@ fn validate_declaration(plugin_id: &str, configured: &ConfiguredPlugin) -> Resul
             ));
         }
     }
+    for dependency in configured.activation.imported_requires.keys() {
+        if dependency.to_string() == plugin_id {
+            return Err(format!(
+                "plugin `{plugin_id}` cannot require itself as an imported dependency"
+            ));
+        }
+    }
     let mut after = BTreeSet::new();
     for dependency in &configured.activation.after {
         let dependency = dependency.to_string();
@@ -255,8 +262,7 @@ fn validate_declaration(plugin_id: &str, configured: &ConfiguredPlugin) -> Resul
 fn required_ids(configured: &ConfiguredPlugin) -> impl Iterator<Item = String> + '_ {
     configured
         .activation
-        .requires
-        .iter()
+        .required_keys()
         .map(ToString::to_string)
 }
 
@@ -425,6 +431,7 @@ pub fn plan_plugin_reload(
                 if matches!(
                     current_config.package,
                     crate::config::PluginPackage::Static { .. }
+                        | crate::config::PluginPackage::AgentPlugin { .. }
                 ) {
                     reasons.insert(PluginReloadReason::InProcessStatic);
                 }

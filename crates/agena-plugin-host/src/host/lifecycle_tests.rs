@@ -97,6 +97,7 @@ impl LifecycleProbe {
                 .deny
                 .load(Ordering::Relaxed)
                 .then(|| "policy denied compaction".into()),
+            additional_instructions: Some("Preserve fixture implementation details".into()),
         }))
     }
 
@@ -122,6 +123,7 @@ impl LifecycleProbe {
                 .deny
                 .load(Ordering::Relaxed)
                 .then(|| "policy denied child".into()),
+            ..Default::default()
         }))
     }
 
@@ -240,25 +242,31 @@ async fn lifecycle_macro_manifest_and_pipelines_fire_all_eight_hooks() {
             })
             .await
     );
-    host.dispatch_compaction_before(crate::sdk::CompactionBeforeInput {
-        session_id: 41,
-        model: "model".into(),
-        automatic: false,
-        estimated_tokens: None,
-    })
-    .await
-    .unwrap();
+    let instructions = host
+        .dispatch_compaction_before(crate::sdk::CompactionBeforeInput {
+            session_id: 41,
+            model: "model".into(),
+            automatic: false,
+            estimated_tokens: None,
+            custom_instructions: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(instructions, "Preserve fixture implementation details");
     host.broadcast_compaction_after(crate::sdk::CompactionAfterInput {
         session_id: 41,
         model: "model".into(),
         automatic: false,
         status: "committed".into(),
+        compact_summary: Some("fixture summary".into()),
     })
     .await;
     host.dispatch_subagent_start(crate::sdk::SubagentStartInput {
         session_id: 41,
         child_session_id: 42,
         name: "child".into(),
+        agent_type: None,
+        model: None,
     })
     .await
     .unwrap();
@@ -274,6 +282,8 @@ async fn lifecycle_macro_manifest_and_pipelines_fire_all_eight_hooks() {
         tool_name: "shell".into(),
         action: "shell/execute".into(),
         description: "execute".into(),
+        tool_cwd: None,
+        tool_input: None,
     })
     .await
     .unwrap();
@@ -303,6 +313,7 @@ async fn guards_can_only_deny_and_model_error_recovery_is_explicit() {
             model: "model".into(),
             automatic: true,
             estimated_tokens: Some(100),
+            custom_instructions: None,
         })
         .await
         .is_err()
@@ -312,6 +323,8 @@ async fn guards_can_only_deny_and_model_error_recovery_is_explicit() {
             session_id: 41,
             child_session_id: 42,
             name: "child".into(),
+            agent_type: None,
+            model: None,
         })
         .await
         .is_err()
@@ -322,6 +335,8 @@ async fn guards_can_only_deny_and_model_error_recovery_is_explicit() {
             tool_name: "tool".into(),
             action: "tool/run".into(),
             description: "approval".into(),
+            tool_cwd: None,
+            tool_input: None,
         })
         .await
         .is_err()

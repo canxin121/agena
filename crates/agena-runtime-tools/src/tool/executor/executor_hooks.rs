@@ -18,9 +18,14 @@ impl ToolExecutor {
             )
             .await
             .map_err(|err| self.plugin_error_or_cancelled(err))?;
-        Ok(patch.set.into_iter().collect())
+        let mut environment = patch.set;
+        if let Some(directory) = &self.claude_skill_config_directory {
+            environment.insert("CLAUDE_CONFIG_DIR".into(), directory.to_string());
+        }
+        Ok(environment.into_iter().collect())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn finalize_execution_async(
         &self,
         invocation: &ToolInvocation,
@@ -29,6 +34,8 @@ impl ToolExecutor {
         call_id: i64,
         mut execution: ToolInvocationExecution,
         original_payload: Option<&serde_json::Value>,
+        tool_cwd: Option<&Path>,
+        shell_read_target: Option<PathBuf>,
     ) -> Result<ToolInvocationExecution, ToolError> {
         let definition = self
             .invocation_definition(invocation)
@@ -48,10 +55,12 @@ impl ToolExecutor {
         if let Err(error) = self
             .apply_after_hooks_async(
                 &definition,
+                invocation,
                 session_id,
                 call_id,
                 &mut execution,
                 original_payload,
+                tool_cwd,
             )
             .await
         {
@@ -87,39 +96,17 @@ impl ToolExecutor {
 
         crate::tool::post_edit::validate(self, invocation, session_id, &mut execution).await;
 
-        if matches!(
+        let instruction_files = self.attach_project_instructions(
             model_tool_name,
-            "fs.read" | "agena.fs.read" | "fs.read_many" | "agena.fs.read_many"
-        ) {
-            let input = serde_json::Value::from(invocation.input.clone());
-            let paths = input
-                .get("paths")
-                .and_then(serde_json::Value::as_array)
-                .map(|paths| {
-                    paths
-                        .iter()
-                        .filter_map(serde_json::Value::as_str)
-                        .map(|path| self.resolve_target_path(path))
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_else(|| {
-                    input
-                        .get("file_path")
-                        .and_then(serde_json::Value::as_str)
-                        .map(|path| vec![self.resolve_target_path(path)])
-                        .unwrap_or_default()
-                });
-            let instructions = self.project_instruction_section(&paths);
-            if !instructions.is_empty() {
-                execution
-                    .view
-                    .metadata
-                    .insert("project_instructions".to_owned(), instructions.clone());
-                execution
-                    .view
-                    .output_text
-                    .push_str(&format!("\n\n{instructions}"));
-            }
+            invocation,
+            &mut execution,
+            original_payload,
+            shell_read_target,
+        )
+        .await;
+        // Synthetic callback calls return to a plugin, outside the model transcript.
+        if call_id > 0 {
+            self.notify_project_instructions_loaded(session_id, instruction_files, false);
         }
 
         // Complete the call-time action/input title with a compact fact from
@@ -130,23 +117,121 @@ impl ToolExecutor {
         Ok(execution)
     }
 
+    async fn attach_project_instructions(
+        &self,
+        tool: &str,
+        invocation: &ToolInvocation,
+        execution: &mut ToolInvocationExecution,
+        original_payload: Option<&serde_json::Value>,
+        shell_read_target: Option<PathBuf>,
+    ) -> Vec<agena_plugin_host::sdk::ImportedInstructionFile> {
+        if self.is_global()
+            || execution
+                .view
+                .metadata
+                .get(agena_plugin_host::sdk::TOOL_MODEL_OUTPUT_WITHHELD)
+                .is_some_and(|withheld| withheld == "true")
+        {
+            return Vec::new();
+        }
+        let path_arg = |key| {
+            invocation
+                .input
+                .get(key)
+                .and_then(|value| value.as_text())
+                .map(|path| self.resolve_target_path(path.trim()))
+        };
+        let paths: Vec<_> = match tool {
+            "agena.fs.read" => path_arg("file_path").into_iter().collect(),
+            "agena.fs.read_media"
+            | "agena.fs.write"
+            | "agena.fs.replace"
+            | "agena.notebook.edit_cell" => path_arg("path").into_iter().collect(),
+            "agena.notebook.read" | "agena.notebook.edit" => {
+                path_arg("notebook_path").into_iter().collect()
+            }
+            "agena.fs.read_many" => original_payload
+                .and_then(|payload| payload.get("files")?.as_array())
+                .into_iter()
+                .flatten()
+                .filter(|entry| entry["status"] == "read")
+                .filter_map(|entry| entry["path"].as_str())
+                .map(|path| self.resolve_target_path(path))
+                .collect(),
+            "agena.fs.apply_patch" => execution
+                .apply_patch
+                .iter()
+                .flat_map(|patch| &patch.files)
+                .flat_map(|file| {
+                    std::iter::once(file.path.as_str()).chain(file.from_path.as_deref())
+                })
+                .map(|path| self.resolve_target_path(path))
+                .collect(),
+            "agena.shell.exec" => shell_read_target
+                .into_iter()
+                .filter_map(|path| path.canonicalize().ok())
+                .filter(|path| {
+                    path.is_file()
+                        && matches!(
+                            self.sandbox_permission_snapshot()
+                                .authorize_path_access(AccessKind::Read, path),
+                            PermissionDecision::Allow
+                        )
+                })
+                .collect(),
+            _ => return Vec::new(),
+        };
+        if paths.is_empty() {
+            return Vec::new();
+        }
+        let (instructions, sources) = self.load_project_instructions_async(paths).await;
+        if !instructions.is_empty() {
+            let guidance = format!("\n\n{instructions}");
+            execution.view.output_text.push_str(&guidance);
+            if let Some(output) = &mut execution.view.model_output {
+                output.push_str(&guidance);
+            }
+            execution
+                .view
+                .metadata
+                .insert("project_instructions".into(), instructions);
+        }
+        sources
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn apply_after_hooks_async(
         &self,
         definition: &agena_plugin_host::registry::RegisteredTool,
+        invocation: &ToolInvocation,
         session_id: i64,
         call_id: i64,
         execution: &mut ToolInvocationExecution,
         original_payload: Option<&serde_json::Value>,
+        tool_cwd: Option<&Path>,
     ) -> Result<(), ToolError> {
+        if !self.dispatch_tool_after {
+            return Ok(());
+        }
         let summary = execution.summary();
         let after_in = PluginToolAfterInput {
             tool: definition.tool_key().clone(),
             session_id,
             call_id,
             workspace_root: self.workspace_root.to_string_lossy().to_string(),
+            tool_cwd: tool_cwd.map(|path| path.to_string_lossy().into_owned()),
+            shell_completion: crate::tool::shell_tool::collect_shell_completion(
+                self,
+                definition.tool_key(),
+                session_id,
+                original_payload,
+            ),
+            input: Some(serde_json::Value::from(invocation.input.clone())),
             title: summary.title,
             summary: summary.summary,
             output_text: summary.output_text,
+            additional_context: std::mem::take(&mut execution.view.additional_context),
+            model_output: execution.view.model_output.take(),
             payload: original_payload.cloned(),
             metadata: summary.metadata.into_iter().collect(),
         };
@@ -163,7 +248,15 @@ impl ToolExecutor {
             hooked.output_text,
             hooked.metadata,
         );
-        if let Some(payload_value) = hooked.payload {
+        execution.view.additional_context = hooked.additional_context;
+        execution.view.model_output = hooked.model_output;
+        if let Some(payload_value) = hooked.payload
+            && execution
+                .view
+                .metadata
+                .get(agena_plugin_host::sdk::TOOL_MODEL_OUTPUT_WITHHELD)
+                .is_none_or(|withheld| withheld != "true")
+        {
             definition
                 .validate_output(Some(&payload_value))
                 .map_err(|error| {
@@ -188,6 +281,8 @@ impl ToolExecutor {
         session_id: i64,
         call_id: i64,
         failure: &agena_failure::Failure,
+        duration_ms: Option<u64>,
+        automatic_denial: Option<String>,
     ) {
         if self.plugins.is_empty() {
             return;
@@ -233,8 +328,12 @@ impl ToolExecutor {
             workspace_root: self.workspace_root.to_string_lossy().to_string(),
             input: input_value,
             failure: failure.into(),
+            duration_ms,
+            automatic_denial,
         };
-        self.plugins.broadcast_tool_failure(failure_input).await;
+        self.plugins
+            .broadcast_tool_failure(failure_input, |key| self.plugin_is_enabled(key))
+            .await;
     }
 
     /// Render a durable raw result without writing the projection back to the
@@ -408,8 +507,9 @@ fn raw_model_fallback(output: &agena_domain::RawOutput) -> String {
 }
 
 use super::{
-    Path, PluginShellEnvInput, PluginToolAfterInput, PluginToolFailureInput, ToolError,
-    ToolExecutor, ToolInvocation, ToolInvocationExecution, ToolOutput, invocation_input_json,
+    AccessKind, Path, PathBuf, PermissionDecision, PluginShellEnvInput, PluginToolAfterInput,
+    PluginToolFailureInput, ToolError, ToolExecutor, ToolInvocation, ToolInvocationExecution,
+    ToolOutput, invocation_input_json,
 };
 
 #[cfg(test)]
@@ -542,7 +642,16 @@ mod output_contract_tests {
         let (null_executor, invocation) = executor(json!({"type":"null"}));
         assert!(
             null_executor
-                .finalize_execution_async(&invocation, 1, &invocation.name, 1, execution(), None,)
+                .finalize_execution_async(
+                    &invocation,
+                    1,
+                    &invocation.name,
+                    1,
+                    execution(),
+                    None,
+                    None,
+                    None,
+                )
                 .await
                 .is_ok()
         );
@@ -555,6 +664,8 @@ mod output_contract_tests {
                     1,
                     execution(),
                     Some(&json!({})),
+                    None,
+                    None,
                 )
                 .await
                 .is_err()
@@ -569,13 +680,24 @@ mod output_contract_tests {
                     1,
                     execution(),
                     Some(&json!({})),
+                    None,
+                    None,
                 )
                 .await
                 .is_ok()
         );
         assert!(
             object_executor
-                .finalize_execution_async(&invocation, 1, &invocation.name, 1, execution(), None,)
+                .finalize_execution_async(
+                    &invocation,
+                    1,
+                    &invocation.name,
+                    1,
+                    execution(),
+                    None,
+                    None,
+                    None,
+                )
                 .await
                 .is_err()
         );
@@ -606,7 +728,16 @@ mod output_contract_tests {
         let (mut executor, invocation) = executor(json!({"type":"null"}));
         executor.plugins = host;
         let execution = executor
-            .finalize_execution_async(&invocation, 1, &invocation.name, 1, execution(), None)
+            .finalize_execution_async(
+                &invocation,
+                1,
+                &invocation.name,
+                1,
+                execution(),
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(calls.load(Ordering::Relaxed), 1);

@@ -196,6 +196,11 @@ impl Inner {
             .initialization
             .clone()
             .ok_or_else(|| denied("stdio plugin has not completed bootstrap initialization"))?;
+        if context.session_id.is_none() && context.call_id.is_none() {
+            // Application lifecycle hooks and workspace-free commands run
+            // in the verified bootstrap process with its existing sandbox.
+            return Ok(self.bootstrap.clone());
+        }
         // The native host API validates the current callback authority and
         // projects its effective principal, ceilings and persisted rules.
         // No plugin RPC can supply this prepared policy.
@@ -517,6 +522,7 @@ fn prepare_recipe(
                 reads,
                 writes,
                 network,
+                ..Default::default()
             },
             runtime_paths,
         },
@@ -606,8 +612,10 @@ mod tests {
             workspace_root: workspace.clone(),
             cwd: workspace,
             policy: serde_json::to_value(policy).unwrap(),
+            additional_working_directories: Vec::new(),
             permission_snapshot: None,
             call_bound: false,
+            execution: None,
         }
     }
 

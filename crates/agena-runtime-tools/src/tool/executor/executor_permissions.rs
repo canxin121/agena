@@ -128,6 +128,11 @@ impl ToolExecutor {
         }
         let command = shell_command_from_invocation(invocation);
         let names = self.tool_permission_names(&definition);
+        let tool_name = if definition.claude_mod_tool_name().is_some() {
+            definition.canonical_name()
+        } else {
+            tool_name
+        };
         Ok((
             tool_name,
             self.principal.authorize_tool_names(
@@ -1277,6 +1282,7 @@ mod session_role_tests {
         permission: PermissionConfig,
         ceiling: PermissionConfig,
         denied: BTreeSet<String>,
+        allowlist: Option<BTreeSet<String>>,
         channel_authority: Option<agena_domain::ChannelAuthority>,
     }
 
@@ -1303,6 +1309,10 @@ mod session_role_tests {
 
         fn capability_denied_tool_names(&self) -> &BTreeSet<String> {
             &self.denied
+        }
+
+        fn profile_tool_allowlist(&self) -> Option<&BTreeSet<String>> {
+            self.allowlist.as_ref()
         }
 
         fn channel_authority(&self) -> Option<&agena_domain::ChannelAuthority> {
@@ -1381,6 +1391,22 @@ mod session_role_tests {
             available_names(&restricted),
             BTreeSet::from(["agena.shell.open".into()])
         );
+        let restricted_profile = executor
+            .for_session_context_async(&SessionContext {
+                relation: SessionRelationKind::Subagent,
+                allowlist: Some(BTreeSet::from(["agena.agent.message".into()])),
+                ..Default::default()
+            })
+            .await;
+        assert_eq!(
+            available_names(&restricted_profile),
+            BTreeSet::from(["agena.agent.message".into()])
+        );
+        assert!(matches!(
+            restricted_profile
+                .authorize_invocation(&ToolInvocation::new("shell.open", Default::default())),
+            Err(ToolError::CapabilityUnavailable(_))
+        ));
         assert!(matches!(
             restricted
                 .authorize_invocation(&ToolInvocation::new("agent.message", Default::default())),

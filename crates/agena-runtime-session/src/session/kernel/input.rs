@@ -1,10 +1,11 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, btree_map::Entry},
     sync::OnceLock,
 };
 
 use agena_domain::{
-    ActivityPayload, ComposerNode, ContentId, ContentKind, ModelRef, ResourceDelivery, Role,
+    ActivityPayload, ComposerNode, ContentField, ContentId, ContentKind, ModelRef, RawOutput,
+    ResourceDelivery, Role, ToolInvocation,
 };
 use agena_provider::{
     CompletionInputPart, CompletionInputProviderState, CompletionInputRun,
@@ -13,12 +14,13 @@ use agena_provider::{
 use agena_storage::kernel::{
     ContentStreamView, EntryId, EntryPayload, EventCursor, EventPayload, KernelError, KernelReader,
     PromptView, ProviderRoundPhase, ReadBudget, ReadBudgetSnapshot, ReadLease, ReadView, Result,
-    RoundId, SessionId, TextCursor, ToolPhase, modeled_read_bytes,
+    RoundId, SessionId, TextCursor, ToolPhase, ToolView, modeled_read_bytes,
 };
 use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::replay::{KernelProviderState, restore_replay_text};
+use crate::session::manager::cordis_job_capture_is_explicit;
 
 const MAX_MODEL_BYTES: usize = 32 * 1024 * 1024;
 const TOOL_PREVIEW_BYTES: usize = 512 * 1024;
@@ -190,6 +192,9 @@ impl KernelPromptHydrator {
             let Some((tool, entry_id)) = tools.get(tool_call_id) else {
                 continue;
             };
+            if withheld_tool_output(tool.result.as_ref()).is_some() {
+                continue;
+            }
             if let Some(response) = tool
                 .result
                 .as_ref()
@@ -235,6 +240,19 @@ impl KernelPromptHydrator {
             } else {
                 continue;
             };
+            if tool
+                .result
+                .as_ref()
+                .and_then(|result| {
+                    result
+                        .pointer("/metadata/imported_mod_result")
+                        .and_then(Value::as_str)
+                })
+                .is_some_and(|kind| matches!(kind, "withheld" | "replaced"))
+            {
+                raw.attachments.clear();
+                attachments.clear();
+            }
             for item in &raw.attachments {
                 if let Some(hydrated) = super::media::hydrate_attachment(
                     reader,
@@ -262,38 +280,21 @@ impl KernelPromptHydrator {
                 }
             }
             for field in &raw.fields {
-                if field.pointer.is_empty()
-                    && field.format == agena_domain::ContentFormat::Json
+                if is_tool_payload_source(field)
                     && let Some(head) = prompt
                         .facts
                         .sources
                         .iter()
                         .find(|source| source.id == field.resource.resource_id)
-                    && head.committed <= 512 * 1024
+                    && head.committed <= TOOL_PREVIEW_BYTES as u64
                 {
-                    let mut allowance = 2 * 1024 * 1024;
-                    let text =
-                        read_text(reader, prompt.facts.metadata.id, head, &mut allowance, None)
-                            .await?;
                     raw.payload =
-                        Some(serde_json::from_str(&text).map_err(|e| invalid(e.to_string()))?);
+                        Some(read_tool_payload(reader, prompt.facts.metadata.id, head).await?);
                 }
             }
-            // Attachments are delivered through provider media blocks; their
-            // base64 bytes never appear in the model-facing text renderer.
-            raw.attachments.clear();
-            let rendered = executor.render_tool_result(&invocation, &raw).await;
-            if let Some(text) = rendered.model {
-                // Bound only what actually exceeds the budget: the marker is a
-                // statement about truncation, so appending it to a result that
-                // was kept whole would misreport the result and break a client
-                // that parses the text as JSON.
-                let marker = "[Tool result preview limited.]";
-                let text = if crate::tool::model_output_exceeds_boundary(&text, 2000, 50 * 1024) {
-                    crate::tool::bounded_model_output_preview(&text, marker, 2000, 50 * 1024)
-                } else {
-                    text
-                };
+            if let Some(text) =
+                render_model_tool_text(executor, &invocation, raw, tool.result.as_ref()).await
+            {
                 let mut envelope: Value =
                     serde_json::from_str(output_json).map_err(|e| invalid(e.to_string()))?;
                 envelope["result"] = json!({"model":text});
@@ -357,6 +358,7 @@ impl KernelPromptHydrator {
         for head in &facts.sources {
             by_entry.entry(head.entry).or_default().push(head);
         }
+        let mut explicit_activity_captures = BTreeMap::new();
         let mut reasoning =
             BTreeMap::<RoundId, BTreeMap<ContentId, (ContentStreamView, String)>>::new();
         let mut turns = Vec::<CompletionInputRun>::new();
@@ -398,6 +400,7 @@ impl KernelPromptHydrator {
                     document,
                     author,
                     origin,
+                    model_context,
                 } => {
                     // The identity block is presentation context only; it can
                     // never confer authority. Entries written before identity
@@ -456,9 +459,32 @@ impl KernelPromptHydrator {
                             },
                         }
                     }
+                    parts.extend(
+                        model_context
+                            .iter()
+                            .cloned()
+                            .map(|text| CompletionInputPart::Text { text }),
+                    );
                     Role::User
                 }
-                EntryPayload::Text { content_id } | EntryPayload::Reasoning { content_id } => {
+                EntryPayload::PluginPrompt(prompt) => {
+                    if let Some(text) = message_source_block(Some(&prompt.author), None) {
+                        charge(&mut remaining, text.len().saturating_mul(2) + 256)?;
+                        parts.push(CompletionInputPart::Text { text });
+                    }
+                    parts.push(CompletionInputPart::Text {
+                        text: prompt.text.clone(),
+                    });
+                    parts.extend(
+                        prompt
+                            .model_context
+                            .iter()
+                            .cloned()
+                            .map(|text| CompletionInputPart::Text { text }),
+                    );
+                    Role::User
+                }
+                EntryPayload::Text { content_id, .. } | EntryPayload::Reasoning { content_id } => {
                     let head = sources
                         .get(content_id)
                         .ok_or_else(|| invalid("input text has no frozen source head"))?;
@@ -520,13 +546,36 @@ impl KernelPromptHydrator {
                         function: function.clone(),
                         arguments_json: arguments_json.clone(),
                     });
-                    let mut bodies = Vec::new();
-                    for head in by_entry.get(&item.entry.id).into_iter().flatten() {
-                        bodies.push(
-                            tool_content(reader, facts.metadata.id, head, &mut remaining).await?,
-                        );
-                    }
-                    let result = json!({"phase":tool.phase,"result":tool.result,"sources":bodies});
+                    let result = if let Some(reason) = withheld_tool_output(tool.result.as_ref()) {
+                        json!({"phase":tool.phase,"result":{"model":reason},"sources":[]})
+                    } else {
+                        let mut bodies = Vec::new();
+                        for head in by_entry.get(&item.entry.id).into_iter().flatten() {
+                            if let Some(id) = head.activity_id
+                                && matches!(head.kind, ContentKind::Text | ContentKind::Log)
+                            {
+                                let explicit = match explicit_activity_captures.entry(id) {
+                                    Entry::Occupied(entry) => *entry.get(),
+                                    Entry::Vacant(entry) => {
+                                        let explicit = match reader.activity(facts.metadata.id, id).await {
+                                            Ok(activity) => cordis_job_capture_is_explicit(&activity),
+                                            Err(KernelError::NotFound(_)) => true,
+                                            Err(error) => return Err(error),
+                                        };
+                                        *entry.insert(explicit)
+                                    }
+                                };
+                                if explicit {
+                                    continue;
+                                }
+                            }
+                            bodies.push(
+                                tool_content(reader, facts.metadata.id, head, &mut remaining)
+                                    .await?,
+                            );
+                        }
+                        json!({"phase":tool.phase,"result":tool.result,"sources":bodies})
+                    };
                     let output_json = encoded_json(&result, &mut remaining)?;
                     let status = match tool.phase {
                         ToolPhase::Succeeded => CompletionInputToolResultStatus::Completed,
@@ -543,7 +592,7 @@ impl KernelPromptHydrator {
                     });
                     Role::Assistant
                 }
-                EntryPayload::Interaction { .. } => continue,
+                EntryPayload::Interaction { .. } | EntryPayload::PluginCommand { .. } => continue,
                 EntryPayload::Notice { text } => {
                     use agena_runtime_contracts::part_content::DecodedNotice;
                     let decoded = agena_runtime_contracts::part_content::decode_notice(text);
@@ -577,10 +626,35 @@ impl KernelPromptHydrator {
                     let Some(message) = decoded.model_text() else {
                         continue;
                     };
-                    parts.push(CompletionInputPart::SystemMessage {
-                        text: message.to_owned(),
-                    });
-                    Role::System
+                    let mut notice_attachments = Vec::new();
+                    if let DecodedNotice::SystemNotification(Ok(notification)) = &decoded
+                        && notification.operation_kind == "agent_message"
+                        && let Some(items) = notification.extra.get("attachments").and_then(|value| {
+                            serde_json::from_value::<Vec<agena_domain::AttachmentItem>>(
+                                value.clone(),
+                            )
+                            .ok()
+                        })
+                    {
+                        for item in items.into_iter().take(8) {
+                            let attachment = super::media::completion_attachment(&item);
+                            media_modeled =
+                                media_modeled.saturating_add(modeled_read_bytes(&attachment)?);
+                            notice_attachments.push(CompletionInputPart::Attachment { attachment });
+                        }
+                    }
+                    if notice_attachments.is_empty() {
+                        parts.push(CompletionInputPart::SystemMessage {
+                            text: message.to_owned(),
+                        });
+                        Role::System
+                    } else {
+                        parts.push(CompletionInputPart::Text {
+                            text: message.to_owned(),
+                        });
+                        parts.extend(notice_attachments);
+                        Role::User
+                    }
                 }
                 // A cleared context is a boundary, not content: the prompt
                 // already starts after it, so it contributes nothing.
@@ -703,6 +777,125 @@ impl KernelPromptHydrator {
     }
 }
 
+fn is_tool_payload_source(field: &ContentField) -> bool {
+    field.pointer.is_empty() && field.format == agena_domain::ContentFormat::Json
+}
+
+fn withheld_tool_output(result: Option<&Value>) -> Option<&str> {
+    let result = result?;
+    let metadata = result.get("metadata")?;
+    if metadata[agena_plugin_host::sdk::TOOL_MODEL_OUTPUT_WITHHELD] != "true" {
+        return None;
+    }
+    Some(
+        result["hook_model_output"]
+            .as_str()
+            .unwrap_or("A plugin hook withheld the completed tool result."),
+    )
+}
+
+async fn read_tool_payload(
+    reader: &KernelReader,
+    session: SessionId,
+    head: &ContentStreamView,
+) -> Result<Value> {
+    let mut allowance = 2 * 1024 * 1024;
+    let text = read_text(reader, session, head, &mut allowance, None).await?;
+    serde_json::from_str(&text).map_err(|error| invalid(error.to_string()))
+}
+
+async fn render_model_tool_text(
+    executor: &crate::tool::ToolExecutor,
+    invocation: &ToolInvocation,
+    mut raw: RawOutput,
+    result: Option<&Value>,
+) -> Option<String> {
+    // The provider gets attachments through its media blocks.
+    raw.attachments.clear();
+    let rendered = executor.render_tool_result(invocation, &raw).await;
+    let hooked = result.and_then(|value| value["hook_model_output"].as_str());
+    let mut text = hooked.map(ToOwned::to_owned).or(rendered.model)?;
+    if let Some(context) = result
+        .and_then(|value| value["hook_context"].as_str())
+        .filter(|context| !context.is_empty())
+    {
+        text = format!("[Tool hook context]\n{context}\n\n{text}");
+    }
+    if crate::tool::model_output_exceeds_boundary(&text, 2000, 50 * 1024) {
+        text = crate::tool::bounded_model_output_preview(
+            &text,
+            "[Tool result preview limited.]",
+            2000,
+            50 * 1024,
+        );
+    }
+    Some(text)
+}
+
+/// Read a completed call for batch observers using the same text renderer as the model.
+pub(crate) async fn tool_batch_response(
+    reader: &KernelReader,
+    session: SessionId,
+    tool: &ToolView,
+    invocation: Option<&ToolInvocation>,
+    executor: &crate::tool::ToolExecutor,
+) -> Result<String> {
+    let Some(result) = &tool.result else {
+        return Ok(String::new());
+    };
+    if let Some(reason) = withheld_tool_output(Some(result)) {
+        return Ok(reason.to_owned());
+    }
+    if let Some(text) = result
+        .pointer("/tool_api_response/output_text")
+        .and_then(Value::as_str)
+        && !text.is_empty()
+    {
+        return Ok(text.to_owned());
+    }
+    if let Some(invocation) = invocation
+        && let Some(raw) = result.get("raw_output")
+    {
+        let mut raw: RawOutput = serde_json::from_value(raw.clone())
+            .map_err(|error| invalid(format!("invalid raw tool output: {error}")))?;
+        for field in raw
+            .fields
+            .iter()
+            .filter(|field| is_tool_payload_source(field))
+        {
+            let id = field.resource.resource_id;
+            if let Some(output) = tool.outputs.iter().find(|output| output.id == id) {
+                let head = reader.watch_content(session, id).await?.head()?;
+                if head.epoch == output.epoch && head.committed <= TOOL_PREVIEW_BYTES as u64 {
+                    raw.payload = Some(read_tool_payload(reader, session, &head).await?);
+                }
+            }
+        }
+        if let Some(text) = render_model_tool_text(executor, invocation, raw, Some(result)).await {
+            return Ok(text);
+        }
+    }
+    let mut bodies = Vec::new();
+    let mut remaining = 2 * 1024 * 1024;
+    for output in tool
+        .outputs
+        .iter()
+        .filter(|output| output.activity_id.is_none())
+    {
+        let head = reader.watch_content(session, output.id).await?.head()?;
+        if head.epoch == output.epoch {
+            match tool_content(reader, session, &head, &mut remaining).await {
+                Ok(body) => bodies.push(body),
+                Err(_) => {
+                    bodies.push(json!({"text":"[Tool output preview limited.]"}));
+                    break;
+                }
+            }
+        }
+    }
+    Ok(json!({"phase":tool.phase,"result":result,"sources":bodies}).to_string())
+}
+
 pub(super) fn charge(remaining: &mut usize, bytes: usize) -> Result<()> {
     *remaining = remaining.checked_sub(bytes).ok_or_else(|| {
         invalid("hydrated provider input exceeds its byte budget; compact a smaller prefix")
@@ -720,6 +913,12 @@ pub(super) fn message_source_block(
     author: Option<&agena_domain::MessageAuthor>,
     origin: Option<&agena_domain::MessageOrigin>,
 ) -> Option<String> {
+    if let Some(author) = author
+        && let agena_domain::AuthorKind::Plugin { as_user } = author.kind
+    {
+        return (!as_user)
+            .then(|| format!("The {} plugin sent a message:", author.display_label()));
+    }
     if author.is_none() && origin.is_none() {
         return None;
     }
@@ -812,6 +1011,7 @@ fn author_kind_label(kind: &agena_domain::AuthorKind) -> String {
         agena_domain::AuthorKind::ChannelMember { role } => {
             format!("channel_member:{}", role.as_str())
         }
+        agena_domain::AuthorKind::Plugin { .. } => "plugin".into(),
         agena_domain::AuthorKind::System { source } => {
             format!("system:{}", system_author_slug(*source))
         }

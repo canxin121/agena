@@ -283,6 +283,82 @@ async fn configure(
     if let Some(value) = &change.effective_workspace_root {
         next.effective_workspace_root = value.clone();
     }
+    if let Some(value) = &change.working_directory {
+        if value.as_ref().is_some_and(|path| {
+            path.as_os_str().is_empty()
+                || path.to_str().is_none_or(|path| path.len() > 4096)
+                || !path.components().all(|part| matches!(part, std::path::Component::Normal(_)))
+        }) {
+            return Err(invalid("working directory must be a path relative to the project workspace"));
+        }
+        next.working_directory = value.clone();
+    }
+    match &change.worktree {
+        Some(SessionWorktreeChange::Attach(worktree)) => {
+            if original.worktree.is_some()
+                || !worktree.path.is_absolute()
+                || !worktree.source.is_absolute()
+                || worktree.source.starts_with(&worktree.path)
+                || next.effective_workspace_root.as_ref() != Some(&worktree.path)
+                || !next.relation_kind.is_subagent()
+                || next.channel_authority.is_some()
+            {
+                return Err(invalid("invalid session worktree ownership"));
+            }
+            let path = worktree.path.to_str().ok_or_else(|| invalid("worktree path is not UTF-8"))?;
+            let checkout_root = match &worktree.provider {
+                SessionWorktreeProvider::Git { repository_paths: Some(paths), .. } => {
+                    let source = worktree.source.strip_prefix(&paths.source_root)
+                        .ok().filter(|relative| !relative.as_os_str().is_empty());
+                    if !paths.source_root.is_absolute()
+                        || !paths.checkout_root.is_absolute()
+                        || source.is_none()
+                        || source != worktree.path.strip_prefix(&paths.checkout_root).ok()
+                    {
+                        return Err(invalid("invalid session worktree repository roots"));
+                    }
+                    paths.checkout_root.to_str().ok_or_else(|| invalid("worktree path is not UTF-8"))?
+                }
+                _ => path,
+            };
+            let occupied: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM agena_sessions WHERE deleted_at_ms IS NULL AND (json_extract(configuration_json,'$.worktree.path') IN (?,?) OR json_extract(configuration_json,'$.worktree.provider.repository_paths.checkout_root') IN (?,?)))",
+            )
+            .bind(path)
+            .bind(checkout_root)
+            .bind(path)
+            .bind(checkout_root)
+            .fetch_one(&mut *connection)
+            .await
+            .map_err(sql_error)?;
+            if occupied {
+                return Err(KernelError::Conflict("the worktree already belongs to another session".into()));
+            }
+            next.worktree = Some(worktree.clone());
+        }
+        Some(SessionWorktreeChange::Release) => {
+            if let Some(worktree) = next.worktree.take() {
+                next.effective_workspace_root = Some(worktree.source);
+            }
+        }
+        None => {
+            if let Some(worktree) = &next.worktree
+                && next.effective_workspace_root.as_ref() != Some(&worktree.path)
+            {
+                return Err(invalid("release the session's worktree before moving its workspace"));
+            }
+        }
+    }
+    if let Some(value) = &change.pending_model_switch_context {
+        if let Some(context) = value
+            && (context.text.trim().is_empty() || context.text.len() > 16 * 1024)
+        {
+            return Err(invalid(
+                "pending model switch context must contain 1..=16384 bytes",
+            ));
+        }
+        next.pending_model_switch_context = value.clone();
+    }
     if let Some(value) = &change.agent {
         if original.agent.is_some() && value.is_none() {
             return Err(KernelError::Conflict(
@@ -292,19 +368,17 @@ async fn configure(
         if let Some(agent) = value
             && (next.relation_kind != SessionRelationKind::Subagent
                 || next.parent_session_id.is_none()
-                || agent.name.is_empty()
-                || agent.name.len() > 64
-                || !agent
-                    .name
-                    .bytes()
-                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
-                || matches!(agent.name.as_str(), "parent" | "self")
-                || agent.name.bytes().all(|b| b.is_ascii_digit()))
+                || !agent.valid_identity())
         {
             return Err(invalid("invalid agent identity"));
         }
         if let (Some(old), Some(new)) = (&original.agent, value)
             && (old.name != new.name
+                || old.cordis.as_ref().map(|identity| {
+                    (&identity.provider, &identity.label, &identity.reserved_id)
+                }) != new.cordis.as_ref().map(|identity| {
+                    (&identity.provider, &identity.label, &identity.reserved_id)
+                })
                 || (old.started_at_ms == new.started_at_ms
                     && old.origin_message_id != new.origin_message_id)
                 || (old.status.is_terminal()
@@ -319,13 +393,12 @@ async fn configure(
         }
         next.agent = value.clone();
     }
-    normalize_configuration_permissions(&mut next)?;
-    let body = encode(&next)?;
-    if body.len() > 65536 {
-        return Err(invalid("session configuration exceeds 64 KiB"));
+    if next.effective_workspace_root != original.effective_workspace_root {
+        next.additional_working_directories.clear();
     }
+    normalize_configuration_permissions(&mut next)?;
     if next != original {
-        sqlx::query("UPDATE agena_sessions SET configuration_json=?,relation_kind=?,metadata_version=metadata_version+1,updated_at_ms=MAX(?,updated_at_ms+1) WHERE id=?").bind(body).bind(next.relation_kind.as_str()).bind(now_ms()).bind(session.get()).execute(&mut *connection).await.map_err(sql_error)?;
+        write_configuration(connection, session, &next).await?;
     }
     if original.message_queue_paused != next.message_queue_paused {
         // Re-run the existing compact-state projection when resuming; no
@@ -335,6 +408,81 @@ async fn configure(
     }
     Ok(Mutation::Configuration(Box::new(next)))
 }
+
+async fn write_configuration(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+    configuration: &SessionConfiguration,
+) -> Result<()> {
+    let body = encode(configuration)?;
+    if body.len() > 65536 {
+        return Err(invalid("session configuration exceeds 64 KiB"));
+    }
+    sqlx::query("UPDATE agena_sessions SET configuration_json=?,relation_kind=?,metadata_version=metadata_version+1,updated_at_ms=MAX(?,updated_at_ms+1) WHERE id=?").bind(body).bind(configuration.relation_kind.as_str()).bind(now_ms()).bind(session.get()).execute(&mut *connection).await.map_err(sql_error)?;
+    Ok(())
+}
+
+async fn register_working_directory(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+    expected: MetadataVersion,
+    workspace_root: &std::path::Path,
+    directory: &std::path::Path,
+) -> Result<Mutation> {
+    let metadata = reads::metadata(connection, session).await?;
+    if metadata.metadata_version != expected {
+        return Err(KernelError::Conflict(
+            "session configuration changed during directory registration".into(),
+        ));
+    }
+    let mut configuration = configuration(connection, session).await?;
+    if metadata.workspace_id.is_none()
+        || configuration.owner.is_some()
+        || configuration.channel_authority.is_some()
+        || configuration.relation_kind.is_subagent()
+        || configuration
+            .conversation
+            .as_ref()
+            .is_some_and(|view| view.is_read_only())
+    {
+        return Err(invalid(
+            "working directories can only be registered in a writable project session",
+        ));
+    }
+    if !workspace_root.is_absolute()
+        || !directory.is_absolute()
+        || directory.to_str().is_none()
+        || directory
+            .components()
+            .any(|part| part == std::path::Component::ParentDir)
+    {
+        return Err(invalid(
+            "working directory registration requires canonical absolute paths",
+        ));
+    }
+    let added = !std::iter::once(workspace_root)
+        .chain(
+            configuration
+                .additional_working_directories
+                .iter()
+                .map(std::path::PathBuf::as_path),
+        )
+        .any(|root| directory.starts_with(root));
+    if added {
+        configuration
+            .additional_working_directories
+            .push(directory.to_owned());
+        write_configuration(connection, session, &configuration).await?;
+    }
+    Ok(Mutation::WorkingDirectoryRegistration(
+        agena_domain::SessionWorkingDirectoryRegistration {
+            added,
+            directory: directory.to_owned(),
+            directories: configuration.additional_working_directories,
+        },
+    ))
+}
+
 async fn recover_channel_authority(
     connection: &mut SqliteConnection,
     session: SessionId,
@@ -427,7 +575,7 @@ pub(super) async fn boundary(
         row.try_get("ordinal").map_err(storage)?,
     ))
 }
-async fn recount(connection: &mut SqliteConnection, session: SessionId) -> Result<()> {
+pub(super) async fn recount(connection: &mut SqliteConnection, session: SessionId) -> Result<()> {
     sqlx::query(
         "UPDATE agena_session_statistics SET
            (entry_count,user_message_count,last_message_at_ms)=(
@@ -517,15 +665,7 @@ async fn start_control_execution_with_system_origin(
     // transaction and self-anchor the notice in the same INSERT. A system-only
     // session has no user row to use as a temporary foreign key; inserting a
     // fake user would incorrectly grant authority and inflate user history.
-    let previous: i64 = sqlx::query_scalar(
-        "SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name='agena_entries'),0)",
-    )
-    .fetch_one(&mut *connection)
-    .await
-    .map_err(sql_error)?;
-    let anchor = previous
-        .checked_add(1)
-        .ok_or_else(|| invalid("entry identity exhausted"))?;
+    let anchor = commands::next_entry_id(connection).await?;
     sqlx::query("INSERT INTO agena_entries (id,origin_session_id,execution_id,generation,message_id,kind,body_json,created_at_ms) VALUES (?,?,?,1,?,'notice',?,?)")
         .bind(anchor).bind(session.get()).bind(execution.to_string()).bind(anchor).bind(encode(text)?).bind(now)
         .execute(&mut *connection).await.map_err(sql_error)?;
@@ -630,6 +770,12 @@ async fn fork(
         SessionRelationKind::Fork
     };
     config.agent = None;
+    config.additional_working_directories.clear();
+    if let Some(worktree) = config.worktree.take() {
+        // A conversation fork owns its own lifecycle. It returns to the source
+        // project instead of sharing a checkout that the agent can release.
+        config.effective_workspace_root = Some(worktree.source);
+    }
     if management.is_some_and(|guard| guard.title.is_some()) {
         config.title_state = SessionTitleState::default();
     }
@@ -685,7 +831,7 @@ async fn fork(
         MembershipGeneration::INITIAL,
     )
     .await?;
-    branches::capture(connection, session, target).await?;
+    branches::capture(connection, session, target, false).await?;
     history_runs::copy_visible(connection, session, target, sequence).await?;
     recount(connection, target).await?;
     sqlx::query("INSERT INTO agena_prompt_windows (session_id) VALUES (?)")
@@ -813,6 +959,8 @@ async fn clear(
 ) -> Result<Mutation> {
     let metadata = reads::metadata(connection, session).await?;
     settle_active_executions(connection, session).await?;
+    sqlx::query("UPDATE agena_deliveries SET state='failed' WHERE session_id=? AND state='pending' AND json_extract(payload_json,'$.kind')='plugin_prompt'")
+        .bind(session.get()).execute(&mut *connection).await.map_err(sql_error)?;
     match mode {
         ClearMode::History => {
             let next = metadata.membership_generation.next().map_err(storage)?;
@@ -1143,7 +1291,7 @@ async fn delivery(
     })
 }
 
-async fn publish_delivery(
+pub(super) async fn publish_delivery(
     connection: &mut SqliteConnection,
     session: SessionId,
     target: Option<ExecutionId>,
@@ -1151,8 +1299,21 @@ async fn publish_delivery(
     payload: &serde_json::Value,
 ) -> Result<DeliveryView> {
     reads::metadata(connection, session).await?;
-    if business_key.is_empty() || business_key.len() > 1024 || encode(payload)?.len() > 65536 {
+    let encoded = encode(payload)?;
+    let plugin_prompt = delivery_plugin_prompt(payload)?;
+    let limit = if plugin_prompt.is_some() {
+        MAX_COMMAND_BYTES
+    } else {
+        65536
+    };
+    if business_key.is_empty() || business_key.len() > 1024 || encoded.len() > limit {
         return Err(invalid("invalid delivery key or payload size"));
+    }
+    if let Some(prompt) = &plugin_prompt {
+        encode_plugin_prompt(prompt)?;
+        if target.is_none() {
+            return Err(invalid("Plugin prompt delivery requires a running turn"));
+        }
     }
     let existing: Option<String> =
         sqlx::query_scalar("SELECT id FROM agena_deliveries WHERE business_key=?")
@@ -1179,6 +1340,16 @@ async fn publish_delivery(
         .fetch_one(&mut *connection)
         .await
         .map_err(sql_error)?;
+        if plugin_prompt.is_some()
+            && (view.phase != ExecutionPhase::Running
+                || view.purpose == ExecutionPurpose::Compaction
+                || payload["generation"].as_i64() != Some(view.generation.get())
+                || stopping)
+        {
+            return Err(KernelError::Conflict(
+                "The plugin prompt's turn is no longer accepting input".into(),
+            ));
+        }
         if view.phase.is_terminal() || stopping {
             return Err(KernelError::Conflict(
                 "the delegated execution has ended; use agent.followup to resume it".into(),
@@ -1188,20 +1359,37 @@ async fn publish_delivery(
     if payload.get("kind").and_then(serde_json::Value::as_str) == Some("agent_message") {
         let (count, bytes):(i64,i64)=sqlx::query_as("SELECT count(*),COALESCE(sum(length(CAST(payload_json AS BLOB))),0) FROM agena_deliveries WHERE session_id=? AND state='pending' AND json_extract(payload_json,'$.kind')='agent_message'")
             .bind(session.get()).fetch_one(&mut *connection).await.map_err(sql_error)?;
-        if count >= 32 || bytes.saturating_add(encode(payload)?.len() as i64) > 128 * 1024 {
+        if count >= 32 || bytes.saturating_add(encoded.len() as i64) > 128 * 1024 {
             return Err(invalid(
                 "agent mailbox is full; wait for the recipient to consume accepted messages before sending more",
             ));
         }
     }
+    if plugin_prompt.is_some() {
+        let (count, bytes): (i64, i64) = sqlx::query_as(
+            "SELECT count(*),COALESCE(sum(length(CAST(payload_json AS BLOB))),0) FROM agena_deliveries WHERE session_id=? AND state='pending' AND json_extract(payload_json,'$.kind')='plugin_prompt'",
+        ).bind(session.get()).fetch_one(&mut *connection).await.map_err(sql_error)?;
+        if count >= 128 || bytes.saturating_add(encoded.len() as i64) > 8 * 1024 * 1024 {
+            return Err(KernelError::Busy);
+        }
+    }
     let id = agena_domain::CommandId::new();
     sqlx::query("INSERT INTO agena_deliveries (id,session_id,target_execution_id,business_key,payload_json,state) VALUES (?,?,?,?,?,'pending')")
-        .bind(id.to_string()).bind(session.get()).bind(target.map(|id| id.to_string())).bind(business_key).bind(encode(payload)?)
+        .bind(id.to_string()).bind(session.get()).bind(target.map(|id| id.to_string())).bind(business_key).bind(encoded)
         .execute(&mut *connection).await.map_err(sql_error)?;
     delivery(connection, session, id).await
 }
 
-async fn notice(
+fn delivery_plugin_prompt(payload: &serde_json::Value) -> Result<Option<PluginPrompt>> {
+    if payload["kind"] != "plugin_prompt" {
+        return Ok(None);
+    }
+    serde_json::from_value(payload.clone())
+        .map(Some)
+        .map_err(invalid)
+}
+
+pub(super) async fn notice(
     connection: &mut SqliteConnection,
     session: SessionId,
     message: EntryId,
@@ -1210,8 +1398,17 @@ async fn notice(
     if text.len() > 256 * 1024 {
         return Err(invalid("notice exceeds 256 KiB"));
     }
+    append_notice_body(connection, session, message, encode(text)?).await
+}
+
+async fn append_notice_body(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+    message: EntryId,
+    body: String,
+) -> Result<EntryId> {
     boundary(connection, session, message).await?;
-    let row=sqlx::query("SELECT e.origin_session_id,e.execution_id,x.current_generation AS generation FROM agena_entries e JOIN agena_executions x ON x.id=e.execution_id WHERE e.id=? AND x.message_id=e.id AND (e.kind='user' OR (e.kind='notice' AND EXISTS(SELECT 1 FROM agena_execution_purposes p WHERE p.execution_id=x.id)))")
+    let row=sqlx::query("SELECT e.origin_session_id,e.execution_id,x.current_generation AS generation FROM agena_entries e JOIN agena_executions x ON x.id=e.execution_id WHERE e.id=? AND x.message_id=e.id AND (e.kind='user' OR (e.kind='notice' AND (json_extract(e.body_json,'$.kind')='plugin_command' OR EXISTS(SELECT 1 FROM agena_execution_purposes p WHERE p.execution_id=x.id))))")
         .bind(message.get()).fetch_optional(&mut *connection).await.map_err(sql_error)?
         .ok_or_else(||invalid("notice requires an execution input anchor"))?;
     if row
@@ -1221,7 +1418,7 @@ async fn notice(
     {
         return Err(KernelError::Ownership);
     }
-    let id:i64=sqlx::query_scalar("INSERT INTO agena_entries (origin_session_id,execution_id,generation,message_id,kind,body_json,created_at_ms) VALUES (?,?,?,?,'notice',?,?) RETURNING id").bind(session.get()).bind(row.try_get::<&str,_>("execution_id").map_err(storage)?).bind(row.try_get::<i64,_>("generation").map_err(storage)?).bind(message.get()).bind(encode(text)?).bind(now_ms()).fetch_one(&mut *connection).await.map_err(sql_error)?;
+    let id:i64=sqlx::query_scalar("INSERT INTO agena_entries (origin_session_id,execution_id,generation,message_id,kind,body_json,created_at_ms) VALUES (?,?,?,?,'notice',?,?) RETURNING id").bind(session.get()).bind(row.try_get::<&str,_>("execution_id").map_err(storage)?).bind(row.try_get::<i64,_>("generation").map_err(storage)?).bind(message.get()).bind(body).bind(now_ms()).fetch_one(&mut *connection).await.map_err(sql_error)?;
     commands::append_history(connection, session, id).await?;
     EntryId::try_from(id).map_err(storage)
 }
@@ -1341,6 +1538,7 @@ pub(super) async fn apply(
         } => {
             reads::metadata(connection, *session).await?;
             let previous = delivery(connection, *session, *id).await?;
+            let plugin_prompt = delivery_plugin_prompt(&previous.payload)?;
             if previous.target_execution.is_some() {
                 return Err(KernelError::Conflict(
                     "execution guidance cannot start another execution".into(),
@@ -1353,6 +1551,7 @@ pub(super) async fn apply(
                     row.try_get::<&str, _>("purpose").map_err(storage)?,
                 )?)?;
                 if purpose == ExecutionPurpose::Message
+                    && plugin_prompt.is_none()
                     && Some(row.try_get::<i64, _>("message_id").map_err(storage)?)
                         != message.map(EntryId::get)
                 {
@@ -1380,10 +1579,37 @@ pub(super) async fn apply(
                     purpose,
                 })
             } else {
+                let pending: bool = sqlx::query_scalar(
+                    "SELECT state='pending' FROM agena_deliveries WHERE id=? AND session_id=?",
+                )
+                .bind(id.to_string())
+                .bind(session.get())
+                .fetch_one(&mut *connection)
+                .await
+                .map_err(sql_error)?;
+                if !pending {
+                    return Err(KernelError::Conflict(
+                        "delivery is no longer pending".into(),
+                    ));
+                }
                 // A work report is a system continuation, never a retry of a
                 // user request. Otherwise tools could mistake the old user
                 // anchor for fresh authorization and recursively start work.
-                let continued = if matches!(
+                let plugin_prompt_delivery = plugin_prompt.is_some();
+                let continued = if let Some(prompt) = plugin_prompt {
+                    Box::pin(commands::apply(
+                        connection,
+                        &Command::Send {
+                            session: *session,
+                            document: prompt.document(),
+                            blobs: Vec::new(),
+                            author: Some(prompt.author),
+                            origin: None,
+                            model_context: prompt.model_context,
+                        },
+                    ))
+                    .await?
+                } else if previous.wakes_agent() || matches!(
                     previous
                         .payload
                         .get("kind")
@@ -1395,12 +1621,28 @@ pub(super) async fn apply(
                             | "bot_instruction"
                     )
                 ) {
+                    let system_origin = match message {
+                        None => true,
+                        Some(anchor) => sqlx::query_scalar(
+                            "SELECT EXISTS(SELECT 1 FROM agena_entries e
+                             WHERE e.id=? AND e.origin_session_id=? AND e.message_id=e.id
+                               AND e.kind='notice' AND json_extract(e.body_json,'$.kind')='plugin_command')",
+                        )
+                        .bind(anchor.get())
+                        .bind(session.get())
+                        .fetch_one(&mut *connection)
+                        .await
+                        .map_err(sql_error)?,
+                    };
+                    if system_origin && let Some(anchor) = message {
+                        boundary(connection, *session, *anchor).await?;
+                    }
                     Mutation::Execution(
                         start_control_execution_with_system_origin(
                             connection,
                             *session,
                             ControlExecutionPurpose::Continuation,
-                            message.is_none(),
+                            system_origin,
                         )
                         .await?,
                     )
@@ -1419,9 +1661,14 @@ pub(super) async fn apply(
                 let Mutation::Execution(execution) = continued else {
                     return Err(storage("invalid delivery continuation result"));
                 };
-                let entry = notice(connection, *session, execution.message_id, text).await?;
+                let entry = if plugin_prompt_delivery {
+                    execution.message_id
+                } else {
+                    notice(connection, *session, execution.message_id, text).await?
+                };
                 sqlx::query("UPDATE agena_deliveries SET state='consumed',result_entry_id=?,resume_execution_id=?,resume_generation=? WHERE id=? AND session_id=? AND state='pending'")
                     .bind(entry.get()).bind(execution.id.to_string()).bind(execution.generation.get()).bind(id.to_string()).bind(session.get()).execute(&mut *connection).await.map_err(sql_error)?;
+                activity::acknowledge_notice_output(connection, &previous).await?;
                 Mutation::Execution(execution)
             }
         }
@@ -1453,59 +1700,44 @@ pub(super) async fn apply(
             Mutation::InteractionView(Box::new(view))
         }
         Command::CreateConfigured {
-            workspace_id: _,
-            title: _,
-            configuration: _,
-        }
-        | Command::CreateGlobal {
-            title: _,
-            configuration: _,
+            workspace_id,
+            title,
+            configuration,
         } => {
-            let (workspace_id, title, config) = match command {
-                Command::CreateConfigured {
-                    workspace_id,
-                    title,
-                    configuration,
-                } => (Some(*workspace_id), title, configuration),
-                Command::CreateGlobal {
-                    title,
-                    configuration,
-                } => (None, title, configuration),
-                _ => unreachable!(),
-            };
-            if workspace_id.is_none() && config.effective_workspace_root.is_some() {
-                return Err(invalid("global sessions cannot have a workspace root"));
+            let id = create_configured(connection, Some(*workspace_id), title, configuration).await?;
+            Mutation::Session(Box::new(reads::metadata(connection, id).await?))
+        }
+        Command::CreateGlobal {
+            title,
+            configuration,
+        } => {
+            let id = create_configured(connection, None, title, configuration).await?;
+            Mutation::Session(Box::new(reads::metadata(connection, id).await?))
+        }
+        Command::CreateSeededAgent {
+            parent,
+            title,
+            configuration: config,
+        } => {
+            if config.parent_session_id != Some(*parent)
+                || config.relation_kind != SessionRelationKind::Subagent
+                || config.agent.is_none()
+            {
+                return Err(invalid("a seeded agent requires a declared subagent identity"));
             }
-            let created =
-                commands::create_session(connection, workspace_id, title, now_ms()).await?;
-            let Mutation::Session(metadata) = created else {
-                return Err(storage("invalid create result"));
-            };
-            configure(
-                connection,
-                metadata.id,
-                &SessionConfigurationChange {
-                    title_state: Some(config.title_state.clone()),
-                    message_queue_paused: Some(config.message_queue_paused),
-                    parent_session_id: config.parent_session_id,
-                    relation_kind: Some(config.relation_kind),
-                    conversation: Some(config.conversation.clone()),
-                    prompts: Some(config.prompts.clone()),
-                    profile: Some(config.profile.clone()),
-                    selection_defaults: Some(config.selection_defaults.clone()),
-                    permission: Some(config.permission.clone()),
-                    permission_profile: Some(config.permission_profile.clone()),
-                    permission_ceiling: Some(config.permission_ceiling.clone()),
-                    permission_ceiling_layers: Some(config.permission_ceiling_layers.clone()),
-                    channel_authority: config.channel_authority.clone(),
-                    owner: Some(config.owner.clone()),
-                    capability_denied_tool_names: Some(config.capability_denied_tool_names.clone()),
-                    effective_workspace_root: Some(config.effective_workspace_root.clone()),
-                    agent: Some(config.agent.clone()),
-                },
-            )
-            .await?;
-            Mutation::Session(Box::new(reads::metadata(connection, metadata.id).await?))
+            let source = configuration(connection, *parent).await?;
+            let nested_cordis = source.agent.as_ref().is_some_and(|agent| agent.cordis.is_some())
+                && config.agent.as_ref().is_some_and(|agent| agent.cordis.is_some())
+                && source.channel_authority.is_none();
+            if source.channel_authority != config.channel_authority
+                || (source.relation_kind.is_subagent() && !nested_cordis)
+            {
+                return Err(KernelError::Ownership);
+            }
+            let workspace_id = reads::metadata(connection, *parent).await?.workspace_id;
+            let id = create_configured(connection, workspace_id, title, config).await?;
+            agent_seed::capture(connection, *parent, id).await?;
+            Mutation::Session(Box::new(reads::metadata(connection, id).await?))
         }
         Command::DetachGlobal { session, guard } => {
             let row = sqlx::query("SELECT metadata_version,control_version,parent_session_id,deleted_at_ms FROM agena_sessions WHERE id=?")
@@ -1560,7 +1792,7 @@ pub(super) async fn apply(
                 .fetch_one(&mut *connection)
                 .await
                 .map_err(sql_error)?;
-            let changed = sqlx::query(&format!("{TREE} UPDATE agena_sessions SET workspace_id=NULL,configuration_json=json_set(configuration_json,'$.effective_workspace_root',NULL),metadata_version=metadata_version+1,control_version=control_version+1,updated_at_ms=MAX(updated_at_ms,?) WHERE id IN (SELECT id FROM tree) AND (workspace_id IS NOT NULL OR json_type(configuration_json,'$.effective_workspace_root') NOT IN ('null') AND json_type(configuration_json,'$.effective_workspace_root') IS NOT NULL)"))
+            let changed = sqlx::query(&format!("{TREE} UPDATE agena_sessions SET workspace_id=NULL,configuration_json=json_remove(json_set(configuration_json,'$.effective_workspace_root',NULL),'$.additional_working_directories','$.working_directory'),metadata_version=metadata_version+1,control_version=control_version+1,updated_at_ms=MAX(updated_at_ms,?) WHERE id IN (SELECT id FROM tree) AND (workspace_id IS NOT NULL OR json_type(configuration_json,'$.effective_workspace_root') NOT IN ('null') AND json_type(configuration_json,'$.effective_workspace_root') IS NOT NULL OR json_type(configuration_json,'$.additional_working_directories') IS NOT NULL OR json_type(configuration_json,'$.working_directory') IS NOT NULL)"))
                 .bind(session.get()).bind(now_ms()).execute(&mut *connection).await.map_err(sql_error)?.rows_affected();
             let reminders = sqlx::query(&format!("{TREE} UPDATE agena_assistant_reminders SET workspace_id=NULL,reminder_json=json_set(reminder_json,'$.workspace_id',NULL) WHERE source_session_id IN (SELECT id FROM tree) AND (workspace_id IS NOT NULL OR json_type(reminder_json,'$.workspace_id') IS NOT 'null')"))
                 .bind(session.get()).execute(&mut *connection).await.map_err(sql_error)?.rows_affected();
@@ -1572,6 +1804,21 @@ pub(super) async fn apply(
             })
         }
         Command::Configure { session, change } => configure(connection, *session, change).await?,
+        Command::RegisterWorkingDirectory {
+            session,
+            metadata_version,
+            workspace_root,
+            directory,
+        } => {
+            register_working_directory(
+                connection,
+                *session,
+                *metadata_version,
+                workspace_root,
+                directory,
+            )
+            .await?
+        }
         Command::RecoverChannelAuthority { session, recovery } => {
             recover_channel_authority(connection, *session, recovery).await?
         }
@@ -1601,7 +1848,9 @@ pub(super) async fn apply(
                 },
             )
             .await?;
-            publish_delivery(connection, parent, None, business_key, payload).await?;
+            if config.agent.as_ref().is_some_and(SessionAgentConfiguration::delivers_to_parent) {
+                publish_delivery(connection, parent, None, business_key, payload).await?;
+            }
             outcome
         }
 
@@ -1757,14 +2006,75 @@ pub(super) async fn apply(
                         "delivery is no longer pending".into(),
                     ));
                 }
-                let entry = notice(connection, *session, *message, text).await?;
+                let entry = if let Some(prompt) = delivery_plugin_prompt(&previous.payload)? {
+                    if previous.target_execution.is_none() {
+                        return Err(KernelError::Conflict(
+                            "A detached plugin prompt requires a new turn".into(),
+                        ));
+                    }
+                    append_notice_body(
+                        connection,
+                        *session,
+                        *message,
+                        encode_plugin_prompt(&prompt)?,
+                    )
+                    .await?
+                } else {
+                    notice(connection, *session, *message, text).await?
+                };
                 sqlx::query("UPDATE agena_deliveries SET state='consumed',result_entry_id=? WHERE id=? AND session_id=? AND state='pending'").bind(entry.get()).bind(id.to_string()).bind(session.get()).execute(&mut *connection).await.map_err(sql_error)?;
+                activity::acknowledge_notice_output(connection, &previous).await?;
                 Mutation::Checkpoint(entry)
             }
         }
         _ => return Ok(None),
     };
     Ok(Some(value))
+}
+
+async fn create_configured(
+    connection: &mut SqliteConnection,
+    workspace_id: Option<i64>,
+    title: &str,
+    config: &SessionConfiguration,
+) -> Result<SessionId> {
+    if workspace_id.is_none()
+        && (config.effective_workspace_root.is_some() || config.working_directory.is_some())
+    {
+        return Err(invalid("global sessions cannot have a workspace root"));
+    }
+    let created = commands::create_session(connection, workspace_id, title, now_ms()).await?;
+    let Mutation::Session(metadata) = created else {
+        return Err(storage("invalid create result"));
+    };
+    configure(
+        connection,
+        metadata.id,
+        &SessionConfigurationChange {
+            title_state: Some(config.title_state.clone()),
+            message_queue_paused: Some(config.message_queue_paused),
+            parent_session_id: config.parent_session_id,
+            relation_kind: Some(config.relation_kind),
+            conversation: Some(config.conversation.clone()),
+            prompts: Some(config.prompts.clone()),
+            profile: Some(config.profile.clone()),
+            selection_defaults: Some(config.selection_defaults.clone()),
+            permission: Some(config.permission.clone()),
+            permission_profile: Some(config.permission_profile.clone()),
+            permission_ceiling: Some(config.permission_ceiling.clone()),
+            permission_ceiling_layers: Some(config.permission_ceiling_layers.clone()),
+            channel_authority: config.channel_authority.clone(),
+            owner: Some(config.owner.clone()),
+            capability_denied_tool_names: Some(config.capability_denied_tool_names.clone()),
+            effective_workspace_root: Some(config.effective_workspace_root.clone()),
+            working_directory: Some(config.working_directory.clone()),
+            worktree: config.worktree.clone().map(SessionWorktreeChange::Attach),
+            agent: Some(config.agent.clone()),
+            pending_model_switch_context: Some(config.pending_model_switch_context.clone()),
+        },
+    )
+    .await?;
+    Ok(metadata.id)
 }
 
 /// Apply the paused presentation at the write boundary, never by loading
@@ -1928,7 +2238,8 @@ pub(super) async fn pending_deliveries(
         .await
         .map_err(storage)?;
     reads::metadata(&mut tx, session).await?;
-    let ids:Vec<String>=sqlx::query_scalar("SELECT id FROM agena_deliveries WHERE session_id=? AND state='pending' AND id>? ORDER BY id LIMIT ?").bind(session.get()).bind(after.map(|id|id.to_string()).unwrap_or_default()).bind(limit.clamp(1,64) as i64).fetch_all(&mut *tx).await.map_err(sql_error)?;
+    let ids:Vec<String>=sqlx::query_scalar("SELECT id FROM agena_deliveries WHERE session_id=?1 AND state='pending' AND rowid>COALESCE((SELECT rowid FROM agena_deliveries WHERE session_id=?1 AND id=?2),0) ORDER BY rowid LIMIT ?3")
+        .bind(session.get()).bind(after.map(|id|id.to_string())).bind(limit.clamp(1,64) as i64).fetch_all(&mut *tx).await.map_err(sql_error)?;
     let mut values = Vec::with_capacity(ids.len());
     for id in ids {
         values.push(delivery(&mut tx, session, id.parse().map_err(storage)?).await?);
@@ -1963,6 +2274,102 @@ pub(super) async fn find_agent(
         .bind(parent.get()).bind(agent_name).fetch_optional(&mut *tx).await.map_err(sql_error)?;
     let value = id.map(SessionId::try_from).transpose().map_err(storage)?;
     backend.wrap_read(parent, value, std::mem::size_of::<Option<SessionId>>())
+}
+
+pub(super) async fn agent_catalog(
+    backend: &Backend,
+    parent: SessionId,
+    limit: usize,
+) -> Result<ReadView<Vec<AgentCatalogMember>>> {
+    backend.cache.ensure_open()?;
+    let _read = backend.control_reads.clone().try_acquire_owned().map_err(|_| KernelError::Busy)?;
+    let mut tx = backend.reader.get_sqlite_connection_pool().begin().await.map_err(storage)?;
+    let metadata = reads::metadata(&mut tx, parent).await?;
+    let rows = sqlx::query(
+        "WITH RECURSIVE tree(id, depth, position) AS (
+            SELECT ?1, 0, ''
+            UNION ALL
+            SELECT c.id, t.depth+1, t.position || printf('%020d/',c.id)
+            FROM tree t JOIN agena_sessions c ON c.parent_session_id=t.id
+            WHERE c.deleted_at_ms IS NULL AND c.workspace_id=?2 AND c.relation_kind='subagent'
+                AND c.owner_bot_id IS NULL AND c.agent_name IS NOT NULL AND t.depth<128
+                AND json_extract(c.configuration_json,'$.channel_authority') IS NULL
+                AND json_extract(c.configuration_json,'$.agent.workflow') IS NULL
+                AND (json_extract(c.configuration_json,'$.agent.cordis') IS NULL
+                     OR EXISTS(SELECT 1 FROM agena_executions e WHERE e.session_id=c.id))
+            ORDER BY 3 LIMIT ?3
+         )
+         SELECT s.id,s.parent_session_id,s.agent_name,tree.depth,
+                COALESCE(json_extract(s.configuration_json,'$.agent.cordis.label'),s.title) AS label,
+                json_extract(s.configuration_json,'$.agent.cordis.reserved_id') AS reserved_id,
+                stats.running_executions>0 AS running
+         FROM tree JOIN agena_sessions s ON s.id=tree.id
+         JOIN agena_session_statistics stats ON stats.session_id=s.id
+         WHERE tree.depth>0 ORDER BY tree.position",
+    )
+    .bind(parent.get()).bind(metadata.workspace_id).bind((limit.clamp(1, 1025) + 1) as i64)
+    .fetch_all(&mut *tx).await.map_err(sql_error)?;
+    let values = rows.iter().map(|row| {
+        Ok(AgentCatalogMember {
+            id: SessionId::try_from(row.try_get::<i64, _>("id").map_err(storage)?).map_err(storage)?,
+            parent: SessionId::try_from(row.try_get::<i64, _>("parent_session_id").map_err(storage)?).map_err(storage)?,
+            name: row.try_get("agent_name").map_err(storage)?,
+            label: row.try_get("label").map_err(storage)?,
+            depth: row.try_get("depth").map_err(storage)?,
+            running: row.try_get("running").map_err(storage)?,
+            reserved_id: row.try_get("reserved_id").map_err(storage)?,
+        })
+    }).collect::<Result<Vec<_>>>()?;
+    tx.rollback().await.map_err(storage)?;
+    let bytes = modeled_read_bytes(&values)?;
+    backend.wrap_read(parent, values, bytes)
+}
+
+pub(super) async fn active_agent_count(
+    backend: &Backend,
+    root: SessionId,
+) -> Result<ReadView<u64>> {
+    backend.cache.ensure_open()?;
+    let _read = backend
+        .control_reads
+        .clone()
+        .try_acquire_owned()
+        .map_err(|_| KernelError::Busy)?;
+    let mut tx = backend.reader.get_sqlite_connection_pool().begin().await.map_err(storage)?;
+    let metadata = reads::metadata(&mut tx, root).await?;
+    // Start at occupied sessions so a long history of idle children doesn't
+    // make admission scan the entire catalog.
+    let count: i64 = sqlx::query_scalar(
+        "WITH RECURSIVE occupied(id) AS (
+            SELECT id FROM agena_sessions
+            WHERE deleted_at_ms IS NULL AND agent_status IN ('created','running')
+            UNION
+            SELECT session_id FROM agena_attempts WHERE phase IN ('queued','running')
+        ), ancestry(parent, depth) AS (
+            SELECT s.parent_session_id, 1 FROM occupied o JOIN agena_sessions s ON s.id=o.id
+            WHERE s.parent_session_id < s.id AND s.workspace_id=?2
+                AND s.deleted_at_ms IS NULL AND s.relation_kind='subagent'
+                AND s.agent_name IS NOT NULL AND s.owner_bot_id IS NULL
+                AND json_extract(s.configuration_json,'$.channel_authority') IS NULL
+                AND json_extract(s.configuration_json,'$.agent.workflow') IS NULL
+            UNION ALL
+            SELECT s.parent_session_id, a.depth+1
+            FROM ancestry a JOIN agena_sessions s ON s.id=a.parent
+            WHERE a.parent>?1 AND a.depth<128 AND s.parent_session_id < s.id AND s.workspace_id=?2
+                AND s.deleted_at_ms IS NULL AND s.relation_kind='subagent'
+                AND s.agent_name IS NOT NULL AND s.owner_bot_id IS NULL
+                AND json_extract(s.configuration_json,'$.channel_authority') IS NULL
+                AND json_extract(s.configuration_json,'$.agent.workflow') IS NULL
+        )
+        SELECT count(*) FROM ancestry WHERE parent=?1",
+    )
+    .bind(root.get())
+    .bind(metadata.workspace_id)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(sql_error)?;
+    tx.rollback().await.map_err(storage)?;
+    backend.wrap_read(root, u64::try_from(count).map_err(storage)?, std::mem::size_of::<u64>())
 }
 
 pub(super) async fn history_after(
@@ -2240,6 +2647,52 @@ pub(super) async fn prompt_window_status(
         .await
         .map_err(sql_error)?;
     let value = prompt_status_row(&row)?;
+    let bytes = modeled_read_bytes(&value)?;
+    backend.wrap_read(session, value, bytes)
+}
+
+pub(super) async fn session_resume_facts(
+    backend: &Backend,
+    session: SessionId,
+) -> Result<ReadView<Option<SessionResumeFacts>>> {
+    backend.cache.ensure_open()?;
+    let _read = backend.control_reads.clone().try_acquire_owned().map_err(|_| KernelError::Busy)?;
+    let mut tx = backend.reader.get_sqlite_connection_pool().begin().await.map_err(storage)?;
+    reads::metadata(&mut tx, session).await?;
+    // Inspect visible response entries so a fork reads its frozen prefix,
+    // including the branch's view of whether that round actually finished.
+    let row = sqlx::query(
+        "SELECT CASE WHEN r.session_id=s.session_id THEN r.finished_at_ms ELSE f.finished_at_ms END AS finished_at_ms,
+                json_extract(r.provider_state_json,'$.model') AS model,
+                json_extract(r.provider_state_json,'$.usage') AS usage,
+                COALESCE(checkpoint.id>e.id,0) AS context_rewritten,
+                CASE WHEN checkpoint.id>e.id AND json_extract(checkpoint.body_json,'$.kind')='compaction'
+                     THEN w.last_after_tokens END AS compacted_context_tokens
+           FROM agena_session_segments s
+           JOIN agena_segment_entries m ON m.segment_id=s.segment_id AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal
+           JOIN agena_entries e ON e.id=m.entry_id AND e.kind IN ('text','reasoning','tool')
+           JOIN agena_rounds r ON r.id=e.round_id
+           LEFT JOIN agena_branch_rounds f ON f.session_id=s.session_id AND f.round_id=r.id
+           LEFT JOIN agena_compaction_rounds c ON c.round_id=r.id
+           JOIN agena_prompt_windows w ON w.session_id=s.session_id
+           LEFT JOIN agena_entries checkpoint ON checkpoint.id=w.checkpoint_entry_id
+          WHERE s.session_id=? AND c.round_id IS NULL AND r.provider_state_json IS NOT NULL
+            AND ((r.session_id=s.session_id AND r.phase='succeeded' AND r.finished_at_ms IS NOT NULL)
+                 OR (r.session_id!=s.session_id AND f.phase='succeeded' AND f.has_provider_state=1 AND f.finished_at_ms IS NOT NULL))
+          ORDER BY s.sequence DESC,m.ordinal DESC LIMIT 1",
+    ).bind(session.get()).fetch_optional(&mut *tx).await.map_err(sql_error)?;
+    let value = row.as_ref().map(|row| -> Result<_> {
+        let model = row.try_get::<Option<&str>, _>("model").map_err(storage)?;
+        let usage = row.try_get::<Option<&str>, _>("usage").map_err(storage)?;
+        let compacted = row.try_get::<Option<i64>, _>("compacted_context_tokens").map_err(storage)?;
+        Ok(SessionResumeFacts {
+            finished_at_ms: row.try_get("finished_at_ms").map_err(storage)?,
+            model: model.map(decode).transpose()?,
+            usage: usage.map(decode).transpose()?,
+            context_rewritten: row.try_get("context_rewritten").map_err(storage)?,
+            compacted_context_tokens: compacted.map(u64::try_from).transpose().map_err(storage)?,
+        })
+    }).transpose()?;
     let bytes = modeled_read_bytes(&value)?;
     backend.wrap_read(session, value, bytes)
 }

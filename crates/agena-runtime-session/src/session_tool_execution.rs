@@ -1,8 +1,11 @@
 //! Runtime boundary for externally initiated session tool execution.
 
 use agena_domain::ToolInvocation;
+use agena_domain::mcp_app_tools::McpAppViewScope;
 use agena_tool::ToolExecutionSummary;
 use async_trait::async_trait;
+use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 /// Infrastructure or execution failure for a session-scoped invocation.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -80,4 +83,27 @@ pub trait SessionToolExecutionService: Send + Sync {
         session_id: i64,
         invocation: ToolInvocation,
     ) -> Result<SessionToolExecutionOutcome, SessionToolExecutionError>;
+
+    /// Run an authenticated MCP App request under current session permissions.
+    async fn execute_mcp_app_tool(
+        &self,
+        _session_id: i64,
+        _invocation: ToolInvocation,
+    ) -> Result<ToolExecutionSummary, SessionToolExecutionError> {
+        Err(SessionToolExecutionError::Execution("MCP Apps are unavailable.".into()))
+    }
+
+    /// Run an App's own sampling request and return the approved MCP result.
+    async fn sample_mcp_app(
+        &self,
+        _scope: McpAppViewScope,
+        _params: serde_json::Value,
+        _cancellation: CancellationToken,
+    ) -> agena_mcp_client::McpResult<serde_json::Value> {
+        Err(agena_mcp_client::McpError::SamplingUnsupported)
+    }
+
+    fn mcp_app_views(&self) -> Option<Arc<crate::McpAppViews>> {
+        None
+    }
 }

@@ -97,6 +97,10 @@ pub struct StoredRecord {
 
 /// Storage available to plugins.
 pub trait PluginStorage: Send + Sync {
+    fn private_global_directory(&self, _plugin: &PluginKey) -> Option<PathBuf> {
+        None
+    }
+
     fn get(
         &self,
         locator: &StorageLocator,
@@ -110,6 +114,14 @@ pub trait PluginStorage: Send + Sync {
         key: &str,
         value: &str,
     ) -> Result<(), PluginStorageError>;
+    fn compare_exchange(
+        &self,
+        locator: &StorageLocator,
+        namespace: &str,
+        key: &str,
+        expected: Option<&str>,
+        value: &str,
+    ) -> Result<bool, PluginStorageError>;
     fn delete(
         &self,
         locator: &StorageLocator,
@@ -216,6 +228,16 @@ fn read_namespace_map(path: &Path) -> Result<BTreeMap<String, String>, PluginSto
     })
 }
 
+fn write_namespace_map(
+    path: &Path,
+    map: &BTreeMap<String, String>,
+) -> Result<(), PluginStorageError> {
+    let json = serde_json::to_string_pretty(map).map_err(|error| {
+        PluginStorageError::data_error("failed to encode the plugin storage namespace", &error)
+    })?;
+    write_secure_file_unlocked(path, json.as_bytes())
+}
+
 fn storage_scope_dir(root: &Path, locator: &StorageLocator) -> Result<PathBuf, PluginStorageError> {
     let mut p = root.to_path_buf();
     match locator.scope {
@@ -283,6 +305,21 @@ impl FilePluginStorage {
 }
 
 impl PluginStorage for FilePluginStorage {
+    fn private_global_directory(&self, plugin: &PluginKey) -> Option<PathBuf> {
+        storage_scope_dir(
+            &self.root,
+            &StorageLocator::new(
+                HostStorageScope::Global,
+                HostStorageVisibility::Private,
+                plugin.clone(),
+                None,
+                None,
+            )
+            .ok()?,
+        )
+        .ok()
+    }
+
     fn get(
         &self,
         locator: &StorageLocator,
@@ -309,13 +346,29 @@ impl PluginStorage for FilePluginStorage {
         agena_runtime_tools::with_file_mutation_locks(std::slice::from_ref(&path), || {
             let mut map = read_namespace_map(&path)?;
             map.insert(key.to_string(), value.to_string());
-            let json = serde_json::to_string_pretty(&map).map_err(|error| {
-                PluginStorageError::data_error(
-                    "failed to encode the plugin storage namespace",
-                    &error,
-                )
-            })?;
-            write_secure_file_unlocked(&path, json.as_bytes())
+            write_namespace_map(&path, &map)
+        })?
+    }
+
+    fn compare_exchange(
+        &self,
+        locator: &StorageLocator,
+        namespace: &str,
+        key: &str,
+        expected: Option<&str>,
+        value: &str,
+    ) -> Result<bool, PluginStorageError> {
+        validate_namespace(namespace)?;
+        validate_key(key)?;
+        let path = namespace_path(&self.root, locator, namespace)?;
+        agena_runtime_tools::with_file_mutation_locks(std::slice::from_ref(&path), || {
+            let mut map = read_namespace_map(&path)?;
+            if map.get(key).map(String::as_str) != expected {
+                return Ok(false);
+            }
+            map.insert(key.to_owned(), value.to_owned());
+            write_namespace_map(&path, &map)?;
+            Ok(true)
         })?
     }
 
@@ -487,4 +540,45 @@ impl PluginSecretStore for PluginFileSecretStore {
             .filter_map(|key| key.strip_prefix(&prefix).map(str::to_owned))
             .collect())
     }
+}
+
+#[cfg(test)]
+#[test]
+fn compare_exchange_rejects_a_second_writer_with_the_same_expected_value() {
+    let root = tempfile::tempdir().unwrap();
+    let store = FilePluginStorage::new(root.path());
+    let locator = StorageLocator::new(
+        HostStorageScope::Session,
+        HostStorageVisibility::Private,
+        "agena.task".parse().unwrap(),
+        Some(7),
+        None,
+    )
+    .unwrap();
+    store.set(&locator, "tasks", "other", "untouched").unwrap();
+
+    let barrier = std::sync::Barrier::new(2);
+    let (first, second) = std::thread::scope(|scope| {
+        let first = scope.spawn(|| {
+            barrier.wait();
+            store
+                .compare_exchange(&locator, "tasks", "list", None, "first")
+                .unwrap()
+        });
+        barrier.wait();
+        let second = store
+            .compare_exchange(&locator, "tasks", "list", None, "second")
+            .unwrap();
+        (first.join().unwrap(), second)
+    });
+    assert_ne!(first, second);
+    let winner = if first { "first" } else { "second" };
+    assert_eq!(
+        store.get(&locator, "tasks", "list").unwrap().as_deref(),
+        Some(winner)
+    );
+    assert_eq!(
+        store.get(&locator, "tasks", "other").unwrap().as_deref(),
+        Some("untouched")
+    );
 }

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, path::PathBuf};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -48,6 +48,40 @@ pub struct SkillSummary {
     pub revision: String,
     pub source: Option<SkillSource>,
     pub diagnostics: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invocation: Option<SkillInvocation>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SkillInvocation {
+    pub model_invocable: bool,
+    pub user_invocable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SkillResourceBase {
+    Directory { path: PathBuf },
+    Url { url: String },
+    Opaque { description: String },
+}
+
+impl SkillResourceBase {
+    pub fn directory(&self) -> Option<&std::path::Path> {
+        match self {
+            Self::Directory { path } => Some(path),
+            _ => None,
+        }
+    }
+
+    pub fn hint(&self) -> String {
+        match self {
+            Self::Directory { path } => format!("Resolve relative resource paths against {}.", path.display()),
+            Self::Url { url } => format!("Resolve relative resource URLs against {url}."),
+            Self::Opaque { description } => description.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -77,6 +111,8 @@ pub struct SkillDetail {
     pub document: String,
     pub metadata: Option<SkillMetadata>,
     pub files: Vec<SkillFile>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_base: Option<SkillResourceBase>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -130,4 +166,8 @@ pub struct DeclaredSkill {
     pub description: String,
     pub instructions: String,
     pub aliases: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invocation: Option<SkillInvocation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_base: Option<SkillResourceBase>,
 }

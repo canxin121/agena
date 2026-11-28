@@ -952,6 +952,46 @@ impl AgenaClient {
         self.get_json("/api/v1/health").await
     }
 
+    pub async fn list_working_directories(
+        &self,
+        session: i64,
+    ) -> Result<Vec<std::path::PathBuf>, ClientError> {
+        self.get_json(&format!("/api/v1/sessions/{session}/working-directories"))
+            .await
+    }
+
+    pub async fn register_working_directory(
+        &self,
+        session: i64,
+        path: std::path::PathBuf,
+    ) -> Result<agena_domain::SessionWorkingDirectoryRegistration, ClientError> {
+        self.post_json(
+            &format!("/api/v1/sessions/{session}/working-directories"),
+            agena_domain::RegisterSessionWorkingDirectory { path },
+        )
+        .await
+    }
+
+    pub async fn claude_channels(
+        &self,
+        session: i64,
+        action: Option<agena_domain::claude_channels::ClaudeChannelAction>,
+    ) -> Result<Vec<agena_domain::claude_channels::ClaudeChannelView>, ClientError> {
+        let path = format!("/api/v1/sessions/{session}/claude-channels");
+        match action {
+            Some(action) => self.put_json(&path, serde_json::to_value(action)?).await,
+            None => self.get_json(&path).await,
+        }
+    }
+
+    pub async fn claude_channel_catalog(
+        &self,
+        session: i64,
+    ) -> Result<Vec<agena_domain::claude_channels::ClaudeChannelDefinition>, ClientError> {
+        self.get_json(&format!("/api/v1/sessions/{session}/claude-channels/catalog"))
+            .await
+    }
+
     /// Read the live control-plane projection for Agena's own HTTP MCP
     /// server. The response is deliberately kept as JSON until the public API
     /// crate grows a shared MCP-control resource; this endpoint is server
@@ -1293,14 +1333,23 @@ impl AgenaClient {
         auto_title: bool,
         profile: Option<String>,
     ) -> Result<SessionResource, ClientError> {
-        let body = serde_json::json!({
-            "workspace_id": workspace_id,
-            "title": title.into(),
-            "parent_id": parent_id,
-            "auto_title": auto_title,
-            "profile": profile,
-        });
-        self.post_json("/api/v1/sessions", body).await
+        self.create_session_with_options(agena_api::commands::CreateSessionParams {
+            workspace_id,
+            title: title.into(),
+            parent_id,
+            auto_title,
+            profile,
+            prompts: None,
+            setup: None,
+        })
+        .await
+    }
+
+    pub async fn create_session_with_options(
+        &self,
+        options: agena_api::commands::CreateSessionParams,
+    ) -> Result<SessionResource, ClientError> {
+        self.post_json("/api/v1/sessions", options).await
     }
 
     /// Select a named agent profile; None clears the saved selection and restores
@@ -1376,6 +1425,12 @@ impl AgenaClient {
                 "document".to_string(),
                 serde_json::to_value(params.document)?,
             );
+            if let Some(command) = params.prompt_command {
+                object.insert("prompt_command".to_string(), serde_json::to_value(command)?);
+            }
+            if params.literal_leading_slash {
+                object.insert("literal_leading_slash".into(), serde_json::Value::Bool(true));
+            }
         }
         self.post_json(
             &format!("/api/v1/sessions/{}/messages", params.session_id),
@@ -1413,6 +1468,19 @@ impl AgenaClient {
         &self,
     ) -> Result<agena_api::resource::PluginSurfaceCatalogResponse, ClientError> {
         self.get_json("/api/v1/plugins/surface").await
+    }
+
+    pub async fn plugin_surface_catalog_for_session(
+        &self,
+        session_id: i64,
+    ) -> Result<agena_api::resource::PluginSurfaceCatalogResponse, ClientError> {
+        let mut url = self.endpoint("/api/v1/plugins/surface");
+        url.query_pairs_mut()
+            .append_pair("session_id", &session_id.to_string());
+        let response = self
+            .send_request(reqwest::Method::GET, url, None, None)
+            .await?;
+        self.parse_json(response).await
     }
 
     /// Fetch the unified live plugin architecture catalog: resolved profiles,
@@ -1533,6 +1601,28 @@ impl AgenaClient {
         slash: Option<&str>,
         raw: &str,
     ) -> Result<agena_api::resource::PluginCommandInvokeResponse, ClientError> {
+        self.invoke_plugin_command_request(
+            plugin_id,
+            command_id,
+            agena_api::resource::PluginCommandInvokeRequest {
+                context: agena_api::resource::CommandRequestContext {
+                    input,
+                    session_id,
+                    slash: slash.map(ToOwned::to_owned),
+                    raw: raw.to_owned(),
+                },
+                composer: None,
+            },
+        )
+        .await
+    }
+
+    pub async fn invoke_plugin_command_request(
+        &self,
+        plugin_id: &str,
+        command_id: &str,
+        request: agena_api::resource::PluginCommandInvokeRequest,
+    ) -> Result<agena_api::resource::PluginCommandInvokeResponse, ClientError> {
         let mut url = self.endpoint("/api/v1/plugins");
         url.path_segments_mut()
             .map_err(|()| ClientError::Protocol("server URL cannot carry path segments".into()))?
@@ -1540,12 +1630,8 @@ impl AgenaClient {
             .push("commands")
             .push(command_id)
             .push("invoke");
-        let body = serde_json::json!({
-            "input": input,
-            "session_id": session_id,
-            "slash": slash,
-            "raw": raw,
-        });
+        let body = serde_json::to_value(request)
+            .map_err(|error| ClientError::Protocol(error.to_string()))?;
         let response = self
             .send_request(reqwest::Method::POST, url, Some(&body), None)
             .await?;
@@ -2214,6 +2300,23 @@ impl AgenaClient {
         self.put_json(
             &format!("/api/v1/sessions/{session_id}/selection"),
             serde_json::to_value(options)?,
+        )
+        .await
+    }
+
+    pub async fn change_session_selection(
+        &self,
+        session_id: i64,
+        options: RunOptions,
+        model_switch: agena_domain::ModelSwitchInteraction,
+    ) -> Result<agena_api::resource::SessionSelectionResponse, ClientError> {
+        let body = agena_api::resource::SessionSelectionRequest {
+            options,
+            model_switch,
+        };
+        self.put_json(
+            &format!("/api/v1/sessions/{session_id}/selection"),
+            serde_json::to_value(body)?,
         )
         .await
     }

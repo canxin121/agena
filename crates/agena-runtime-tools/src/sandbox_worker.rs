@@ -80,6 +80,18 @@ fn required_string<'a>(input: &'a Value, name: &str) -> Result<&'a str, ToolErro
         .ok_or_else(|| ToolError::invalid_input(format!("sandbox tool requires {name}")))
 }
 
+fn path_field(operation: &str) -> &'static str {
+    match operation {
+        "read" => "file_path",
+        "notebook.read" | "notebook.edit" => "notebook_path",
+        _ => "path",
+    }
+}
+
+fn notebook_edit(operation: &str) -> bool {
+    matches!(operation, "notebook.edit" | "notebook.edit_cell")
+}
+
 pub(crate) fn plan(
     executor: &ToolExecutor,
     resolution: &RegisteredTool,
@@ -100,6 +112,8 @@ pub(crate) fn plan(
         ("code", "search_ast") => "code.search_ast",
         ("code", "syntax_tree") => "code.syntax_tree",
         ("code", "rewrite_ast") => "code.rewrite_ast",
+        ("notebook", "read") => "notebook.read",
+        ("notebook", "edit") => "notebook.edit",
         ("notebook", "edit_cell") => "notebook.edit_cell",
         _ => return Ok(None),
     };
@@ -165,11 +179,7 @@ pub(crate) fn plan(
             input["paths"] = Value::Array(absolute);
         }
         _ => {
-            let field = if operation == "read" {
-                "file_path"
-            } else {
-                "path"
-            };
+            let field = path_field(operation);
             let label = match input.get(field).and_then(Value::as_str) {
                 Some(value) if !value.trim().is_empty() => value.to_owned(),
                 _ if matches!(operation, "glob" | "grep" | "code.search_ast") => {
@@ -189,7 +199,8 @@ pub(crate) fn plan(
             let path = resolve(&label)?;
             input[field] = Value::String(path.to_string_lossy().into_owned());
             reads.push(path.clone());
-            if matches!(operation, "fs.write" | "fs.replace" | "notebook.edit_cell")
+            if matches!(operation, "fs.write" | "fs.replace")
+                || notebook_edit(operation)
                 || (operation == "code.rewrite_ast"
                     && input.get("apply").and_then(Value::as_bool).unwrap_or(false))
             {
@@ -316,7 +327,7 @@ fn execute_locked(
 ) -> Result<ToolInvocationExecution, ToolError> {
     executor.ensure_not_cancelled()?;
     executor.authorize_sandbox_paths(&plan.reads, &plan.writes)?;
-    let max_file = if plan.operation == "notebook.edit_cell" {
+    let max_file = if notebook_edit(&plan.operation) {
         MAX_NOTEBOOK_FILE
     } else {
         MAX_FILE
@@ -446,7 +457,8 @@ fn execute_locked(
                 .collect::<String>();
             plan.input["patch"] = Value::String(rewritten);
         } else {
-            plan.input["path"] = Value::String(staged[0].staged.to_string_lossy().into_owned());
+            plan.input[path_field(&plan.operation)] =
+                Value::String(staged[0].staged.to_string_lossy().into_owned());
         }
         plan.input["folder"] = Value::Null;
         plan.workspace_root = scratch_path.clone();
@@ -534,7 +546,7 @@ fn execute_locked(
             .map(|file| file.capability.clone())
             .zip(changes)
             .collect();
-        if plan.operation == "notebook.edit_cell" {
+        if notebook_edit(&plan.operation) {
             // Carry the same trusted notebook limit through the final revision
             // check and atomic publication, including the original snapshot.
             crate::fs_broker::commit_with_file_limit(changes, max_file)?;
@@ -653,6 +665,8 @@ fn from_response(response: ToolInvokeOutput) -> Result<ToolInvocationExecution, 
             output_text: response.output_text,
             metadata: response.metadata,
             attachments: response.attachments,
+            additional_context: Vec::new(),
+            model_output: None,
         },
     })
 }

@@ -119,6 +119,7 @@ pub struct SessionModelChooserPresentation {
     pub purpose: SessionModelChooserPurpose,
     pub editable: bool,
     pub explicit_local: bool,
+    pub model_switch_source: agena_domain::ModelSwitchSource,
 }
 
 impl SessionModelChooserPresentation {
@@ -127,6 +128,7 @@ impl SessionModelChooserPresentation {
             purpose,
             editable: true,
             explicit_local: false,
+            model_switch_source: agena_domain::ModelSwitchSource::Picker,
         }
     }
 

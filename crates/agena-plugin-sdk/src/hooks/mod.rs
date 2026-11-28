@@ -3,29 +3,39 @@
 
 pub mod agent;
 pub mod chat;
+pub mod claude_lifecycle;
 pub mod command;
 pub mod config;
 pub mod event;
 pub mod lifecycle;
+pub mod mcp;
+pub mod model_switch;
 pub mod notification;
 pub mod prompt;
 pub mod provider;
 pub mod session;
 pub mod shell;
+pub mod skill;
 pub mod tool;
+pub mod worktree;
 
 pub use agent::*;
 pub use chat::*;
+pub use claude_lifecycle::*;
 pub use command::*;
 pub use config::*;
 pub use event::*;
 pub use lifecycle::*;
+pub use mcp::*;
+pub use model_switch::*;
 pub use notification::*;
 pub use prompt::*;
 pub use provider::*;
 pub use session::*;
 pub use shell::*;
+pub use skill::*;
 pub use tool::*;
+pub use worktree::*;
 
 /// Conversion into a hook output type.
 pub trait IntoHookOutput<T> {

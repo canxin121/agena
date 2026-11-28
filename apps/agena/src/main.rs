@@ -43,6 +43,9 @@ fn main() -> ExitCode {
     if let Some(code) = agena_process::sandbox_http::try_run_worker() {
         std::process::exit(code);
     }
+    if let Some(code) = agena_process::sandbox_tcp::try_run_worker() {
+        std::process::exit(code);
+    }
     if let Some(code) = agena_process::sandbox_file::try_run_worker() {
         std::process::exit(code);
     }

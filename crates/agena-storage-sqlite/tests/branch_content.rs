@@ -1,5 +1,6 @@
 use agena_domain::{
-    CommandOutputStream, ComposerDocument, ComposerNode, DocumentMutation, ViewBlock,
+    ActivityOutputChannel, ActivityOutputChunk, CommandOutputStream, ComposerDocument,
+    ComposerNode, DocumentMutation, ViewBlock,
 };
 use agena_storage::kernel::*;
 use agena_storage_sqlite::{SqliteKernel, open_kernel_runtime};
@@ -51,6 +52,46 @@ async fn fixture(url: &str) -> (SqliteKernel, SessionId, AttemptHandle, RoundHan
         .unwrap()
         .value;
     (runtime, root, attempt, round)
+}
+
+#[tokio::test]
+async fn assistant_display_source_stays_with_its_entry_in_a_fork() {
+    let (runtime, root, _attempt, round) = fixture("sqlite::memory:").await;
+    let (original, display) = round
+        .begin_text_with_display(RequestId::new())
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(original.entry_id(), display.entry_id());
+    original.append("raw assistant text").await.unwrap();
+    display.append("display text").await.unwrap();
+    original.finish(RequestId::new()).await.unwrap();
+    display.finish(RequestId::new()).await.unwrap();
+    let branch = runtime
+        .ports
+        .sessions
+        .fork(RequestId::new(), root, original.entry_id())
+        .await
+        .unwrap()
+        .value
+        .id;
+    let reader = &runtime.ports.reader;
+    let snapshot = reader.history_snapshot(branch).await.unwrap();
+    let page = snapshot.page(None, 20).await.unwrap();
+    assert!(page.entries.iter().any(|entry| matches!(
+        &entry.entry.payload,
+        EntryPayload::Text { content_id, display_id: Some(rendered) }
+            if *content_id == original.id() && *rendered == display.id()
+    )));
+    for (id, expected) in [
+        (original.id(), "raw assistant text"),
+        (display.id(), "display text"),
+    ] {
+        let content = reader.text_range(branch, id, None, 256).await.unwrap();
+        assert_eq!(content.bytes, expected.as_bytes());
+    }
+    drop((page, snapshot, original, display, round));
+    runtime.ports.clone().shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -1365,4 +1406,288 @@ async fn inherited_event_pages_snapshots_losses_and_sources_stop_at_the_fork_cut
     ));
 
     runtime.ports.clone().shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn an_activity_read_commits_with_a_successful_tool_result() {
+    let (runtime, session, _, round) = fixture("sqlite::memory:").await;
+    let start_tool = |name: &'static str| {
+        round.begin_tool(
+            RequestId::new(),
+            ToolStart {
+                call_id: name.into(),
+                name: name.into(),
+                input: serde_json::json!({}),
+            },
+        )
+    };
+    let launch = start_tool("launch-activity").await.unwrap().value;
+    let activity = launch
+        .begin_activity(
+            RequestId::new(),
+            BackgroundActivityStart {
+                kind: BackgroundActivityKind::Agent,
+                label: "Produce a result".into(),
+            },
+        )
+        .await
+        .unwrap()
+        .value;
+    let stream = activity.begin_text(RequestId::new()).await.unwrap().value;
+    let cursor = stream.append("durable activity output").await.unwrap();
+    let reader = &runtime.ports.reader;
+    let origin = reader
+        .entry(session, stream.entry_id())
+        .await
+        .unwrap()
+        .message_id;
+    activity
+        .end_with_notice(
+            RequestId::new(),
+            BackgroundActivityOutcome::Succeeded {
+                value: serde_json::json!("result"),
+            },
+            Some(BackgroundActivityNotice {
+                text: "Read the new activity result.".into(),
+                origin_message_id: origin,
+                wake: false,
+                wake_budget: None,
+                output_position: None,
+            }),
+        )
+        .await
+        .unwrap();
+    let read = ActivityOutputRead {
+        activity: activity.id(),
+        position: ActivityOutputPosition {
+            cursor: Some(cursor),
+            lost_bytes: 0,
+            outcome_read: true,
+            packet_offset: None,
+        },
+    };
+    let failed = start_tool("failed-job-read").await.unwrap().value;
+    failed
+        .complete_with_activity_reads(
+            RequestId::new(),
+            ToolResult {
+                phase: ToolPhase::Failed,
+                value: serde_json::json!({}),
+            },
+            &[],
+            &[read],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        reader
+            .activity_output_position(session, activity.id())
+            .await
+            .unwrap(),
+        ActivityOutputPosition::default()
+    );
+    assert_eq!(
+        reader
+            .pending_deliveries(session, None, 8)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let success = start_tool("successful-job-read").await.unwrap().value;
+    let result = ToolResult {
+        phase: ToolPhase::Succeeded,
+        value: serde_json::json!({"text": "result"}),
+    };
+    let mut invalid = read;
+    invalid.position.cursor.as_mut().unwrap().offset += 1;
+    assert!(matches!(
+        success
+            .complete_with_activity_reads(RequestId::new(), result.clone(), &[], &[invalid])
+            .await,
+        Err(KernelError::Invalid(_)),
+    ));
+    assert_eq!(
+        reader
+            .activity_output_position(session, activity.id())
+            .await
+            .unwrap(),
+        ActivityOutputPosition::default()
+    );
+    assert_eq!(
+        reader
+            .pending_deliveries(session, None, 8)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let commit = RequestId::new();
+    let receipt = success
+        .complete_with_activity_reads(commit, result.clone(), &[], &[read])
+        .await
+        .unwrap();
+    let replay = success
+        .complete_with_activity_reads(commit, result, &[], &[read])
+        .await
+        .unwrap();
+    assert_eq!(receipt.position, replay.position);
+    assert_eq!(
+        reader
+            .activity_output_position(session, activity.id())
+            .await
+            .unwrap(),
+        read.position
+    );
+    assert!(
+        reader
+            .pending_deliveries(session, None, 8)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        reader
+            .activity(session, activity.id())
+            .await
+            .unwrap()
+            .outcome
+            .is_some()
+    );
+    assert_eq!(
+        reader
+            .text_range(session, stream.id(), None, 80)
+            .await
+            .unwrap()
+            .bytes,
+        b"durable activity output"
+    );
+    drop((activity, stream, launch, failed, success, round));
+    runtime.ports.clone().shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn activity_output_admits_raw_byte_capacity_and_acknowledges_once() {
+    let (runtime, session, _attempt, round) = fixture("sqlite::memory:").await;
+    let tool = round
+        .begin_tool(
+            RequestId::new(),
+            ToolStart {
+                call_id: "activity-packets".into(),
+                name: "activity-packets".into(),
+                input: serde_json::json!({}),
+            },
+        )
+        .await
+        .unwrap()
+        .value;
+    let activity = tool
+        .begin_activity_with_output(
+            RequestId::new(),
+            BackgroundActivityStart {
+                kind: BackgroundActivityKind::Process,
+                label: "Output capacity".into(),
+            },
+            Some(ActivityOutputRetention {
+                live_bytes: MAX_ACTIVITY_OUTPUT_BYTES,
+                settled_bytes: 8,
+            }),
+        )
+        .await
+        .unwrap()
+        .value;
+    let packet = ActivityOutputChunk {
+        at: 0,
+        text: "\0".repeat(MAX_ACTIVITY_OUTPUT_BYTES),
+        channel: Some(ActivityOutputChannel::Stderr),
+        gap_before: false,
+    };
+    let total = packet.text.len() as u64;
+    let append = RequestId::new();
+    let first = activity
+        .append_output_chunks(append, total, std::slice::from_ref(&packet))
+        .await
+        .unwrap();
+    let replay = activity
+        .append_output_chunks(append, total, std::slice::from_ref(&packet))
+        .await
+        .unwrap();
+    assert_eq!(first.position, replay.position);
+    assert_eq!(first.value, ActivityOutputHead { earliest: 0, total });
+    let reader = &runtime.ports.reader;
+    let output = reader
+        .activity_output(session, activity.id(), Some(1))
+        .await
+        .unwrap();
+    let chunk = &output.as_ref().unwrap().chunks[0];
+    assert!(
+        chunk == &packet,
+        "a read inside the packet must return every byte"
+    );
+    drop(output);
+
+    activity
+        .end_with_output(
+            RequestId::new(),
+            BackgroundActivityOutcome::Stopped,
+            None,
+            Some(ActivityOutputTerminal {
+                detail: Some("stopped".into()),
+                result: Some("kept".into()),
+            }),
+        )
+        .await
+        .unwrap();
+    let position = ActivityOutputPosition {
+        packet_offset: Some(total),
+        outcome_read: true,
+        ..Default::default()
+    };
+    let read = ActivityOutputRead {
+        activity: activity.id(),
+        position,
+    };
+    let before = ActivityOutputPosition::default();
+    let sessions = &runtime.ports.sessions;
+    assert!(
+        sessions
+            .acknowledge_activity_output(RequestId::new(), session, read, before)
+            .await
+            .unwrap()
+            .value
+    );
+    assert!(
+        !sessions
+            .acknowledge_activity_output(RequestId::new(), session, read, before)
+            .await
+            .unwrap()
+            .value
+    );
+    let output = reader
+        .activity_output(session, activity.id(), Some(0))
+        .await
+        .unwrap();
+    let output = output.as_ref().unwrap();
+    assert_eq!(
+        output.head,
+        ActivityOutputHead {
+            earliest: total - 8,
+            total
+        }
+    );
+    assert_eq!(output.chunks[0].text, "\0".repeat(8));
+    assert!(output.chunks[0].gap_before);
+    assert_eq!(
+        output.terminal.as_ref().unwrap().result.as_deref(),
+        Some("kept")
+    );
+    assert_eq!(
+        reader
+            .activity_output_position(session, activity.id())
+            .await
+            .unwrap(),
+        position
+    );
 }

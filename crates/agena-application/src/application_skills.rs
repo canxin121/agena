@@ -1,6 +1,8 @@
 //! Skill management shared by the Web and terminal clients. Model-driven tool
 //! calls use the same manager through the permission-aware skills plugin.
 
+use std::path::PathBuf;
+
 use agena_api::skills::*;
 use agena_skills::source::load_install_source;
 use agena_skills::{DeclaredSkill, SkillError, SkillErrorKind, SkillManager};
@@ -23,19 +25,20 @@ impl Application {
         }
     }
 
-    fn skill_manager(&self, workspace: std::path::PathBuf) -> SkillManager {
+    fn skill_manager(&self, workspace: PathBuf, mut declared: Vec<DeclaredSkill>) -> SkillManager {
         let global_root = agena_storage_layout::StorageLayout::current()
             .root()
             .join("skills");
-        let mut declared = Vec::new();
         for status in self.plugin_runtime().plugin_statuses() {
             let plugin_id = status.plugin_id.to_string();
-            if let Some(manifest) = self
+            let Some(plugin) = self
                 .plugin_runtime()
                 .plugin_inspect(&plugin_id)
                 .filter(|plugin| plugin.authority.is_some())
-                .and_then(|plugin| plugin.manifest)
-            {
+            else {
+                continue;
+            };
+            if let Some(manifest) = plugin.manifest {
                 for skill in manifest.skills {
                     declared.push(DeclaredSkill {
                         plugin_id: plugin_id.clone(),
@@ -44,6 +47,8 @@ impl Application {
                         description: skill.description,
                         instructions: skill.instructions,
                         aliases: skill.aliases,
+                        invocation: None,
+                        resource_base: None,
                     });
                 }
             }
@@ -66,8 +71,14 @@ impl Application {
             .unwrap_or_default();
         SkillManager::new(workspace, global_root)
             .with_additional_roots(additional)
+            .with_exact_skill_dirs(self.plugin_runtime().agent_plugin_skill_dirs())
             .with_declared_skills(declared)
             .with_disabled_names(disabled)
+    }
+
+    async fn workspace_skill_manager(&self, workspace: PathBuf) -> SkillManager {
+        let provided = self.plugin_runtime().agent_plugin_provided_skills(&workspace).await;
+        self.skill_manager(workspace, provided)
     }
 
     pub async fn list_skills(
@@ -75,9 +86,23 @@ impl Application {
         workspace_id: Option<i64>,
     ) -> Result<SkillCatalog, ApplicationError> {
         let workspace = self.skills_workspace_root(workspace_id).await?;
-        self.run_blocking(move |app| app.skill_manager(workspace).list())
-            .await?
-            .map_err(skill_error)
+        let manager = self.workspace_skill_manager(workspace).await;
+        self.run_blocking(move |_| manager.list()).await?.map_err(skill_error)
+    }
+
+    pub async fn list_skills_for_session(&self, session_id: i64) -> Result<SkillCatalog, ApplicationError> {
+        let scope = self.plugin_runtime().agent_plugin_session_skills(session_id)
+            .await
+            .map_err(ApplicationError::from_failure)?;
+        let manager = match scope {
+            Some((workspace, provided)) => self.skill_manager(workspace, provided),
+            None => {
+                let root = agena_storage_layout::StorageLayout::current().root().to_path_buf();
+                SkillManager::new(root.join("global-skill-workspace"), root.join("skills"))
+                    .with_instance_only_roots()
+            }
+        };
+        self.run_blocking(move |_| manager.list()).await?.map_err(skill_error)
     }
 
     pub async fn get_skill(
@@ -86,7 +111,8 @@ impl Application {
         id: String,
     ) -> Result<SkillDetail, ApplicationError> {
         let workspace = self.skills_workspace_root(workspace_id).await?;
-        self.run_blocking(move |app| app.skill_manager(workspace).get(&id))
+        let manager = self.workspace_skill_manager(workspace).await;
+        self.run_blocking(move |_| manager.get(&id))
             .await?
             .map_err(skill_error)
     }
@@ -97,10 +123,8 @@ impl Application {
         request: SkillCreateRequest,
     ) -> Result<SkillDetail, ApplicationError> {
         let workspace = self.skills_workspace_root(workspace_id).await?;
-        self.run_blocking(move |app| {
-            app.skill_manager(workspace)
-                .create(request.scope, &request.document)
-        })
+        let manager = self.workspace_skill_manager(workspace).await;
+        self.run_blocking(move |_| manager.create(request.scope, &request.document))
         .await?
         .map_err(skill_error)
     }
@@ -113,8 +137,9 @@ impl Application {
     ) -> Result<SkillDetail, ApplicationError> {
         let workspace = self.skills_workspace_root(workspace_id).await?;
         require_revision(&request.expected_revision)?;
-        self.run_blocking(move |app| {
-            app.skill_manager(workspace).update(
+        let manager = self.workspace_skill_manager(workspace).await;
+        self.run_blocking(move |_| {
+            manager.update(
                 &id,
                 &request.document,
                 Some(&request.expected_revision),
@@ -132,10 +157,8 @@ impl Application {
     ) -> Result<SkillDeleteResult, ApplicationError> {
         let workspace = self.skills_workspace_root(workspace_id).await?;
         require_revision(&expected_revision)?;
-        self.run_blocking(move |app| {
-            app.skill_manager(workspace)
-                .remove(&id, Some(&expected_revision))
-        })
+        let manager = self.workspace_skill_manager(workspace).await;
+        self.run_blocking(move |_| manager.remove(&id, Some(&expected_revision)))
         .await?
         .map(|skill| SkillDeleteResult {
             id: skill.id,
@@ -152,8 +175,9 @@ impl Application {
     ) -> Result<SkillDetail, ApplicationError> {
         let workspace = self.skills_workspace_root(workspace_id).await?;
         require_revision(&request.expected_revision)?;
-        self.run_blocking(move |app| {
-            app.skill_manager(workspace).set_enabled(
+        let manager = self.workspace_skill_manager(workspace).await;
+        self.run_blocking(move |_| {
+            manager.set_enabled(
                 &id,
                 request.enabled,
                 Some(&request.expected_revision),
@@ -170,7 +194,8 @@ impl Application {
         path: String,
     ) -> Result<SkillResource, ApplicationError> {
         let workspace = self.skills_workspace_root(workspace_id).await?;
-        self.run_blocking(move |app| app.skill_manager(workspace).read_resource(&id, &path))
+        let manager = self.workspace_skill_manager(workspace).await;
+        self.run_blocking(move |_| manager.read_resource(&id, &path))
             .await?
             .map_err(skill_error)
     }
@@ -182,8 +207,9 @@ impl Application {
         request: SkillResourceWriteRequest,
     ) -> Result<SkillResource, ApplicationError> {
         let workspace = self.skills_workspace_root(workspace_id).await?;
-        self.run_blocking(move |app| {
-            app.skill_manager(workspace).write_resource(
+        let manager = self.workspace_skill_manager(workspace).await;
+        self.run_blocking(move |_| {
+            manager.write_resource(
                 &id,
                 &request.path,
                 &request.content,
@@ -203,10 +229,8 @@ impl Application {
     ) -> Result<SkillDetail, ApplicationError> {
         let workspace = self.skills_workspace_root(workspace_id).await?;
         require_revision(&expected_revision)?;
-        self.run_blocking(move |app| {
-            app.skill_manager(workspace)
-                .remove_resource(&id, &path, Some(&expected_revision))
-        })
+        let manager = self.workspace_skill_manager(workspace).await;
+        self.run_blocking(move |_| manager.remove_resource(&id, &path, Some(&expected_revision)))
         .await?
         .map_err(skill_error)
     }
@@ -235,10 +259,8 @@ impl Application {
             skill_error,
         )
         .await?;
-        self.run_blocking(move |app| {
-            app.skill_manager(workspace)
-                .preview_install(&loaded.package, request.scope)
-        })
+        let manager = self.workspace_skill_manager(workspace).await;
+        self.run_blocking(move |_| manager.preview_install(&loaded.package, request.scope))
         .await?
         .map_err(skill_error)
     }
@@ -259,8 +281,9 @@ impl Application {
         loaded
             .verify_revision(request.expected_source_revision.as_deref())
             .map_err(skill_error)?;
-        self.run_blocking(move |app| {
-            app.skill_manager(workspace).install(
+        let manager = self.workspace_skill_manager(workspace).await;
+        self.run_blocking(move |_| {
+            manager.install(
                 &loaded.package,
                 request.scope,
                 &request.selected,

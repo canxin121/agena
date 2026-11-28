@@ -8,6 +8,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentStopInput {
     pub session_id: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     /// True when a `Stop` hook is already active (prevents infinite loops).
     #[serde(default)]
     pub stop_hook_active: bool,
@@ -20,6 +24,19 @@ pub struct AgentStopInput {
     /// aborting the plan).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_error: Option<String>,
+    /// Classification for a failed model round that will end the turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_failure: Option<agena_failure::FailureCategory>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent: Option<SubagentHookContext>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubagentHookContext {
+    pub parent_session_id: i64,
+    pub agent_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

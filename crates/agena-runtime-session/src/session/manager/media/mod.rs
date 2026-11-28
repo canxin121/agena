@@ -3,10 +3,25 @@ use super::super::model::SessionExecutionContext;
 use super::*;
 use crate::session::kernel::media::{MediaBinding, uri};
 use agena_domain::{
-    AccessKind, ActivityPayload, AttachmentSource, PermissionDecision, ResourceDelivery,
-    ResourceReference,
+    AccessKind, ActivityId, ActivityPayload, AttachmentSource, PermissionDecision,
+    ResourceDelivery, ResourceReference,
 };
-use agena_runtime_tools::media_input;
+use agena_runtime_tools::media_input::{self, PreparedMedia};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
+
+mod cordis;
+pub(super) use cordis::CordisAttachments;
+
+#[derive(Clone)]
+pub(super) struct UserMediaSnapshot {
+    media: Arc<PreparedMedia>,
+    blob: Option<PreparedBlob>,
+}
+
+pub(super) type UserMediaSnapshots = HashMap<ActivityId, UserMediaSnapshot>;
 pub(super) static MEDIA_WORKERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 pub(super) static MEDIA_PREPARATIONS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
 
@@ -39,6 +54,34 @@ pub(super) fn tool_media_input_binder(
 }
 
 impl SessionManager {
+    async fn open_selected_artifact(
+        &self,
+        session: SessionId,
+        uri: &str,
+        sha256: &str,
+    ) -> Result<BlobReader, AppError> {
+        // A URI alone cannot grant access to another session's immutable bytes.
+        let binding =
+            crate::session::kernel::media::decode_binding(uri).map_err(AppError::Config)?;
+        if binding.version != 1 || binding.attachment.sha256.as_deref() != Some(sha256) {
+            return Err(AppError::Config("invalid stored attachment binding".into()));
+        }
+        let reader = self
+            .kernel()
+            .reader
+            .open_blob(session, binding.blob)
+            .await
+            .map_err(kernel_error)?;
+        if reader.descriptor().byte_len > media_input::MAX_MEDIA_BYTES as u64
+            || hex::encode(reader.descriptor().sha256) != sha256
+        {
+            return Err(AppError::Config(
+                "stored attachment size or checksum does not match".into(),
+            ));
+        }
+        Ok(reader)
+    }
+
     pub(super) async fn prepare_user_media_with_state(
         &self,
         session: SessionId,
@@ -47,6 +90,7 @@ impl SessionManager {
         request: RequestId,
         state: Arc<ExecutionState>,
         context: Option<SessionExecutionContext>,
+        snapshots: Option<&UserMediaSnapshots>,
     ) -> Result<(ComposerDocument, Vec<PreparedBlob>), AppError> {
         if !document.0.iter().any(|node| {
             matches!(node, ComposerNode::Activity { activity }
@@ -65,17 +109,7 @@ impl SessionManager {
             Some(context) => context,
             None => self.execution_context_with_state(session, &state).await?,
         };
-        let executor = state.executor.for_session_context_async(&context).await;
-        let root = if context.global {
-            None
-        } else {
-            Some(
-                executor
-                    .workspace_root()
-                    .canonicalize()
-                    .map_err(|e| AppError::Config(e.to_string()))?,
-            )
-        };
+        let access = UserMediaAccess::new(session, &state, &context)?;
         let route = state.providers.media_route_binding(model)?;
         let mut blobs = Vec::new();
         let mut bytes = 0usize;
@@ -96,85 +130,42 @@ impl SessionManager {
                     "at most eight media resources may be sent in one message".into(),
                 ));
             }
-            let (prepared, existing_blob) = match &resource.reference {
-                ResourceReference::WorkspacePath { path } => {
-                    let requested = std::path::Path::new(path);
-                    let target = match &root {
-                        Some(root) => root.join(requested),
-                        None if requested.is_absolute() => requested.to_path_buf(),
-                        None => return Err(AppError::Config("Global Bot attachments need their session-owned uploaded path".into())),
-                    }.canonicalize().map_err(|error| AppError::Config(format!("selected attachment is unavailable: {error}")))?;
-                    if context.global && requested != target {
-                        return Err(AppError::Config("Global Bot uploads must use their canonical session-owned path".into()));
+            let (prepared, existing_blob) = if let Some(snapshot) =
+                snapshots.and_then(|snapshots| snapshots.get(&activity.id))
+            {
+                (snapshot.media.clone(), snapshot.blob.clone())
+            } else {
+                match &resource.reference {
+                    ResourceReference::WorkspacePath { path } => {
+                        let expected = activity.provenance.content_hash.clone();
+                        let target = access.workspace_path(path, expected.as_deref())?;
+                        let prepared = MEDIA_WORKERS
+                            .run(move || media_input::read_local_path(&target, expected.as_deref()))
+                            .await
+                            .map_err(|error| AppError::Internal(error.to_string()))?
+                            .map_err(AppError::Config)?;
+                        (Arc::new(prepared), None)
                     }
-                    let owned_asset = agena_runtime_tools::managed_session_attachment_root(session.get(), &target);
-                    if context.global {
-                        let expected = activity.provenance.content_hash.as_deref().ok_or_else(|| AppError::Config("Global Bot uploads require their content hash; select the file again".into()))?;
-                        if !upload_hash_matches(&target, expected) {
-                            return Err(AppError::Config("Global Bot upload identity or content hash is invalid; select the file again".into()));
+                    ResourceReference::Artifact { uri, sha256 } => {
+                        let reader = self.open_selected_artifact(session, uri, sha256).await?;
+                        if resource.delivery == ResourceDelivery::Reference {
+                            blobs.push(reader.into_prepared());
+                            continue;
                         }
+                        let mut stored = Vec::with_capacity(reader.descriptor().byte_len as usize);
+                        reader.copy_to(&mut stored).await.map_err(kernel_error)?;
+                        let name = resource.name.clone();
+                        let prepared = MEDIA_WORKERS
+                            .run(move || media_input::from_bytes(&name, stored, None))
+                            .await
+                            .map_err(|error| AppError::Internal(error.to_string()))?
+                            .map_err(AppError::Config)?;
+                        (Arc::new(prepared), Some(reader.into_prepared()))
                     }
-                    let read_root = if let Some(asset_root) = &owned_asset {
-                        asset_root.clone()
-                    } else if let Some(project_root) = &root {
-                        if !target.starts_with(project_root) && agena_runtime_tools::managed_attachment_root(project_root, &target).is_none() {
-                            return Err(AppError::Config("selected attachment is not owned by this project or session".into()));
-                        }
-                        project_root.clone()
-                    } else {
-                        return Err(AppError::Config("selected upload is not owned by this global Bot session".into()));
-                    };
-                    if !(context.global && owned_asset.is_some()) && !matches!(
-                        executor.principal().authorize_path_access(AccessKind::Read, executor.workspace_root(), &target),
-                        PermissionDecision::Allow
-                    ) {
-                        return Err(AppError::Config("attachment read requires permission; no content was sent".into()));
-                    }
-                    let root = read_root;
-                    let path = path.clone();
-                    let expected = activity.provenance.content_hash.clone();
-                    let prepared = MEDIA_WORKERS
-                        .run(move || media_input::read_local(&root, &path, expected.as_deref()))
-                        .await
-                        .map_err(|error| AppError::Internal(error.to_string()))?
-                        .map_err(AppError::Config)?;
-                    (prepared, None)
+                    _ => return Err(AppError::Config(
+                        "model input must be a selected workspace file or a stored attachment in this session".into(),
+                    )),
                 }
-                ResourceReference::Artifact { uri, sha256 } => {
-                    // Editing queued input preserves its frozen bytes, even
-                    // after the original file moved. Session membership gates
-                    // access; a URI alone cannot grant another session a blob.
-                    let binding = crate::session::kernel::media::decode_binding(uri)
-                        .map_err(AppError::Config)?;
-                    if binding.version != 1 || binding.attachment.sha256.as_ref() != Some(sha256) {
-                        return Err(AppError::Config("invalid stored attachment binding".into()));
-                    }
-                    let reader = self.kernel().reader.open_blob(session, binding.blob)
-                        .await.map_err(kernel_error)?;
-                    if reader.descriptor().byte_len > media_input::MAX_MEDIA_BYTES as u64
-                        || hex::encode(reader.descriptor().sha256) != *sha256
-                    {
-                        return Err(AppError::Config(
-                            "stored attachment size or checksum does not match".into(),
-                        ));
-                    }
-                    if resource.delivery == ResourceDelivery::Reference {
-                        blobs.push(reader.into_prepared());
-                        continue;
-                    }
-                    let mut stored = Vec::with_capacity(reader.descriptor().byte_len as usize);
-                    reader.copy_to(&mut stored).await.map_err(kernel_error)?;
-                    let name = resource.name.clone();
-                    let prepared = MEDIA_WORKERS
-                        .run(move || media_input::from_bytes(&name, stored, None))
-                        .await
-                        .map_err(|error| AppError::Internal(error.to_string()))?
-                        .map_err(AppError::Config)?;
-                    (prepared, Some(reader.into_prepared()))
-                }
-                _ => return Err(AppError::Config(
-                    "model input must be a selected workspace file or a stored attachment in this session".into(),
-                )),
             };
             bytes = bytes.saturating_add(prepared.bytes.len());
             if bytes > media_input::MAX_MEDIA_BATCH_BYTES {
@@ -212,7 +203,7 @@ impl SessionManager {
                 attachment,
             };
             resource.reference = ResourceReference::Artifact {
-                sha256: prepared.sha256,
+                sha256: prepared.sha256.clone(),
                 uri: uri(&binding).map_err(kernel_error)?,
             };
             // UI MIME/extension hints cannot override the validated bytes.
@@ -223,13 +214,116 @@ impl SessionManager {
                 agena_domain::AttachmentKind::Pdf => agena_domain::ResourceKind::Pdf,
                 agena_domain::AttachmentKind::File => agena_domain::ResourceKind::File,
             };
-            resource.media_type = Some(prepared.mime);
+            resource.media_type = Some(prepared.mime.clone());
             resource.size_bytes = Some(prepared.size_bytes);
             resource.width = prepared.width;
             resource.height = prepared.height;
             blobs.push(blob);
         }
         Ok((document, blobs))
+    }
+}
+
+struct UserMediaAccess {
+    session: SessionId,
+    root: Option<PathBuf>,
+    executor: ToolExecutor,
+}
+
+impl UserMediaAccess {
+    fn new(
+        session: SessionId,
+        state: &ExecutionState,
+        context: &SessionExecutionContext,
+    ) -> Result<Self, AppError> {
+        let executor = state.executor.for_session_resource_context(context);
+        let root = if context.global {
+            None
+        } else {
+            Some(
+                executor
+                    .workspace_root()
+                    .canonicalize()
+                    .map_err(|error| AppError::Config(error.to_string()))?,
+            )
+        };
+        Ok(Self {
+            session,
+            root,
+            executor,
+        })
+    }
+
+    fn workspace_path(&self, path: &str, expected: Option<&str>) -> Result<PathBuf, AppError> {
+        let requested = Path::new(path);
+        let candidate = match &self.root {
+            Some(root) => root.join(requested),
+            None if requested.is_absolute() => requested.to_path_buf(),
+            None => {
+                return Err(AppError::Config(
+                    "Global Bot attachments need their session-owned uploaded path".into(),
+                ));
+            }
+        };
+        let target = candidate.canonicalize().map_err(|error| {
+            AppError::Config(format!("selected attachment is unavailable: {error}"))
+        })?;
+        let owned_asset =
+            agena_runtime_tools::managed_session_attachment_root(self.session.get(), &target);
+        if self.root.is_none() {
+            if requested != target {
+                return Err(AppError::Config(
+                    "Global Bot uploads must use their canonical session-owned path".into(),
+                ));
+            }
+            let expected = expected.ok_or_else(|| {
+                AppError::Config(
+                    "Global Bot uploads require their content hash; select the file again".into(),
+                )
+            })?;
+            if owned_asset.is_none() || !upload_hash_matches(&target, expected) {
+                return Err(AppError::Config(
+                    "Global Bot upload identity or content hash is invalid; select the file again"
+                        .into(),
+                ));
+            }
+            return Ok(target);
+        }
+        let project_root = self.root.as_ref().expect("checked project root");
+        let session_assets = agena_storage_layout::StorageLayout::current()
+            .root()
+            .join("session-assets");
+        if owned_asset.is_none()
+            && (target.starts_with(session_assets)
+                || !(target.starts_with(project_root)
+                    || agena_runtime_tools::managed_attachment_root(project_root, &target)
+                        .is_some()))
+        {
+            return Err(AppError::Config(
+                "selected attachment is not owned by this project or session".into(),
+            ));
+        }
+        if !matches!(
+            self.executor.principal().authorize_path_access(
+                AccessKind::Read,
+                self.executor.workspace_root(),
+                &target,
+            ),
+            PermissionDecision::Allow
+        ) {
+            return Err(AppError::Config(
+                "attachment read requires permission; no content was sent".into(),
+            ));
+        }
+        if candidate
+            .symlink_metadata()
+            .is_ok_and(|metadata| metadata.file_type().is_symlink())
+        {
+            return Err(AppError::Config(
+                "selected attachment must be a regular file".into(),
+            ));
+        }
+        Ok(target)
     }
 }
 

@@ -305,6 +305,7 @@ pub(crate) enum ChoiceOverlayAction {
         model: Option<ModelRef>,
         selected: agena_domain::ExecutionSelection,
         local_value: agena_domain::ExecutionSelection,
+        model_switch_source: agena_domain::ModelSwitchSource,
     },
     ModelSelectionMode {
         explicit_local: bool,
@@ -530,6 +531,13 @@ pub(crate) type ConfirmOverlay = ConfirmDialogState<ConfirmAction>;
 
 #[derive(Debug, Clone)]
 pub(crate) enum ConfirmAction {
+    ModelSwitch {
+        session_id: i64,
+        revision: u64,
+        options: Box<agena_api::resource::RunOptions>,
+        token: uuid::Uuid,
+        selected_message: Option<String>,
+    },
     SettingsRestoreDefault {
         field: SettingsFieldSpec,
     },

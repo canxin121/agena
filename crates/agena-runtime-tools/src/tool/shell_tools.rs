@@ -2,12 +2,12 @@ use std::sync::LazyLock;
 use std::{collections::HashMap, path::PathBuf};
 
 use agena_domain::FilesystemEffects;
-use agena_process::shell::ShellKind;
 use agena_process::shell::ShellPreference;
 use agena_process::shell::ShellSettings;
 use agena_process::shell::SnapshotMode;
 use agena_process::shell::snapshot;
 use agena_process::shell::snapshot::ShellSnapshot;
+use agena_process::shell::{DetectedShell, ShellKind};
 use agena_tool::shell::ShellDialect;
 use agena_tool::shell::ShellLaunchSpec;
 pub(crate) use agena_tool::shell_analysis::{ExitInterpretation, analyze_command};
@@ -52,6 +52,14 @@ pub(crate) async fn prepare_posix_launch(
         .map_err(|error| {
             std::io::Error::other(format!("shell detection worker failed: {error}"))
         })?;
+    prepare_detected_launch(settings, &detected, env).await
+}
+
+pub(crate) async fn prepare_detected_launch(
+    settings: &ShellSettings,
+    detected: &DetectedShell,
+    env: &mut HashMap<String, String>,
+) -> Result<ShellLaunchSpec, ToolError> {
     let mut spec = ShellLaunchSpec {
         program: detected.path.to_string_lossy().to_string(),
         dialect: shell_dialect(detected.kind),
@@ -118,11 +126,32 @@ pub(crate) fn resolve_workdir_in_folder(
     workdir: Option<&str>,
     folder: Option<&str>,
 ) -> Result<PathBuf, ToolError> {
+    if workdir.is_some_and(|path| path.contains('\0'))
+        || (executor.is_global() && folder.is_some_and(|path| path.contains('\0')))
+    {
+        return Err(ToolError::invalid_input("invalid shell working directory"));
+    }
     let usable = |path: &str| !path.trim().is_empty() && std::path::Path::new(path).is_absolute();
     if executor.is_global() && !workdir.is_some_and(usable) && !folder.is_some_and(usable) {
         return Err(ToolError::invalid_input(
             "global shell execution requires an explicit absolute workdir or folder",
         ));
+    }
+    if let Some(base) = executor.imported_shell_cwd() {
+        return Ok(match workdir {
+            Some(value)
+                if !usable(value)
+                    && super::resolve_managed_project_path_alias(
+                        value,
+                        executor.workspace_root(),
+                    )
+                    .is_none() =>
+            {
+                executor.resolve_filesystem_effect_path(value, &base)
+            }
+            Some(value) => executor.resolve_target_path_in_folder(value, folder),
+            None => base,
+        });
     }
     let cwd = match workdir {
         Some(value) => executor.resolve_target_path_in_folder(value, folder),

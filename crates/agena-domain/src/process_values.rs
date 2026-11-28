@@ -24,6 +24,32 @@ pub enum ProcessShell {
     Powershell,
 }
 
+/// Whether a shell tool launched a terminal, a background job or a watched job.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ShellLaunchMode {
+    Open,
+    Spawn,
+    Watch,
+}
+
+/// Identity of the tool call that started a managed shell process.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShellLaunchCall {
+    pub call_id: i64,
+    pub shell: ProcessShell,
+}
+
+/// The process registry's record of the originating shell launch.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ShellInvocation {
+    pub process_id: String,
+    pub mode: ShellLaunchMode,
+    pub call: ShellLaunchCall,
+    pub command: String,
+    pub cwd: String,
+}
+
 /// A bounded, plain-text projection of a terminal's current screen. Positions
 /// are zero-based. Raw terminal output is returned separately and never executed
 /// as control sequences by the human-facing renderer.

@@ -15,7 +15,7 @@ use crate::model::ServerJsonRpcMessage;
 pub type BoxedSseResponse = BoxStream<'static, Result<Sse, SseError>>;
 
 /// Maximum raw size of one SSE event accepted from a remote server.
-pub(crate) const DEFAULT_MAX_SSE_EVENT_SIZE: usize = 16 * 1024 * 1024;
+pub const DEFAULT_MAX_SSE_EVENT_SIZE: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Error)]
 enum BoundedSseStreamError {
@@ -141,7 +141,8 @@ where
     }
 }
 
-pub(crate) fn bounded_sse_stream<S, E>(stream: S, max_event_size: usize) -> BoxedSseResponse
+/// Parse SSE while bounding the bytes retained for any one event.
+pub fn bounded_sse_stream<S, E>(stream: S, max_event_size: usize) -> BoxedSseResponse
 where
     S: Stream<Item = Result<Bytes, E>> + Send + 'static,
     E: std::error::Error + Send + Sync + 'static,

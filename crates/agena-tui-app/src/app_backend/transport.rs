@@ -205,6 +205,8 @@ struct RemoteBackend {
     /// commands) fetched from the server. Plugin reads are synchronous in the
     /// TUI event loop.
     plugin_catalog: tokio::sync::RwLock<Option<agena_plugin_sdk::inspection::PluginSurfaceCatalog>>,
+    session_plugin_commands:
+        tokio::sync::RwLock<Option<(i64, Vec<agena_plugin_sdk::inspection::CommandCatalogItem>)>>,
     /// Cached plugin statuses fetched from the server.
     plugin_statuses: tokio::sync::RwLock<Vec<agena_plugin_sdk::inspection::PluginStatus>>,
     /// Cached plugin details and logs used by the synchronous workbench model.
@@ -611,6 +613,7 @@ impl TuiBackend {
                 runtime_status: Default::default(),
                 mcp_server_control: Default::default(),
                 plugin_catalog: Default::default(),
+                session_plugin_commands: Default::default(),
                 plugin_statuses: Default::default(),
                 plugin_inspects: Default::default(),
                 plugin_logs: Default::default(),
@@ -743,6 +746,7 @@ impl TuiBackend {
                 runtime_status: tokio::sync::RwLock::new(Some(runtime_status)),
                 mcp_server_control: Default::default(),
                 plugin_catalog: Default::default(),
+                session_plugin_commands: Default::default(),
                 plugin_statuses: Default::default(),
                 plugin_inspects: Default::default(),
                 plugin_logs: Default::default(),
@@ -1015,6 +1019,21 @@ impl TuiBackend {
             .and_then(|guard| guard.clone())
     }
 
+    pub(crate) fn plugin_commands(
+        &self,
+        session_id: Option<i64>,
+    ) -> Vec<agena_plugin_sdk::inspection::CommandCatalogItem> {
+        if let Some(session_id) = session_id
+            && let Ok(catalog) = self.inner.session_plugin_commands.try_read()
+            && let Some((owner, commands)) = &*catalog
+            && session_id == *owner
+        {
+            return commands.clone();
+        }
+        self.plugin_catalog()
+            .map_or_else(Vec::new, |catalog| catalog.commands)
+    }
+
     /// The cached plugin statuses, if loaded from the server.
     pub(crate) fn plugin_statuses(&self) -> Vec<agena_plugin_sdk::inspection::PluginStatus> {
         self.inner
@@ -1082,15 +1101,44 @@ impl TuiBackend {
     /// intentionally separate from workbench status/inspect/log reads so a
     /// run lifecycle signal costs one HTTP request instead of one per plugin.
     pub(crate) async fn refresh_plugin_presentation_snapshot(&self) -> Result<()> {
-        let catalog_response = self.inner.client.plugin_surface_catalog().await?;
+        let response = self.inner.client.plugin_surface_catalog().await?;
+        self.apply_plugin_presentation(response, None).await;
+        Ok(())
+    }
+
+    async fn refresh_session_plugin_presentation(&self, session_id: i64) -> Result<()> {
+        let response = self
+            .inner
+            .client
+            .plugin_surface_catalog_for_session(session_id)
+            .await?;
+        self.apply_plugin_presentation(response, Some(session_id))
+            .await;
+        Ok(())
+    }
+
+    async fn apply_plugin_presentation(
+        &self,
+        mut catalog_response: agena_api::resource::PluginSurfaceCatalogResponse,
+        session_id: Option<i64>,
+    ) {
         if let Some(at_ms) = catalog_response.notifications_at_ms {
             let _ = self.inner.plugin_notifications_baseline.set(at_ms);
         }
-        *self.inner.plugin_catalog.write().await = Some(catalog_response.catalog);
+        {
+            let mut global_catalog = self.inner.plugin_catalog.write().await;
+            if let Some(id) = session_id {
+                let commands = std::mem::take(&mut catalog_response.catalog.commands);
+                *self.inner.session_plugin_commands.write().await = Some((id, commands));
+                if let Some(previous) = global_catalog.as_mut() {
+                    catalog_response.catalog.commands = std::mem::take(&mut previous.commands);
+                }
+            }
+            *global_catalog = Some(catalog_response.catalog);
+        }
         *self.inner.permission_tools.write().await = catalog_response.permission_tools;
         *self.inner.plugin_notifications.write().await = catalog_response.notifications;
         *self.inner.activity_kinds.write().await = catalog_response.activity_kinds;
-        Ok(())
     }
 
     pub(crate) fn permission_tools(
@@ -2423,15 +2471,28 @@ impl TuiBackend {
     pub async fn submit_document(
         &self,
         session_id: i64,
-        document: agena_domain::ComposerDocument,
+        mut document: agena_domain::ComposerDocument,
         options: RunOptions,
+        prompt_command: Option<agena_api::commands::SessionPromptCommand>,
     ) -> Result<SessionExecutionResource> {
+        let literal_leading_slash = if prompt_command.is_none()
+            && document.text().starts_with("//")
+            && let Some(agena_domain::ComposerNode::Text { text }) = document.0.first_mut()
+            && text.starts_with('/')
+        {
+            text.remove(0);
+            true
+        } else {
+            false
+        };
         let execution = self
             .client()
             .submit_message(agena_api::commands::SubmitRunParams {
                 session_id,
                 options,
                 document,
+                prompt_command,
+                literal_leading_slash,
             })
             .await
             .context("failed to submit user message")?;
@@ -2476,17 +2537,28 @@ impl TuiBackend {
             .context("failed to clear session")
     }
 
-    pub async fn update_session_selection(
+    pub async fn change_session_selection(
         &self,
         session_id: i64,
         options: RunOptions,
-    ) -> Result<SessionExecutionResource> {
-        let execution = self
+        interaction: agena_domain::ModelSwitchInteraction,
+    ) -> Result<agena_api::resource::SessionSelectionResponse> {
+        use agena_api::resource::SessionSelectionResponse;
+        let outcome = self
             .client()
-            .update_session_selection(session_id, options)
+            .change_session_selection(session_id, options, interaction)
             .await
             .context("failed to update session model selection")?;
-        Ok(self.localized_execution(execution).await)
+        match outcome {
+            SessionSelectionResponse::Applied {
+                execution,
+                system_messages,
+            } => Ok(SessionSelectionResponse::Applied {
+                execution: Box::new(self.localized_execution(*execution).await),
+                system_messages,
+            }),
+            confirmation => Ok(confirmation),
+        }
     }
 
     pub async fn cancel_run(
@@ -2910,6 +2982,13 @@ impl TuiBackend {
                         continue;
                     }
                 };
+                let catalog = tokio::select! {
+                    _ = tx.closed() => return,
+                    result = backend.refresh_session_plugin_presentation(session_id) => result,
+                };
+                if let Err(error) = catalog {
+                    tracing::debug!(session_id, %error, "failed to load session plugin commands");
+                }
                 if tx
                     .send(LiveEvent {
                         part_update: None,
@@ -3039,6 +3118,12 @@ impl TuiBackend {
                                         "failed to refresh the TUI plugin runtime snapshot after a runtime signal"
                                     );
                                 }
+                                if let Err(error) = backend
+                                    .refresh_session_plugin_presentation(session_id)
+                                    .await
+                                {
+                                    tracing::debug!(session_id, %error, "failed to refresh session plugin commands");
+                                }
                                 continue;
                             }
                             SessionSubscriptionDispatch::Emit {
@@ -3056,12 +3141,11 @@ impl TuiBackend {
                         },
                     };
                     if refresh_plugin_presentation
-                        && let Err(error) = backend.refresh_plugin_presentation_snapshot().await
+                        && let Err(error) = backend
+                            .refresh_session_plugin_presentation(session_id)
+                            .await
                     {
-                        tracing::warn!(
-                            diagnostic = %agena_failure::diagnostic::format_error_chain(error.as_ref()),
-                            "failed to refresh the TUI plugin presentation snapshot after a session event"
-                        );
+                        tracing::warn!(session_id, %error, "failed to refresh session plugin presentation");
                     }
                     if tx
                         .send(LiveEvent {
@@ -4502,5 +4586,107 @@ mod attachment_localization_tests {
             .await
             .unwrap()
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn submit_document_marks_escaped_leading_slash_as_literal() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+        use tokio::time::{Duration, timeout};
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let mut bodies = Vec::new();
+            for _ in 0..2 {
+                let (mut socket, _) = timeout(Duration::from_secs(10), listener.accept())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let mut raw = Vec::new();
+                let header_end = loop {
+                    let mut chunk = [0; 1024];
+                    let n = timeout(Duration::from_secs(10), socket.read(&mut chunk))
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    assert!(n > 0);
+                    raw.extend_from_slice(&chunk[..n]);
+                    if let Some(pos) = raw.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+                        break pos + 4;
+                    }
+                };
+                let headers = std::str::from_utf8(&raw[..header_end]).unwrap();
+                let content_length = headers
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap_or(0);
+                while raw.len() < header_end + content_length {
+                    let mut chunk = [0; 1024];
+                    let n = timeout(Duration::from_secs(10), socket.read(&mut chunk))
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    assert!(n > 0);
+                    raw.extend_from_slice(&chunk[..n]);
+                }
+                let json: serde_json::Value =
+                    serde_json::from_slice(&raw[header_end..header_end + content_length]).unwrap();
+                bodies.push(json);
+                let reply = serde_json::json!({
+                    "session": {
+                        "id": 7, "parent_id": null, "root_id": 7, "depth": 0,
+                        "workspace_id": 1, "title": "Test", "version": 1,
+                        "relation_kind": "root", "lifecycle_state": "ready",
+                        "state": { "kind": "ready", "data": {} },
+                        "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
+                        "message_count": 0, "child_session_count": 0
+                    },
+                    "parts": [], "part_page": null,
+                    "execution": {
+                        "agent_id": "test", "selected_permission": {},
+                        "effective_permission": {}, "permission_ceiling": {}
+                    },
+                    "usage": { "current_tokens": 0 }
+                })
+                .to_string();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    reply.len(),
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+            bodies
+        });
+
+        let mut backend = TuiBackend::isolated_test_backend(PathBuf::from("/server/workspace"));
+        Arc::get_mut(&mut backend.inner).unwrap().client = AgenaClient::new(endpoint).unwrap();
+        let escaped = agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+            text: "//manual-only and /disk-skill".into(),
+        }]);
+        backend
+            .submit_document(7, escaped, RunOptions::default(), None)
+            .await
+            .unwrap();
+        let plain = agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
+            text: "/manual-only".into(),
+        }]);
+        backend
+            .submit_document(7, plain, RunOptions::default(), None)
+            .await
+            .unwrap();
+
+        let bodies = timeout(Duration::from_secs(10), server)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(bodies[0]["document"][0]["text"], "/manual-only and /disk-skill");
+        assert_eq!(bodies[0]["literal_leading_slash"], true);
+        assert_eq!(bodies[1]["document"][0]["text"], "/manual-only");
+        assert!(bodies[1].get("literal_leading_slash").is_none());
     }
 }

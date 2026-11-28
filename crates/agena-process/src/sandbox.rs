@@ -851,6 +851,7 @@ const PRIVATE_TEMP_PREFIXES: &[&str] = &[
     "agena-tool-worker-",
     "agena-media-worker-",
     "agena-native-worker-",
+    "agena-shell-session-",
 ];
 
 fn reserved_temporary_child(path: &Path, root: &Path) -> bool {

@@ -23,3 +23,20 @@ pub struct UserPromptSubmitPatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub block_reason: Option<String>,
 }
+
+/// A user selected a command that expands into a prompt for a session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserPromptExpansionInput {
+    pub session_id: i64,
+    pub command_name: String,
+    pub command_args: String,
+    pub prompt: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UserPromptExpansionPatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub additional_context: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_reason: Option<String>,
+}

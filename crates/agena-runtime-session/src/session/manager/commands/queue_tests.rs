@@ -230,6 +230,7 @@ async fn resuming_during_paused_supervisor_retirement_does_not_strand_the_same_a
         generation: view.generation,
         model,
         state: manager.state.load_full(),
+        cordis_child_jobs: Default::default(),
         cancel: CancellationToken::new(),
         phase: StdMutex::new(agena_domain::ExecutionPhase::Starting),
         done: Notify::new(),
@@ -523,6 +524,7 @@ async fn tool_authorization_uses_session_workspace_rules_without_default_fallbac
                 generation: attempt.generation(),
                 model: ModelRef::new("test", "test"),
                 state: state.clone(),
+                cordis_child_jobs: Default::default(),
                 cancel: CancellationToken::new(),
                 phase: StdMutex::new(agena_domain::ExecutionPhase::ExecutingTools),
                 done: Notify::new(),
@@ -537,6 +539,7 @@ async fn tool_authorization_uses_session_workspace_rules_without_default_fallbac
                     control: control.clone(),
                     permit: Arc::new(tokio::sync::Mutex::new(None)),
                     permissions: Default::default(),
+                    cordis_reads: Default::default(),
                 },
             );
             control

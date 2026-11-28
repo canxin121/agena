@@ -326,6 +326,8 @@ pub enum SkillsQuery {
     List {
         #[serde(default)]
         workspace_id: Option<i64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_id: Option<i64>,
     },
     Get {
         #[serde(default)]
@@ -408,6 +410,9 @@ pub enum PluginQuery {
     },
     Architecture,
     Surface,
+    SurfaceForSession {
+        session_id: i64,
+    },
     ToolChanges {
         #[serde(default)]
         after_generation: Option<u64>,
@@ -426,6 +431,14 @@ pub enum PluginQuery {
         page_id: String,
         generation: String,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginCommandComposer {
+    pub document: agena_domain::ComposerDocument,
+    #[serde(default)]
+    pub options: crate::resource::RunOptions,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -452,6 +465,8 @@ pub enum PluginCommand {
         slash: Option<String>,
         #[serde(default)]
         raw: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        composer: Option<PluginCommandComposer>,
     },
     SetWebSettings {
         plugin_id: String,

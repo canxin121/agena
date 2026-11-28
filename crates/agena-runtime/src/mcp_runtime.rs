@@ -2,13 +2,16 @@
 
 use std::sync::Arc;
 
+mod agent_plugins;
+pub(crate) use agent_plugins::{register_agent_plugin_mcp, resolve_inactive_agent_plugin_mcp};
+
 use agena_mcp_client::{FileTokenStore, McpConnectionManager, ReconnectPolicy, ServerSpec};
 use agena_plugin_host::{PluginPackage, PluginsConfig};
 use agena_runtime_config::{McpHttpAuthConfig, McpServerConfig};
 
 // Keep the runtime composition boundary and plugin schema on one configuration
 // definition. These must be derived from one definition so the
-// UI schema and the runtime parser to disagree about supported MCP fields.
+// UI schema agrees with the runtime parser.
 pub(crate) use agena_runtime_config::{
     MCP_PLUGIN_ID, McpConfig, McpRuntimeConfig, mcp_config_from_plugins,
 };
@@ -30,6 +33,7 @@ pub async fn build_mcp_manager(
     workspace_root: &std::path::Path,
 ) -> Arc<McpConnectionManager> {
     let mut manager = McpConnectionManager::new(client_name.into(), client_version.into())
+        .with_apps(true)
         .with_roots([workspace_root.to_path_buf()]);
     if config.runtime.token_store.enabled {
         manager.set_token_store(Arc::new(FileTokenStore::new()));
@@ -121,7 +125,7 @@ pub fn mcp_server_spec(
                 Some(path) => workspace_root.join(path),
                 None => workspace_root.to_owned(),
             }),
-            tool_policy: agena_mcp_client::McpToolPolicy {
+            tool_policy: agena_mcp_client::McpToolPolicy::Patterns {
                 include: tools.include.clone(),
                 exclude: tools.exclude.clone(),
             },
@@ -138,14 +142,16 @@ pub fn mcp_server_spec(
             tools,
             ..
         } => ServerSpec::Http {
+            header_helper: None,
             url: url::Url::parse(&endpoint.url).map_err(|_| "Invalid MCP HTTP endpoint.")?,
+            transport: Default::default(),
             headers: endpoint
                 .headers
                 .iter()
                 .map(|(key, value)| (key.clone(), value.clone()))
                 .collect(),
             auth: mcp_http_auth(auth.as_ref()),
-            tool_policy: agena_mcp_client::McpToolPolicy {
+            tool_policy: agena_mcp_client::McpToolPolicy::Patterns {
                 include: tools.include.clone(),
                 exclude: tools.exclude.clone(),
             },

@@ -5,6 +5,8 @@ use std::sync::Arc;
 use agena_provider::{CompletionToolCall, CompletionUsage, ProviderCompactionOutput};
 use agena_tool_api::normalize_tool_call_input;
 
+use crate::provider::attempt::{ModelAttempt, ModelAttemptHooks};
+
 use super::performance::{RequestPerformanceTracker, record_non_streaming_performance};
 
 use super::{
@@ -548,8 +550,12 @@ fn tool_api_identity(value: &str) -> Option<agena_domain::ToolApiFunction> {
 }
 
 fn has_valid_tool_name_syntax(name: &str) -> bool {
+    let is_claude_mod_alias = name
+        .strip_prefix("mcp__")
+        .and_then(|name| name.split_once("__"))
+        .is_some_and(|(plugin, tool)| !plugin.is_empty() && !tool.is_empty());
     name == name.trim()
-        && name.contains('.')
+        && (name.contains('.') || is_claude_mod_alias)
         && name.split('.').all(|segment| !segment.is_empty())
         && name
             .bytes()
@@ -921,7 +927,16 @@ impl ProviderRegistry {
     pub async fn complete(
         &self,
         model: &ModelRef,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse, ProviderError> {
+        self.complete_observed(model, request, None).await
+    }
+
+    pub async fn complete_observed(
+        &self,
+        model: &ModelRef,
         mut request: CompletionRequest,
+        hooks: Option<&ModelAttemptHooks>,
     ) -> Result<CompletionResponse, ProviderError> {
         let provider = self.provider_for_model_ref(model)?;
         apply_configured_tool_mode(model, provider.as_ref(), &mut request);
@@ -944,12 +959,29 @@ impl ProviderRegistry {
                         let request = request.clone();
                         let adapter_id = adapter_id.clone();
                         async move {
+                            let mut attempt = ModelAttempt::begin(hooks, model).await;
                             let started_at = Instant::now();
-                            let mut response = provider
+                            let response = provider
                                 .complete_for_adapter(adapter_id.as_ref(), request)
-                                .await?;
-                            record_non_streaming_performance(&mut response.usage, started_at);
-                            Ok(response)
+                                .await;
+                            match response {
+                                Ok(mut response) => {
+                                    let received_at = Instant::now();
+                                    attempt
+                                        .complete(
+                                            &mut response.usage,
+                                            response.provider_metadata.as_ref(),
+                                        )
+                                        .await;
+                                    RequestPerformanceTracker::new(started_at)
+                                        .finish(&mut response.usage, received_at);
+                                    Ok(response)
+                                }
+                                Err(error) => {
+                                    attempt.fail(&error).await;
+                                    Err(error)
+                                }
+                            }
                         }
                     }
                 })
@@ -1010,7 +1042,17 @@ impl ProviderRegistry {
     pub async fn compact_conversation(
         &self,
         model: &ModelRef,
+        request: CompletionRequest,
+    ) -> Result<Option<ProviderCompactionOutput>, ProviderError> {
+        self.compact_conversation_observed(model, request, None)
+            .await
+    }
+
+    pub async fn compact_conversation_observed(
+        &self,
+        model: &ModelRef,
         mut request: CompletionRequest,
+        hooks: Option<&ModelAttemptHooks>,
     ) -> Result<Option<ProviderCompactionOutput>, ProviderError> {
         let provider = self.provider_for_model_ref(model)?;
         apply_configured_tool_mode(model, provider.as_ref(), &mut request);
@@ -1019,6 +1061,11 @@ impl ProviderRegistry {
         validate_request_capabilities(model, provider.as_ref(), &mut request)?;
         request.model = model.model_id.clone();
         apply_request_backfill(model, provider.as_ref(), &mut request);
+        let hooks = hooks.filter(|_| {
+            let adapter = model.adapter_id.as_ref();
+            provider.native_compaction_enabled_for_adapter(adapter, &model.model_id)
+                && provider.supports_native_compaction_for_adapter(adapter, &model.model_id)
+        });
         self.call_with_retry(model.provider_id.as_ref(), "compact_conversation", {
             let provider = provider.clone();
             let request = request.clone();
@@ -1028,9 +1075,39 @@ impl ProviderRegistry {
                 let request = request.clone();
                 let adapter_id = adapter_id.clone();
                 async move {
-                    provider
+                    let mut attempt = ModelAttempt::begin(hooks, model).await;
+                    let result = provider
                         .compact_conversation_for_adapter(adapter_id.as_ref(), request)
-                        .await
+                        .await;
+                    match result {
+                        Ok(Some(ProviderCompactionOutput::OpenAiResponses {
+                            items,
+                            response_id,
+                            mut usage,
+                        })) => {
+                            let metadata =
+                                crate::provider::utils::response_id_metadata(response_id.clone());
+                            attempt.complete(&mut usage, metadata.as_ref()).await;
+                            hydrate_usage_cost_from_provider_metadata(
+                                provider.as_ref(),
+                                model,
+                                &mut usage,
+                            );
+                            Ok(Some(ProviderCompactionOutput::OpenAiResponses {
+                                items,
+                                response_id,
+                                usage,
+                            }))
+                        }
+                        Ok(None) => {
+                            attempt.complete(&mut None, None).await;
+                            Ok(None)
+                        }
+                        Err(error) => {
+                            attempt.fail(&error).await;
+                            Err(error)
+                        }
+                    }
                 }
             }
         })
@@ -1042,7 +1119,8 @@ impl ProviderRegistry {
         model: &ModelRef,
         request: CompletionRequest,
     ) -> Result<super::super::core::CompletionEventStream, ProviderError> {
-        self.complete_stream_inner(model, request, false).await
+        self.complete_stream_inner(model, request, false, None)
+            .await
     }
 
     /// Emit Tool API fragments in provider order for consumers that retain
@@ -1054,8 +1132,10 @@ impl ProviderRegistry {
         &self,
         model: &ModelRef,
         request: CompletionRequest,
+        hooks: Option<ModelAttemptHooks>,
     ) -> Result<super::super::core::CompletionEventStream, ProviderError> {
-        self.complete_stream_inner(model, request, true).await
+        self.complete_stream_inner(model, request, true, hooks)
+            .await
     }
 
     async fn complete_stream_inner(
@@ -1063,6 +1143,7 @@ impl ProviderRegistry {
         model: &ModelRef,
         mut request: CompletionRequest,
         tool_drafts: bool,
+        hooks: Option<ModelAttemptHooks>,
     ) -> Result<
         std::pin::Pin<Box<dyn Stream<Item = Result<CompletionStreamEvent, ProviderError>> + Send>>,
         ProviderError,
@@ -1142,8 +1223,9 @@ impl ProviderRegistry {
                     };
                 }
 
+                let mut attempt_hooks = ModelAttempt::begin(hooks.as_ref(), &model_ref).await;
                 // Start after retry notifications have been delivered; consumer
-                // processing/backoff is not part of this physical request.
+                // processing, backoff and pre-hooks are outside provider timing.
                 let mut performance = Some(RequestPerformanceTracker::new(Instant::now()));
                 let mut inner_stream = match provider
                     .complete_stream_for_adapter(adapter_id.as_ref(), request.clone())
@@ -1163,6 +1245,7 @@ impl ProviderRegistry {
                         stream
                     }
                     Err(err) => {
+                        attempt_hooks.fail(&err).await;
                         let can_retry = err.retryable()
                             && retry_index < retry_policy.max_retries
                             && !breaker_open(&breaker, &provider_id);
@@ -1280,7 +1363,8 @@ impl ProviderRegistry {
                             if let Some(tracker) = performance.as_mut() {
                                 tracker.observe(&event, observed_at);
                             }
-                            if let CompletionStreamEvent::Completed { usage, .. } = &mut event {
+                            if let CompletionStreamEvent::Completed { usage, provider_metadata, .. } = &mut event {
+                                attempt_hooks.complete(usage, provider_metadata.as_ref()).await;
                                 if let Some(tracker) = performance.take() {
                                     tracker.finish(usage, observed_at);
                                 }
@@ -1345,6 +1429,7 @@ impl ProviderRegistry {
                                                     replayed_events = replayed_events_in_attempt,
                                                     "provider stream replay text diverged; aborting to avoid duplicate output"
                                                 );
+                                                attempt_hooks.fail(&err).await;
                                                 Err(err)?;
                                             }
                                         }
@@ -1392,6 +1477,7 @@ impl ProviderRegistry {
                                                     replayed_events = replayed_events_in_attempt,
                                                     "provider stream replay reasoning diverged; aborting to avoid duplicate output"
                                                 );
+                                                attempt_hooks.fail(&err).await;
                                                 Err(err)?;
                                             }
                                         }
@@ -1426,6 +1512,7 @@ impl ProviderRegistry {
                                             replayed_events = replayed_events_in_attempt,
                                             "provider stream replay prefix diverged; aborting to avoid duplicate output"
                                         );
+                                        attempt_hooks.fail(&err).await;
                                         Err(err)?;
                                     }
                                 }
@@ -1611,6 +1698,7 @@ impl ProviderRegistry {
                             yield event;
                         }
                         Err(err) => {
+                            attempt_hooks.fail(&err).await;
                             let can_retry_now = err.retryable()
                                 && retry_index < retry_policy.max_retries
                                 && !breaker_open(&breaker, &provider_id);
@@ -1734,6 +1822,7 @@ impl ProviderRegistry {
                         expected_events = emitted_history.len() as u64,
                         "provider stream replay ended before matching emitted prefix"
                     );
+                    attempt_hooks.fail(&err).await;
                     Err(err)?;
                 }
 
@@ -1742,9 +1831,11 @@ impl ProviderRegistry {
                 }
 
                 if !terminal_event_in_attempt {
-                    Err(ProviderError::Provider(format!(
+                    let error = ProviderError::Provider(format!(
                         "provider `{provider_id}` stream ended without a Completed event"
-                    )))?;
+                    ));
+                    attempt_hooks.fail(&error).await;
+                    Err(error)?;
                 }
 
                 // A completed attempt that produced no content at all (no

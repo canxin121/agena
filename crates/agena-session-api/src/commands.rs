@@ -115,6 +115,13 @@ pub struct ResolveWorkspaceParams {
 
 // ─── session ─────────────────────────────────────────────────────────────
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionSetupTrigger {
+    Init,
+    Maintenance,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 /// Parameters for creating a session inside a workspace.
 pub struct CreateSessionParams {
@@ -130,6 +137,8 @@ pub struct CreateSessionParams {
     pub parent_id: Option<i64>,
     #[serde(default)]
     pub prompts: Option<agena_prompt_layers::PromptLayer>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup: Option<SessionSetupTrigger>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -160,12 +169,27 @@ pub struct DeleteSessionParams {
 // ─── message / run ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+/// An imported inline prompt command to resolve as part of a user submission.
+pub struct SessionPromptCommand {
+    pub plugin_id: String,
+    pub command_id: String,
+    #[serde(default)]
+    pub args: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Parameters for submitting a user message (composer document) to a session.
 pub struct SubmitRunParams {
     pub session_id: i64,
     #[serde(default)]
     pub options: RunOptions,
     pub document: ComposerDocument,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_command: Option<SessionPromptCommand>,
+    /// The initial slash was escaped in the composer and is literal text.
+    #[serde(default)]
+    pub literal_leading_slash: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

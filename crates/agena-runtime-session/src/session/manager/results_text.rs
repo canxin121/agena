@@ -2,7 +2,7 @@ use super::*;
 use agena_domain::ContentId;
 
 impl SessionManager {
-    async fn assistant_text(
+    pub(super) async fn assistant_text(
         &self,
         session: SessionId,
         content: ContentId,
@@ -48,7 +48,7 @@ impl SessionManager {
             // A continued execution can have several completed model rounds;
             // its final response is the newest text, not the first round.
             for entry in page.entries.iter().rev() {
-                if let EntryPayload::Text { content_id } = entry.payload
+                if let EntryPayload::Text { content_id, .. } = entry.payload
                     && let text = self
                         .assistant_text(session, content_id, max.min(1024 * 1024))
                         .await?

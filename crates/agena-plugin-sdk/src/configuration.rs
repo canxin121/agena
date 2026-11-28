@@ -1,6 +1,7 @@
 //! Serializable plugin package and configuration values shared by hosts and
 //! authenticated inspectors. Loading, signature checks, and lifecycle stay in the host.
 use crate::PluginKey;
+pub use agena_plugin_contracts::{AgentPluginEcosystem, AgentPluginSource};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 use url::Url;
@@ -64,6 +65,28 @@ fn default_plugin_enabled() -> bool {
 /// How a plugin is packaged and loaded.
 pub enum PluginPackage {
     Static {},
+    /// An agent plugin package adapted to Agena. The optional bridge field
+    /// identifies an existing installation to import from disk.
+    AgentPlugin {
+        /// Package root. Relative paths are resolved against the Agena
+        /// configuration file that declares the package.
+        path: PathBuf,
+        /// Service environment variables the operator makes available to this
+        /// package. Package manifests cannot grant access to ambient values.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        environment: Vec<String>,
+        /// Maps a Claude plugin's userConfig key to a service environment
+        /// variable for the imported components.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        user_config_env: BTreeMap<String, String>,
+        /// Execute the package's supported lifecycle hooks in Agena sessions.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        enable_hooks: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bridge: Option<Box<AgentPluginBridgeConfig>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<Box<AgentPluginSource>>,
+    },
     Cdylib {
         path: PathBuf,
         /// Optional sha256 hex digest of the cdylib bytes. If set, the
@@ -119,6 +142,43 @@ pub enum PluginPackage {
     },
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AgentPluginBridgeConfig {
+    pub runtime: AgentPluginRuntime,
+    /// Existing absolute directory containing the installation inventory.
+    pub config_dir: PathBuf,
+    /// Legacy executable path used to locate shipped bundle files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executable: Option<PathBuf>,
+    /// Resolve the package from the recorded native installation on each reload.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub follow_installation: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AgentPluginRuntime {
+    Codex {
+        plugin: String,
+    },
+    ClaudeCode {
+        /// A user-scoped marketplace installation. A directory-only bridge omits it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        plugin: Option<String>,
+    },
+    DeepseekHarness {
+        #[serde(default = "default_deepseek_profile")]
+        profile: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bundle: Option<String>,
+    },
+}
+
+fn default_deepseek_profile() -> String {
+    "headless".into()
+}
+
 impl ConfiguredPlugin {
     pub fn static_settings(settings: serde_json::Value) -> Self {
         Self {
@@ -146,6 +206,7 @@ impl ConfiguredPlugin {
     pub fn kind_str(&self) -> &'static str {
         match &self.package {
             PluginPackage::Static { .. } => "static",
+            PluginPackage::AgentPlugin { .. } => "agent_plugin",
             PluginPackage::Cdylib { .. } => "cdylib",
             PluginPackage::Stdio { .. } => "stdio",
             PluginPackage::Http { .. } => "http",
@@ -171,6 +232,10 @@ pub struct PluginActivationConfig {
     /// Plugins that must be active before this plugin may initialize.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires: Vec<PluginKey>,
+    /// Marketplace dependencies maintained by the imported-plugin installer.
+    /// Each optional value is a source marketplace version range.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub imported_requires: BTreeMap<PluginKey, Option<String>>,
     /// Existing plugins that should initialize first when possible. Missing,
     /// disabled, failed, or cyclic hints are ignored.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -179,7 +244,15 @@ pub struct PluginActivationConfig {
 
 impl PluginActivationConfig {
     pub fn is_empty(&self) -> bool {
-        self.requires.is_empty() && self.after.is_empty()
+        self.requires.is_empty() && self.imported_requires.is_empty() && self.after.is_empty()
+    }
+
+    pub fn required_keys(&self) -> impl Iterator<Item = &PluginKey> {
+        self.requires.iter().chain(
+            self.imported_requires
+                .keys()
+                .filter(|key| !self.requires.contains(key)),
+        )
     }
 }
 

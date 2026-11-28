@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use futures_util::FutureExt;
 
 use crate::error::TransportError;
-use crate::host::current_plugin_call_completion;
+use crate::host::{ImportedPromptScope, SessionLifecycleScope, current_plugin_call_completion};
 use crate::sdk::drivers::dispatch::PluginDispatcher;
 use crate::sdk::host_api::{current_host_callback_context, run_in_host_callback_context};
 use crate::sdk::{HostClient, InitOutcome, Plugin, PluginManifest, ToolInvokeInput};
@@ -88,6 +88,8 @@ impl<P: Plugin> PluginTransport for InProcessTransport<P> {
         let method = method_name.clone();
         let context = current_host_callback_context();
         let completion = current_plugin_call_completion();
+        let prompt_scope = ImportedPromptScope::capture();
+        let lifecycle = SessionLifecycleScope::for_dispatch(&method);
         let request = dispatcher
             .begin_request(crate::sdk::rpc::RequestId::Num(
                 self.next_id.fetch_add(1, Ordering::Relaxed),
@@ -108,8 +110,20 @@ impl<P: Plugin> PluginTransport for InProcessTransport<P> {
                         fut.await
                     }
                 };
-                match completion {
-                    Some(completion) => completion.scope(invoke).await,
+                let invoke = async move {
+                    match completion {
+                        Some(completion) => completion.scope(invoke).await,
+                        None => invoke.await,
+                    }
+                };
+                let invoke = async move {
+                    match prompt_scope {
+                        Some(scope) => scope.run(invoke).await,
+                        None => invoke.await,
+                    }
+                };
+                match lifecycle {
+                    Some(scope) => scope.run(invoke).await,
                     None => invoke.await,
                 }
             })

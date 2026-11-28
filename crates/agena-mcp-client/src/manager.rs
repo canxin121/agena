@@ -6,20 +6,25 @@
 )]
 
 use portable_atomic::AtomicU64;
-use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use http::{HeaderName, HeaderValue};
 use rmcp::model::{
-    ClientCapabilities, ClientInfo, ContentBlock as RmcpContentBlock, GetPromptRequestParams,
-    Implementation, ListRootsResult, PaginatedRequestParams, ProtocolVersion,
+    ClientCapabilities, ClientInfo, ClientRequest, ContentBlock as RmcpContentBlock, CustomRequest,
+    CustomResult, ElicitRequestParams, ElicitResult, ElicitationCapability,
+    FormElicitationCapability, GetPromptRequest, GetPromptRequestParams, Implementation,
+    ListRootsResult, PaginatedRequestParams, ProtocolVersion, ReadResourceRequest,
     ReadResourceRequestParams, ResourceContents as RmcpResourceContents, Role, Root,
-    RootsCapabilities, ServerNotification, SubscriptionFilter, Tool,
+    RootsCapabilities, ServerNotification, ServerResult, SubscriptionFilter, Tool,
+    UrlElicitationCapability,
 };
-use rmcp::service::{NotificationContext, Peer, RoleClient, RunningService};
+use rmcp::service::{
+    NotificationContext, Peer, RequestContext, RoleClient, RunningService, ServiceError,
+};
 use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
 use rmcp::transport::{
     AuthClient, AuthorizationManager, StreamableHttpClientTransport, TokioChildProcess,
@@ -27,10 +32,11 @@ use rmcp::transport::{
 use rmcp::{ClientHandler, ClientLifecycleMode, ClientServiceExt};
 use serde_json::Value;
 use tokio::process::Command;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock, watch};
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 use url::Url;
+use uuid::Uuid;
 
 use crate::error::{McpError, McpResult};
 use crate::protocol::{
@@ -39,17 +45,36 @@ use crate::protocol::{
     ResourceTemplateDescriptor, ToolDescriptor,
 };
 use crate::{
-    FileOAuthCredentialStore, McpOAuthRegistration, OAuthCredentialHealth, credential_store_name,
-    oauth_credential_binding,
+    FileOAuthCredentialStore, McpOAuthRegistration, McpRedactions, OAuthCredentialHealth,
+    credential_store_name, oauth_credential_binding,
 };
 
+mod app_connections;
+mod borrowed_http;
+mod claude_channel;
+mod elicitation;
+mod probe;
 mod scoped;
-use scoped::ScopedServerKey;
-pub use scoped::{McpSandboxContext, StdioResourceDeclarations};
+mod skills;
+mod tool_loading;
+pub use tool_loading::{
+    MCP_TOOL_LOADER, McpOnDemandConfig, McpOnDemandScope, McpOnDemandSelection, McpOnDemandServer,
+};
+mod tasks;
+pub use tasks::{McpTaskObserver, McpTaskViewInputs};
+pub use claude_channel::{ClaudeChannelEvent, ClaudeChannelPeer, ClaudeChannelStream};
+pub use elicitation::{McpElicitationHandler, respond_to_app_sampling, respond_to_app_tool_inputs};
+pub use probe::{McpProbeOptions, McpProbeResult};
+pub use scoped::{McpConnectionObservation, McpSandboxContext, StdioResourceDeclarations};
+pub use skills::{McpSkill, McpSkillPage, McpSkillResources};
+mod managed;
+pub use managed::McpManagedConnection;
+use scoped::{PluginHttpCallKey, ScopedServerKey};
 
 static TOOL_CATALOGS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 static TOOL_SNAPSHOTS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 static MCP_PAYLOADS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
+static SPEC_RESOLVERS: agena_async::BlockingPool = agena_async::BlockingPool::new(2);
 
 fn projection_error(error: tokio::task::JoinError) -> McpError {
     McpError::Transport(format!("MCP projection worker failed: {error}"))
@@ -58,20 +83,29 @@ fn projection_error(error: tokio::task::JoinError) -> McpError {
 async fn prepare_tools(
     tools: Vec<Tool>,
     policy: McpToolPolicy,
+    redactions: McpRedactions,
 ) -> McpResult<Arc<Vec<ToolDescriptor>>> {
     TOOL_CATALOGS
-        .run(move || Arc::new(filter_tools(tools, &policy)))
+        .run(move || {
+            redactions
+                .payload(filter_tools(tools, &policy))
+                .map(Arc::new)
+        })
         .await
-        .map_err(projection_error)
+        .map_err(projection_error)?
 }
 
 async fn replace_tools(events: &ServerEventState, tools: Arc<Vec<ToolDescriptor>>) {
     let retired = {
         let mut cache = events.tools.write().await;
+        let count_changed = cache.len() != tools.len();
         let retired = std::mem::replace(&mut *cache, tools);
         // Publish the generation before the next await. Cancellation while
         // releasing the old catalog must not leave a changed cache unmarked.
         events.tool_generation.fetch_add(1, Ordering::Relaxed);
+        if count_changed && let Some(observations) = &events.observations {
+            observations.send_modify(|revision| *revision += 1);
+        }
         retired
     };
     release_tools(retired).await;
@@ -89,7 +123,38 @@ async fn project_payload<T: Send + 'static>(
     MCP_PAYLOADS.run(project).await.map_err(projection_error)
 }
 
-#[derive(Debug, Clone)]
+async fn project_reply<T: serde::Serialize + serde::de::DeserializeOwned + Send + 'static>(
+    server: &ConnectedServer,
+    project: impl FnOnce() -> T + Send + 'static,
+) -> McpResult<T> {
+    let redactions = server.redactions.clone();
+    project_payload(move || redactions.payload(project())).await?
+}
+
+async fn request_with_elicitation(
+    server: &ConnectedServer,
+    request: ClientRequest,
+    handler: Option<&dyn McpElicitationHandler>,
+    operation: &str,
+) -> McpResult<ServerResult> {
+    agena_async::permission_wait::timeout(
+        server.request_timeout,
+        elicitation::request(server, request, handler, &mut false),
+    )
+    .await
+    .map_err(|error| {
+        McpError::timeout_error(
+            format!(
+                "MCP {operation} timed out after {}ms",
+                server.request_timeout.as_millis()
+            ),
+            &error,
+        )
+    })?
+    .map_err(|error| server.redactions.error(error.into()))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// Specification of an MCP server.
 pub enum ServerSpec {
     Stdio {
@@ -105,17 +170,42 @@ pub enum ServerSpec {
     },
     Http {
         url: Url,
+        transport: McpHttpTransport,
         headers: HashMap<String, String>,
+        header_helper: Option<crate::McpHeaderHelper>,
         auth: Option<HttpAuth>,
         tool_policy: McpToolPolicy,
     },
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum McpHttpTransport {
+    #[default]
+    Streamable,
+    Sse,
+    WebSocket,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// Policy filtering MCP tools.
-pub struct McpToolPolicy {
-    pub include: Vec<String>,
-    pub exclude: Vec<String>,
+pub enum McpToolPolicy {
+    Patterns {
+        include: Vec<String>,
+        exclude: Vec<String>,
+    },
+    ExactNames {
+        enabled: Option<BTreeSet<String>>,
+        disabled: BTreeSet<String>,
+    },
+}
+
+impl Default for McpToolPolicy {
+    fn default() -> Self {
+        Self::Patterns {
+            include: Vec::new(),
+            exclude: Vec::new(),
+        }
+    }
 }
 
 /// Normalized advisory risk for a discovered MCP tool. This is derived from
@@ -130,16 +220,21 @@ pub enum McpToolRisk {
 
 impl McpToolPolicy {
     pub fn permits(&self, tool: &str) -> bool {
-        let included = self.include.is_empty()
-            || self
-                .include
-                .iter()
-                .any(|pattern| tool_pattern_matches(pattern, tool));
-        included
-            && !self
-                .exclude
-                .iter()
-                .any(|pattern| tool_pattern_matches(pattern, tool))
+        match self {
+            Self::Patterns { include, exclude } => {
+                (include.is_empty()
+                    || include
+                        .iter()
+                        .any(|pattern| tool_pattern_matches(pattern, tool)))
+                    && !exclude
+                        .iter()
+                        .any(|pattern| tool_pattern_matches(pattern, tool))
+            }
+            Self::ExactNames { enabled, disabled } => {
+                enabled.as_ref().is_none_or(|names| names.contains(tool))
+                    && !disabled.contains(tool)
+            }
+        }
     }
 }
 
@@ -291,7 +386,7 @@ impl ServerSpec {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 /// HTTP authentication of an MCP server.
 pub enum HttpAuth {
     Bearer(String),
@@ -424,6 +519,27 @@ struct ReconnectSupervisor {
     handle: tokio::task::JoinHandle<()>,
 }
 
+struct ConnectionAttempt {
+    active: Option<Arc<()>>,
+    observations: watch::Sender<u64>,
+}
+
+impl ConnectionAttempt {
+    fn new(observations: watch::Sender<u64>) -> Self {
+        Self {
+            active: Some(Arc::new(())),
+            observations,
+        }
+    }
+}
+
+impl Drop for ConnectionAttempt {
+    fn drop(&mut self) {
+        self.active.take();
+        self.observations.send_modify(|revision| *revision += 1);
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct ReconnectAttempt {
     failures: u32,
@@ -438,13 +554,29 @@ const SERVER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Default)]
 struct ServerEventState {
+    http_session_open: Arc<std::sync::atomic::AtomicBool>,
+    app_http_events: crate::http_transport::AppHttpEvents,
+    app_resource_listener: Mutex<()>,
     tools: RwLock<Arc<Vec<ToolDescriptor>>>,
     tool_generation: AtomicU64,
+    tool_list_changes: watch::Sender<u64>,
     resource_generation: AtomicU64,
+    resource_list_changes: watch::Sender<u64>,
     prompt_generation: AtomicU64,
     last_refresh_failure: RwLock<Option<agena_failure::Failure>>,
     tool_refresh_state: AtomicU8,
     shutdown: CancellationToken,
+    tasks: tasks::TaskRegistry,
+    observations: Option<watch::Sender<u64>>,
+    claude_channel: claude_channel::ChannelEvents,
+}
+
+impl ServerEventState {
+    fn resource_list_changed(&self) {
+        self.resource_generation.fetch_add(1, Ordering::Relaxed);
+        self.resource_list_changes
+            .send_modify(|revision| *revision = revision.wrapping_add(1));
+    }
 }
 
 #[derive(Clone)]
@@ -452,9 +584,11 @@ struct AgenaMcpClientHandler {
     info: ClientInfo,
     roots: Arc<RwLock<Vec<Root>>>,
     events: Arc<ServerEventState>,
+    refresh_catalog_in_background: bool,
     request_timeout: Duration,
     server_name: String,
     tool_policy: McpToolPolicy,
+    redactions: McpRedactions,
 }
 
 impl ClientHandler for AgenaMcpClientHandler {
@@ -462,21 +596,61 @@ impl ClientHandler for AgenaMcpClientHandler {
         self.info.clone()
     }
 
+    fn on_ordered_custom_notification(
+        &self,
+        notification: &rmcp::model::CustomNotification,
+        context: &NotificationContext<RoleClient>,
+    ) -> bool {
+        self.events
+            .claude_channel
+            .handle(notification, &context.peer, &self.redactions)
+    }
+
     async fn list_roots(
         &self,
-        _context: rmcp::service::RequestContext<RoleClient>,
+        context: RequestContext<RoleClient>,
     ) -> Result<ListRootsResult, rmcp::ErrorData> {
-        Ok(ListRootsResult::new(self.roots.read().await.clone()))
+        let route = self.events.tasks.legacy_route(&context)?;
+        let mut roots = ListRootsResult::new(self.roots.read().await.clone());
+        if let Some(route) = route {
+            roots.meta = Some(route.metadata());
+        } else {
+            let _ = elicitation::associated_incoming(&context);
+        }
+        Ok(roots)
+    }
+
+    async fn create_elicitation(
+        &self,
+        request: ElicitRequestParams,
+        context: RequestContext<RoleClient>,
+    ) -> Result<ElicitResult, rmcp::ErrorData> {
+        elicitation::standard_request(request, context, &self.events.tasks).await
+    }
+
+    #[allow(deprecated)]
+    async fn create_message(
+        &self,
+        request: rmcp::model::CreateMessageRequestParams,
+        context: RequestContext<RoleClient>,
+    ) -> Result<rmcp::model::CreateMessageResult, rmcp::ErrorData> {
+        elicitation::sampling_request(request, context, &self.events.tasks).await
+    }
+
+    async fn on_custom_request(
+        &self,
+        request: CustomRequest,
+        context: RequestContext<RoleClient>,
+    ) -> Result<CustomResult, rmcp::ErrorData> {
+        elicitation::custom_request(request, context, &self.events.tasks).await
     }
 
     async fn on_tool_list_changed(&self, context: NotificationContext<RoleClient>) {
-        self.queue_tool_refresh(context.peer);
+        self.tool_list_changed(context.peer);
     }
 
     async fn on_resource_list_changed(&self, _context: NotificationContext<RoleClient>) {
-        self.events
-            .resource_generation
-            .fetch_add(1, Ordering::Relaxed);
+        self.resource_list_changed();
     }
 
     async fn on_prompt_list_changed(&self, _context: NotificationContext<RoleClient>) {
@@ -497,6 +671,19 @@ impl ClientHandler for AgenaMcpClientHandler {
 }
 
 impl AgenaMcpClientHandler {
+    fn resource_list_changed(&self) {
+        self.events.resource_list_changed();
+    }
+
+    fn tool_list_changed(&self, peer: Peer<RoleClient>) {
+        self.events
+            .tool_list_changes
+            .send_modify(|revision| *revision = revision.wrapping_add(1));
+        if self.refresh_catalog_in_background {
+            self.queue_tool_refresh(peer);
+        }
+    }
+
     fn queue_tool_refresh(&self, peer: Peer<RoleClient>) {
         loop {
             let previous = self
@@ -525,6 +712,7 @@ impl AgenaMcpClientHandler {
         let timeout = self.request_timeout;
         let server_name = self.server_name.clone();
         let tool_policy = self.tool_policy.clone();
+        let redactions = self.redactions.clone();
         tokio::spawn(async move {
             loop {
                 let refresh = tokio::time::timeout(timeout, async {
@@ -536,7 +724,7 @@ impl AgenaMcpClientHandler {
                     _ = events.shutdown.cancelled() => return,
                     result = refresh => match result {
                         Ok(Ok(tools)) => {
-                            match prepare_tools(tools, tool_policy.clone()).await {
+                            match prepare_tools(tools, tool_policy.clone(), redactions.clone()).await {
                                 Ok(tools) => {
                                     replace_tools(&events, tools).await;
                                     *events.last_refresh_failure.write().await = None;
@@ -603,6 +791,7 @@ impl AgenaMcpClientHandler {
 
 /// A connected MCP server.
 pub struct ConnectedServer {
+    peer_id: Uuid,
     name: String,
     peer: Peer<RoleClient>,
     running: Mutex<Option<RunningClient>>,
@@ -611,35 +800,37 @@ pub struct ConnectedServer {
     instructions: Option<String>,
     tool_policy: McpToolPolicy,
     request_timeout: Duration,
+    tool_timeout: Duration,
+    close_timeout: Duration,
+    connected_at_ms: i64,
+    redactions: McpRedactions,
 }
 
 impl ConnectedServer {
-    fn new(
-        name: String,
-        peer: Peer<RoleClient>,
-        running: RunningClient,
-        events: Arc<ServerEventState>,
-        network_target: Option<String>,
-        instructions: Option<String>,
-        tool_policy: McpToolPolicy,
-        request_timeout: Duration,
-    ) -> Self {
-        Self {
-            name,
+    fn borrowed(&self, peer: Peer<RoleClient>) -> Arc<Self> {
+        Arc::new(Self {
+            peer_id: self.peer_id,
+            name: self.name.clone(),
             peer,
-            running: Mutex::new(Some(running)),
-            events,
-            network_target,
-            instructions,
-            tool_policy,
-            request_timeout,
-        }
+            running: Mutex::new(None),
+            events: self.events.clone(),
+            network_target: self.network_target.clone(),
+            instructions: self.instructions.clone(),
+            tool_policy: self.tool_policy.clone(),
+            request_timeout: self.request_timeout,
+            tool_timeout: self.tool_timeout,
+            close_timeout: self.close_timeout,
+            connected_at_ms: self.connected_at_ms,
+            redactions: self.redactions.clone(),
+        })
     }
 }
 
 impl Drop for ConnectedServer {
     fn drop(&mut self) {
-        self.events.shutdown.cancel();
+        if self.running.get_mut().is_some() {
+            self.events.shutdown.cancel();
+        }
     }
 }
 
@@ -648,8 +839,12 @@ pub struct McpConnectionManager {
     inner: Arc<RwLock<Inner>>,
     client_name: String,
     client_version: String,
+    apps_enabled: bool,
     token_store: Option<Arc<dyn TokenStore>>,
     http_network_authorizer: Option<Arc<dyn crate::McpHttpNetworkAuthorizer>>,
+    http_background_enabled: bool,
+    borrowed_http: bool,
+    _legacy_app_operation: Option<tokio::sync::OwnedMutexGuard<()>>,
     connect_timeout: Duration,
     request_timeout: Duration,
     roots: Arc<RwLock<Vec<Root>>>,
@@ -658,7 +853,12 @@ pub struct McpConnectionManager {
     reconnect_supervisor: std::sync::Mutex<Option<ReconnectSupervisor>>,
     oauth_sessions: crate::oauth::McpOAuthSessionManager,
     scoped_servers: Mutex<HashMap<ScopedServerKey, Arc<McpConnectionManager>>>,
+    plugin_http_calls: Mutex<BTreeMap<PluginHttpCallKey, Arc<McpConnectionManager>>>,
+    app_http_connections: Mutex<BTreeMap<(i64, i64), app_connections::AppHttpConnection>>,
+    managed_connections: Mutex<BTreeMap<(i64, String), Arc<McpManagedConnection>>>,
+    observations: watch::Sender<u64>,
     next_spec_revision: AtomicU64,
+    next_tool_observation: AtomicU64,
 }
 
 #[derive(Default)]
@@ -666,6 +866,8 @@ struct Inner {
     servers: BTreeMap<String, Arc<ConnectedServer>>,
     specs: BTreeMap<String, StoredServerSpec>,
     last_failures: BTreeMap<String, agena_failure::Failure>,
+    connecting: BTreeMap<String, Weak<()>>,
+    on_demand: tool_loading::SessionCatalogs,
 }
 
 #[derive(Clone)]
@@ -673,7 +875,65 @@ struct StoredServerSpec {
     spec: ServerSpec,
     connect_timeout: Duration,
     request_timeout: Duration,
+    plugin_timeouts: ScopedPluginTimeouts,
     revision: u64,
+    plugin_scoped: bool,
+    resolve_workspace: Option<ScopedPluginServerResolver>,
+    redactions: McpRedactions,
+    on_demand: Option<McpOnDemandConfig>,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct ScopedPluginTimeouts {
+    /// Complete connection setup, including initial tool discovery.
+    pub startup: Option<Duration>,
+    /// Active time for a tool invocation and its continuations.
+    pub tool_call: Option<Duration>,
+    /// Budget for shutting down the scoped instance.
+    pub close: Option<Duration>,
+}
+
+#[derive(Clone)]
+pub struct ScopedPluginServer {
+    pub spec: ServerSpec,
+    pub redactions: McpRedactions,
+}
+
+impl From<ServerSpec> for ScopedPluginServer {
+    fn from(spec: ServerSpec) -> Self {
+        Self {
+            spec,
+            redactions: McpRedactions::default(),
+        }
+    }
+}
+
+/// Reinterpret a plugin definition against the authenticated caller's workspace.
+pub type ScopedPluginServerResolver =
+    Arc<dyn Fn(&Path) -> Result<ScopedPluginServer, String> + Send + Sync>;
+
+impl StoredServerSpec {
+    fn requires_scope(&self, http_authorized: bool) -> bool {
+        match &self.spec {
+            ServerSpec::Stdio { sandbox, .. } => sandbox.is_none(),
+            ServerSpec::Http { .. } => self.plugin_scoped && !http_authorized,
+        }
+    }
+
+    async fn in_workspace(&self, workspace: &Path) -> McpResult<ScopedPluginServer> {
+        let Some(resolve) = self.resolve_workspace.clone() else {
+            return Ok(ScopedPluginServer {
+                spec: self.spec.clone(),
+                redactions: self.redactions.clone(),
+            });
+        };
+        let workspace = workspace.to_owned();
+        SPEC_RESOLVERS
+            .run(move || resolve(&workspace))
+            .await
+            .map_err(projection_error)?
+            .map_err(McpError::Malformed)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -681,8 +941,7 @@ struct StoredServerSpec {
 pub struct McpServerStatus {
     pub name: String,
     pub connected: bool,
-    /// The definition is waiting for a caller's sandbox scope, rather than
-    /// maintaining a server-workspace-wide stdio process.
+    /// The definition is waiting for an authorized caller scope.
     pub scope_required: bool,
     pub protocol_version: Option<String>,
     pub server_info: Option<Value>,
@@ -718,8 +977,12 @@ impl McpConnectionManager {
             inner: Default::default(),
             client_name: client_name.into(),
             client_version: client_version.into(),
+            apps_enabled: false,
             token_store: None,
             http_network_authorizer: None,
+            http_background_enabled: true,
+            borrowed_http: false,
+            _legacy_app_operation: None,
             connect_timeout: Duration::from_secs(20),
             request_timeout: Duration::from_secs(60),
             roots: Arc::new(RwLock::new(Vec::new())),
@@ -728,13 +991,23 @@ impl McpConnectionManager {
             reconnect_supervisor: std::sync::Mutex::new(None),
             oauth_sessions: Default::default(),
             scoped_servers: Mutex::new(HashMap::new()),
+            plugin_http_calls: Mutex::default(),
+            app_http_connections: Mutex::default(),
+            managed_connections: Mutex::default(),
+            observations: watch::Sender::new(0),
             next_spec_revision: AtomicU64::new(1),
+            next_tool_observation: AtomicU64::new(1),
         }
     }
 
     pub fn with_timeouts(mut self, connect_timeout: Duration, request_timeout: Duration) -> Self {
         self.connect_timeout = connect_timeout.max(Duration::from_millis(1));
         self.request_timeout = request_timeout.max(Duration::from_millis(1));
+        self
+    }
+
+    pub fn with_apps(mut self, enabled: bool) -> Self {
+        self.apps_enabled = enabled;
         self
     }
 
@@ -763,7 +1036,14 @@ impl McpConnectionManager {
     /// Replace the roots returned to MCP servers and notify every active
     /// connection that the advertised root catalog changed.
     pub async fn replace_roots(&self, roots: impl IntoIterator<Item = PathBuf>) -> McpResult<()> {
-        *self.roots.write().await = mcp_roots(roots);
+        let roots = mcp_roots(roots);
+        {
+            let mut current = self.roots.write().await;
+            if *current == roots {
+                return Ok(());
+            }
+            *current = roots;
+        }
         let peers = self
             .inner
             .read()
@@ -851,10 +1131,84 @@ impl McpConnectionManager {
                 spec,
                 connect_timeout: connect_timeout.max(Duration::from_millis(1)),
                 request_timeout: request_timeout.max(Duration::from_millis(1)),
+                plugin_timeouts: ScopedPluginTimeouts::default(),
                 revision: self.next_spec_revision.fetch_add(1, Ordering::Relaxed),
+                plugin_scoped: false,
+                resolve_workspace: None,
+                redactions: McpRedactions::default(),
+                on_demand: None,
             },
+            claude_channel::ChannelEvents::default(),
         )
         .await
+    }
+
+    /// Register a plugin contribution without connecting or replacing an
+    /// existing definition. Only a caller-owned scope can start a connection.
+    pub async fn register_scoped_plugin_server(
+        &self,
+        name: &str,
+        server: impl Into<ScopedPluginServer>,
+        timeouts: ScopedPluginTimeouts,
+        resolve_workspace: Option<ScopedPluginServerResolver>,
+    ) -> McpResult<()> {
+        self.register_scoped_plugin_server_with_loading(
+            name,
+            server,
+            timeouts,
+            resolve_workspace,
+            None,
+        )
+        .await
+    }
+
+    pub async fn register_scoped_plugin_server_with_loading(
+        &self,
+        name: &str,
+        server: impl Into<ScopedPluginServer>,
+        timeouts: ScopedPluginTimeouts,
+        resolve_workspace: Option<ScopedPluginServerResolver>,
+        on_demand: Option<McpOnDemandConfig>,
+    ) -> McpResult<()> {
+        let ScopedPluginServer { spec, redactions } = server.into();
+        if name.is_empty()
+            || name.trim() != name
+            || matches!(
+                &spec,
+                ServerSpec::Stdio {
+                    sandbox: Some(_),
+                    ..
+                }
+            )
+        {
+            return Err(McpError::Malformed(
+                "invalid scoped MCP server definition".into(),
+            ));
+        }
+        let _lifecycle = self.lifecycle.read().await;
+        let operation = self.server_operation_lock(name).await;
+        let _operation = operation.lock().await;
+        let mut inner = self.inner.write().await;
+        if inner.specs.contains_key(name) {
+            return Err(McpError::Malformed(
+                "MCP server name is already configured".into(),
+            ));
+        }
+        inner.specs.insert(
+            name.to_owned(),
+            StoredServerSpec {
+                spec,
+                connect_timeout: self.connect_timeout,
+                request_timeout: self.request_timeout,
+                plugin_timeouts: timeouts,
+                revision: self.next_spec_revision.fetch_add(1, Ordering::Relaxed),
+                plugin_scoped: true,
+                resolve_workspace,
+                redactions,
+                on_demand,
+            },
+        );
+        Ok(())
     }
 
     async fn server_operation_lock(&self, name: &str) -> Arc<Mutex<()>> {
@@ -872,15 +1226,47 @@ impl McpConnectionManager {
     /// The lifecycle read guard and per-server operation guard must already be
     /// held. Reconnect resolves its stored definition under the same guard, so
     /// a concurrent removal cannot resurrect a deleted connection.
-    async fn connect_server_locked(&self, name: &str, stored: StoredServerSpec) -> McpResult<()> {
+    async fn connect_server_locked(
+        &self,
+        name: &str,
+        stored: StoredServerSpec,
+        claude_channel: claude_channel::ChannelEvents,
+    ) -> McpResult<()> {
         self.retire_scoped_server(name).await;
-        let connect_timeout = stored.connect_timeout;
+        if self
+            .inner
+            .read()
+            .await
+            .specs
+            .get(name)
+            .is_some_and(|previous| previous.revision != stored.revision)
+        {
+            self.retire_app_http_connections(|_, server| server == name)
+                .await;
+        }
+        let startup_timeout = stored.plugin_timeouts.startup;
+        let connect_timeout = startup_timeout.unwrap_or(stored.connect_timeout);
         let request_timeout = stored.request_timeout;
+        let tool_timeout = stored.plugin_timeouts.tool_call.unwrap_or(request_timeout);
+        let close_timeout = stored
+            .plugin_timeouts
+            .close
+            .unwrap_or(SERVER_SHUTDOWN_TIMEOUT);
+        let requires_scope = stored.requires_scope(self.http_network_authorizer.is_some());
+        let plugin_scoped = stored.plugin_scoped;
         let spec = stored.spec.clone();
+        let redactions = stored.redactions.clone();
+        let attempt = (!requires_scope).then(|| ConnectionAttempt::new(self.observations.clone()));
         if let Some(existing) = {
             let mut inner = self.inner.write().await;
             inner.specs.insert(name.to_string(), stored);
             inner.last_failures.remove(name);
+            if let Some(active) = attempt.as_ref().and_then(|attempt| attempt.active.as_ref()) {
+                inner
+                    .connecting
+                    .insert(name.to_owned(), Arc::downgrade(active));
+                self.notify_observation();
+            }
             inner.servers.remove(name)
         } {
             shutdown_server(existing).await;
@@ -888,64 +1274,49 @@ impl McpConnectionManager {
 
         // Config loading stores definitions without launching a global stdio
         // process. A scoped manager supplies the immutable sandbox policy.
-        if matches!(&spec, ServerSpec::Stdio { sandbox: None, .. }) {
+        if requires_scope {
             return Ok(());
         }
 
-        let events = Arc::new(ServerEventState::default());
+        let events = Arc::new(ServerEventState {
+            observations: Some(self.observations.clone()),
+            claude_channel,
+            ..Default::default()
+        });
         let tool_policy = spec.tool_policy().clone();
         let client_handler = self.client_handler(
             name,
             Arc::clone(&events),
             tool_policy.clone(),
             request_timeout,
+            redactions.clone(),
         );
-        let connection = async {
-            match spec {
-                ServerSpec::Stdio {
-                    command,
-                    args,
-                    env,
-                    cwd,
-                    sandbox,
-                    ..
-                } => Ok::<_, McpError>((
-                    connect_stdio(client_handler, command, args, env, cwd, sandbox).await?,
-                    None,
-                )),
-                ServerSpec::Http {
-                    url, headers, auth, ..
-                } => {
-                    let target = Some(url.to_string());
-                    let running = connect_http(
-                        client_handler,
-                        name,
-                        url,
-                        headers,
-                        auth,
-                        self.token_store.clone(),
-                        self.http_network_authorizer.clone(),
-                    )
-                    .await?;
-                    Ok::<_, McpError>((running, target))
-                }
-            }
-        };
+        let connection = self.open_transport(name, spec, client_handler, plugin_scoped);
+        let started_at = tokio::time::Instant::now();
         let (running, network_target) =
             match tokio::time::timeout(connect_timeout, connection).await {
                 Ok(Ok(connected)) => connected,
                 Ok(Err(error)) => {
+                    let error = if events.http_session_open.load(Ordering::Acquire) {
+                        McpError::UnconfirmedClosure
+                    } else {
+                        redactions.error(error)
+                    };
                     self.record_error(name, &error).await;
                     return Err(error);
                 }
                 Err(error) => {
-                    let error = McpError::timeout_error(
-                        format!(
-                            "MCP connection timed out after {}ms",
-                            connect_timeout.as_millis()
-                        ),
-                        &error,
-                    );
+                    let error = if events.http_session_open.load(Ordering::Acquire) {
+                        McpError::UnconfirmedClosure
+                    } else {
+                        McpError::timeout_error(
+                            format!(
+                                "MCP connection timed out after {}ms",
+                                connect_timeout.as_millis()
+                            ),
+                            &error,
+                        )
+                    };
                     self.record_error(name, &error).await;
                     return Err(error);
                 }
@@ -955,18 +1326,24 @@ impl McpConnectionManager {
         let instructions = peer
             .peer_info()
             .and_then(|info| info.instructions.clone())
-            .filter(|value| !value.trim().is_empty());
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| redactions.text(value));
         let tools_result = if peer
             .peer_info()
             .is_some_and(|info| info.capabilities.tools.is_some())
         {
-            match tokio::time::timeout(request_timeout, peer.list_all_tools()).await {
-                Ok(Ok(tools)) => prepare_tools(tools, tool_policy.clone()).await,
-                Ok(Err(error)) => Err(McpError::from(error)),
+            let listing_timeout = startup_timeout.map_or(request_timeout, |budget| {
+                budget.saturating_sub(started_at.elapsed())
+            });
+            match tokio::time::timeout(listing_timeout, peer.list_all_tools()).await {
+                Ok(Ok(tools)) => {
+                    prepare_tools(tools, tool_policy.clone(), redactions.clone()).await
+                }
+                Ok(Err(error)) => Err(redactions.error(McpError::from(error))),
                 Err(timeout_error) => Err(McpError::timeout_error(
                     format!(
                         "initial MCP tool listing timed out after {}ms",
-                        request_timeout.as_millis()
+                        listing_timeout.as_millis()
                     ),
                     &timeout_error,
                 )),
@@ -977,13 +1354,15 @@ impl McpConnectionManager {
         let tools = match tools_result {
             Ok(tools) => tools,
             Err(error) => {
+                events.shutdown.cancel();
+                let confirmed = shutdown_client(name, running, close_timeout).await
+                    && !events.http_session_open.load(Ordering::Acquire);
+                let error = if confirmed {
+                    error
+                } else {
+                    McpError::UnconfirmedClosure
+                };
                 self.record_error(name, &error).await;
-                if running.cancel().await.is_err() {
-                    tracing::warn!(
-                        server = name,
-                        "failed to cancel an MCP connection after tool catalog initialization failed"
-                    );
-                }
                 return Err(error);
             }
         };
@@ -996,17 +1375,25 @@ impl McpConnectionManager {
             }
         };
         release_tools(retired).await;
-        start_catalog_subscription(running.service().clone(), peer.clone());
-        let connected = Arc::new(ConnectedServer::new(
-            name.to_string(),
+        if self.http_background_enabled {
+            start_catalog_subscription(running.service().clone(), peer.clone());
+        }
+        observe_transport_close(&events, peer.clone());
+        let connected = Arc::new(ConnectedServer {
+            peer_id: Uuid::new_v4(),
+            name: name.to_owned(),
             peer,
-            running,
+            running: Mutex::new(Some(running)),
             events,
             network_target,
             instructions,
             tool_policy,
             request_timeout,
-        ));
+            tool_timeout,
+            close_timeout,
+            connected_at_ms: chrono::Utc::now().timestamp_millis(),
+            redactions,
+        });
 
         let mut inner = self.inner.write().await;
         inner.servers.insert(name.to_string(), connected);
@@ -1014,7 +1401,74 @@ impl McpConnectionManager {
         Ok(())
     }
 
+    async fn open_transport(
+        &self,
+        name: &str,
+        spec: ServerSpec,
+        client_handler: AgenaMcpClientHandler,
+        plugin_scoped: bool,
+    ) -> McpResult<(RunningClient, Option<String>)> {
+        match spec {
+            ServerSpec::Stdio {
+                command,
+                args,
+                env,
+                cwd,
+                sandbox,
+                ..
+            } => Ok((
+                connect_stdio(
+                    client_handler,
+                    command,
+                    args,
+                    env,
+                    cwd,
+                    sandbox,
+                    plugin_scoped,
+                )
+                .await?,
+                None,
+            )),
+            ServerSpec::Http {
+                url,
+                transport,
+                headers,
+                header_helper,
+                auth,
+                ..
+            } => {
+                let target = Some(url.to_string());
+                let running = connect_http(
+                    client_handler,
+                    name,
+                    url,
+                    transport,
+                    headers,
+                    header_helper,
+                    auth,
+                    self.token_store.clone(),
+                    self.http_network_authorizer.clone(),
+                    self.http_background_enabled,
+                )
+                .await?;
+                Ok((running, target))
+            }
+        }
+    }
+
     pub async fn reconnect(&self, name: &str) -> McpResult<()> {
+        self.reconnect_with_channel_events(name, claude_channel::ChannelEvents::default())
+            .await
+    }
+
+    async fn reconnect_with_channel_events(
+        &self,
+        name: &str,
+        claude_channel: claude_channel::ChannelEvents,
+    ) -> McpResult<()> {
+        if self.borrowed_http {
+            return Err(McpError::TransportClosed);
+        }
         let _lifecycle_guard = self.lifecycle.read().await;
         let operation_lock = self.server_operation_lock(name).await;
         let _operation_guard = operation_lock.lock().await;
@@ -1026,10 +1480,10 @@ impl McpConnectionManager {
             .get(name)
             .cloned()
             .ok_or_else(|| McpError::ServerNotConnected(name.to_string()))?;
-        if matches!(&spec.spec, ServerSpec::Stdio { sandbox: None, .. }) {
+        if spec.requires_scope(self.http_network_authorizer.is_some()) {
             return Err(scoped::missing_scope(name));
         }
-        self.connect_server_locked(name, spec).await
+        self.connect_server_locked(name, spec, claude_channel).await
     }
 
     pub async fn remove_server(&self, name: &str) -> McpResult<()> {
@@ -1037,12 +1491,19 @@ impl McpConnectionManager {
         let operation_lock = self.server_operation_lock(name).await;
         let _operation_guard = operation_lock.lock().await;
         self.retire_scoped_server(name).await;
+        self.retire_app_http_connections(|_, server| server == name)
+            .await;
+        self.retire_managed_connections(|_, server| server == name)
+            .await;
         let removed = {
             let mut inner = self.inner.write().await;
             inner.specs.remove(name);
             inner.last_failures.remove(name);
+            inner.connecting.remove(name);
+            inner.on_demand.retain(|(_, server), _| server != name);
             inner.servers.remove(name)
         };
+        self.notify_observation();
         if let Some(server) = removed {
             shutdown_server(server).await;
         }
@@ -1054,6 +1515,15 @@ impl McpConnectionManager {
         inner.specs.keys().cloned().collect()
     }
 
+    pub async fn is_plugin_server(&self, name: &str) -> bool {
+        self.inner
+            .read()
+            .await
+            .specs
+            .get(name)
+            .is_some_and(|server| server.plugin_scoped)
+    }
+
     pub async fn statuses(&self) -> Vec<McpServerStatus> {
         let inner = self.inner.read().await;
         let specs = inner.specs.clone();
@@ -1063,6 +1533,7 @@ impl McpConnectionManager {
         let mut statuses = Vec::with_capacity(specs.len());
         let reconnect_supervisor_running = self.reconnect_supervisor_running();
         for (name, stored) in specs {
+            let scope_required = stored.requires_scope(self.http_network_authorizer.is_some());
             let spec = stored.spec;
             let server = servers.get(name.as_str()).cloned();
             let connected = server
@@ -1091,16 +1562,20 @@ impl McpConnectionManager {
             statuses.push(McpServerStatus {
                 name: name.clone(),
                 connected,
-                scope_required: matches!(&spec, ServerSpec::Stdio { sandbox: None, .. }),
+                scope_required,
                 protocol_version: peer_info
                     .as_ref()
                     .map(|info| info.protocol_version.to_string()),
                 server_info: peer_info
                     .as_ref()
-                    .and_then(|info| serialize_optional(info.server_info.clone())),
+                    .and_then(|info| serialize_optional(info.server_info.clone()))
+                    .and_then(|info| server.as_ref()?.redactions.payload(info).ok()),
                 capabilities: peer_info
                     .as_ref()
-                    .and_then(|info| serde_json::to_value(&info.capabilities).ok()),
+                    .and_then(|info| serde_json::to_value(&info.capabilities).ok())
+                    .and_then(|capabilities| {
+                        server.as_ref()?.redactions.payload(capabilities).ok()
+                    }),
                 tool_count,
                 network_target: server.as_ref().and_then(|server| {
                     server.network_target.as_deref().and_then(redacted_endpoint)
@@ -1215,8 +1690,10 @@ impl McpConnectionManager {
                         ),
                         &error,
                     )
-                })??,
+                })?
+                .map_err(|error| server.redactions.error(error.into()))?,
             server.tool_policy.clone(),
+            server.redactions.clone(),
         )
         .await?;
         replace_tools(&server.events, Arc::clone(&tools)).await;
@@ -1233,6 +1710,54 @@ impl McpConnectionManager {
         tool: &str,
         arguments: Option<Value>,
     ) -> McpResult<CallToolResult> {
+        self.call_tool_with_elicitation(server, tool, arguments, None)
+            .await
+    }
+
+    pub async fn call_tool_with_elicitation(
+        &self,
+        server: &str,
+        tool: &str,
+        arguments: Option<Value>,
+        handler: Option<&dyn McpElicitationHandler>,
+    ) -> McpResult<CallToolResult> {
+        self.call_tool_with_peer(server, tool, arguments, handler)
+            .await
+            .map(|(result, _)| result)
+    }
+
+    /// The peer ID comes from the connection that delivered the result, even
+    /// when HTTP authentication rotated the peer during the call.
+    pub async fn call_tool_with_peer(
+        &self,
+        server: &str,
+        tool: &str,
+        arguments: Option<Value>,
+        handler: Option<&dyn McpElicitationHandler>,
+    ) -> McpResult<(CallToolResult, Uuid)> {
+        self.call_tool_on_peer(server, tool, arguments, handler, None).await
+    }
+
+    pub async fn call_tool_observed(
+        &self,
+        server: &str,
+        tool: &str,
+        arguments: Option<Value>,
+        handler: &dyn McpElicitationHandler,
+        observer: &McpTaskObserver<'_>,
+    ) -> McpResult<CallToolResult> {
+        self.call_tool_on_peer(server, tool, arguments, Some(handler), Some(observer))
+            .await.map(|(result, _)| result)
+    }
+
+    async fn call_tool_on_peer(
+        &self,
+        server: &str,
+        tool: &str,
+        arguments: Option<Value>,
+        handler: Option<&dyn McpElicitationHandler>,
+        observer: Option<&McpTaskObserver<'_>>,
+    ) -> McpResult<(CallToolResult, Uuid)> {
         let server = self.get(server).await?;
         require_capability(&server, "tools")?;
         if !server.tool_policy.permits(tool) {
@@ -1245,18 +1770,95 @@ impl McpConnectionManager {
         if let Some(arguments) = value_to_json_object(arguments).await? {
             params.arguments = Some(arguments);
         }
-        let result = tokio::time::timeout(server.request_timeout, server.peer.call_tool(params))
-            .await
+        let mut call = tasks::ToolCall::default();
+        let work = async {
+            let error = match call.run(&server, params.clone(), handler, observer).await {
+                Ok(result) => return Ok((Arc::clone(&server), result)),
+                Err(error) => error,
+            };
+            if call.continuation_started || !error.http_auth_rejected() {
+                return Err(McpError::from(error));
+            }
+            let Some(fresh) = self.refresh_header_connection(&server).await? else {
+                return Err(McpError::from(error));
+            };
+            require_capability(&fresh, "tools")?;
+            if !fresh.tool_policy.permits(tool) {
+                return Err(McpError::ToolDisallowed {
+                    server: fresh.name.clone(),
+                    tool: tool.to_owned(),
+                });
+            }
+            let result = call.run(&fresh, params, handler, observer).await.map_err(|error| {
+                if !call.continuation_started && error.http_auth_rejected() {
+                    McpError::Auth("MCP server rejected the refreshed credentials".into())
+                } else {
+                    fresh.redactions.error(error.into())
+                }
+            })?;
+            Ok((fresh, result))
+        };
+        let outcome = if let Some(observer) = observer {
+            tokio::select! {
+                biased;
+                _ = observer.cancellation.cancelled() => Ok(Err(ServiceError::Cancelled { reason: None }.into())),
+                result = agena_async::permission_wait::timeout(server.tool_timeout, work) => result,
+            }
+        } else {
+            agena_async::permission_wait::timeout(server.tool_timeout, work).await
+        };
+        call.settle().await;
+        let (connected, result) = outcome
             .map_err(|error| {
                 McpError::timeout_error(
                     format!(
                         "MCP tool call timed out after {}ms",
-                        server.request_timeout.as_millis()
+                        server.tool_timeout.as_millis()
                     ),
                     &error,
                 )
-            })??;
-        project_payload(move || convert_call_tool_result(result)).await
+            })?
+            .map_err(|error| server.redactions.error(error))?;
+        let result = project_reply(&connected, move || convert_call_tool_result(result)).await?;
+        Ok((result, connected.peer_id))
+    }
+
+    async fn refresh_header_connection(
+        &self,
+        stale: &Arc<ConnectedServer>,
+    ) -> McpResult<Option<Arc<ConnectedServer>>> {
+        if self.borrowed_http {
+            return Ok(None);
+        }
+        let name = &stale.name;
+        let _lifecycle = self.lifecycle.read().await;
+        let operation = self.server_operation_lock(name).await;
+        let _operation = operation.lock().await;
+        let (stored, reconnected) = {
+            let inner = self.inner.read().await;
+            let Some(stored) = inner.specs.get(name) else {
+                return Ok(None);
+            };
+            if !matches!(
+                stored.spec,
+                ServerSpec::Http {
+                    header_helper: Some(_),
+                    ..
+                }
+            ) || stored.requires_scope(self.http_network_authorizer.is_some())
+            {
+                return Ok(None);
+            }
+            let reconnected = inner.servers.get(name).is_some_and(|server| {
+                !Arc::ptr_eq(server, stale) && !server.peer.is_transport_closed()
+            });
+            (stored.clone(), reconnected)
+        };
+        if !reconnected {
+            self.connect_server_locked(name, stored, claude_channel::ChannelEvents::default())
+                .await?;
+        }
+        self.get(name).await.map(Some)
     }
 
     pub async fn list_resources(
@@ -1285,8 +1887,9 @@ impl McpConnectionManager {
                 ),
                 &error,
             )
-        })??;
-        project_payload(move || ListResourcesResult {
+        })?
+        .map_err(|error| server.redactions.error(McpError::from(error)))?;
+        project_reply(&server, move || ListResourcesResult {
             resources: result
                 .resources
                 .into_iter()
@@ -1325,8 +1928,9 @@ impl McpConnectionManager {
                 ),
                 &error,
             )
-        })??;
-        project_payload(move || ListResourceTemplatesResult {
+        })?
+        .map_err(|error| server.redactions.error(McpError::from(error)))?;
+        project_reply(&server, move || ListResourceTemplatesResult {
             resource_templates: result
                 .resource_templates
                 .into_iter()
@@ -1338,25 +1942,29 @@ impl McpConnectionManager {
     }
 
     pub async fn read_resource(&self, server: &str, uri: &str) -> McpResult<ReadResourceResult> {
+        self.read_resource_with_elicitation(server, uri, None).await
+    }
+
+    pub async fn read_resource_with_elicitation(
+        &self,
+        server: &str,
+        uri: &str,
+        handler: Option<&dyn McpElicitationHandler>,
+    ) -> McpResult<ReadResourceResult> {
         let server = self.get(server).await?;
         require_capability(&server, "resources")?;
-        let result = tokio::time::timeout(
-            server.request_timeout,
-            server
-                .peer
-                .read_resource(ReadResourceRequestParams::new(uri.to_string())),
+        let request = ReadResourceRequest::new(ReadResourceRequestParams::new(uri.to_string()));
+        let result = request_with_elicitation(
+            &server,
+            ClientRequest::ReadResourceRequest(request),
+            handler,
+            "resource read",
         )
-        .await
-        .map_err(|error| {
-            McpError::timeout_error(
-                format!(
-                    "MCP resource read timed out after {}ms",
-                    server.request_timeout.as_millis()
-                ),
-                &error,
-            )
-        })??;
-        project_payload(move || ReadResourceResult {
+        .await?;
+        let ServerResult::ReadResourceResult(result) = result else {
+            return Err(ServiceError::UnexpectedResponse.into());
+        };
+        project_reply(&server, move || ReadResourceResult {
             contents: result
                 .contents
                 .into_iter()
@@ -1392,8 +2000,9 @@ impl McpConnectionManager {
                 ),
                 &error,
             )
-        })??;
-        project_payload(move || ListPromptsResult {
+        })?
+        .map_err(|error| server.redactions.error(McpError::from(error)))?;
+        project_reply(&server, move || ListPromptsResult {
             prompts: result
                 .prompts
                 .into_iter()
@@ -1410,6 +2019,17 @@ impl McpConnectionManager {
         name: &str,
         arguments: Option<BTreeMap<String, String>>,
     ) -> McpResult<GetPromptResult> {
+        self.get_prompt_with_elicitation(server, name, arguments, None)
+            .await
+    }
+
+    pub async fn get_prompt_with_elicitation(
+        &self,
+        server: &str,
+        name: &str,
+        arguments: Option<BTreeMap<String, String>>,
+        handler: Option<&dyn McpElicitationHandler>,
+    ) -> McpResult<GetPromptResult> {
         let server = self.get(server).await?;
         require_capability(&server, "prompts")?;
         let mut params = GetPromptRequestParams::new(name.to_string());
@@ -1421,18 +2041,17 @@ impl McpConnectionManager {
                     .collect(),
             );
         }
-        let result = tokio::time::timeout(server.request_timeout, server.peer.get_prompt(params))
-            .await
-            .map_err(|error| {
-                McpError::timeout_error(
-                    format!(
-                        "MCP prompt read timed out after {}ms",
-                        server.request_timeout.as_millis()
-                    ),
-                    &error,
-                )
-            })??;
-        project_payload(move || GetPromptResult {
+        let result = request_with_elicitation(
+            &server,
+            ClientRequest::GetPromptRequest(GetPromptRequest::new(params)),
+            handler,
+            "prompt read",
+        )
+        .await?;
+        let ServerResult::GetPromptResult(result) = result else {
+            return Err(ServiceError::UnexpectedResponse.into());
+        };
+        project_reply(&server, move || GetPromptResult {
             description: result.description,
             messages: result
                 .messages
@@ -1447,8 +2066,11 @@ impl McpConnectionManager {
         self.stop_reconnect_supervisor();
         self.oauth_sessions.shutdown().await;
         let _lifecycle_guard = self.lifecycle.write().await;
+        self.retire_app_http_connections(|_, _| true).await;
+        self.retire_managed_connections(|_, _| true).await;
         let scoped = std::mem::take(&mut *self.scoped_servers.lock().await);
-        for (_, manager) in scoped {
+        let calls = std::mem::take(&mut *self.plugin_http_calls.lock().await);
+        for manager in scoped.into_values().chain(calls.into_values()) {
             manager.shutdown_local().await;
         }
         self.shutdown_connections().await;
@@ -1469,10 +2091,13 @@ impl McpConnectionManager {
             let mut inner = self.inner.write().await;
             inner.specs.clear();
             inner.last_failures.clear();
+            inner.connecting.clear();
+            inner.on_demand.clear();
             std::mem::take(&mut inner.servers)
                 .into_values()
                 .collect::<Vec<_>>()
         };
+        self.notify_observation();
         let mut shutdowns = tokio::task::JoinSet::new();
         for server in servers {
             shutdowns.spawn(shutdown_server(server));
@@ -1485,14 +2110,16 @@ impl McpConnectionManager {
         if inner
             .specs
             .get(name)
-            .is_some_and(|stored| matches!(&stored.spec, ServerSpec::Stdio { sandbox: None, .. }))
+            .is_some_and(|stored| stored.requires_scope(self.http_network_authorizer.is_some()))
         {
             return Err(scoped::missing_scope(name));
         }
         inner
             .servers
             .get(name)
-            .filter(|server| !server.peer.is_transport_closed())
+            .filter(|server| {
+                !server.peer.is_transport_closed() && !server.events.shutdown.is_cancelled()
+            })
             .cloned()
             .ok_or_else(|| McpError::ServerNotConnected(name.to_string()))
     }
@@ -1502,7 +2129,7 @@ impl McpConnectionManager {
         inner
             .specs
             .iter()
-            .filter(|(_, stored)| !matches!(&stored.spec, ServerSpec::Stdio { sandbox: None, .. }))
+            .filter(|(_, stored)| !stored.requires_scope(self.http_network_authorizer.is_some()))
             .map(|(name, _)| name)
             .filter(|name| {
                 inner
@@ -1514,17 +2141,44 @@ impl McpConnectionManager {
             .collect()
     }
 
+    #[allow(deprecated)]
     fn client_handler(
         &self,
         server_name: &str,
         events: Arc<ServerEventState>,
         tool_policy: McpToolPolicy,
         request_timeout: Duration,
+        redactions: McpRedactions,
     ) -> AgenaMcpClientHandler {
         let mut roots = RootsCapabilities::default();
         roots.list_changed = Some(true);
         let mut capabilities = ClientCapabilities::default();
         capabilities.roots = Some(roots);
+        let mut sampling = rmcp::model::SamplingCapability::default();
+        sampling.tools = Some(Default::default());
+        sampling.context = Some(Default::default());
+        capabilities.sampling = Some(sampling);
+        let mut extensions = elicitation::openai_capabilities();
+        extensions.insert(rmcp::model::TASKS_EXTENSION_ID.into(), Default::default());
+        extensions.insert(skills::EXTENSION_ID.into(), Default::default());
+        if self.apps_enabled {
+            extensions.insert(
+                crate::apps::APP_EXTENSION_ID.into(),
+                serde_json::Map::from_iter([(
+                    "mimeTypes".into(),
+                    serde_json::json!([crate::apps::APP_MIME_TYPE]),
+                )]),
+            );
+        }
+        capabilities.extensions = Some(extensions);
+        // The legacy capability declares the requestor role. Agena never
+        // advertises accepting server-created sampling or elicitation tasks.
+        capabilities.legacy_tasks = Some(Default::default());
+        capabilities.elicitation = Some(
+            ElicitationCapability::new()
+                .with_form(FormElicitationCapability::new().with_schema_validation(true))
+                .with_url(UrlElicitationCapability::new()),
+        );
         AgenaMcpClientHandler {
             info: ClientInfo::new(
                 capabilities,
@@ -1532,9 +2186,11 @@ impl McpConnectionManager {
             ),
             roots: Arc::clone(&self.roots),
             events,
+            refresh_catalog_in_background: self.http_background_enabled,
             request_timeout,
             server_name: server_name.to_string(),
             tool_policy,
+            redactions,
         }
     }
 
@@ -1606,6 +2262,22 @@ fn mcp_failure(error: &McpError) -> agena_failure::Failure {
             RetryDirective::Backoff,
             RecoveryDirective::RestartPlugin,
             "The MCP server is unavailable. Reconnect it and try again.",
+        ),
+        McpError::UnconfirmedClosure => (
+            "mcp.close_unconfirmed",
+            FailureCategory::DependencyUnavailable,
+            FailureResponsibility::Dependency,
+            RetryDirective::AfterUserAction,
+            RecoveryDirective::RestartPlugin,
+            "The previous MCP connection did not confirm closure.",
+        ),
+        McpError::SamplingDeclined => (
+            "mcp.sampling_declined",
+            FailureCategory::PermissionDenied,
+            FailureResponsibility::Policy,
+            RetryDirective::AfterUserAction,
+            RecoveryDirective::RequestPermission,
+            "The MCP sampling request was declined or cancelled.",
         ),
         McpError::SamplingUnsupported | McpError::CapabilityUnavailable { .. } => (
             "mcp.unsupported",
@@ -1706,13 +2378,10 @@ fn start_catalog_subscription(handler: AgenaMcpClientHandler, peer: Peer<RoleCli
                     // Reconcile any changes between initial discovery and the
                     // subscription acknowledgment, or during a dropped stream.
                     if filter.tools_list_changed == Some(true) {
-                        handler.queue_tool_refresh(peer.clone());
+                        handler.tool_list_changed(peer.clone());
                     }
                     if filter.resources_list_changed == Some(true) {
-                        handler
-                            .events
-                            .resource_generation
-                            .fetch_add(1, Ordering::Relaxed);
+                        handler.resource_list_changed();
                     }
                     if filter.prompts_list_changed == Some(true) {
                         handler
@@ -1728,12 +2397,12 @@ fn start_catalog_subscription(handler: AgenaMcpClientHandler, peer: Peer<RoleCli
                         };
                         match next {
                             Ok(Some(ServerNotification::ToolListChangedNotification(_))) => {
-                                handler.queue_tool_refresh(peer.clone())
+                                handler.tool_list_changed(peer.clone())
                             }
-                            Ok(Some(
-                                ServerNotification::ResourceListChangedNotification(_)
-                                | ServerNotification::ResourceUpdatedNotification(_),
-                            )) => {
+                            Ok(Some(ServerNotification::ResourceListChangedNotification(_))) => {
+                                handler.resource_list_changed();
+                            }
+                            Ok(Some(ServerNotification::ResourceUpdatedNotification(_))) => {
                                 handler
                                     .events
                                     .resource_generation
@@ -1766,6 +2435,22 @@ fn start_catalog_subscription(handler: AgenaMcpClientHandler, peer: Peer<RoleCli
                 _ = tokio::time::sleep(retry_delay) => {}
             }
             retry_delay = (retry_delay * 2).min(Duration::from_secs(30));
+        }
+    });
+}
+
+fn observe_transport_close(events: &ServerEventState, peer: Peer<RoleClient>) {
+    let observations = events.observations.clone();
+    let shutdown = events.shutdown.clone();
+    tokio::spawn(async move {
+        tokio::select! {
+            _ = shutdown.cancelled() => {}
+            _ = peer.transport_closed() => {
+                shutdown.cancel();
+                if let Some(observations) = observations {
+                    observations.send_modify(|revision| *revision += 1);
+                }
+            }
         }
     });
 }
@@ -1829,6 +2514,7 @@ async fn run_reconnect_supervisor(
 }
 
 fn mcp_roots(paths: impl IntoIterator<Item = PathBuf>) -> Vec<Root> {
+    let mut uris = std::collections::BTreeSet::new();
     paths
         .into_iter()
         .filter_map(|path| {
@@ -1846,7 +2532,11 @@ fn mcp_roots(paths: impl IntoIterator<Item = PathBuf>) -> Vec<Root> {
                 .file_name()
                 .and_then(|value| value.to_str())
                 .map(str::to_owned);
-            let mut root = Root::new(uri.to_string());
+            let uri = uri.to_string();
+            if !uris.insert(uri.clone()) {
+                return None;
+            }
+            let mut root = Root::new(uri);
             root.name = name;
             Some(root)
         })
@@ -1864,8 +2554,15 @@ async fn connect_stdio(
     env: HashMap<String, String>,
     cwd: Option<PathBuf>,
     sandbox: Option<agena_process::sandbox::SandboxPolicy>,
+    plugin_scoped: bool,
 ) -> McpResult<RunningClient> {
     let mut cmd = Command::new(command);
+    if plugin_scoped {
+        cmd.env_clear();
+        if let Some(path) = std::env::var_os("PATH") {
+            cmd.env("PATH", path);
+        }
+    }
     cmd.args(args);
     cmd.envs(env);
     if let Some(cwd) = cwd {
@@ -1886,13 +2583,16 @@ async fn connect_http(
     client_handler: AgenaMcpClientHandler,
     server_name: &str,
     url: Url,
+    transport: McpHttpTransport,
     mut headers: HashMap<String, String>,
+    header_helper: Option<crate::McpHeaderHelper>,
     auth: Option<HttpAuth>,
     token_store: Option<Arc<dyn TokenStore>>,
     network_authorizer: Option<Arc<dyn crate::McpHttpNetworkAuthorizer>>,
+    background_enabled: bool,
 ) -> McpResult<RunningClient> {
     let credential_name = credential_store_name(server_name, &url);
-    let has_authorization = headers
+    let mut has_authorization = headers
         .keys()
         .any(|key| key.eq_ignore_ascii_case("authorization"));
     let oauth_binding = match auth.as_ref() {
@@ -1921,6 +2621,19 @@ async fn connect_http(
         }
     }
 
+    let dynamic_headers = header_helper.is_some();
+    if let Some(helper) = header_helper {
+        let authorizer = network_authorizer
+            .as_deref()
+            .ok_or(McpError::PermissionDenied)?;
+        helper
+            .merge_headers(authorizer, url.as_str(), &mut headers)
+            .await?;
+        has_authorization = headers
+            .keys()
+            .any(|key| key.eq_ignore_ascii_case("authorization"));
+    }
+
     let mut custom_headers = HashMap::new();
     let mut bearer = None;
     for (key, value) in headers {
@@ -1934,9 +2647,43 @@ async fn connect_http(
         custom_headers.insert(parse_header_name(&key)?, parse_header_value(&value)?);
     }
 
-    let config = StreamableHttpClientTransportConfig::with_uri(url.to_string())
+    if transport != McpHttpTransport::Streamable {
+        if oauth_binding.is_some() {
+            return Err(McpError::Auth(
+                "this MCP transport requires static request headers".into(),
+            ));
+        }
+        let authority = network_authorizer.ok_or(McpError::PermissionDenied)?;
+        let mut headers: http::HeaderMap = custom_headers.into_iter().collect();
+        if let Some(token) = bearer {
+            headers.insert(
+                http::header::AUTHORIZATION,
+                parse_header_value(&format!("Bearer {token}"))?,
+            );
+        }
+        return match transport {
+            McpHttpTransport::Sse => Ok(client_handler
+                .serve_with_lifecycle(
+                    crate::legacy_sse::connect(url, headers, authority, !background_enabled)
+                        .await?,
+                    ClientLifecycleMode::Initialize,
+                )
+                .await?),
+            McpHttpTransport::WebSocket => Ok(client_handler
+                .serve_with_lifecycle(
+                    crate::websocket::connect(url, headers, authority, !background_enabled).await?,
+                    ClientLifecycleMode::Initialize,
+                )
+                .await?),
+            McpHttpTransport::Streamable => unreachable!("handled below"),
+        };
+    }
+
+    let mut config = StreamableHttpClientTransportConfig::with_uri(url.to_string())
         .custom_headers(custom_headers)
-        .reinit_on_expired_session(true);
+        .reinit_on_expired_session(background_enabled);
+    config.listen_for_server_messages = background_enabled;
+    let app_events = (!background_enabled).then(|| client_handler.events.app_http_events.clone());
     if let Some(binding) = oauth_binding {
         if bearer.is_some() || has_authorization {
             return Err(McpError::Auth(
@@ -1966,7 +2713,12 @@ async fn connect_http(
         if let Some(authorizer) = network_authorizer {
             let transport = StreamableHttpClientTransport::with_client(
                 AuthClient::new(
-                    crate::http_transport::authorized_mcp_client(authorizer)?,
+                    crate::http_transport::authorized_mcp_client(
+                        authorizer,
+                        false,
+                        client_handler.events.http_session_open.clone(),
+                        app_events,
+                    )?,
                     manager,
                 ),
                 config,
@@ -1990,7 +2742,12 @@ async fn connect_http(
     };
     if let Some(authorizer) = network_authorizer {
         let transport = StreamableHttpClientTransport::with_client(
-            crate::http_transport::authorized_mcp_client(authorizer)?,
+            crate::http_transport::authorized_mcp_client(
+                authorizer,
+                dynamic_headers,
+                client_handler.events.http_session_open.clone(),
+                app_events,
+            )?,
             config,
         );
         return Ok(client_handler
@@ -2004,36 +2761,36 @@ async fn connect_http(
         .await?)
 }
 
-async fn shutdown_server(server: Arc<ConnectedServer>) {
-    server.events.shutdown.cancel();
+async fn shutdown_server(server: Arc<ConnectedServer>) -> bool {
     // Take ownership of the cancellable connection before awaiting its
     // shutdown. A cancellation may notify tasks that need to inspect the
     // same `running` slot; holding the mutex across that await creates an
     // avoidable lock cycle.
     let running = server.running.lock().await.take();
     if let Some(running) = running {
-        match tokio::time::timeout(SERVER_SHUTDOWN_TIMEOUT, running.cancel()).await {
-            Ok(Ok(_reason)) => {}
-            Ok(Err(_error)) => {
-                tracing::warn!(
-                    server = %server.name,
-                    "failed to shut down an MCP connection"
-                );
-            }
-            Err(error) => tracing::warn!(
-                server = %server.name,
-                timeout_ms = SERVER_SHUTDOWN_TIMEOUT.as_millis(),
-                diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                    format!(
-                        "timed out after {}ms while shutting down an MCP connection",
-                        SERVER_SHUTDOWN_TIMEOUT.as_millis()
-                    ),
-                    &error,
-                ),
-                "timed out while shutting down an MCP connection"
-            ),
-        }
+        server.events.shutdown.cancel();
+        shutdown_client(&server.name, running, server.close_timeout).await
+            && !server.events.http_session_open.load(Ordering::Acquire)
+    } else {
+        true
     }
+}
+
+async fn shutdown_client(server: &str, running: RunningClient, timeout: Duration) -> bool {
+    match tokio::time::timeout(timeout, running.cancel()).await {
+        Ok(Ok(_reason)) => return true,
+        Ok(Err(_error)) => tracing::warn!(server, "failed to shut down an MCP connection"),
+        Err(error) => tracing::warn!(
+            server,
+            timeout_ms = timeout.as_millis(),
+            diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
+                format!("timed out after {}ms while shutting down an MCP connection", timeout.as_millis()),
+                &error,
+            ),
+            "timed out while shutting down an MCP connection"
+        ),
+    }
+    false
 }
 
 impl Drop for McpConnectionManager {
@@ -2177,7 +2934,7 @@ fn convert_tool_descriptor(tool: Tool) -> ToolDescriptor {
             .output_schema
             .map(|schema| Value::Object(schema.as_ref().clone())),
         annotations: serialize_optional(tool.annotations),
-        execution: None,
+        execution: tool.execution.map(Value::Object),
         icons: serialize_values(tool.icons.unwrap_or_default()),
         meta: serialize_optional(tool.meta),
     }

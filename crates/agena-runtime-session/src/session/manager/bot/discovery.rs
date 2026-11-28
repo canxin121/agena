@@ -598,7 +598,10 @@ impl SessionManager {
                     "user_plain_text",
                 );
             }
-            EntryPayload::Text { content_id } => (*content_id, "assistant_text", 0),
+            EntryPayload::PluginPrompt(prompt) => {
+                return inline_chunk(session, entry, &prompt.text, offset, max, "user_plain_text");
+            }
+            EntryPayload::Text { content_id, .. } => (*content_id, "assistant_text", 0),
             // A cleared context carries no text: it only marks where the model
             // starts reading, so there is nothing for discovery to return.
             EntryPayload::ContextCleared { .. } => {
@@ -774,6 +777,16 @@ impl SessionManager {
                     out["next"] = json!({"action":"read_text","session_id":session.get(),"entry_id":entry.id.get(),"byte_offset":0,"max_bytes":4000});
                 }
             }
+            EntryPayload::PluginPrompt(prompt) => {
+                let chunk = self.discovery_text_chunk(session, entry, 0, 1800).await?;
+                out["kind"] = json!("user");
+                out["text"] = chunk["text"].clone();
+                out["author"] = json!(prompt.author);
+                out["truncated"] = chunk["has_more"].clone();
+                if chunk["has_more"] == true {
+                    out["next"] = chunk["next"].clone();
+                }
+            }
             EntryPayload::Text { .. }
             | EntryPayload::Reasoning { .. }
             | EntryPayload::ContextCleared { .. }
@@ -855,6 +868,11 @@ impl SessionManager {
                     .map_err(kernel_error)?;
                 out["kind"] = json!("interaction");
                 out["interaction"] = interaction_value(session.get(), &interaction);
+            }
+            EntryPayload::PluginCommand { plugin_id, command_id, .. } => {
+                out["kind"] = json!("plugin_command");
+                out["plugin_id"] = json!(plugin_id);
+                out["command_id"] = json!(command_id);
             }
             EntryPayload::Notice { text } => {
                 out["kind"] = json!("notice");

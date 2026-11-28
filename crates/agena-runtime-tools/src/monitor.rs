@@ -36,7 +36,10 @@ use uuid::Uuid;
 
 use crate::part::{ShellMonitorPatternKind, ShellWatchNotifications, ShellWatchPolicy};
 use crate::process_output::{OutputCursor, select_events, text_budget};
-use agena_domain::{ProcessEvent, ProcessStatus, ProcessStream, ProcessSummary};
+use agena_domain::{
+    ProcessEvent, ProcessStatus, ProcessStream, ProcessSummary, ShellInvocation, ShellLaunchCall,
+    ShellLaunchMode,
+};
 use agena_process::ManagedChild;
 #[path = "monitor/watch.rs"]
 mod watch;
@@ -78,6 +81,8 @@ pub struct StartParams {
     /// id. Reusing a reserved id is idempotent and returns the existing
     /// monitor instead of spawning a duplicate side effect.
     pub process_id: Option<String>,
+    /// Original tool call when the result is observed through the tool lifecycle.
+    pub launch_call: Option<ShellLaunchCall>,
     /// Shell command to run.
     pub command: String,
     pub description: String,
@@ -175,6 +180,16 @@ pub trait MonitorService: Send + Sync + std::fmt::Debug {
     /// Unscoped methods are for trusted runtime administration, never model input.
     fn is_owned(&self, _id: &str, _owner: &crate::TerminalOwner) -> bool {
         false
+    }
+    fn workdir(&self, id: &str, owner: &crate::TerminalOwner) -> Option<std::path::PathBuf> {
+        self.terminals()?.workdir(id, owner)
+    }
+    fn take_shell_invocation(
+        &self,
+        id: &str,
+        owner: &crate::TerminalOwner,
+    ) -> Option<ShellInvocation> {
+        self.terminals()?.take_shell_invocation(id, owner)
     }
     fn stop_session(&self, _session: i64) {}
     fn shutdown(&self) {}
@@ -298,6 +313,7 @@ struct MonitorState {
 #[derive(Debug)]
 struct MonitorInner {
     spawned: bool,
+    launch_call: Option<ShellLaunchCall>,
     ending: bool,
     cursor: OutputCursor,
     buffer: VecDeque<ProcessEvent>,
@@ -442,6 +458,43 @@ impl MonitorService for MonitorRegistry {
         self.lookup(id)
             .is_some_and(|state| state.owner.as_ref() == Some(owner))
     }
+    fn workdir(&self, id: &str, owner: &crate::TerminalOwner) -> Option<std::path::PathBuf> {
+        if self.terminals.contains(id) {
+            return self.terminals.workdir(id, owner);
+        }
+        let state = self.lookup(id)?;
+        (state.owner.as_ref() == Some(owner)).then(|| state.launch.workdir.clone())
+    }
+    fn take_shell_invocation(
+        &self,
+        id: &str,
+        owner: &crate::TerminalOwner,
+    ) -> Option<ShellInvocation> {
+        if self.terminals.contains(id) {
+            return self.terminals.take_shell_invocation(id, owner);
+        }
+        let state = self.lookup(id)?;
+        if state.owner.as_ref() != Some(owner) {
+            return None;
+        }
+        let mut inner = state.inner.lock().unwrap();
+        if !matches!(inner.completion_reason.as_deref(), Some(
+            "process_exit" | "success_pattern" | "failure_pattern" | "quiet_period" | "timeout"
+        )) {
+            return None;
+        }
+        Some(ShellInvocation {
+            process_id: id.to_owned(),
+            mode: if state.launch.monitored {
+                ShellLaunchMode::Watch
+            } else {
+                ShellLaunchMode::Spawn
+            },
+            call: inner.launch_call.take()?,
+            command: state.launch.command.clone(),
+            cwd: state.launch.workdir.to_string_lossy().into_owned(),
+        })
+    }
     fn stop_session(&self, session: i64) {
         self.terminals.stop_session(session);
         let states: Vec<_> = self
@@ -475,7 +528,7 @@ impl MonitorService for MonitorRegistry {
             request_abort(&state);
         }
     }
-    fn start(&self, params: StartParams) -> Result<MonitorStart, MonitorError> {
+    fn start(&self, mut params: StartParams) -> Result<MonitorStart, MonitorError> {
         if params.command.trim().is_empty() {
             return Err(MonitorError::Invalid("a shell command is required".into()));
         }
@@ -516,6 +569,8 @@ impl MonitorService for MonitorRegistry {
                 "reserved background process id must not be empty".into(),
             ));
         }
+        // Register attribution before the process or its listeners can publish a result.
+        let launch_call = params.launch_call.take();
         let state = Arc::new(MonitorState {
             owner: params.owner.clone(),
             launch: params.clone(),
@@ -532,6 +587,7 @@ impl MonitorService for MonitorRegistry {
             dropped_lines: AtomicU64::new(0),
             inner: Mutex::new(MonitorInner {
                 spawned: false,
+                launch_call,
                 ending: false,
                 cursor: OutputCursor::default(),
                 buffer: VecDeque::with_capacity(capacity.min(256)),

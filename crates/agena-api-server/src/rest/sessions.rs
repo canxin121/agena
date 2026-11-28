@@ -1,5 +1,49 @@
 use agena_application::dto::SessionPermissionUpdateRequest;
 
+pub async fn list_working_directories(
+    State(state): State<AppState>,
+    Path(session_id): Path<i64>,
+) -> Result<impl IntoResponse, ServerError> {
+    Ok(Json(
+        state.service().list_working_directories(session_id).await?,
+    ))
+}
+
+pub async fn register_working_directory(
+    State(state): State<AppState>,
+    Path(session_id): Path<i64>,
+    Json(request): Json<agena_domain::RegisterSessionWorkingDirectory>,
+) -> Result<impl IntoResponse, ServerError> {
+    Ok(Json(
+        state
+            .service()
+            .register_working_directory(session_id, request)
+            .await?,
+    ))
+}
+
+pub async fn list_claude_channels(
+    State(state): State<AppState>,
+    Path(session_id): Path<i64>,
+) -> Result<impl IntoResponse, ServerError> {
+    Ok(Json(state.service().list_claude_channels(session_id).await?))
+}
+
+pub async fn configure_claude_channel(
+    State(state): State<AppState>,
+    Path(session_id): Path<i64>,
+    Json(action): Json<agena_domain::claude_channels::ClaudeChannelAction>,
+) -> Result<impl IntoResponse, ServerError> {
+    Ok(Json(state.service().configure_claude_channel(session_id, action).await?))
+}
+
+pub async fn list_declared_claude_channels(
+    State(state): State<AppState>,
+    Path(session_id): Path<i64>,
+) -> Result<impl IntoResponse, ServerError> {
+    Ok(Json(state.service().list_declared_claude_channels(session_id).await?))
+}
+
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct SessionOverviewQuery {
     #[serde(default)]
@@ -194,12 +238,12 @@ pub async fn replace_session_selection(
     State(state): State<AppState>,
     Path(session_id): Path<i64>,
     headers: HeaderMap,
-    Json(request): Json<SessionRunRequestBody>,
+    Json(request): Json<agena_api::resource::SessionSelectionRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
     assert_if_match_session_version(&state, session_id, &headers).await?;
     Ok(Json(
         state
-            .update_session_selection(session_id, request.options)
+            .change_session_selection(session_id, request.options, request.model_switch)
             .await?,
     ))
 }
@@ -469,7 +513,13 @@ pub async fn submit_message(
     assert_if_match_session_version(&state, session_id, &headers).await?;
     Ok(Json(
         state
-            .submit_user_run(session_id, request.document, request.run.options)
+            .submit_user_run(agena_api::commands::SubmitRunParams {
+                session_id,
+                document: request.document,
+                options: request.run.options,
+                prompt_command: request.prompt_command,
+                literal_leading_slash: request.literal_leading_slash,
+            })
             .await?,
     ))
 }

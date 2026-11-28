@@ -8,6 +8,43 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use strum::{Display, EnumString};
 
+pub const MAX_ACTIVITY_OUTPUT_BYTES: usize = 1024 * 1024;
+pub const MAX_ACTIVITY_SPILL_PATHS: usize = 16;
+
+/// File references are opaque metadata. Reject control characters before
+/// projecting them into a terminal or a model-facing job result.
+pub fn valid_activity_spill_path(path: &str) -> bool {
+    !path.is_empty() && path.len() <= 4096 && !path.chars().any(char::is_control)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActivityOutputRetention {
+    pub live_bytes: usize,
+    pub settled_bytes: usize,
+}
+
+/// The original channel of a packet in a background activity's output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivityOutputChannel {
+    Stdout,
+    Stderr,
+    Log,
+}
+
+/// A whole append at an absolute UTF-8 byte offset. A retained tail can
+/// start inside the original append, in which case it carries a gap marker.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ActivityOutputChunk {
+    pub at: u64,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel: Option<ActivityOutputChannel>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub gap_before: bool,
+}
+
 /// Source category of a background activity.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Display, EnumString,

@@ -1,9 +1,10 @@
 use super::{
-    AppState, AxumQuery, CommandRequestContext, Deserialize, IntoResponse, Json, Path,
+    AppState, AxumQuery, Deserialize, IntoResponse, Json, Path,
     PluginLogListQuery, PluginSettingsUpdateRequest, PluginToolInvokeRequest, ServerError, State,
     json_http, server_error_from_application,
 };
 use agena_api::management::{PluginCommand, PluginQuery};
+use agena_api::resource::PluginCommandInvokeRequest;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 /// Query for plugin tool registry changes.
@@ -12,6 +13,11 @@ pub struct PluginToolRegistryChangesQuery {
     pub after_generation: Option<u64>,
     #[serde(default)]
     pub limit: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PluginSurfaceQuery {
+    session_id: Option<i64>,
 }
 
 pub async fn list_plugins(State(state): State<AppState>) -> Result<impl IntoResponse, ServerError> {
@@ -36,13 +42,12 @@ pub async fn get_plugin_architecture_catalog(
 
 pub async fn get_plugin_surface_catalog(
     State(state): State<AppState>,
+    AxumQuery(query): AxumQuery<PluginSurfaceQuery>,
 ) -> Result<impl IntoResponse, ServerError> {
-    json_http(
-        state
-            .application()
-            .query_plugin_management(PluginQuery::Surface),
-    )
-    .await
+    let request = query.session_id.map_or(PluginQuery::Surface, |session_id| {
+        PluginQuery::SurfaceForSession { session_id }
+    });
+    json_http(state.application().query_plugin_management(request)).await
 }
 
 pub async fn list_plugin_tool_registry_changes(
@@ -103,7 +108,7 @@ pub async fn update_plugin_settings(
 pub async fn run_plugin_command(
     State(state): State<AppState>,
     Path((plugin_id, command_id)): Path<(String, String)>,
-    Json(request): Json<CommandRequestContext>,
+    Json(request): Json<PluginCommandInvokeRequest>,
 ) -> Result<impl IntoResponse, ServerError> {
     json_http(
         state
@@ -111,10 +116,11 @@ pub async fn run_plugin_command(
             .command_plugin_management(PluginCommand::InvokeCommand {
                 plugin_id,
                 command_id,
-                input: request.input,
-                session_id: request.session_id,
-                slash: request.slash,
-                raw: request.raw,
+                input: request.context.input,
+                session_id: request.context.session_id,
+                slash: request.context.slash,
+                raw: request.context.raw,
+                composer: request.composer,
             }),
     )
     .await

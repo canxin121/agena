@@ -2,11 +2,14 @@ mod executor_adapter_gate;
 mod executor_core;
 mod executor_execution;
 mod executor_hooks;
+mod executor_imported_mods;
+mod executor_mcp;
 mod executor_paths;
 mod executor_permissions;
 mod executor_process_sandbox;
 mod executor_sandbox;
 mod executor_sandbox_help;
+pub use executor_imported_mods::run_tool_task;
 use super::{
     AccessKind, Arc, BuiltinToolSet, ExecutionPrincipal, FilesystemEffects, MonitorService,
     NetworkTarget, Path, PathBuf, PermissionDecision, PluginHost, PluginShellEnvInput,

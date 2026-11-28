@@ -3,17 +3,60 @@
 
 use super::*;
 use crate::session::kernel::KernelToolApiCall;
+use agena_domain::mcp_app_tools::CALL_MCP_APP_TOOL;
+use agena_domain::{StructuredField, StructuredObject, StructuredValue, ToolInvocation};
+use agena_runtime_tools::tool::{MCP_TOOL_LOADER, McpOnDemandServer, McpToolDescriptor};
 use agena_tool_api::{
     CatalogPlugin, CatalogTool, ToolApiAction, ToolApiCatalog, ToolApiError, ToolApiResponse,
 };
 use serde_json::json;
 
 pub(super) async fn catalog(executor: &ToolExecutor) -> ToolApiCatalog {
+    projected_catalog(executor).await.0
+}
+
+struct McpToolRoute {
+    name: String,
+    qualified_name: String,
+    server: String,
+    raw_name: String,
+}
+
+impl McpToolRoute {
+    fn invocation(self, input: StructuredObject) -> ToolInvocation {
+        ToolInvocation::new(
+            "agena.mcp.tools.call",
+            StructuredObject {
+                fields: vec![
+                    StructuredField {
+                        name: "server".into(),
+                        value: StructuredValue::Text { value: self.server },
+                    },
+                    StructuredField {
+                        name: "name".into(),
+                        value: StructuredValue::Text {
+                            value: self.raw_name,
+                        },
+                    },
+                    StructuredField {
+                        name: "arguments".into(),
+                        value: StructuredValue::Object {
+                            fields: input.fields,
+                        },
+                    },
+                ],
+            },
+        )
+    }
+}
+
+async fn projected_catalog(executor: &ToolExecutor) -> (ToolApiCatalog, Vec<McpToolRoute>) {
     let tools = executor.available_execution_tools_async().await;
     let names = agena_runtime_tools::tool::execution_tool_names(&tools);
     let mut entries = tools
         .iter()
         .zip(names)
+        .filter(|(tool, _)| tool.canonical_name() != CALL_MCP_APP_TOOL)
         .map(|(tool, name)| {
             let input_schema = tool.input_schema();
             CatalogTool {
@@ -46,6 +89,7 @@ pub(super) async fn catalog(executor: &ToolExecutor) -> ToolApiCatalog {
             }
         })
         .collect::<Vec<_>>();
+    let routes = append_mcp_tools(executor, &mut entries).await;
     entries.sort_by(|left, right| left.name.cmp(&right.name));
     let mut plugins = executor
         .plugin_manager()
@@ -69,13 +113,256 @@ pub(super) async fn catalog(executor: &ToolExecutor) -> ToolApiCatalog {
         })
         .collect::<Vec<_>>();
     plugins.sort_by(|left, right| left.id.cmp(&right.id));
-    ToolApiCatalog {
-        tools: entries,
-        plugins,
+    (
+        ToolApiCatalog {
+            tools: entries,
+            plugins,
+        },
+        routes,
+    )
+}
+
+async fn append_mcp_tools(
+    executor: &ToolExecutor,
+    entries: &mut Vec<CatalogTool>,
+) -> Vec<McpToolRoute> {
+    let servers = executor.on_demand_mcp_servers().await;
+    if servers.is_empty() {
+        return Vec::new();
+    }
+    let names = mcp_alias_counts(
+        executor,
+        &servers,
+        entries.iter().map(|entry| entry.name.clone()),
+    );
+    let mut routes = Vec::new();
+    for server in servers {
+        let mut add = |tool: McpToolDescriptor| {
+            if !executor.allows_mcp_tool_alias(&server.id, &tool.name) {
+                return;
+            }
+            let route = McpToolRoute {
+                name: visible_mcp_alias(&server, &tool.name, &names),
+                qualified_name: server.qualified_alias(&tool.name),
+                server: server.id.clone(),
+                raw_name: tool.name,
+            };
+            let input_schema = tool
+                .input_schema
+                .unwrap_or_else(|| json!({"type": "object"}));
+            entries.push(CatalogTool {
+                name: route.name.clone(),
+                canonical_name: route.qualified_name.clone(),
+                plugin_id: "agena.mcp".into(),
+                summary: tool.description.unwrap_or_default(),
+                help: [tool.before_help, tool.after_help]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join("\n\n"),
+                tags: vec!["mcp".into()],
+                input_usage: agena_runtime_tools::tool::definition::schema_usage_text(
+                    &input_schema,
+                ),
+                input_examples: agena_runtime_tools::tool::definition::schema_example_texts(
+                    &input_schema,
+                ),
+                input_schema,
+                output_schema: tool.output_schema.unwrap_or_default(),
+            });
+            routes.push(route);
+        };
+        add(server.loader());
+        if let Some(catalog) = &server.catalog {
+            for tool in catalog
+                .loaded
+                .iter()
+                .filter_map(|name| catalog.offered.get(name))
+            {
+                add(tool.clone());
+            }
+        }
+    }
+    routes
+}
+
+fn mcp_alias_counts(
+    executor: &ToolExecutor,
+    servers: &[McpOnDemandServer],
+    registered_names: impl IntoIterator<Item = String>,
+) -> HashMap<String, usize> {
+    let mut counts = HashMap::new();
+    for name in registered_names {
+        *counts.entry(name).or_default() += 1;
+    }
+    for server in servers {
+        let loaded = server
+            .catalog
+            .iter()
+            .flat_map(|catalog| catalog.loaded.iter().map(String::as_str));
+        for name in std::iter::once(MCP_TOOL_LOADER).chain(loaded) {
+            if executor.allows_mcp_tool_alias(&server.id, name) {
+                *counts.entry(server.alias(name)).or_default() += 1;
+            }
+        }
+    }
+    counts
+}
+
+fn visible_mcp_alias(
+    server: &McpOnDemandServer,
+    raw_name: &str,
+    counts: &HashMap<String, usize>,
+) -> String {
+    let alias = server.alias(raw_name);
+    if counts.get(&alias).copied().unwrap_or_default() > 1 {
+        server.qualified_alias(raw_name)
+    } else {
+        alias
     }
 }
 
 impl SessionManager {
+    fn project_mcp_app_tools(
+        &self,
+        session: SessionId,
+        executor: &ToolExecutor,
+        catalog: &mut ToolApiCatalog,
+    ) -> HashMap<String, uuid::Uuid> {
+        let mut routes = HashMap::new();
+        if !executor.mcp_tool_available(CALL_MCP_APP_TOOL) {
+            return routes;
+        }
+        let mut used = catalog
+            .tools
+            .iter()
+            .flat_map(|tool| [tool.name.clone(), tool.canonical_name.clone()])
+            .collect::<std::collections::HashSet<_>>();
+        for (part, app, tool) in self.mcp_app_views.tools(session.get()) {
+            let alias = tool.alias(part);
+            if !used.insert(alias.clone()) {
+                continue;
+            }
+            let definition = &tool.definition;
+            let name = definition.title.as_deref().unwrap_or(&definition.name);
+            let input_schema = &definition.input_schema;
+            catalog.tools.push(CatalogTool {
+                name: alias.clone(),
+                canonical_name: alias.clone(),
+                plugin_id: "agena.mcp".into(),
+                summary: format!("{name} (MCP App: {app})"),
+                help: definition.description.clone().unwrap_or_default(),
+                tags: vec!["mcp".into(), "execute".into(), "mutate".into()],
+                input_usage: agena_runtime_tools::tool::definition::schema_usage_text(input_schema),
+                input_examples: agena_runtime_tools::tool::definition::schema_example_texts(
+                    input_schema,
+                ),
+                input_schema: input_schema.clone(),
+                output_schema: definition.output_schema.clone().unwrap_or_default(),
+            });
+            routes.insert(alias, tool.id);
+        }
+        if !routes.is_empty() {
+            catalog
+                .tools
+                .sort_by(|left, right| left.name.cmp(&right.name));
+            if let Some(plugin) = catalog
+                .plugins
+                .iter_mut()
+                .find(|plugin| plugin.id == "agena.mcp")
+            {
+                plugin.tool_count += routes.len();
+            }
+        }
+        routes
+    }
+
+    pub(super) async fn append_on_demand_mcp_catalog(
+        &self,
+        executor: &ToolExecutor,
+        control: &RunControl,
+        system: &mut String,
+    ) {
+        if self.mcp_app_views.has_tools(control.session.get())
+            && executor.mcp_tool_available(CALL_MCP_APP_TOOL)
+        {
+            system.push_str(
+                "\n\nOpen MCP Apps in this session provide tools. Use `tools_list` with `plugin: \"mcp\"` to discover them and `tools_help` to read their inputs.",
+            );
+        }
+        let permitted = |server: &McpOnDemandServer| {
+            executor.allows_mcp_tool_alias(&server.id, MCP_TOOL_LOADER)
+        };
+        let mut servers = executor.on_demand_mcp_servers().await;
+        if !servers.iter().any(permitted) {
+            return;
+        }
+        let search_available = executor.mcp_tool_available("agena.mcp.tools.search");
+        if search_available {
+            // Prompt assembly has no approval slot. The same tool can retry
+            // catalog discovery later under a normal interactive invocation.
+            let refresh = self.invoke_imported_hook_tool(
+                control.session.get(),
+                "agena.mcp.tools.search",
+                json!({"on_demand_catalog": true}),
+            );
+            tokio::select! {
+                biased;
+                _ = control.cancel.cancelled() => return,
+                _ = tokio::time::timeout(Duration::from_secs(5), refresh) => {}
+            }
+            servers = executor.on_demand_mcp_servers().await;
+        }
+        let aliases = mcp_alias_counts(
+            executor,
+            &servers,
+            agena_runtime_tools::tool::execution_tool_names(&executor.available_execution_tools()),
+        );
+        const CATALOG_BUDGET: usize = 16 * 1024;
+        let start = system.len();
+        for server in servers.into_iter().filter(permitted) {
+            let name = visible_mcp_alias(&server, MCP_TOOL_LOADER, &aliases);
+            let heading = format!(
+                "\n\n### On-demand tools from MCP server {}\nUse `tools_help` for `{name}`, then load the exact tool names before calling them.\n",
+                server.source_name,
+            );
+            if system.len() - start + heading.len() > CATALOG_BUDGET {
+                return;
+            }
+            let Some(catalog) = &server.catalog else {
+                if search_available {
+                    system.push_str(&heading);
+                    system.push_str("Use `mcp.tools.search` with `on_demand_catalog: true` to retrieve the catalog.");
+                }
+                continue;
+            };
+            let mut offered = catalog
+                .offered
+                .values()
+                .filter(|tool| executor.allows_mcp_tool_alias(&server.id, &tool.name))
+                .peekable();
+            if offered.peek().is_none() {
+                continue;
+            }
+            system.push_str(&heading);
+            for tool in offered {
+                let summary = server.summary(tool.description.as_deref().unwrap_or_default());
+                let line = if summary.is_empty() {
+                    format!("- {:?}\n", tool.name)
+                } else {
+                    format!("- {:?}: {summary}\n", tool.name)
+                };
+                if system.len() - start + line.len() > CATALOG_BUDGET {
+                    if search_available {
+                        system.push_str("Use `mcp.tools.search` with `on_demand_catalog: true` and `catalog_offset` to see additional names.");
+                    }
+                    return;
+                }
+                system.push_str(&line);
+            }
+        }
+    }
+
     pub(super) async fn dispatch_tool_api(
         &self,
         protocol: KernelToolApiCall,
@@ -93,13 +380,18 @@ impl SessionManager {
                 let catalog = if protocol.call.function == agena_domain::ToolApiFunction::Call {
                     ToolApiCatalog::default()
                 } else {
-                    catalog(&executor).await
+                    let mut catalog = catalog(&executor).await;
+                    self.project_mcp_app_tools(control.session, &executor, &mut catalog);
+                    catalog
                 };
                 catalog.dispatch(&protocol.call)
             }
         };
         let response = match action {
             Ok(ToolApiAction::Execute(request)) => {
+                let (mut catalog, routes) = projected_catalog(&executor).await;
+                let app_routes =
+                    self.project_mcp_app_tools(control.session, &executor, &mut catalog);
                 // The model may run a tool only after its complete live
                 // contract entered the current context through tools_help.
                 // A context that lost that help (compaction) must re-read it,
@@ -110,14 +402,13 @@ impl SessionManager {
                         &request.tool,
                         protocol.tool.session_id(),
                         protocol.tool.round_id(),
-                        &executor,
+                        &catalog,
                     )
                     .await
                 {
                     // The rejection itself carries the live contract, so the
                     // model leaves this result knowing how to call the tool.
-                    let help = catalog(&executor)
-                        .await
+                    let help = catalog
                         .dispatch(&agena_domain::ToolApiCall {
                             function: agena_domain::ToolApiFunction::Help,
                             arguments: agena_domain::StructuredObject::try_from(
@@ -138,15 +429,34 @@ impl SessionManager {
                 }
                 // This is the only crossing into plugin execution. From here
                 // on, the executor sees solely the target and its own input.
+                let route = routes.into_iter().find(|route| {
+                    route.name == request.tool || route.qualified_name == request.tool
+                });
+                let invocation = match (route, app_routes.get(&request.tool)) {
+                    (Some(route), _) => route.invocation(request.input),
+                    (None, Some(target)) => ToolInvocation::new(
+                        CALL_MCP_APP_TOOL,
+                        StructuredObject {
+                            fields: vec![
+                                StructuredField {
+                                    name: "target".into(),
+                                    value: StructuredValue::Text {
+                                        value: target.to_string(),
+                                    },
+                                },
+                                StructuredField {
+                                    name: "arguments".into(),
+                                    value: StructuredValue::Object {
+                                        fields: request.input.fields,
+                                    },
+                                },
+                            ],
+                        },
+                    ),
+                    (None, None) => ToolInvocation::new(request.tool, request.input),
+                };
                 return self
-                    .execute_tool(
-                        protocol.tool,
-                        agena_domain::ToolInvocation::new(request.tool, request.input),
-                        executor,
-                        control,
-                        state,
-                        model,
-                    )
+                    .execute_tool(protocol.tool, invocation, executor, control, state, model)
                     .await;
             }
             Ok(ToolApiAction::Respond(response)) => Ok(response),
@@ -224,9 +534,8 @@ impl SessionManager {
         tool: &str,
         session: SessionId,
         round: agena_storage::kernel::RoundId,
-        executor: &ToolExecutor,
+        catalog: &ToolApiCatalog,
     ) -> Option<ToolHelpGate> {
-        let catalog = catalog(executor).await;
         let resolvable = catalog
             .tools
             .iter()

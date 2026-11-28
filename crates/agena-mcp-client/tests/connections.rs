@@ -9,17 +9,22 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use agena_domain::mcp_elicitation::{McpElicitation, McpElicitationAction, McpElicitationReply};
 use agena_mcp_client::{
     ContentBlock, FileOAuthCredentialStore, FileTokenStore, HttpAuth, McpConnectionManager,
-    McpError, McpHttpNetworkAuthorizer, McpOAuthRegistration, McpOAuthSessionManager,
-    McpToolPolicy, OAuthCredentialState, ReconnectPolicy, ServerSpec, credential_store_name,
-    oauth_credential_binding,
+    McpElicitationHandler, McpError, McpHttpNetworkAuthorizer, McpOAuthRegistration,
+    McpOAuthSessionManager, McpToolPolicy, OAuthCredentialState, ReconnectPolicy, ServerSpec,
+    credential_store_name, oauth_credential_binding,
 };
 use agena_secret_store::{SecretStore, SecretStoreError};
 use rmcp::transport::CredentialStore;
-use serde_json::Value;
+use serde_json::{Value, json};
 use tempfile::TempDir;
+use tokio_util::sync::CancellationToken;
 use url::Url;
+
+#[path = "connections/tasks.rs"]
+mod tasks;
 
 fn fixture_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/server.py")
@@ -88,6 +93,23 @@ fn text_content(result: agena_mcp_client::CallToolResult) -> String {
         .expect("fixture returned text")
 }
 
+#[test]
+fn codex_tool_filters_treat_names_literally_and_respect_an_empty_allowlist() {
+    let filtered = McpToolPolicy::ExactNames {
+        enabled: Some(["read*".to_owned(), "read-blocked".to_owned()].into()),
+        disabled: ["read-blocked".to_owned()].into(),
+    };
+    assert!(filtered.permits("read*"));
+    assert!(!filtered.permits("read-file"));
+    assert!(!filtered.permits("read-blocked"));
+
+    let empty = McpToolPolicy::ExactNames {
+        enabled: Some(Default::default()),
+        disabled: Default::default(),
+    };
+    assert!(!empty.permits("read-file"));
+}
+
 struct HttpFixture {
     child: Child,
     root: TempDir,
@@ -119,6 +141,20 @@ impl HttpFixture {
         issuer: Option<&str>,
         authorization_url: Option<&str>,
     ) -> Self {
+        let mut options = vec!["--registration", registration];
+        if oauth {
+            options.push("--oauth");
+        }
+        if let Some(issuer) = issuer {
+            options.extend(["--issuer-base", issuer]);
+        }
+        if let Some(url) = authorization_url {
+            options.extend(["--authorization-url", url]);
+        }
+        Self::start_process(protocol, &options).await
+    }
+
+    async fn start_process(protocol: &str, options: &[&str]) -> Self {
         let root = tempfile::tempdir().unwrap();
         let port_file = root.path().join("port");
         let mut command = Command::new("python3");
@@ -136,19 +172,10 @@ impl HttpFixture {
             .arg(root.path().join("rpc.jsonl"))
             .arg("--port-file")
             .arg(&port_file)
+            .args(options)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::inherit());
-        if oauth {
-            command.arg("--oauth");
-        }
-        command.args(["--registration", registration]);
-        if let Some(issuer) = issuer {
-            command.args(["--issuer-base", issuer]);
-        }
-        if let Some(url) = authorization_url {
-            command.args(["--authorization-url", url]);
-        }
         let child = command
             .spawn()
             .expect("Python 3 is required for MCP fixtures");
@@ -179,7 +206,9 @@ impl HttpFixture {
 
     fn spec(&self, auth: Option<HttpAuth>) -> ServerSpec {
         ServerSpec::Http {
+            header_helper: None,
             url: self.endpoint.clone(),
+            transport: Default::default(),
             headers: HashMap::new(),
             auth,
             tool_policy: McpToolPolicy::default(),
@@ -435,6 +464,319 @@ async fn streamable_http_supports_both_lifecycles_and_redacts_status_urls() {
         }
         manager.shutdown_all().await;
     }
+}
+
+struct FormAnswer<'a> {
+    label: &'a str,
+    answer: Value,
+}
+
+#[async_trait::async_trait]
+impl McpElicitationHandler for FormAnswer<'_> {
+    async fn elicit(
+        &self,
+        server: &str,
+        request: McpElicitation,
+        _: CancellationToken,
+    ) -> McpElicitationReply {
+        assert_eq!(server, "http");
+        let McpElicitation::Form {
+            message,
+            requested_schema,
+        } = request
+        else {
+            panic!("fixture should send a form");
+        };
+        assert_eq!(message, self.label);
+        assert_eq!(requested_schema["properties"]["answer"]["type"], "string");
+        McpElicitationReply {
+            action: McpElicitationAction::Accept,
+            content: Some(json!({ "answer": self.answer })),
+        }
+    }
+}
+
+async fn call_for_input(
+    manager: &McpConnectionManager,
+    name: &str,
+    label: &str,
+    handler: &dyn McpElicitationHandler,
+) -> Value {
+    let result = manager
+        .call_tool_with_elicitation("http", name, Some(json!({"label": label})), Some(handler))
+        .await
+        .unwrap();
+    serde_json::from_str(&text_content(result)).unwrap()
+}
+
+#[tokio::test]
+async fn legacy_elicitation_follows_the_originating_http_stream() {
+    let fixture = HttpFixture::start("legacy", false).await;
+    let manager = manager();
+    manager
+        .add_server("http", fixture.spec(None))
+        .await
+        .unwrap();
+    let first = FormAnswer {
+        label: "first",
+        answer: json!("alice"),
+    };
+    let second = FormAnswer {
+        label: "second",
+        answer: json!("bob"),
+    };
+    let (alice, bob) = tokio::join!(
+        call_for_input(&manager, "ask", first.label, &first),
+        call_for_input(&manager, "ask", second.label, &second),
+    );
+    assert_eq!(
+        alice,
+        json!({"action":"accept","content":{"answer":"alice"}})
+    );
+    assert_eq!(bob, json!({"action":"accept","content":{"answer":"bob"}}));
+    let result = manager.call_tool("http", "ask", None).await.unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&text_content(result)).unwrap(),
+        json!({"action":"decline"})
+    );
+    manager.shutdown_all().await;
+}
+
+#[tokio::test]
+async fn modern_elicitation_round_trips_for_tools_prompts_and_resources() {
+    let fixture = HttpFixture::start("modern", false).await;
+    let manager = manager();
+    manager
+        .add_server("http", fixture.spec(None))
+        .await
+        .unwrap();
+    let answer = json!({"action":"accept","content":{"answer":"accepted"}});
+    let form = FormAnswer {
+        label: "tool",
+        answer: json!("accepted"),
+    };
+    assert_eq!(
+        call_for_input(&manager, "ask", form.label, &form).await,
+        answer
+    );
+    let form = FormAnswer {
+        label: "prompt",
+        ..form
+    };
+    let prompt = manager
+        .get_prompt_with_elicitation("http", "ask", None, Some(&form))
+        .await
+        .unwrap();
+    let ContentBlock::Text { text, .. } = &prompt.messages[0].content else {
+        panic!("fixture should return a text prompt");
+    };
+    assert_eq!(serde_json::from_str::<Value>(text).unwrap(), answer);
+    let form = FormAnswer {
+        label: "resource",
+        ..form
+    };
+    let resource = manager
+        .read_resource_with_elicitation("http", "fixture://ask", Some(&form))
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(resource.contents[0].text.as_deref().unwrap()).unwrap(),
+        answer
+    );
+    let form = FormAnswer {
+        label: "tool",
+        answer: json!(7),
+    };
+    assert_eq!(
+        call_for_input(&manager, "ask", form.label, &form).await,
+        json!({"action":"decline"}),
+    );
+    manager.shutdown_all().await;
+}
+
+#[tokio::test]
+async fn codex_form_elicitation_translates_picker_choices_on_both_protocols() {
+    struct PickerAnswer(&'static str);
+    #[async_trait::async_trait]
+    impl McpElicitationHandler for PickerAnswer {
+        async fn elicit(
+            &self,
+            _: &str,
+            request: McpElicitation,
+            _: CancellationToken,
+        ) -> McpElicitationReply {
+            let McpElicitation::Form {
+                requested_schema, ..
+            } = request
+            else {
+                panic!("picker should be mapped to a form");
+            };
+            assert_eq!(
+                requested_schema["properties"]["template"]["oneOf"],
+                json!([
+                    {"const":"month","title":"Monthly review"},{"const":"week","title":"Weekly review"},
+                ])
+            );
+            McpElicitationReply {
+                action: McpElicitationAction::Accept,
+                content: Some(json!({"template":self.0})),
+            }
+        }
+    }
+
+    for protocol in ["legacy", "modern"] {
+        let fixture = HttpFixture::start(protocol, false).await;
+        let manager = manager();
+        manager
+            .add_server("http", fixture.spec(None))
+            .await
+            .unwrap();
+        assert_eq!(
+            call_for_input(&manager, "ask-picker", "picker", &PickerAnswer("week")).await,
+            json!({"action":"accept","content":{"template":"week"}}),
+        );
+        assert_eq!(
+            call_for_input(&manager, "ask-picker", "picker", &PickerAnswer("unknown")).await,
+            json!({"action":"decline"}),
+        );
+        manager.shutdown_all().await;
+    }
+}
+
+#[tokio::test]
+async fn legacy_elicitation_cancels_the_handler_when_its_tool_finishes() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct WaitForCancellation(AtomicBool);
+    #[async_trait::async_trait]
+    impl McpElicitationHandler for WaitForCancellation {
+        async fn elicit(
+            &self,
+            _: &str,
+            _: McpElicitation,
+            canceled: CancellationToken,
+        ) -> McpElicitationReply {
+            canceled.cancelled().await;
+            self.0.store(true, Ordering::SeqCst);
+            McpElicitationReply::new(McpElicitationAction::Cancel)
+        }
+    }
+
+    let fixture = HttpFixture::start("legacy", false).await;
+    let manager = manager();
+    manager
+        .add_server("http", fixture.spec(None))
+        .await
+        .unwrap();
+    let handler = WaitForCancellation(AtomicBool::new(false));
+    assert_eq!(
+        call_for_input(
+            &manager,
+            "ask-ended",
+            "exit while input is pending",
+            &handler
+        )
+        .await,
+        json!({"action":"ended"}),
+    );
+    assert!(handler.0.load(Ordering::SeqCst));
+    manager.shutdown_all().await;
+}
+
+#[tokio::test]
+async fn elicitation_user_wait_does_not_consume_request_timeout() {
+    struct SlowForm;
+    #[async_trait::async_trait]
+    impl McpElicitationHandler for SlowForm {
+        async fn elicit(
+            &self,
+            _: &str,
+            _: McpElicitation,
+            _: CancellationToken,
+        ) -> McpElicitationReply {
+            agena_async::permission_wait::waiting(tokio::time::sleep(Duration::from_millis(750)))
+                .await;
+            McpElicitationReply {
+                action: McpElicitationAction::Accept,
+                content: Some(json!({"answer":"ready"})),
+            }
+        }
+    }
+
+    let fixture = HttpFixture::start("modern", false).await;
+    let manager = manager();
+    manager
+        .add_server_with_timeouts(
+            "http",
+            fixture.spec(None),
+            Duration::from_secs(4),
+            Duration::from_millis(500),
+        )
+        .await
+        .unwrap();
+    let answer = agena_async::permission_wait::scope(
+        Some((1278, 46)),
+        call_for_input(&manager, "ask", "slow form", &SlowForm),
+    )
+    .await;
+    assert_eq!(
+        answer,
+        json!({"action":"accept","content":{"answer":"ready"}})
+    );
+    manager.shutdown_all().await;
+}
+
+#[tokio::test]
+async fn disconnecting_mcp_during_a_continuation_cancels_the_dialog() {
+    struct InputInProgress {
+        started: CancellationToken,
+        canceled: CancellationToken,
+    }
+
+    #[async_trait::async_trait]
+    impl McpElicitationHandler for InputInProgress {
+        async fn elicit(
+            &self,
+            _: &str,
+            _: McpElicitation,
+            cancellation: CancellationToken,
+        ) -> McpElicitationReply {
+            self.started.cancel();
+            cancellation.cancelled().await;
+            self.canceled.cancel();
+            McpElicitationReply::new(McpElicitationAction::Cancel)
+        }
+    }
+
+    let fixture = HttpFixture::start("modern", false).await;
+    let manager = manager();
+    manager
+        .add_server("http", fixture.spec(None))
+        .await
+        .unwrap();
+    let handler = InputInProgress {
+        started: CancellationToken::new(),
+        canceled: CancellationToken::new(),
+    };
+    let disconnect = async {
+        tokio::time::timeout(Duration::from_secs(2), handler.started.cancelled())
+            .await
+            .unwrap();
+        manager.remove_server("http").await.unwrap();
+    };
+    let (result, ()) = tokio::join!(
+        manager.call_tool_with_elicitation("http", "ask", None, Some(&handler)),
+        disconnect,
+    );
+    assert!(matches!(result, Err(McpError::TransportClosed)));
+    assert!(handler.canceled.is_cancelled());
+    assert_eq!(
+        records(fixture.root.path())
+            .iter()
+            .filter(|entry| entry["method"] == "tools/call")
+            .count(),
+        2
+    );
 }
 
 type SecretReadPause = (

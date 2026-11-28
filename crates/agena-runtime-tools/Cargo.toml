@@ -10,9 +10,11 @@ description = "Builtin Agena tools and tool execution"
 cap-std = { workspace = true }
 cap-fs-ext = { workspace = true }
 agena-storage-layout = { workspace = true }
+agena-skills = { workspace = true }
 agena-async = { workspace = true }
 vt100 = "0.16.2"
 portable-atomic = { workspace = true }
+pulldown-cmark = { version = "0.13.4", default-features = false }
 agena-failure = { workspace = true }
 agena-domain = { workspace = true }
 agena-plugin-host = { workspace = true }
@@ -22,6 +24,7 @@ agena-runtime-contracts = { workspace = true }
 agena-storage = { workspace = true }
 agena-scheduler = { workspace = true }
 agena-lsp = { workspace = true }
+agena-mcp-client = { workspace = true }
 agena-tool = { workspace = true }
 base64 = { workspace = true }
 blake3 = { workspace = true }
@@ -45,6 +48,7 @@ regex = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 schemars = { workspace = true }
 sha2 = { workspace = true }
 similar = { workspace = true }

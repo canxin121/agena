@@ -30,6 +30,7 @@ agena-storage-sqlite = { workspace = true }
 agena-scheduler = { workspace = true }
 agena-plugin-host = { workspace = true }
 agena-plugin-sdk = { workspace = true }
+agena-prompt-layers = { workspace = true }
 agena-process = { workspace = true }
 agena-mcp-client = { workspace = true }
 agena-lsp = { workspace = true }

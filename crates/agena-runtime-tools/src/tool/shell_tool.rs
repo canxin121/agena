@@ -30,7 +30,9 @@ async fn launch_worker_permit(
 
 use crate::part::{ShellToolInput, ShellWatchInput, ShellWatchPolicy};
 use agena_domain::{ProcessEvent, ProcessShell, ProcessStatus, ProcessStream, ProcessSummary};
+use agena_plugin_host::{HookSubscription, sdk::{ShellProcessCompletion, ToolKey}};
 
+use super::imported_shell::ImportedShellFiles;
 use super::shell_tools::{
     inherited_environment, prepare_posix_launch, resolve_workdir_in_folder, shell_settings,
     validate_declared_filesystem_effects,
@@ -171,12 +173,16 @@ pub(crate) async fn execute_async(
     executor: &ToolExecutor,
     input: &ShellToolInput,
     context: ToolRuntimeContext,
-) -> Result<ToolPayloadExecution, ToolError> {
-    match input {
+) -> Result<(ToolPayloadExecution, Option<std::path::PathBuf>), ToolError> {
+    let execution = match input {
         ShellToolInput::Exec {
             shell: ProcessShell::Bash,
             command,
-        } => execute_foreground_bash_async(executor, command, context).await,
+        } => {
+            let (execution, target) = bash::execute_async(executor, command, context).await?;
+            let execution = normalize_foreground_execution(execution, ProcessShell::Bash, command)?;
+            return Ok((execution, target));
+        }
         ShellToolInput::Exec {
             shell: ProcessShell::Powershell,
             command,
@@ -252,16 +258,71 @@ pub(crate) async fn execute_async(
             })
             .await
         }
-    }
+    }?;
+    Ok((execution, None))
 }
 
-async fn execute_foreground_bash_async(
+pub(super) fn hook_cwd(
     executor: &ToolExecutor,
-    command: &crate::part::ShellCommandInput,
-    context: ToolRuntimeContext,
-) -> Result<ToolPayloadExecution, ToolError> {
-    let execution = bash::execute_async(executor, command, context).await?;
-    normalize_foreground_execution(execution, ProcessShell::Bash, command)
+    input: &ShellToolInput,
+    session_id: Option<i64>,
+) -> Result<Option<std::path::PathBuf>, ToolError> {
+    if let Some((_, command)) = input.launch_command() {
+        return resolve_workdir_in_folder(
+            executor,
+            command.workdir.as_deref(),
+            command.folder.as_deref(),
+        )
+        .map(Some);
+    }
+    let process_id = match input {
+        ShellToolInput::Read { input } => &input.process_id,
+        ShellToolInput::Write { input } => &input.process_id,
+        ShellToolInput::Logs { process_id, .. } => process_id,
+        _ => return Ok(None),
+    };
+    Ok(process_registry(executor).ok().and_then(|registry| {
+        let owner = super::terminal_tool::owner(executor, session_id).ok()?;
+        registry.workdir(process_id, &owner)
+    }))
+}
+
+pub(super) fn collect_shell_completion(
+    executor: &ToolExecutor,
+    tool: &ToolKey,
+    session_id: i64,
+    payload: Option<&serde_json::Value>,
+) -> Option<ShellProcessCompletion> {
+    if !matches!(
+        (tool.plugin().namespace(), tool.plugin().name(), tool.name()),
+        ("agena", "shell", "open" | "read" | "write" | "logs")
+    ) || session_id <= 0
+    {
+        return None;
+    }
+    let payload = payload?;
+    if !matches!(payload["status"].as_str(), Some("exited" | "failed" | "timed_out"))
+        || payload["has_more"] != false
+    {
+        return None;
+    }
+    let process = payload["process_id"].as_str()?;
+    let owner = super::terminal_tool::owner(executor, Some(session_id)).ok()?;
+    let registry = process_registry(executor).ok()?;
+    let output = if let Some(output) = payload["output"].as_str() {
+        output.to_owned()
+    } else {
+        let mut output = String::new();
+        for event in payload["events"].as_array().into_iter().flatten() {
+            output.push_str(event["line"].as_str()?);
+            if event["chunk"] != true {
+                output.push('\n');
+            }
+        }
+        output
+    };
+    let invocation = registry.take_shell_invocation(process, &owner)?;
+    Some(ShellProcessCompletion { invocation, output })
 }
 
 fn normalize_foreground_execution(
@@ -365,13 +426,23 @@ async fn execute_managed_launch_async(
     let reserved_process_id = session_id
         .zip(call_id)
         .map(|(session_id, call_id)| crate::managed_process_id(session_id, call_id));
+    let launch_call = session_id
+        .and(call_id)
+        .filter(|id| {
+            *id > 0
+                && executor.dispatch_tool_after
+                && executor.plugin_manager().has_subscription(HookSubscription::TOOL_AFTER)
+        })
+        .map(|call_id| agena_domain::ShellLaunchCall { call_id, shell });
     let prepared = match shell {
         ProcessShell::Bash => match prepared_shell_command {
             Some(prepared) => Some(prepared),
             None => match (session_id, call_id) {
                 (Some(session_id), Some(call_id)) => {
-                    bash::prepare_command_async(executor, command, session_id, call_id, tool_name)
-                        .await?
+                    bash::prepare_command_async(
+                        executor, command, session_id, call_id, tool_name, None,
+                    )
+                    .await?
                 }
                 _ => None,
             },
@@ -400,6 +471,9 @@ async fn execute_managed_launch_async(
         }
     };
 
+    let files = executor
+        .imported_shell_files(launch.as_ref().is_some_and(|spec| spec.dialect.is_posix()))
+        .await;
     let worker_executor = executor.clone();
     let worker_command = command.clone();
     let worker_permit = launch_worker_permit(executor).await?;
@@ -425,7 +499,9 @@ async fn execute_managed_launch_async(
                 launch.as_ref(),
                 reserved_process_id,
                 process_owner,
+                launch_call,
                 output,
+                files,
                 cancel,
             );
         }
@@ -445,8 +521,10 @@ async fn execute_managed_launch_async(
             },
             SpawnDestination {
                 reserved_process_id,
+                launch_call,
                 owner: process_owner,
                 output,
+                files,
             },
             &cancel,
         )
@@ -463,8 +541,10 @@ async fn execute_managed_launch_async(
 
 struct SpawnDestination {
     reserved_process_id: Option<String>,
+    launch_call: Option<agena_domain::ShellLaunchCall>,
     owner: crate::TerminalOwner,
     output: Option<crate::tool::ToolOutputStreams>,
+    files: ImportedShellFiles,
 }
 
 fn execute_spawn_prepared(
@@ -478,8 +558,10 @@ fn execute_spawn_prepared(
 ) -> Result<ToolPayloadExecution, ToolError> {
     let SpawnDestination {
         reserved_process_id,
+        launch_call,
         owner,
         output,
+        files,
     } = destination;
     let PreparedShellCommand {
         command: final_command,
@@ -487,18 +569,19 @@ fn execute_spawn_prepared(
         mut env,
         launch,
     } = prepared;
-    let argv = crate::shell_sandbox::protect(
+    let sourced = files.source(&final_command);
+    let script = sourced.as_deref().unwrap_or(&final_command);
+    let argv = crate::shell_sandbox::protect_with_files(
         executor,
         match launch.as_ref() {
-            Some(spec) => spec.argv(final_command.as_str()),
-            None if shell == ProcessShell::Powershell => {
-                powershell_command_for_windows(&final_command)
-            }
-            None => agena_tool::shell::shell_command_for_platform(&final_command),
+            Some(spec) => spec.argv(script),
+            None if shell == ProcessShell::Powershell => powershell_command_for_windows(script),
+            None => agena_tool::shell::shell_command_for_platform(script),
         },
         &final_cwd,
         command,
         &mut env,
+        files.readonly_mounts(),
     )?;
     let registry = process_registry(executor)?;
     let started = registry
@@ -508,6 +591,7 @@ fn execute_spawn_prepared(
                 owner: Some(owner),
                 argv: Some(argv),
                 process_id: reserved_process_id,
+                launch_call,
                 command: final_command,
                 description: command.description.clone(),
                 workdir: final_cwd,
@@ -526,6 +610,7 @@ fn execute_spawn_prepared(
             cancel,
         )
         .map_err(into_tool_error)?;
+    drop(files);
     let mut execution = render_spawn(started, shell, command, watch.is_some());
     if let Some(spec) = launch.as_ref() {
         for (key, value) in spec.metadata() {

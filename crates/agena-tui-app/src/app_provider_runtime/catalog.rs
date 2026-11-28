@@ -66,6 +66,14 @@ impl App {
         self.open_model_chooser(SessionModelChooserPurpose::RuntimeOverride);
     }
 
+    pub(crate) fn open_session_model_command(&mut self) {
+        self.open_model_chooser_with_source(
+            SessionModelChooserPurpose::RuntimeOverride,
+            false,
+            agena_domain::ModelSwitchSource::Command,
+        );
+    }
+
     pub(crate) fn open_global_default_model_chooser(&mut self) {
         self.open_model_chooser(SessionModelChooserPurpose::GlobalDefault);
     }
@@ -91,13 +99,18 @@ impl App {
     }
 
     fn open_model_chooser(&mut self, purpose: SessionModelChooserPurpose) {
-        self.open_model_chooser_with_source(purpose, false);
+        self.open_model_chooser_with_source(
+            purpose,
+            false,
+            agena_domain::ModelSwitchSource::Picker,
+        );
     }
 
     pub(crate) fn open_model_chooser_with_source(
         &mut self,
         purpose: SessionModelChooserPurpose,
         explicit_local: bool,
+        model_switch_source: agena_domain::ModelSwitchSource,
     ) {
         // The runtime override (`/model`) must work without an open session:
         // with no session it edits the run-options model stack used by the
@@ -111,6 +124,7 @@ impl App {
             return;
         }
         let mut dialog = self.build_session_model_chooser_overlay(purpose);
+        dialog.meta.model_switch_source = model_switch_source;
         dialog.meta.explicit_local = explicit_local;
         dialog.meta.editable = self.settings_model_editable(purpose, explicit_local);
         if explicit_local {

@@ -69,6 +69,8 @@ pub struct SandboxPathPolicy {
     pub workspace_write_default: PermissionMode,
     pub external_read_default: PermissionMode,
     pub external_write_default: PermissionMode,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_working_directories: Vec<PathBuf>,
     /// Preserves the configuration's last-matching-rule-wins ordering.
     pub rules: Vec<SandboxPathRule>,
 }
@@ -177,6 +179,7 @@ impl SandboxPermissionSnapshot {
                     workspace_write_default: policy.workspace_write_default,
                     external_read_default: policy.external_read_default,
                     external_write_default: policy.external_write_default,
+                    additional_working_directories: policy.additional_working_directories.clone(),
                     rules: policy
                         .rules
                         .iter()
@@ -237,6 +240,33 @@ impl SandboxPermissionSnapshot {
     /// launcher after the configured filesystem grants have been lowered.
     pub fn private_storage_roots(&self) -> Vec<PathBuf> {
         self.protected_paths.private_roots().cloned().collect()
+    }
+
+    /// Advertise only registered roots for which the current session has read authority.
+    pub fn authorized_additional_working_directories(&self) -> Vec<PathBuf> {
+        self.path_layers
+            .first()
+            .into_iter()
+            .flat_map(|layer| &layer.additional_working_directories)
+            .filter(|directory| {
+                matches!(
+                    self.authorize_path_access(AccessKind::Read, directory),
+                    PermissionDecision::Allow
+                )
+            })
+            .cloned()
+            .collect()
+    }
+
+    pub fn authorized_working_directories(&self) -> Vec<PathBuf> {
+        let mut directories = self.authorized_additional_working_directories();
+        if matches!(
+            self.authorize_path_access(AccessKind::Read, &self.workspace_root),
+            PermissionDecision::Allow
+        ) {
+            directories.insert(0, self.workspace_root.clone());
+        }
+        directories
     }
 
     pub fn authorize_path_access(&self, access: AccessKind, target: &Path) -> PermissionDecision {
@@ -578,20 +608,22 @@ impl SandboxPermissionSnapshot {
             }
             // A grant outside a workspace can contain that workspace, whose
             // more restrictive class defaults must still be enforced.
-            if !self.workspace_root.as_os_str().is_empty()
-                && layer.workspace_read_default != PermissionMode::Allow
-                && all_reads.iter().any(|grant| {
-                    self.workspace_root != *grant && within(&self.workspace_root, grant)
-                })
-            {
-                self.add_read_boundary(
-                    &mut restrictions,
-                    layer.workspace_read_default,
-                    &self.workspace_root,
-                    true,
-                    &all_reads,
-                    false,
-                )?;
+            if layer.workspace_read_default != PermissionMode::Allow {
+                for root in layer.working_directories(&self.workspace_root) {
+                    if all_reads
+                        .iter()
+                        .any(|grant| !path_identity::equal(root, grant) && within(root, grant))
+                    {
+                        self.add_read_boundary(
+                            &mut restrictions,
+                            layer.workspace_read_default,
+                            root,
+                            true,
+                            &all_reads,
+                            false,
+                        )?;
+                    }
+                }
             }
         }
         for rule in &self.persisted_rules {
@@ -703,6 +735,23 @@ impl SandboxPermissionSnapshot {
 }
 
 impl SandboxPathPolicy {
+    fn working_directories<'a>(&'a self, workspace: &'a Path) -> impl Iterator<Item = &'a Path> {
+        (!workspace.as_os_str().is_empty())
+            .then_some(workspace)
+            .into_iter()
+            .chain(
+                self.additional_working_directories
+                    .iter()
+                    .map(PathBuf::as_path),
+            )
+    }
+
+    fn containing_workspace<'a>(&'a self, workspace: &'a Path, target: &Path) -> Option<&'a Path> {
+        self.working_directories(workspace)
+            .filter(|root| within(target, root))
+            .max_by_key(|root| root.components().count())
+    }
+
     fn subtree_default(
         &self,
         access: AccessKind,
@@ -718,7 +767,7 @@ impl SandboxPathPolicy {
         }) {
             return rule.mode;
         }
-        let in_workspace = !workspace_root.as_os_str().is_empty() && within(target, workspace_root);
+        let in_workspace = self.containing_workspace(workspace_root, target).is_some();
         match (access, in_workspace) {
             (AccessKind::Read, true) => self.workspace_read_default,
             (AccessKind::Write, true) => self.workspace_write_default,
@@ -740,7 +789,7 @@ impl SandboxPathPolicy {
                 return decide_from_mode(rule.mode, "matched sandbox path rule");
             }
         }
-        let in_workspace = !workspace_root.as_os_str().is_empty() && within(target, workspace_root);
+        let in_workspace = self.containing_workspace(workspace_root, target).is_some();
         let mode = match (access, in_workspace) {
             (AccessKind::Read, true) => self.workspace_read_default,
             (AccessKind::Write, true) => self.workspace_write_default,

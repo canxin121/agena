@@ -117,7 +117,7 @@ fn output<T: Serialize>(label: &str, value: T) -> SdkResult<ToolInvokeOutput> {
     ))
 }
 
-pub(super) fn network_permission_target(target: &str) -> SdkResult<String> {
+pub fn network_permission_target(target: &str) -> SdkResult<String> {
     let url = url::Url::parse(target)
         .map_err(|_| PluginError::invalid_params("MCP endpoint must be a valid HTTP(S) URL"))?;
     if !matches!(url.scheme(), "http" | "https")
@@ -132,7 +132,7 @@ pub(super) fn network_permission_target(target: &str) -> SdkResult<String> {
     Ok(url.origin().ascii_serialization())
 }
 
-pub(super) struct ConnectionNetworkAuthority {
+pub struct ConnectionNetworkAuthority {
     host: Arc<dyn HostClient>,
     context: agena_plugin_host::sdk::host_api::HostCallbackContext,
     cancellation: Option<agena_process::sandbox_http::WorkerCancellation>,
@@ -187,6 +187,35 @@ impl agena_mcp_client::McpHttpNetworkAuthorizer for ConnectionNetworkAuthority {
         }
     }
 
+    async fn header_helper_policy(
+        &self,
+        cwd: &std::path::Path,
+    ) -> agena_mcp_client::McpResult<agena_process::sandbox::SandboxPolicy> {
+        let cwd = cwd
+            .to_str()
+            .ok_or(agena_mcp_client::McpError::PermissionDenied)?;
+        let result = agena_plugin_host::sdk::host_api::run_in_isolated_host_callback_context(
+            self.context.clone(),
+            self.host.prepare_process_sandbox(HostProcessResources {
+                cwd: Some(cwd.to_owned()),
+                reads: vec![cwd.to_owned()],
+                require_sandbox: true,
+                ..Default::default()
+            }),
+        )
+        .await;
+        match result {
+            Ok(prepared) => serde_json::from_value(prepared.policy)
+                .map_err(|_| agena_mcp_client::McpError::PermissionDenied),
+            Err(error) => {
+                if let Ok(mut denial) = self.denial.lock() {
+                    *denial = Some(error);
+                }
+                Err(agena_mcp_client::McpError::PermissionDenied)
+            }
+        }
+    }
+
     async fn authorize_resolved(
         &self,
         target: &str,
@@ -213,7 +242,19 @@ impl agena_mcp_client::McpHttpNetworkAuthorizer for ConnectionNetworkAuthority {
     }
 }
 impl ConnectionNetworkAuthority {
-    pub(super) fn finish<T>(&self, result: agena_mcp_client::McpResult<T>) -> SdkResult<T> {
+    pub fn current(host: Arc<dyn HostClient>) -> SdkResult<Arc<Self>> {
+        Ok(Arc::new(Self {
+            host,
+            context: agena_plugin_host::sdk::host_api::current_host_callback_context().ok_or_else(
+                || PluginError::internal("MCP HTTP requires an active host callback context"),
+            )?,
+            cancellation: agena_plugin_host::current_plugin_call_completion()
+                .map(|completion| completion.cancellation_token()),
+            denial: Default::default(),
+        }))
+    }
+
+    pub fn finish<T>(&self, result: agena_mcp_client::McpResult<T>) -> SdkResult<T> {
         if let Some(error) = self.denial.lock().ok().and_then(|mut denial| denial.take()) {
             return Err(error);
         }
@@ -284,17 +325,7 @@ impl McpPlugin {
     pub(super) fn connection_network_authority(
         &self,
     ) -> SdkResult<Arc<ConnectionNetworkAuthority>> {
-        Ok(Arc::new(ConnectionNetworkAuthority {
-            host: Arc::clone(self.connection_host()?),
-            context: agena_plugin_host::sdk::host_api::current_host_callback_context().ok_or_else(
-                || PluginError::internal("MCP HTTP requires an active host callback context"),
-            )?,
-            // Controlled HTTP managers are call-owned; this never attaches a
-            // tool lifetime to the shared management manager or its sessions.
-            cancellation: agena_plugin_host::current_plugin_call_completion()
-                .map(|completion| completion.cancellation_token()),
-            denial: Default::default(),
-        }))
+        ConnectionNetworkAuthority::current(Arc::clone(self.connection_host()?))
     }
 
     async fn connection_secret_access(&self) -> SdkResult<()> {
@@ -812,7 +843,7 @@ fn connection_spec(config: &McpServerConfig, root: &Path) -> SdkResult<ServerSpe
                 Some(cwd) => root.join(cwd),
                 None => root.into(),
             }),
-            tool_policy: McpToolPolicy {
+            tool_policy: McpToolPolicy::Patterns {
                 include: tools.include.clone(),
                 exclude: tools.exclude.clone(),
             },
@@ -829,6 +860,8 @@ fn connection_spec(config: &McpServerConfig, root: &Path) -> SdkResult<ServerSpe
             tools,
             ..
         } => ServerSpec::Http {
+            header_helper: None,
+            transport: Default::default(),
             url: url::Url::parse(&endpoint.url)
                 .map_err(|_| PluginError::invalid_params("Invalid HTTP endpoint."))?,
             headers: endpoint
@@ -860,7 +893,7 @@ fn connection_spec(config: &McpServerConfig, root: &Path) -> SdkResult<ServerSpe
                         .collect(),
                 ),
             }),
-            tool_policy: McpToolPolicy {
+            tool_policy: McpToolPolicy::Patterns {
                 include: tools.include.clone(),
                 exclude: tools.exclude.clone(),
             },

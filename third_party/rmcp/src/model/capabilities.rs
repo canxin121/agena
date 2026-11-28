@@ -4,10 +4,35 @@ use std::marker::PhantomData;
 
 #[cfg(any(feature = "server", feature = "macros"))]
 use pastey::paste;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 
 use super::JsonObject;
 pub type ExperimentalCapabilities = BTreeMap<String, JsonObject>;
+
+fn deserialize_server_experimental<'de, D>(
+    deserializer: D,
+) -> Result<Option<ExperimentalCapabilities>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde_json::Value;
+
+    let Some(entries) = Option::<BTreeMap<String, Value>>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    let mut enabled = BTreeMap::new();
+    for (name, value) in entries {
+        match value {
+            Value::Object(settings) => {
+                enabled.insert(name, settings);
+            }
+            // Experimental extensions can explicitly declare themselves disabled.
+            Value::Bool(false) => {}
+            _ => return Err(D::Error::custom("invalid experimental capability")),
+        }
+    }
+    Ok(Some(enabled))
+}
 
 /// MCP extension capabilities map.
 ///
@@ -192,6 +217,9 @@ pub struct ClientCapabilities {
     /// Capability to handle elicitation requests from servers for interactive user input
     #[serde(skip_serializing_if = "Option::is_none")]
     pub elicitation: Option<ElicitationCapability>,
+    /// Experimental task capability used by the 2025-11-25 initialize handshake.
+    #[serde(rename = "tasks", skip_serializing_if = "Option::is_none")]
+    pub legacy_tasks: Option<JsonObject>,
 }
 
 impl ClientCapabilities {
@@ -221,7 +249,11 @@ impl ClientCapabilities {
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[non_exhaustive]
 pub struct ServerCapabilities {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_server_experimental",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub experimental: Option<ExperimentalCapabilities>,
     /// Optional MCP extensions that the server supports (SEP-1724).
     /// Keys are extension identifiers (e.g., `"io.modelcontextprotocol/apps"`),
@@ -240,6 +272,9 @@ pub struct ServerCapabilities {
     pub resources: Option<ResourcesCapability>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<ToolsCapability>,
+    /// Experimental task capability negotiated by 2025-11-25 peers.
+    #[serde(rename = "tasks", skip_serializing_if = "Option::is_none")]
+    pub legacy_tasks: Option<JsonObject>,
 }
 
 impl ServerCapabilities {
@@ -277,6 +312,7 @@ macro_rules! builder {
                 pub fn build(self) -> $Target {
                     $Target {
                         $( $f: self.$f, )*
+                        ..Default::default()
                     }
                 }
             }

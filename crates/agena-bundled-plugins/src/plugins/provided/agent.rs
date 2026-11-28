@@ -104,7 +104,7 @@ impl AgentPlugin {
     }
     #[tool(
         tags(agent),
-        summary = "Delegate a bounded task to a role profile and return its handle immediately. Choose profile from the available subagent catalog: explore for investigation, worker for implementation, reviewer for verification. Omission uses the configured subagent default. Parent history is not copied; include scope, constraints, and expected result in prompt. Final replies are delivered automatically.",
+        summary = "Delegate a bounded task to a role profile and return its handle immediately. Choose profile from the available subagent catalog: explore for investigation, worker for implementation, reviewer for verification. Omission uses the configured subagent default. The child starts fresh by default. Set inherit_parent_context to include completed parent turns. Final replies are delivered automatically.",
         translations(
             locale(
                 "zh-CN",

@@ -241,6 +241,8 @@ impl jsonrpc::AppServerBackend for AgenaAppServerBackend {
                 document: agena_domain::ComposerDocument(vec![agena_domain::ComposerNode::Text {
                     text: params.prompt,
                 }]),
+                prompt_command: None,
+                literal_leading_slash: false,
             })
             .await
             .map_err(client_backend_error)?;

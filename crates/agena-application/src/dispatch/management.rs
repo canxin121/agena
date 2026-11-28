@@ -54,7 +54,12 @@ impl Application {
                 }
             },
             ManagementQuery::Skills(query) => match query {
-                SkillsQuery::List { workspace_id } => wire(self.list_skills(workspace_id).await?),
+                SkillsQuery::List { workspace_id, session_id } => {
+                    wire(match session_id {
+                        Some(id) => self.list_skills_for_session(id).await?,
+                        None => self.list_skills(workspace_id).await?,
+                    })
+                }
                 SkillsQuery::Get { workspace_id, id } => {
                     wire(self.get_skill(workspace_id, id).await?)
                 }

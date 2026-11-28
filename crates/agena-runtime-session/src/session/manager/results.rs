@@ -266,11 +266,38 @@ impl SessionManager {
                 raw.payload = None;
             }
         }
-        let value = json!({"raw_output":raw,"title":execution.view.title,"summary":execution.view.summary,"metadata":execution.view.metadata,"invocation":invocation});
-        if bounded_json(&value, 768 * 1024).is_err() {
-            return Err(AppError::Config(
-                "tool result metadata exceeds its storage budget".into(),
-            ));
+        let mut value = json!({"raw_output":raw,"title":execution.view.title,"summary":execution.view.summary,"metadata":execution.view.metadata,"invocation":invocation});
+        const RESULT_LIMIT: usize = 768 * 1024;
+        let base_size = bounded_json(&value, RESULT_LIMIT)
+            .map_err(|_| {
+                AppError::Config("tool result metadata exceeds its storage budget".into())
+            })?
+            .len();
+        // JSON escaping can multiply the encoded length by up to six. Reserve
+        // room inside the original receipt budget before storing hook text.
+        let mut hook_budget = RESULT_LIMIT.saturating_sub(base_size + 64) / 6;
+        if hook_budget > 0 && !execution.view.additional_context.is_empty() {
+            let mut context = String::new();
+            let limit = hook_budget.min(16 * 1024);
+            for item in &execution.view.additional_context {
+                let budget = limit.saturating_sub(context.len() + 1);
+                if budget == 0 {
+                    break;
+                }
+                let end = item.floor_char_boundary(item.len().min(budget));
+                if !context.is_empty() {
+                    context.push('\n');
+                }
+                context.push_str(&item[..end]);
+            }
+            hook_budget -= context.len();
+            value["hook_context"] = json!(context);
+        }
+        if hook_budget > 0
+            && let Some(output) = &execution.view.model_output
+        {
+            let end = output.floor_char_boundary(output.len().min(hook_budget).min(128 * 1024));
+            value["hook_model_output"] = json!(&output[..end]);
         }
         Ok((value, blobs))
     }
@@ -333,7 +360,10 @@ pub(super) async fn append_text_chunks(
     }
     Ok(())
 }
-fn bounded_json(value: &impl serde::Serialize, limit: usize) -> Result<Vec<u8>, AppError> {
+pub(super) fn bounded_json(
+    value: &impl serde::Serialize,
+    limit: usize,
+) -> Result<Vec<u8>, AppError> {
     struct Writer {
         bytes: Vec<u8>,
         limit: usize,

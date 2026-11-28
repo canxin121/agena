@@ -1,10 +1,17 @@
 use std::collections::BTreeMap;
 
+pub use agena_domain::{ProcessShell, ShellLaunchMode};
 use serde::{Deserialize, Serialize};
 
 use crate::attachment::AttachmentItem;
 use crate::identity::{PluginKey, ToolKey};
 use crate::manifest::ToolTag;
+
+/// Stored with a completed receipt when a hook withholds its result from the model.
+pub const TOOL_MODEL_OUTPUT_WITHHELD: &str = "model_output_withheld";
+
+/// Stored in tool metadata when a hook requests ending the current model turn after this tool call.
+pub const TOOL_END_TURN: &str = "agena_tool_end_turn";
 
 // ── tool.before ────────────────────────────────────────────────────
 
@@ -15,12 +22,20 @@ pub struct ToolBeforeInput {
     pub session_id: i64,
     pub call_id: i64,
     pub workspace_root: String,
+    /// Resolved local working directory of a shell invocation, when applicable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_cwd: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<ToolTag>,
     pub input: serde_json::Value,
     /// Carry-through: accumulated title override from prior plugins in the chain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title_override: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_context: Vec<String>,
+    /// Approval requested by a prior hook for this invocation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_ask: Option<String>,
     /// Carry-through: accumulated metadata from prior plugins in the chain.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub metadata: BTreeMap<String, String>,
@@ -45,9 +60,15 @@ pub struct ToolBeforePatch {
     /// Abort execution before the tool runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub abort_reason: Option<String>,
+    /// Ask for approval of the effective invocation after the remaining hooks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_ask: Option<String>,
     /// Override the pending-state title shown in the UI.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title_override: Option<String>,
+    /// Context to send alongside the eventual tool result.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_context: Vec<String>,
     /// Key-value metadata merged into the tool execution record.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub metadata: BTreeMap<String, String>,
@@ -56,15 +77,34 @@ pub struct ToolBeforePatch {
 // ── tool.after ─────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// The originating invocation and output when a shell tool collects a final result.
+pub struct ShellProcessCompletion {
+    pub invocation: agena_domain::ShellInvocation,
+    pub output: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Input of the tool-after hook.
 pub struct ToolAfterInput {
     pub tool: ToolKey,
     pub session_id: i64,
     pub call_id: i64,
     pub workspace_root: String,
+    /// The directory in which the shell invocation started.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shell_completion: Option<ShellProcessCompletion>,
+    /// Effective tool arguments after the pre-execution hooks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<serde_json::Value>,
     pub title: String,
     pub summary: String,
     pub output_text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_context: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_output: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -81,9 +121,41 @@ impl ToolAfterInput {
     }
 }
 
+/// The completed local tool calls from one provider round, in request order.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolBatchInput {
+    pub session_id: i64,
+    pub calls: Vec<ToolBatchCall>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolBatchCall {
+    pub call_id: i64,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<ToolKey>,
+    pub input: serde_json::Value,
+    pub model_output: String,
+}
+
+/// Context for the next model round, or a reason to end the current turn.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ToolBatchPatch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub additional_context: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_reason: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 /// Patch applied after a tool executes.
 pub struct ToolAfterPatch {
+    /// Model context accompanying the tool's result.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_context: Vec<String>,
+    /// Replace the model's projection while retaining the tool receipt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_output: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -145,6 +217,12 @@ pub struct ToolFailureInput {
     /// Safe user/API projection. Diagnostic sources and model feedback are
     /// intentionally unavailable at the plugin hook boundary.
     pub failure: agena_failure::UserProblem,
+    /// Elapsed execution time, present once the tool's effect was admitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    /// Safe reason from a definite denial by the automatic approval model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub automatic_denial: Option<String>,
 }
 
 impl ToolFailureInput {
@@ -168,6 +246,8 @@ pub struct ToolDefinitionInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub help: Option<String>,
     pub input_schema: serde_json::Value,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
 }
 
 impl ToolDefinitionInput {
@@ -189,6 +269,8 @@ pub struct ToolDefinitionPatch {
     pub help: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_schema: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hidden: Option<bool>,
 }
 
 // ── tool.invoke (custom plugin tools) ─────────────────────────────────────
@@ -280,6 +362,9 @@ pub struct ToolInvokeOutput {
     pub metadata: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<AttachmentItem>,
+    /// Context for the model alongside the result, separate from the visible output.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_context: Vec<String>,
 }
 
 impl ToolInvokeOutput {
@@ -292,6 +377,7 @@ impl ToolInvokeOutput {
             payload: None,
             metadata: BTreeMap::new(),
             attachments: Vec::new(),
+            additional_context: Vec::new(),
         }
     }
 
@@ -310,6 +396,7 @@ impl ToolInvokeOutput {
             payload,
             metadata,
             attachments,
+            additional_context: Vec::new(),
         }
     }
 }
@@ -406,6 +493,8 @@ pub struct ToolStreamEnd {
     pub metadata: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<AttachmentItem>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_context: Vec<String>,
 }
 
 impl ToolStreamEnd {
@@ -419,6 +508,7 @@ impl ToolStreamEnd {
             payload: None,
             metadata: BTreeMap::new(),
             attachments: Vec::new(),
+            additional_context: Vec::new(),
         }
     }
 
@@ -431,6 +521,7 @@ impl ToolStreamEnd {
             payload: output.payload,
             metadata: output.metadata,
             attachments: output.attachments,
+            additional_context: output.additional_context,
         }
     }
 
@@ -451,6 +542,7 @@ impl ToolStreamEnd {
             payload,
             metadata,
             attachments,
+            additional_context: Vec::new(),
         }
     }
 }

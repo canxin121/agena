@@ -69,7 +69,9 @@ pub(super) async fn execution_text_sources(
          FROM agena_entries e INDEXED BY idx_agena_entry_attempt
          CROSS JOIN agena_segment_entries m INDEXED BY idx_agena_segment_entry_reverse ON m.entry_id=e.id
          CROSS JOIN agena_session_segments s INDEXED BY idx_agena_session_segment_reverse ON s.segment_id=m.segment_id
-         WHERE e.kind='text' AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal AND s.session_id=",
+         WHERE e.kind='text'
+           AND NOT EXISTS(SELECT 1 FROM agena_compaction_rounds c WHERE c.round_id=e.round_id)
+           AND m.ordinal>=s.first_ordinal AND m.ordinal<s.end_ordinal AND s.session_id=",
     );
     query
         .push_bind(session.get())

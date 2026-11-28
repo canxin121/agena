@@ -189,12 +189,14 @@ async fn profile_prompt_reaches_final_system_assembly_and_request_override_keeps
         resolution.text.find("PROFILE_REVIEW_INSTRUCTION").unwrap()
             < resolution.text.find("SESSION_INSTRUCTION").unwrap()
     );
+    let project_guidance = executor.project_instruction_section(&[]);
     let builtin = manager.assemble_session_system_prompt_with_executor(
         &executor,
         None,
         false,
         context.profile.as_deref(),
         &state.config,
+        &project_guidance,
     );
     let final_system = manager.assemble_session_system_prompt_with_executor(
         &executor,
@@ -202,6 +204,7 @@ async fn profile_prompt_reaches_final_system_assembly_and_request_override_keeps
         false,
         context.profile.as_deref(),
         &state.config,
+        &project_guidance,
     );
     assert!(!builtin.is_empty());
     assert!(final_system.starts_with(&builtin));
@@ -215,6 +218,7 @@ async fn profile_prompt_reaches_final_system_assembly_and_request_override_keeps
         false,
         context.profile.as_deref(),
         &state.config,
+        &project_guidance,
     );
     assert!(final_system.starts_with(&builtin));
     assert!(final_system.contains("REQUEST_INSTRUCTION"));

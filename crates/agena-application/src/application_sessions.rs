@@ -12,7 +12,7 @@ use agena_api::resource::{
     PermissionReply, RunOptions, SessionExecutionResource, SessionOverviewResource,
     SessionResource, UserInputReply, WorkspaceResource,
 };
-use agena_domain::{CancellationOutcome, ComposerDocument, ExecutionId, PermissionConfig};
+use agena_domain::{CancellationOutcome, ExecutionId, PermissionConfig};
 use agena_runtime::{SessionForkRequest, SessionRewindRequest};
 
 use crate::dto::{
@@ -504,12 +504,17 @@ impl Application {
     /// resulting execution state.
     pub async fn submit_user_run(
         &self,
-        session_id: i64,
-        document: ComposerDocument,
-        options: RunOptions,
+        params: agena_api::commands::SubmitRunParams,
     ) -> Result<SessionExecutionResource, ApplicationError> {
-        let request =
-            crate::session::session_user_run_request(self, session_id, options, document).await?;
+        let mut request = crate::session::session_user_run_request(
+            self,
+            params.session_id,
+            params.options,
+            params.document,
+        )
+        .await?;
+        request.prompt_command = params.prompt_command;
+        request.literal_leading_slash = params.literal_leading_slash;
         let outcome = self
             .session_execution_services()?
             .commands
@@ -806,33 +811,64 @@ impl Application {
         session_id: i64,
         options: RunOptions,
     ) -> Result<SessionExecutionResource, ApplicationError> {
-        if options.model.is_none()
+        let result = self
+            .change_session_selection(session_id, options, Default::default())
+            .await?;
+        match result {
+            agena_api::resource::SessionSelectionResponse::Applied { execution, .. } => {
+                Ok(*execution)
+            }
+            _ => Err(ApplicationError::internal(
+                "Unexpected interactive model switch response",
+            )),
+        }
+    }
+
+    pub async fn change_session_selection(
+        &self,
+        session_id: i64,
+        options: RunOptions,
+        interaction: agena_domain::ModelSwitchInteraction,
+    ) -> Result<agena_api::resource::SessionSelectionResponse, ApplicationError> {
+        use agena_api::resource::SessionSelectionResponse;
+        use agena_runtime::SessionModelSwitchOutcome;
+
+        let options = if options.model.is_none()
             && options.thinking_mode.is_none()
             && options.speed_mode.is_none()
             && options.verbosity.is_none()
             && options.parallel_tool_calls.is_none()
         {
-            let outcome = self
-                .session_execution_services()?
-                .commands
-                .clear_session_selection(session_id)
-                .await
-                .map_err(|error| ApplicationError::from_failure(error.failure))?;
-            return session_command_resource(
-                outcome,
-                self.session_execution_resource(outcome.session_id),
-            )
-            .await;
-        }
-        let options =
-            crate::session::resolve_session_run_options(self, session_id, options).await?;
+            None
+        } else {
+            Some(crate::session::resolve_session_run_options(self, session_id, options).await?)
+        };
         let outcome = self
             .session_execution_services()?
             .commands
-            .update_session_selection(session_id, options)
+            .change_session_selection(session_id, options, interaction)
             .await
             .map_err(|error| ApplicationError::from_failure(error.failure))?;
-        session_command_resource(outcome, self.session_execution_resource(outcome.session_id)).await
+        match outcome {
+            SessionModelSwitchOutcome::Applied { system_messages } => {
+                let execution = session_command_resource(
+                    agena_runtime::SessionExecutionCommandOutcome::completed(session_id),
+                    self.session_execution_resource(session_id),
+                )
+                .await?;
+                Ok(SessionSelectionResponse::Applied {
+                    execution: Box::new(execution),
+                    system_messages,
+                })
+            }
+            SessionModelSwitchOutcome::ConfirmationRequired {
+                request,
+                system_messages,
+            } => Ok(SessionSelectionResponse::ConfirmationRequired {
+                confirmation: request,
+                system_messages,
+            }),
+        }
     }
 
     pub async fn list_workspace_sessions(
@@ -873,6 +909,7 @@ impl Application {
         self.service()
             .create_session(SessionCreateRequest {
                 workspace_id: workspace.id,
+                setup: None,
                 session: SessionHierarchyRequest {
                     title,
                     parent_id,

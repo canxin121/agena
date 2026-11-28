@@ -86,8 +86,9 @@ pub fn project_tool_call_content(content: &Value, sections: &[ToolDetailSection]
     }
 
     if has(ToolDetailSection::Metadata) {
-        if let Some(metadata) = object.get("metadata") {
-            projected.insert("metadata".to_owned(), metadata.clone());
+        if let Some(Value::Object(metadata)) = projected.get_mut("metadata") {
+            metadata.remove(agena_domain::mcp_connections::APP_METADATA_KEY);
+            metadata.remove(agena_domain::mcp_connections::APP_RESULT_METADATA_KEY);
         }
     } else {
         projected.remove("metadata");

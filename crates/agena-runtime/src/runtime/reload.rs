@@ -24,7 +24,7 @@ pub(crate) async fn run(runtime: AgenaRuntime) {
                         RuntimeReloadCause::WatchedPathsChanged { paths },
                         RuntimeBackgroundTaskOrigin::System,
                     )
-                    .map(|_| ())
+                    .map(|start| start.started)
                     .map_err(|error| agena_failure::diagnostic::format_error_chain(&error))
             }
         },

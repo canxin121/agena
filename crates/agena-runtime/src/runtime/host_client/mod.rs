@@ -10,6 +10,7 @@ use std::{
 };
 
 use agena_plugin_sdk::PluginKey;
+use agena_plugin_sdk::host_api::{ImportedPluginBackground, ImportedPluginNotices};
 use async_trait::async_trait;
 
 use crate::part::AskUserToolInput;
@@ -19,6 +20,8 @@ use crate::plugins::storage::{
 use crate::runtime::AgenaRuntime;
 use crate::tool::{MonitorError, MonitorReadParams, MonitorStartParams};
 use agena_domain::ToolInvocation;
+use agena_domain::mcp_app_tools::McpAppViewScope;
+use agena_domain::mcp_elicitation::{McpElicitation, McpElicitationReply};
 use agena_domain::{
     AccessKind, PathKind, PermissionDecision, StructuredObject, UserInputOption, UserInputQuestion,
 };
@@ -45,8 +48,14 @@ use agena_plugin_host::sdk::host_api::{
 use agena_plugin_host::{
     EventEnvelope, EventFilter as PluginEventFilter, PluginError, ToolInvokeOutput,
 };
+use agena_storage::kernel::SessionSummaryView;
 
+mod deepseek_mcp;
+pub(super) use deepseek_mcp::CleanupLedger as DeepSeekMcpCleanupLedger;
 mod image;
+mod imported_files;
+mod imported_stop;
+mod imported_tools;
 mod mappers;
 
 use image::*;
@@ -71,6 +80,14 @@ pub fn install_plugin_host_event_publisher(
 
 fn plugin_error(error: impl std::error::Error + 'static) -> PluginError {
     PluginError::internal_error(&error)
+}
+
+fn is_transcript_parent(child: &SessionSummaryView, parent: &SessionSummaryView) -> bool {
+    child.relation_kind.is_subagent()
+        && child.parent_session_id == Some(parent.id)
+        && child.workspace_id == parent.workspace_id
+        && child.root_session_id == parent.root_session_id
+        && child.owner_bot_id == parent.owner_bot_id
 }
 
 fn bot_plugin_error(error: crate::AppError) -> PluginError {
@@ -131,6 +148,24 @@ fn plugin_error_from_app(error: crate::AppError) -> PluginError {
     }
 }
 
+fn imported_skill_error(error: crate::AppError) -> PluginError {
+    let public = match &error {
+        crate::AppError::Config(message) => Some(message.as_str()),
+        crate::AppError::PolicyDenied(denial) => Some(denial.reason.as_str()),
+        crate::AppError::CapabilityUnavailable(unavailable) => Some(unavailable.reason.as_str()),
+        _ => None,
+    };
+    let public = public.map(|message| agena_failure::diagnostic::scrubbed_preserve(message, 220));
+    let mut error = plugin_error_from_app(error);
+    if let Some(public) = public.filter(|message| !message.is_empty()) {
+        error.failure.user = agena_failure::UserPresentation::validated(
+            format!("{}-detail", error.failure.user.key),
+            public,
+        );
+    }
+    error
+}
+
 fn plugin_error_from_failure(failure: agena_failure::Failure) -> PluginError {
     use agena_failure::FailureCategory;
     use agena_plugin_sdk::PluginErrorKind;
@@ -154,6 +189,31 @@ pub(super) struct RuntimeHostClient {
     generation: u64,
     config: serde_json::Value,
     runtime: OnceLock<super::builder::WeakAgenaRuntime>,
+}
+
+enum McpInteractionOwner {
+    Tool { session: i64, call: i64 },
+    View(McpAppViewScope),
+}
+
+struct RuntimeImportedPluginNotices {
+    manager: Arc<crate::session::SessionManager>,
+    cancellation: tokio_util::sync::CancellationToken,
+    session: i64,
+    plugin: String,
+}
+
+#[async_trait]
+impl ImportedPluginNotices for RuntimeImportedPluginNotices {
+    async fn deliver(&self, text: String, wake: bool) -> Result<(), PluginError> {
+        tokio::select! {
+            biased;
+            _ = self.cancellation.cancelled() => Ok(()),
+            result = self.manager.queue_imported_plugin_notice(self.session, &self.plugin, text, wake) => {
+                result.map_err(plugin_error_from_app)
+            }
+        }
+    }
 }
 
 impl RuntimeHostClient {
@@ -272,6 +332,32 @@ impl RuntimeHostClient {
         .map_err(plugin_error_from_app)
     }
 
+    async fn mcp_interaction_owner(
+        &self,
+        cancellation: &tokio_util::sync::CancellationToken,
+    ) -> Result<McpInteractionOwner, PluginError> {
+        let denied = || PluginError::from_kind(
+            agena_plugin_sdk::PluginErrorKind::PolicyDenied,
+            "MCP interactions require a live session tool or App view from the built-in MCP bridge",
+        );
+        let (session, call) = self.callback_session_and_call()?;
+        if self.callback_plugin_key()?.to_string() != agena_runtime_config::MCP_PLUGIN_ID
+            || session <= 0
+        {
+            return Err(denied());
+        }
+        if call >= 0 {
+            return Ok(McpInteractionOwner::Tool { session, call });
+        }
+        let app = self.callback_context()?.mcp_app.ok_or_else(denied)?;
+        if let Some(task) = app.server_task.filter(|task| task.initial().is_some()) {
+            let call = task.parent_tool(cancellation).await.ok_or_else(denied)?;
+            return Ok(McpInteractionOwner::Tool { session, call });
+        }
+        app.view.filter(|view| view.binding.session_id == session)
+            .map(McpInteractionOwner::View).ok_or_else(denied)
+    }
+
     fn callback_context(&self) -> Result<HostCallbackContext, PluginError> {
         current_host_callback_context()
             .ok_or_else(|| host_unavailable("host callback context is not available"))
@@ -322,7 +408,7 @@ impl RuntimeHostClient {
         let session_id = context
             .session_id
             .ok_or_else(|| host_unavailable("agent coordination requires a session"))?;
-        Ok((session_id, context.call_id))
+        Ok((session_id, context.call_id.filter(|call| *call >= 0)))
     }
 
     fn require_agent_delegation(&self) -> Result<(), PluginError> {
@@ -349,6 +435,86 @@ impl RuntimeHostClient {
         plugin_id
             .parse()
             .map_err(|err| host_unavailable(format!("invalid host callback plugin_id: {err}")))
+    }
+
+    fn imported_agent_plugin(&self) -> Result<Arc<agena_plugin_host::LoadedPlugin>, PluginError> {
+        let caller = self.callback_plugin_key()?;
+        self.plugin_manager()?
+            .plugins()
+            .iter()
+            .find(|plugin| plugin.key() == caller && plugin.agent_plugin().is_some())
+            .cloned()
+            .ok_or_else(|| {
+                PluginError::from_kind(
+                    agena_plugin_host::sdk::PluginErrorKind::PolicyDenied,
+                    "this callback belongs to the in-process agent plugin adapter",
+                )
+            })
+    }
+
+    fn cordis_workflow_caller(
+        &self,
+    ) -> Result<(i64, i64, Arc<agena_plugin_host::LoadedPlugin>), PluginError> {
+        let plugin = self.imported_agent_plugin()?;
+        let (session, call) = self.callback_session_and_call()?;
+        if session <= 0 || call < 0 || self.callback_context()?.tool_name.is_none()
+            || !plugin.agent_plugin().is_some_and(|package| {
+                package.format == agena_plugin_host::AgentPluginFormat::DeepSeekHarness
+            })
+        {
+            return Err(host_unavailable("Cordis workflow jobs require a live DeepSeek tool call"));
+        }
+        Ok((session, call, plugin))
+    }
+
+    fn cordis_subagent_caller(
+        &self,
+    ) -> Result<(i64, Option<i64>, Arc<agena_plugin_host::LoadedPlugin>), PluginError> {
+        let plugin = self.imported_agent_plugin()?;
+        let context = self.callback_context()?;
+        if let Some(session) = context.session_id.filter(|session| *session > 0)
+            && plugin.agent_plugin().is_some_and(|package| {
+                package.format == agena_plugin_host::AgentPluginFormat::DeepSeekHarness
+            })
+        {
+            if let Some(call) = context.call_id.filter(|call| *call >= 0)
+                && context.tool_name.is_some()
+            {
+                return Ok((session, Some(call), plugin));
+            }
+            if context.plugin_command.is_some() && context.call_id.is_none() && context.tool_name.is_none() {
+                return Ok((session, None, plugin));
+            }
+        }
+        Err(host_unavailable("Cordis delegation requires a live DeepSeek project tool or command"))
+    }
+
+    async fn mcp_server_identity(
+        &self,
+        id: &str,
+    ) -> Result<Option<agena_plugin_sdk::host_api::ImportedMcpServerIdentity>, PluginError> {
+        let snapshot = self.snapshot()?;
+        let Some(manager) = snapshot.mcp_manager() else {
+            return Ok(None);
+        };
+        // A configured server can deliberately use the same spelling. Only a
+        // successfully registered contribution has plugin provenance.
+        if !manager.is_plugin_server(id).await {
+            return Ok(None);
+        }
+        let plugins = snapshot.plugin_manager();
+        Ok(plugins.plugins().iter().find_map(|plugin| {
+            let package = plugin.agent_plugin()?;
+            let key = plugin.key().to_string();
+            let server = package.mcp_servers.iter().find(|server| {
+                agena_plugin_host::agent_plugin::agent_plugin_mcp_server_name(&key, &server.name)
+                    == id
+            })?;
+            Some(agena_plugin_sdk::host_api::ImportedMcpServerIdentity {
+                package: package.name.clone(),
+                server: server.name.clone(),
+            })
+        }))
     }
 
     fn storage_locator(
@@ -573,6 +739,25 @@ impl HostClient for RuntimeHostClient {
         Ok(permission_query(check.decision))
     }
 
+    async fn mcp_session_roots(&self) -> Result<Option<Vec<std::path::PathBuf>>, PluginError> {
+        let context = self.callback_context()?;
+        if !context.session_id.is_some_and(|session| session > 0) {
+            return Ok(None);
+        }
+        let executor = self.callback_scoped_resource_executor().await?;
+        let workspace = context.workspace_root.as_deref().map(std::path::Path::new);
+        if workspace.is_some_and(|root| root != executor.workspace_root()) {
+            return Err(host_unavailable(
+                "the MCP callback's session workspace changed",
+            ));
+        }
+        Ok(Some(
+            executor
+                .sandbox_permission_snapshot()
+                .authorized_working_directories(),
+        ))
+    }
+
     async fn check_resolved_network_permission(
         &self,
         original: String,
@@ -717,59 +902,14 @@ impl HostClient for RuntimeHostClient {
             }
         };
 
-        let caller = self.callback_context()?;
-        let plugin_id = resolution.plugin_full_name();
-        if caller
-            .plugin_id
-            .as_ref()
-            .is_some_and(|current| current == &plugin_id)
-        {
-            return Err(PluginError::internal(format!(
-                "host->plugin invoke would re-enter plugin `{plugin_id}` (cycle detected)"
-            )));
-        }
+        self.invoke_callback_tool(&resolution, input, false).await
+    }
 
-        let session_id = caller
-            .session_id
-            .ok_or_else(|| host_unavailable("host/tool.invoke requires session_id"))?;
-        let structured = StructuredObject::try_from(input)
-            .map_err(|err| PluginError::invalid_params(format!("invoke_tool input: {err}")))?;
-        let invocation = ToolInvocation::new(resolution.canonical_name(), structured);
-        let call_id = caller.call_id;
-        let _delegation = agena_runtime::try_enter_delegation(session_id).ok_or_else(|| {
-            PluginError::internal(format!(
-                "plugin tool delegation in session {session_id} exceeded its nesting bound \
-                 (possible cycle through `{plugin_id}`)"
-            ))
-        })?;
-        // A hook (`session.start`, `chat.*`, `run.pre`, …) has no transcript
-        // tool call, so it delegates under the session's policy instead of the
-        // live-call authority. Only a real tool invocation carries a call id.
-        let execution = match call_id {
-            Some(call_id) => {
-                let _guard = agena_runtime::try_enter_invocation(
-                    session_id,
-                    call_id,
-                    plugin_id.clone(),
-                )
-                .ok_or_else(|| {
-                    PluginError::internal(format!(
-                        "host->plugin invoke would re-enter plugin `{plugin_id}` (cycle detected)"
-                    ))
-                })?;
-                self.session_manager()?
-                    .execute_host_invoked_tool(session_id, call_id, invocation)
-                    .await
-            }
-            None => {
-                self.session_manager()?
-                    .execute_session_scoped_tool(session_id, invocation)
-                    .await
-            }
-        }
-        .map_err(plugin_error_from_app)?;
-
-        Ok(tool_execution_to_invoke_output(execution))
+    async fn imported_mod_tool(
+        &self,
+        request: agena_plugin_sdk::host_api::ImportedModToolRequest,
+    ) -> Result<serde_json::Value, PluginError> {
+        self.run_imported_mod_tool(request).await
     }
 
     async fn ask_user(&self, req: AskUserRequest) -> Result<AskUserResponse, PluginError> {
@@ -779,6 +919,32 @@ impl HostClient for RuntimeHostClient {
             .request_host_user_input(session_id, call_id, input)
             .await
             .map_err(plugin_error)
+    }
+
+    async fn mcp_elicitation(
+        &self,
+        server: &str,
+        request: McpElicitation,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> Result<McpElicitationReply, PluginError> {
+        let owner = self.mcp_interaction_owner(&cancellation).await?;
+        let server = match self.mcp_server_identity(server).await? {
+            Some(identity) => format!("plugin:{}:{}", identity.package, identity.server),
+            None => server.to_owned(),
+        };
+        let manager = self.session_manager()?;
+        match owner {
+            McpInteractionOwner::Tool { session, call } => manager.resolve_mcp_elicitation(
+                call,
+                agena_plugin_sdk::ImportedMcpElicitationInput {
+                    session_id: session, server, request, reply: None,
+                },
+                cancellation,
+            ).await,
+            McpInteractionOwner::View(view) => manager.resolve_mcp_app_elicitation(
+                &view, &server, request, cancellation,
+            ).await,
+        }.map_err(plugin_error_from_app)
     }
 
     async fn companion_context(&self) -> Result<serde_json::Value, PluginError> {
@@ -794,6 +960,50 @@ impl HostClient for RuntimeHostClient {
             .companion_context(source)
             .await
             .map_err(|e| PluginError::invalid_params(e.to_string()))
+    }
+
+    async fn mcp_sampling(
+        &self,
+        server: &str,
+        request: agena_domain::mcp_sampling::McpSamplingRequest,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> Result<Option<agena_domain::mcp_sampling::McpSamplingReply>, PluginError> {
+        let owner = self.mcp_interaction_owner(&cancellation).await?;
+        let server = match self.mcp_server_identity(server).await? {
+            Some(identity) => format!("plugin:{}:{}", identity.package, identity.server),
+            None => server.to_owned(),
+        };
+        let manager = self.session_manager()?;
+        match owner {
+            McpInteractionOwner::Tool { session, call } => manager
+                .resolve_mcp_sampling(session, call, &server, request, cancellation)
+                .await,
+            McpInteractionOwner::View(view) => manager.resolve_mcp_app_sampling(
+                &view, &server, "Return model output to the MCP server", request, cancellation,
+            ).await,
+        }.map_err(plugin_error_from_app)
+    }
+
+    async fn call_mcp_app_view_tool(
+        &self,
+        target: uuid::Uuid,
+        arguments: serde_json::Map<String, serde_json::Value>,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> Result<agena_domain::mcp_app_tools::McpAppToolResult, PluginError> {
+        let (session, call) = self.callback_session_and_call()?;
+        if self.callback_plugin_key()?.to_string() != agena_runtime_config::MCP_PLUGIN_ID
+            || session <= 0
+            || call < 0
+        {
+            return Err(PluginError::from_kind(
+                agena_plugin_sdk::PluginErrorKind::PolicyDenied,
+                "MCP App tools require a live session call from the built-in MCP bridge.",
+            ));
+        }
+        self.session_manager()?
+            .call_mcp_app_view_tool(session, call, target, arguments, cancellation)
+            .await
+            .map_err(plugin_error_from_app)
     }
     async fn companion_operation(
         &self,
@@ -885,12 +1095,581 @@ impl HostClient for RuntimeHostClient {
             .map_err(plugin_error)
     }
 
+    async fn start_cordis_workflow(
+        &self,
+        start: agena_plugin_sdk::host_api::CordisWorkflowStart,
+        run: agena_plugin_sdk::host_api::CordisWorkflowRunner,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> Result<agena_plugin_sdk::host_api::CordisWorkflowStarted, PluginError> {
+        let (session, call, plugin) = self.cordis_workflow_caller()?;
+        agena_plugin_sdk::permission_wait::waiting(self.session_manager()?.start_cordis_workflow(
+            session, call, plugin.key(), plugin.effect_scope().cancellation_token(), start, run, cancellation,
+        ))
+        .await
+        .map_err(bot_plugin_error)
+    }
+
+    async fn start_cordis_job(
+        &self,
+        start: agena_plugin_sdk::host_api::CordisJobStart,
+        produce: agena_plugin_sdk::host_api::CordisJobStarter,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> Result<String, PluginError> {
+        use agena_plugin_sdk::host_api::CordisJobInvocation;
+        let context = self.callback_context()?;
+        let (session, invocation, plugin) = if let Some(command) = context.plugin_command
+            && let Some(session) = context.session_id.filter(|session| *session > 0)
+            && context.call_id.is_none() && context.tool_name.is_none()
+        {
+            let plugin = self.imported_agent_plugin()?;
+            if !plugin.agent_plugin().is_some_and(|package| {
+                package.format == agena_plugin_host::AgentPluginFormat::DeepSeekHarness
+            }) {
+                return Err(host_unavailable("Cordis jobs require a DeepSeek package"));
+            }
+            (session, CordisJobInvocation::Command(command), plugin)
+        } else {
+            let (session, call, plugin) = self.cordis_workflow_caller()?;
+            (session, CordisJobInvocation::Tool(call), plugin)
+        };
+        self.session_manager()?
+            .start_cordis_job(
+                session,
+                invocation,
+                plugin.key(),
+                plugin.effect_scope().cancellation_token(),
+                start,
+                produce,
+                cancellation,
+            )
+            .await
+    }
+
+    async fn open_cordis_job_registry(
+        &self,
+        lifetime: tokio_util::sync::CancellationToken,
+    ) -> Result<Arc<dyn agena_plugin_sdk::host_api::CordisJobRegistry>, PluginError> {
+        let plugin = self.imported_agent_plugin()?;
+        let session = self.callback_context()?.session_id
+            .filter(|session| *session > 0)
+            .ok_or_else(|| host_unavailable("Cordis job registry requires a project session"))?;
+        if !plugin.agent_plugin().is_some_and(|package| {
+            package.format == agena_plugin_host::AgentPluginFormat::DeepSeekHarness
+        }) {
+            return Err(host_unavailable("Cordis job registry requires a DeepSeek package"));
+        }
+        self.session_manager()?
+            .open_cordis_job_registry(
+                session, plugin.key(), plugin.effect_scope().cancellation_token(), lifetime,
+            ).await.map_err(bot_plugin_error)
+    }
+
+    async fn cordis_workflow_job(
+        &self,
+        request: agena_plugin_sdk::host_api::CordisWorkflowJobRequest,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> Result<serde_json::Value, PluginError> {
+        let (session, call, plugin) = self.cordis_workflow_caller()?;
+        self.session_manager()?
+            .cordis_workflow_job(session, call, plugin.key(), request, cancellation)
+            .await
+            .map_err(bot_plugin_error)
+    }
+
+    async fn wait_imported_plugin_agent(
+        &self,
+        child: i64,
+        timeout_ms: u64,
+    ) -> Result<ToolInvokeOutput, PluginError> {
+        self.imported_agent_plugin()?;
+        let (session, call) = self.callback_scope()?;
+        self.session_manager()?
+            .wait_imported_plugin_agent(session, (call >= 0).then_some(call), child, timeout_ms)
+            .await
+            .map_err(plugin_error_from_app)
+    }
+
+    async fn start_cordis_subagent(
+        &self,
+        start: agena_plugin_sdk::host_api::CordisSubagentStart,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> Result<agena_plugin_sdk::host_api::CordisSubagentStarted, PluginError> {
+        let (session, call, plugin) = self.cordis_subagent_caller()?;
+        let lifetime = plugin.effect_scope().cancellation_token();
+        let manager = self.session_manager()?;
+        let launch = agena_plugin_sdk::permission_wait::waiting(
+            manager.start_cordis_subagent(session, call, plugin.key(), start, cancellation.clone()),
+        );
+        tokio::pin!(launch);
+        tokio::select! {
+            biased;
+            _ = lifetime.cancelled() => { cancellation.cancel(); launch.await },
+            result = &mut launch => result,
+        }.map_err(bot_plugin_error)
+    }
+
+    async fn wait_for_cordis_subagent(
+        &self,
+        wait: agena_plugin_sdk::host_api::CordisSubagentWait,
+    ) -> Result<(), PluginError> {
+        let (session, call, _) = self.cordis_subagent_caller()?;
+        self.session_manager()?.wait_for_cordis_subagent(session, call, wait)
+            .await.map_err(plugin_error_from_app)
+    }
+
+    async fn cordis_subagent_control(
+        &self,
+        request: agena_plugin_sdk::host_api::CordisSubagentControl,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> Result<serde_json::Value, PluginError> {
+        let (session, call, plugin) = self.cordis_subagent_caller()?;
+        agena_plugin_sdk::permission_wait::waiting(self.session_manager()?.cordis_subagent_control(
+            session, call, plugin.key(), request, cancel,
+        )).await.map_err(bot_plugin_error)
+    }
+
+    async fn cordis_llm_complete(
+        &self,
+        request: agena_plugin_sdk::host_api::CordisLlmRequest,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> Result<agena_plugin_sdk::host_api::CordisLlmResponse, PluginError> {
+        let (session, call, plugin) = self.cordis_subagent_caller()?;
+        let lifetime = plugin.effect_scope().cancellation_token();
+        let manager = self.session_manager()?;
+        let completion =
+            manager.complete_cordis_llm(session, call, plugin.key(), request, cancel.clone());
+        tokio::pin!(completion);
+        tokio::select! {
+            biased;
+            _ = lifetime.cancelled() => { cancel.cancel(); completion.await }
+            result = &mut completion => result,
+        }
+        .map_err(bot_plugin_error)
+    }
+
+    async fn evaluate_imported_plugin_prompt(&self, prompt: String) -> Result<String, PluginError> {
+        self.imported_agent_plugin()?;
+        let (session, _) = self.callback_scope()?;
+        const SYSTEM: &str = "Evaluate the hook instruction using the supplied event. Return one JSON object with a boolean ok and an optional string reason. Set ok to false when the hook condition fails.";
+        let result = self
+            .session_manager()?
+            .complete_auxiliary(session, SYSTEM.into(), prompt, 512)
+            .await
+            .map_err(plugin_error_from_app)?;
+        Ok(result.text)
+    }
+
+    async fn run_imported_skill_shell(
+        &self,
+        request: agena_plugin_sdk::ImportedSkillShellRequest,
+    ) -> Result<agena_plugin_sdk::ImportedSkillShellResult, PluginError> {
+        let plugin = self.imported_agent_plugin()?;
+        let context = self.callback_context()?;
+        let session = context.session_id.filter(|id| *id > 0).ok_or_else(|| {
+            host_unavailable("Claude skill shell expansion requires a project session")
+        })?;
+        if context.call_id.is_some() || context.tool_name.is_some() {
+            return Err(PluginError::from_kind(
+                agena_plugin_sdk::PluginErrorKind::PolicyDenied,
+                "this callback belongs to a Claude slash command invocation",
+            ));
+        }
+        self.session_manager()?
+            .run_imported_skill_shell(session, plugin.key(), request)
+            .await
+            .map_err(imported_skill_error)
+    }
+
+    async fn render_imported_skill(
+        &self,
+        path: &std::path::Path,
+        document: &str,
+        arguments: &str,
+    ) -> Result<Option<agena_plugin_sdk::ImportedSkillRender>, PluginError> {
+        let context = self.callback_context()?;
+        if self.callback_plugin_key()?.to_string()
+            != agena_bundled_plugins::tool::skills_plugin_id()
+            || context.tool_name.as_deref() != Some("get")
+        {
+            return Err(PluginError::from_kind(
+                agena_plugin_sdk::PluginErrorKind::PolicyDenied,
+                "this callback belongs to the built-in skills tool",
+            ));
+        }
+        let (Some(session), Some(call)) = (
+            context.session_id.filter(|id| *id > 0),
+            context.call_id.filter(|id| *id >= 0),
+        ) else {
+            return Ok(Some(agena_plugin_sdk::ImportedSkillRender::Inspection));
+        };
+        self.session_manager()?
+            .render_imported_skill(session, call, path, document, arguments)
+            .await
+            .map_err(imported_skill_error)
+    }
+
+    async fn find_imported_plugin_agent(
+        &self,
+        name: String,
+    ) -> Result<Option<agena_plugin_host::sdk::host_api::ImportedPluginAgentState>, PluginError>
+    {
+        self.imported_agent_plugin()?;
+        let (session, call) = self.callback_scope()?;
+        self.session_manager()?
+            .find_imported_plugin_agent(session, (call >= 0).then_some(call), &name)
+            .await
+            .map_err(plugin_error_from_app)
+    }
+
+    async fn evaluate_imported_plugin_agent(&self, prompt: String) -> Result<String, PluginError> {
+        self.imported_agent_plugin()?;
+        let context = self.callback_context()?;
+        let session = context
+            .session_id
+            .ok_or_else(|| host_unavailable("an imported agent hook requires a session"))?;
+        self.session_manager()?
+            .verify_imported_hook(session, prompt)
+            .await
+            .map_err(plugin_error_from_app)
+    }
+
+    async fn bind_imported_plugin_background(
+        &self,
+    ) -> Result<ImportedPluginBackground, PluginError> {
+        let plugin = self.imported_agent_plugin()?;
+        let (session, _) = self.callback_scope()?;
+        if session <= 0 {
+            return Err(PluginError::invalid_params(
+                "background hooks require a session",
+            ));
+        }
+        let cancellation = plugin.effect_scope().cancellation_token();
+        Ok(ImportedPluginBackground {
+            cancellation: cancellation.clone(),
+            notices: Arc::new(RuntimeImportedPluginNotices {
+                manager: self.session_manager()?,
+                cancellation,
+                session,
+                plugin: plugin.key().to_string(),
+            }),
+        })
+    }
+
+    async fn submit_imported_plugin_prompt(
+        &self,
+        request: agena_plugin_sdk::host_api::ImportedPluginPromptRequest,
+    ) -> Result<serde_json::Value, PluginError> {
+        let plugin = self.imported_agent_plugin()?;
+        let name = plugin
+            .agent_plugin()
+            .expect("imported package")
+            .name
+            .clone();
+        let session = self
+            .callback_context()?
+            .session_id
+            .ok_or_else(|| host_unavailable("Plugin prompts require a project session"))?;
+        let manager = self.session_manager()?;
+        Ok(
+            match manager
+                .submit_imported_plugin_prompt(session, plugin.key(), name, request)
+                .await
+            {
+                Ok(answer) => answer,
+                Err(error) => serde_json::json!({"drop":error.failure().user.fallback}),
+            },
+        )
+    }
+
+    async fn configure_imported_plugin_files(
+        &self,
+        paths: Option<Vec<PathBuf>>,
+        callback_generation: Option<u64>,
+    ) -> Result<(), PluginError> {
+        let plugin = self.imported_agent_plugin()?;
+        let (session, _) = self.callback_scope()?;
+        if session <= 0 || callback_generation != Some(plugin.effect_scope().generation()) {
+            return Err(PluginError::invalid_params(
+                "file hooks require an imported plugin session",
+            ));
+        }
+        let manager = self.session_manager()?;
+        let host = self.plugin_manager()?;
+        if !host.has_subscription(agena_plugin_sdk::HookSubscription::SESSION_FILE_CHANGED) {
+            return Ok(());
+        }
+        manager
+            .imported_file_watches()
+            .configure(
+                session,
+                host.imported_file_watch_filenames().next().is_some(),
+                paths,
+                imported_files::bind(&self.runtime()?, session),
+            )
+            .await
+            .map_err(PluginError::internal)
+    }
+
+    async fn imported_hook_profile(&self) -> Result<Option<String>, PluginError> {
+        self.imported_agent_plugin()?;
+        let (session, _) = self.callback_scope()?;
+        self.session_manager()?
+            .imported_hook_profile(session)
+            .await
+            .map(Some)
+            .map_err(plugin_error_from_app)
+    }
+
+    async fn check_imported_task(
+        &self,
+        mut input: agena_plugin_sdk::ImportedTaskBeforeInput,
+    ) -> Result<(), PluginError> {
+        let (session, _) = self.callback_scope()?;
+        let plugin = self.callback_plugin_key()?;
+        if plugin.to_string() != "agena.task" || session <= 0 || input.session_id != session {
+            return Err(PluginError::from_kind(
+                agena_plugin_sdk::PluginErrorKind::PolicyDenied,
+                "task hooks require the built-in task bridge and its bound session",
+            ));
+        }
+        let plugins = self.plugin_manager()?;
+        if !plugins.has_subscription(agena_plugin_sdk::HookSubscription::IMPORTED_TASK_BEFORE) {
+            return Ok(());
+        }
+        let context = self
+            .get_session(HostGetSessionRequest::default())
+            .await?
+            .session;
+        input.agent_id = context.is_subagent.then(|| session.to_string());
+        plugins.dispatch_imported_task_before(input).await
+    }
+
+    async fn imported_mcp_server_identity(
+        &self,
+        id: &str,
+    ) -> Result<Option<agena_plugin_sdk::host_api::ImportedMcpServerIdentity>, PluginError> {
+        self.imported_agent_plugin()?;
+        self.mcp_server_identity(id).await
+    }
+
+    async fn imported_hook_environment(
+        &self,
+        callback_generation: Option<u64>,
+    ) -> Result<Option<agena_plugin_sdk::host_api::ImportedHookEnvironment>, PluginError> {
+        let (session, call) = self.callback_scope()?;
+        let plugin = self.imported_agent_plugin()?;
+        if session <= 0 || callback_generation != Some(plugin.effect_scope().generation()) {
+            return Ok(None);
+        }
+        let manager = self.session_manager()?;
+        let executor = manager
+            .host_resource_callback_executor(Some(session), (call >= 0).then_some(call))
+            .await
+            .map_err(plugin_error_from_app)?;
+        if executor.is_global() || !executor.sandbox_enabled() {
+            return Ok(None);
+        }
+        let package = plugin.agent_plugin().expect("native imported plugin");
+        manager
+            .imported_shells()
+            .environment_for_hook(session, plugin.key(), package.root.clone())
+            .await
+            .map_err(|error| {
+                PluginError::internal(format!(
+                    "could not create hook environment file: {}",
+                    error.kind()
+                ))
+            })
+    }
+
+    async fn imported_hook_transcripts(
+        &self,
+        format: agena_plugin_sdk::host_api::HookTranscriptFormat,
+        scope: agena_plugin_sdk::host_api::HookTranscriptScope,
+        callback_generation: Option<u64>,
+    ) -> Result<agena_plugin_sdk::host_api::ImportedHookTranscripts, PluginError> {
+        use agena_plugin_sdk::host_api::{HookTranscriptScope, ImportedHookTranscripts};
+
+        let (id, call) = self.callback_scope()?;
+        let plugin = self.imported_agent_plugin()?;
+        if id <= 0 || callback_generation != Some(plugin.effect_scope().generation()) {
+            return Ok(ImportedHookTranscripts::default());
+        }
+        let session = agena_storage::kernel::SessionId::try_from(id)
+            .map_err(|error| PluginError::invalid_params_error(&error))?;
+        let manager = self.session_manager()?;
+        let executor = manager
+            .host_resource_callback_executor(Some(id), (call >= 0).then_some(call))
+            .await
+            .map_err(plugin_error_from_app)?;
+        let key = plugin.key();
+        if executor.is_global() || !executor.sandbox_enabled() || !executor.plugin_is_enabled(&key)
+        {
+            return Ok(ImportedHookTranscripts::default());
+        }
+        let root = &plugin.agent_plugin().expect("native imported plugin").root;
+        let export = async |session, workspace: &std::path::Path| {
+            manager
+                .imported_shells()
+                .transcript_for_hook(session, workspace, format, key.clone(), root.clone())
+                .await
+                .map_err(|error| PluginError::internal_error(&error))
+        };
+        if scope == HookTranscriptScope::Current {
+            return Ok(ImportedHookTranscripts {
+                transcript: export(session, executor.workspace_root()).await?,
+                agent: None,
+            });
+        }
+
+        let reader = &manager.kernel().reader;
+        let child = reader
+            .summary(session)
+            .await
+            .map_err(|error| PluginError::internal_error(&error))?;
+        let Some(parent) = child
+            .parent_session_id
+            .filter(|_| child.relation_kind.is_subagent())
+        else {
+            return Ok(ImportedHookTranscripts::default());
+        };
+        let parent_summary = reader
+            .summary(parent)
+            .await
+            .map_err(|error| PluginError::internal_error(&error))?;
+        let mut files = ImportedHookTranscripts::default();
+        if is_transcript_parent(&child, &parent_summary) {
+            let parent_executor = manager
+                .host_resource_callback_executor(Some(parent.get()), None)
+                .await
+                .map_err(plugin_error_from_app)?;
+            if !parent_executor.is_global()
+                && parent_executor.sandbox_enabled()
+                && parent_executor.plugin_is_enabled(&key)
+            {
+                files.transcript = export(parent, parent_executor.workspace_root()).await?;
+            }
+        }
+        if scope == HookTranscriptScope::ParentAndAgent {
+            files.agent = export(session, executor.workspace_root()).await?;
+        }
+        Ok(files)
+    }
+
+    async fn imported_claude_stop_work(
+        &self,
+        parent: bool,
+        callback_generation: Option<u64>,
+    ) -> Result<Option<agena_plugin_sdk::ImportedClaudeStopWork>, PluginError> {
+        self.claude_stop_work(parent, callback_generation).await
+    }
+
+    async fn visit_ending_session_history(
+        &self,
+        visit: &mut (dyn FnMut(agena_plugin_sdk::host_api::SessionHistoryEvent) + Send),
+    ) -> Result<(), PluginError> {
+        let plugin = self.imported_agent_plugin()?;
+        let (session, call) = self.callback_scope()?;
+        if call != agena_plugin_sdk::host_api::SESSION_SCOPED_CALL_ID
+            || !agena_plugin_host::host::is_session_disposal(session)
+        {
+            return Err(host_unavailable(
+                "session history requires a session disposal hook",
+            ));
+        }
+        self.session_manager()?
+            .visit_ending_session_history(session, &plugin.key(), visit)
+            .await
+            .map_err(plugin_error_from_app)
+    }
+
+    async fn call_imported_plugin_mcp(
+        &self,
+        server: String,
+        tool: String,
+        arguments: serde_json::Value,
+    ) -> Result<ToolInvokeOutput, PluginError> {
+        self.imported_agent_plugin()?;
+        let context = self.callback_context()?;
+        let session = context
+            .session_id
+            .ok_or_else(|| host_unavailable("an imported MCP hook requires a session"))?;
+        let input = serde_json::json!({"server": server, "name": tool, "arguments": arguments});
+        self.session_manager()?
+            .call_imported_plugin_mcp(session, input)
+            .await
+            .map(tool_execution_to_invoke_output)
+            .map_err(plugin_error_from_app)
+    }
+
+    async fn deepseek_mcp_manager(
+        &self,
+        request: agena_plugin_sdk::host_api::DeepSeekMcpManagerRequest,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> Result<serde_json::Value, PluginError> {
+        self.manage_deepseek_mcp(request, cancellation).await
+    }
+
+    async fn observe_deepseek_mcp_manager(
+        &self,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> Result<tokio::sync::watch::Receiver<serde_json::Value>, PluginError> {
+        self.subscribe_deepseek_mcp(cancellation).await
+    }
+
+    async fn imported_model_skills(
+        &self,
+    ) -> Result<Vec<agena_plugin_host::AgentPluginSkill>, PluginError> {
+        if self.callback_context()?.plugin_id.as_deref() != Some("agena.skills") {
+            return Err(host_unavailable("the skill catalog belongs to the built-in skills tool"));
+        }
+        let executor = self.callback_scoped_resource_executor().await?;
+        let skills = executor.agent_plugin_provided_skills().await;
+        Ok(skills
+            .into_iter()
+            .filter(|skill| skill.invocation.is_none_or(|policy| policy.model_invocable))
+            .collect())
+    }
+
+    async fn prepare_managed_mcp_http(&self, server: String) -> Result<bool, PluginError> {
+        self.admit_managed_mcp_http(&server).await
+    }
+
     async fn followup_agent(&self, req: AgentMessageRequest) -> Result<AgentHandle, PluginError> {
         let (session, call) = self.agent_callback_scope()?;
         self.session_manager()?
             .followup_agent(session, call, req)
             .await
             .map_err(plugin_error)
+    }
+
+    async fn read_imported_plugin_mcp(
+        &self,
+        server: String,
+        uri: String,
+    ) -> Result<ToolInvokeOutput, PluginError> {
+        let plugin = self.imported_agent_plugin()?;
+        let key = plugin.key().to_string();
+        let package = plugin.agent_plugin().expect("native imported plugin");
+        if !package.mcp_servers.iter().any(|entry| {
+            agena_plugin_host::agent_plugin::agent_plugin_mcp_server_name(&key, &entry.name)
+                == server
+        }) {
+            return Err(PluginError::from_kind(
+                agena_plugin_sdk::PluginErrorKind::PolicyDenied,
+                "the MCP resource server must belong to this plugin",
+            ));
+        }
+        let session = self
+            .callback_context()?
+            .session_id
+            .ok_or_else(|| host_unavailable("an imported MCP resource hook requires a session"))?;
+        let input = serde_json::json!({"server": server, "uri": uri});
+        self.session_manager()?
+            .read_imported_plugin_mcp(session, input)
+            .await
+            .map(tool_execution_to_invoke_output)
+            .map_err(plugin_error_from_app)
     }
 
     async fn cancel_agent(
@@ -1399,11 +2178,42 @@ impl HostClient for RuntimeHostClient {
         .await
     }
 
+    async fn storage_compare_exchange(
+        &self,
+        req: HostStorageSetRequest,
+        expected: Option<String>,
+    ) -> Result<bool, PluginError> {
+        self.use_plugin_storage(req.scope, req.visibility, move |store, locator| {
+            store.compare_exchange(
+                locator,
+                &req.namespace,
+                &req.key,
+                expected.as_deref(),
+                &req.value,
+            )
+        })
+        .await
+    }
+
     async fn storage_delete(&self, req: HostStorageDeleteRequest) -> Result<(), PluginError> {
         self.use_plugin_storage(req.scope, req.visibility, move |store, locator| {
             store.delete(locator, req.namespace.as_str(), req.key.as_str())
         })
         .await
+    }
+
+    async fn imported_plugin_storage_directory(&self) -> Result<std::path::PathBuf, PluginError> {
+        let plugin = self.imported_agent_plugin()?;
+        if !plugin.agent_plugin().is_some_and(|package| {
+            package.format == agena_plugin_host::AgentPluginFormat::DeepSeekHarness
+        }) {
+            return Err(host_unavailable(
+                "this imported plugin has no Cordis storage adapter",
+            ));
+        }
+        self.plugin_storage()?
+            .private_global_directory(&plugin.key())
+            .ok_or_else(|| host_unavailable("private plugin storage directory is unavailable"))
     }
 
     async fn storage_list(
@@ -1510,11 +2320,23 @@ impl HostClient for RuntimeHostClient {
 
     async fn prepare_process_sandbox(
         &self,
-        resources: agena_plugin_sdk::host_api::HostProcessResources,
+        mut resources: agena_plugin_sdk::host_api::HostProcessResources,
     ) -> Result<agena_plugin_sdk::host_api::HostPreparedProcessSandbox, PluginError> {
         let (session, call) = self.callback_scope()?;
-        let mut prepared = self
-            .session_manager()?
+        let manager = self.session_manager()?;
+        if resources.cwd.is_none()
+            && manager.imported_shells().has_cwd(session)
+            && self.imported_agent_plugin().is_ok()
+        {
+            let executor = manager
+                .host_resource_callback_executor(Some(session), (call >= 0).then_some(call))
+                .await
+                .map_err(plugin_error_from_app)?;
+            resources.cwd = executor
+                .imported_shell_cwd()
+                .map(|cwd| cwd.to_string_lossy().into_owned());
+        }
+        let mut prepared = manager
             .prepare_host_process_sandbox(session, call, resources)
             .await
             .map_err(plugin_error_from_app)?;
@@ -1612,6 +2434,69 @@ mod agent_capability_tests {
             call_id: Some(11),
             ..Default::default()
         }
+    }
+
+    #[tokio::test]
+    async fn transcripts_are_scoped_to_the_recorded_subagent_parent() {
+        use agena_domain::SessionRelationKind;
+        use agena_storage::kernel::{RequestId, SessionAgentConfiguration, SessionConfiguration};
+
+        let runtime = agena_storage_sqlite::open_kernel_runtime("sqlite::memory:")
+            .await
+            .unwrap();
+        let workspace = runtime
+            .workspaces
+            .ensure_id("/test-transcript")
+            .await
+            .unwrap();
+        let kernel = &runtime.ports;
+        let parent = kernel
+            .sessions
+            .create(RequestId::new(), workspace, "Parent".into())
+            .await
+            .unwrap()
+            .value
+            .id;
+        let child = kernel
+            .sessions
+            .create_configured(
+                RequestId::new(),
+                workspace,
+                "Child".into(),
+                SessionConfiguration {
+                    parent_session_id: Some(parent),
+                    relation_kind: SessionRelationKind::Subagent,
+                    agent: Some(SessionAgentConfiguration {
+                        origin_message_id: None,
+                        workflow: None,
+                        cordis: None,
+                        name: "worker".into(),
+                        status: agena_domain::AgentStatus::Running,
+                        started_at_ms: Some(1),
+                        finished_at_ms: None,
+                        failure: None,
+                        limits: Default::default(),
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap()
+            .value
+            .id;
+        let parent = kernel.reader.summary(parent).await.unwrap();
+        let mut child = (*kernel.reader.summary(child).await.unwrap()).clone();
+        assert!(is_transcript_parent(&child, &parent));
+        assert!(!is_transcript_parent(&child, &child));
+
+        child.workspace_id = Some(workspace + 1);
+        assert!(!is_transcript_parent(&child, &parent));
+        child.workspace_id = Some(workspace);
+        child.owner_bot_id = Some("other owner".into());
+        assert!(!is_transcript_parent(&child, &parent));
+        child.owner_bot_id = None;
+        child.relation_kind = SessionRelationKind::Child;
+        assert!(!is_transcript_parent(&child, &parent));
     }
 
     /// The bundled agent plugin is the only holder of the agent capability.

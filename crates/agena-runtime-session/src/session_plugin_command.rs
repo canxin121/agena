@@ -1,10 +1,12 @@
 //! Session-scoped plugin-command invocation with runtime-owned authorization.
 
+use agena_domain::ComposerDocument;
+use agena_failure::Failure;
 use async_trait::async_trait;
-use thiserror::Error;
+use futures_util::future::BoxFuture;
 
 #[derive(Debug, Clone)]
-/// Request to run a plugin command in a session.
+/// Request to run an attachment-aware plugin command in a session.
 pub struct SessionPluginCommandRequest {
     pub session_id: i64,
     pub plugin_id: String,
@@ -14,15 +16,16 @@ pub struct SessionPluginCommandRequest {
     /// invocation context. Authorization remains entirely inside Runtime.
     pub slash: Option<String>,
     pub raw: String,
-    pub workspace_root: Option<String>,
+    pub document: ComposerDocument,
 }
 
-#[derive(Debug, Clone, Error, PartialEq, Eq)]
-/// Error running a plugin command.
-pub enum SessionPluginCommandError {
-    #[error("plugin command execution failed: {0}")]
-    Execution(String),
-}
+/// Build a user submission using the normal ingress identity and run options.
+/// Model selection is resolved only if the command produces a followup.
+pub type BuildCommandFollowup<'a> = Box<
+    dyn FnOnce(ComposerDocument) -> BoxFuture<'a, Result<crate::SessionUserRunRequest, Failure>>
+        + Send
+        + 'a,
+>;
 
 /// Invokes a plugin command in an existing session.
 ///
@@ -37,5 +40,6 @@ pub trait SessionPluginCommandService: Send + Sync {
     async fn invoke_session_plugin_command(
         &self,
         request: SessionPluginCommandRequest,
-    ) -> Result<agena_plugin_host::sdk::CommandResult, SessionPluginCommandError>;
+        build_followup: BuildCommandFollowup<'_>,
+    ) -> Result<agena_plugin_host::sdk::CommandResult, Failure>;
 }

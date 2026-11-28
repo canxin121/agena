@@ -1022,10 +1022,10 @@ impl SessionManager {
         max: usize,
     ) -> Result<Option<Evidence>, AppError> {
         let item = match &entry.payload {
-            EntryPayload::User { document, .. } => {
+            EntryPayload::User { document, .. } if entry.execution_started => {
                 Some((EvidenceKind::User, document_text(document, max)))
             }
-            EntryPayload::Text { content_id } => {
+            EntryPayload::Text { content_id, .. } => {
                 let range = self
                     .kernel()
                     .reader

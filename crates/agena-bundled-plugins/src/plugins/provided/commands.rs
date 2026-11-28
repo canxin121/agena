@@ -617,18 +617,6 @@ pub(crate) fn declared_commands() -> Vec<DeclaredCommand> {
 
 // ── dynamic command registry synchronization ───────────────────────────────
 
-/// The command ids this plugin has registered in the host's dynamic command
-/// registry, with the content hash each one was registered under.
-///
-/// The host registry has no bulk-replace, so a rescan diffs this set against
-/// the new catalog: ids that disappeared are removed, ids whose content hash
-/// changed are removed and re-registered, and an unchanged rescan writes
-/// nothing at all.
-#[derive(Debug, Clone, Default)]
-struct RegisteredCommands {
-    by_command_id: BTreeMap<String, String>,
-}
-
 /// Upper bound on registry mutations in a single synchronization pass, so a
 /// very large package directory cannot turn one catalog refresh into an
 /// unbounded burst of host callbacks. The remainder converges on later passes.
@@ -849,7 +837,7 @@ pub(crate) struct CommandsPlugin {
     config: Arc<OnceLock<CommandsPluginConfig>>,
     catalog_state: Arc<Mutex<CatalogState>>,
     definition_catalog: Arc<Mutex<Option<DefinitionCatalogSnapshot>>>,
-    registered: Arc<Mutex<RegisteredCommands>>,
+    catalog_sync: Arc<tokio::sync::Mutex<()>>,
     watcher: Arc<Mutex<Option<CommandCatalogWatcher>>>,
     watcher_generation: Arc<AtomicU64>,
 }
@@ -1084,7 +1072,7 @@ impl CommandsPlugin {
             config: Arc::new(OnceLock::new()),
             catalog_state: Arc::new(Mutex::new(CatalogState::default())),
             definition_catalog: Arc::new(Mutex::new(None)),
-            registered: Arc::new(Mutex::new(RegisteredCommands::default())),
+            catalog_sync: Arc::new(tokio::sync::Mutex::new(())),
             watcher: Arc::new(Mutex::new(None)),
             watcher_generation: Arc::new(AtomicU64::new(0)),
         }
@@ -1427,8 +1415,18 @@ impl CommandsPlugin {
     }
 
     async fn definition_catalog_async(&self) -> SdkResult<PackageCatalog> {
-        self.run_blocking(|plugin| plugin.definition_catalog())
-            .await
+        let workspace = self.request_workspace_root()?;
+        self.run_blocking(move |plugin| {
+            if workspace == plugin.workspace_root()? {
+                plugin.definition_catalog()
+            } else {
+                Ok(Self::discovered_catalog_for_workspace_with_config(
+                    &workspace,
+                    &plugin.config(),
+                ))
+            }
+        })
+        .await
     }
 
     fn invalidate_definition_catalog(&self) -> SdkResult<()> {
@@ -1485,7 +1483,18 @@ impl CommandsPlugin {
     ) -> PackageCatalog {
         let (roots, command_roots) = Self::filesystem_roots(workspace_root, config);
 
-        let package_report = discovery::scan_packages_filtered(&roots, access.clone());
+        let imported = agena_runtime_plugins::plugin_slot::current_plugin_host()
+            .map(|host| host.agent_plugin_skill_dirs())
+            .unwrap_or_default();
+        let (managed_root, other_roots) = roots.split_last().expect("workspace skill root");
+        let mut package_report = discovery::scan_packages_filtered(other_roots, access.clone());
+        let imported = discovery::scan_agent_plugin_skills(imported, access.as_ref());
+        package_report.commands.extend(imported.commands);
+        package_report.diagnostics.extend(imported.diagnostics);
+        let managed =
+            discovery::scan_packages_filtered(std::slice::from_ref(managed_root), access.clone());
+        package_report.commands.extend(managed.commands);
+        package_report.diagnostics.extend(managed.diagnostics);
         let command_report = discovery::scan_commands_filtered(&command_roots, access);
 
         let mut packages: BTreeMap<String, PackageEntry> = bundled_command_definitions()
@@ -1628,10 +1637,13 @@ impl CommandsPlugin {
     /// `refresh` surfaces the generation/delta when a caller needs an explicit
     /// audit point.
     fn refresh_catalog(&self) -> SdkResult<CatalogRefresh> {
-        let catalog = Self::discovered_catalog_for_workspace_with_config(
+        self.track_catalog(Self::discovered_catalog_for_workspace_with_config(
             self.workspace_root()?,
             &self.config(),
-        );
+        ))
+    }
+
+    fn track_catalog(&self, catalog: PackageCatalog) -> SdkResult<CatalogRefresh> {
         let fingerprint = Self::catalog_fingerprint(&catalog);
         let mut state = self
             .catalog_state
@@ -1702,117 +1714,39 @@ impl CommandsPlugin {
 
     // ── the dynamic command registry ───────────────────────────────────────
 
-    /// Bring the host's dynamic command registry in line with the current
-    /// catalog: remove what disappeared, register what is new or changed.
-    ///
-    /// The registry has no bulk-replace, and a registration at an occupied key
-    /// is refused rather than overwritten, so a changed package is removed and
-    /// re-registered. An unchanged rescan does neither, and the first rescan
-    /// after init is the one that publishes everything.
-    ///
-    /// Entries register at the global layer, because that is the layer
-    /// `resolve_command` and the command catalog read: a package that existed
-    /// only inside one session's scope would be invisible to the very request
-    /// that discovered it. The cost of that choice is that a discovered name
-    /// matching a declared command — a user file called `review.md` next to the
-    /// built-in `/review` — is refused by the host. That is the intended
-    /// outcome: a built-in is not a package anyone can shadow from disk, and
-    /// saying so out loud beats silently offering a command that resolves to
-    /// something else. Each refusal is counted and logged here.
-    ///
-    /// Registration is clamped: at most [`MAX_SYNCS_PER_PASS`] registry writes
-    /// run per pass, so a directory with thousands of files cannot turn one
-    /// catalog refresh into an unbounded burst of host callbacks. The remainder
-    /// registers on the next pass.
+    /// Reconcile only this callback's registry layer. A session end can
+    /// remove that layer independently of any previous discovery pass.
     async fn sync_commands(
         &self,
         host: &Arc<dyn HostClient>,
         catalog: &PackageCatalog,
+        registered: BTreeMap<String, CommandDefinition>,
     ) -> SdkResult<ResyncOutcome> {
-        let desired: BTreeMap<String, String> = catalog
+        let desired: BTreeMap<_, _> = catalog
             .packages
             .iter()
-            .map(|(name, entry)| (name.clone(), entry.command.content_hash()))
+            .map(|(name, entry)| (name.clone(), package_command_definition(name, entry)))
             .collect();
-
-        let (stale, changed) = {
-            let synced = self
-                .registered
-                .lock()
-                .map_err(|_| PluginError::internal("commands registry-state lock poisoned"))?;
-            let stale = synced
-                .by_command_id
-                .keys()
-                .filter(|command_id| !desired.contains_key(*command_id))
-                .cloned()
-                .collect::<Vec<_>>();
-            let changed = desired
-                .iter()
-                .filter(|(command_id, hash)| synced.by_command_id.get(*command_id) != Some(*hash))
-                .map(|(command_id, _)| command_id.clone())
-                .take(MAX_SYNCS_PER_PASS)
-                .collect::<Vec<_>>();
-            (stale, changed)
-        };
-
-        let mut removed = 0usize;
-        let mut registered = 0usize;
-        let mut collisions = 0usize;
-        for command_id in &stale {
-            host.remove_command(HostCommandRemoveRequest {
-                id: command_id.clone(),
-            })
-            .await?;
-            removed = removed.saturating_add(1);
-            self.registered
-                .lock()
-                .map_err(|_| PluginError::internal("commands registry-state lock poisoned"))?
-                .by_command_id
-                .remove(command_id);
+        let mut removed = 0;
+        let mut added = 0;
+        let mut collisions = 0;
+        for command_id in registered.keys().filter(|id| !desired.contains_key(*id)) {
+            host.remove_command(HostCommandRemoveRequest { id: command_id.clone() }).await?;
+            removed += 1;
         }
-        for command_id in &changed {
-            let Some(entry) = catalog.packages.get(command_id) else {
-                continue;
-            };
-            // A changed entry may already be registered under an older
-            // definition; a duplicate is refused rather than replaced, so the
-            // old registration goes first.
-            if self
-                .registered
-                .lock()
-                .map_err(|_| PluginError::internal("commands registry-state lock poisoned"))?
-                .by_command_id
-                .contains_key(command_id)
-            {
-                host.remove_command(HostCommandRemoveRequest {
-                    id: command_id.clone(),
-                })
-                .await?;
-                removed = removed.saturating_add(1);
-                self.registered
-                    .lock()
-                    .map_err(|_| PluginError::internal("commands registry-state lock poisoned"))?
-                    .by_command_id
-                    .remove(command_id);
+
+        let changed = desired.into_iter()
+            .filter(|(id, definition)| registered.get(id) != Some(definition))
+            .take(MAX_SYNCS_PER_PASS);
+        for (command_id, command) in changed {
+            if registered.contains_key(&command_id) {
+                host.remove_command(HostCommandRemoveRequest { id: command_id.clone() }).await?;
+                removed += 1;
             }
-            match host
-                .register_command(HostCommandRegisterRequest {
-                    command: package_command_definition(command_id, entry),
-                })
-                .await
-            {
-                Ok(_) => {
-                    registered = registered.saturating_add(1);
-                    self.registered
-                        .lock()
-                        .map_err(|_| {
-                            PluginError::internal("commands registry-state lock poisoned")
-                        })?
-                        .by_command_id
-                        .insert(command_id.clone(), entry.command.content_hash());
-                }
+            match host.register_command(HostCommandRegisterRequest { command }).await {
+                Ok(_) => added += 1,
                 Err(error) => {
-                    collisions = collisions.saturating_add(1);
+                    collisions += 1;
                     tracing::warn!(
                         target: "agena_commands::registry",
                         command = %command_id,
@@ -1822,9 +1756,8 @@ impl CommandsPlugin {
                 }
             }
         }
-
         Ok(ResyncOutcome {
-            registered,
+            registered: added,
             removed,
             collisions,
             diagnostics: catalog.diagnostics.len(),
@@ -1867,7 +1800,27 @@ impl CommandsPlugin {
         let client = host
             .host_handle()
             .scoped_host_client_for_scope(COMMANDS_PLUGIN_ID.to_string(), loaded.effect_scope());
-        match self.sync_commands(&client, catalog).await {
+        let scope = agena_plugin_host::sdk::host_api::current_host_callback_context()
+            .and_then(|context| context.session_id)
+            .map(agena_plugin_host::PluginScopeKey::session);
+        use agena_plugin_host::ScopedRegistryLayer;
+        let layer = scope.clone().map_or(ScopedRegistryLayer::Global, |scope| {
+            ScopedRegistryLayer::Scope { scope }
+        });
+        let registered = host
+            .host_handle()
+            .command_registry()
+            .visible(scope.as_ref())
+            .into_values()
+            .filter(|entry| entry.owner == plugin_key && entry.layer == layer)
+            .map(|entry| entry.value.command)
+            .filter(|command| {
+                command.category.as_deref() == Some(DISCOVERED_CATEGORY)
+                    && matches!(&command.target, CommandTarget::Method { handler } if handler == HANDLER_RUN)
+            })
+            .map(|command| (command.id.clone(), command))
+            .collect();
+        match self.sync_commands(&client, catalog, registered).await {
             Ok(outcome) => outcome,
             Err(error) => {
                 tracing::warn!(
@@ -2238,6 +2191,7 @@ impl Plugin for CommandsPlugin {
         // the tools. This is the synchronization point because it is a real
         // request boundary with a valid host callback, and the scan stays cheap
         // through the definition catalog's short cache.
+        let _sync = self.catalog_sync.lock().await;
         let catalog = self.definition_catalog_async().await?;
         let sync = self.sync_from_callback(&catalog).await;
 
@@ -2310,6 +2264,7 @@ impl Plugin for CommandsPlugin {
             summary,
             help: Some(lines.join("\n")),
             input_schema: None,
+            hidden: None,
         }))
     }
 
@@ -2418,10 +2373,11 @@ impl CommandsPlugin {
         self.authorize_discovery().await?;
         let access = crate::permissions::read_filter(self.permission_host()?, true)?;
         let predicate = access.predicate();
+        let workspace = self.request_workspace_root()?;
         let result = self
             .run_blocking(move |plugin| {
                 Ok(Self::discovered_catalog_filtered(
-                    plugin.workspace_root()?,
+                    &workspace,
                     &plugin.config(),
                     Some(predicate),
                 ))
@@ -2634,14 +2590,17 @@ impl CommandsPlugin {
     }
 
     async fn invoke_refresh(&self, input: CommandsRefreshInput) -> SdkResult<ToolInvokeOutput> {
-        self.request_catalog().await?;
+        let _sync = self.catalog_sync.lock().await;
+        let catalog = self.request_catalog().await?;
         let (refresh, watcher_status) = self
-            .run_blocking(|plugin| {
-                let refresh = plugin.refresh_catalog()?;
+            .run_blocking(move |plugin| {
+                plugin.invalidate_definition_catalog()?;
+                let refresh = plugin.track_catalog(catalog)?;
                 let watcher_status = plugin.watcher_status()?;
                 Ok((refresh, watcher_status))
             })
             .await?;
+        self.sync_from_callback(&refresh.catalog).await;
         let (watcher_enabled, watched_path_count, watcher_generation) = watcher_status;
         let declared = refresh
             .catalog

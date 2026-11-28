@@ -58,6 +58,8 @@ impl Fixture {
                     relation_kind: agena_domain::SessionRelationKind::Subagent,
                     agent: Some(SessionAgentConfiguration {
                         origin_message_id: None,
+                        workflow: None,
+                        cordis: None,
                         name: "child".into(),
                         status: agena_domain::AgentStatus::Created,
                         started_at_ms: None,
@@ -107,6 +109,7 @@ impl Fixture {
             generation: self.attempt.generation(),
             model: self.model.clone(),
             state,
+            cordis_child_jobs: Default::default(),
             cancel: CancellationToken::new(),
             phase: StdMutex::new(agena_domain::ExecutionPhase::ExecutingTools),
             done: Notify::new(),
@@ -125,6 +128,7 @@ impl Fixture {
                     control: control.clone(),
                     permit: Default::default(),
                     permissions: Default::default(),
+                    cordis_reads: Default::default(),
                 },
             );
         control
@@ -301,6 +305,7 @@ impl Fixture {
             generation: self.attempt.generation(),
             model: self.model.clone(),
             state: state.clone(),
+            cordis_child_jobs: Default::default(),
             cancel: CancellationToken::new(),
             phase: StdMutex::new(agena_domain::ExecutionPhase::ExecutingTools),
             done: Notify::new(),

@@ -66,11 +66,13 @@ pub async fn dispatch_command(
             parent_id,
             prompts,
             profile,
+            setup,
         }) => {
             let session = state
                 .service()
                 .create_session(SessionCreateRequest {
                     workspace_id,
+                    setup,
                     session: SessionHierarchyRequest {
                         title,
                         parent_id,
@@ -82,12 +84,8 @@ pub async fn dispatch_command(
                 .await?;
             Ok(CommandResult::Session(session))
         }
-        Command::SubmitMessage(SubmitRunParams {
-            session_id,
-            options,
-            document,
-        }) => Ok(execution_command_result(
-            state.submit_user_run(session_id, document, options).await?,
+        Command::SubmitMessage(params) => Ok(execution_command_result(
+            state.submit_user_run(params).await?,
         )),
         Command::ContinueRun(ContinueRunParams {
             session_id,
@@ -258,7 +256,7 @@ use super::{
     DeletePermissionRuleParams, DeleteSessionParams, DeleteWorkspaceParams, ForkSessionParams,
     ListSessionTreeParams, MarkInteractiveRequestPresentedParams, ReplacePermissionRuleParams,
     ReplyPermissionParams, ReplyUserInputParams, ResolveWorkspaceParams,
-    RevokePermissionRuleParams, RewindSessionParams, SessionClearMode, SubmitRunParams,
-    UpdateSessionParams, UpdateSessionSelectionParams, UpdateWorkspaceParams, WorkspacePathRequest,
+    RevokePermissionRuleParams, RewindSessionParams, SessionClearMode, UpdateSessionParams,
+    UpdateSessionSelectionParams, UpdateWorkspaceParams, WorkspacePathRequest,
     WorkspaceResolveRequest,
 };

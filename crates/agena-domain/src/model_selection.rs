@@ -85,3 +85,28 @@ impl ModelSelectionConfig {
             && self.parallel_tool_calls.is_none()
     }
 }
+/// Origin of a session model change reported to imported hooks.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelSwitchSource {
+    #[default]
+    Sdk,
+    Command,
+    Picker,
+    Auto,
+    Resume,
+}
+
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ModelSwitchInteraction {
+    pub source: ModelSwitchSource,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confirmation: Option<uuid::Uuid>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ModelSwitchConfirmation {
+    pub token: uuid::Uuid,
+    pub reason: String,
+}

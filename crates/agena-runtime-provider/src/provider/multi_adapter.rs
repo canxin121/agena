@@ -287,6 +287,7 @@ impl ModelRuntime for MultiAdapterProvider {
         fn model_speed_modes / model_speed_modes_for_adapter (&self, model: &ModelId) -> BTreeMap<String, ModelSpeedMode>;
         fn supports_prompt_continuation / supports_prompt_continuation_for_adapter (&self, model: &ModelId) -> bool;
         fn native_compaction_enabled / native_compaction_enabled_for_adapter (&self, model: &ModelId) -> bool;
+        fn supports_native_compaction / supports_native_compaction_for_adapter (&self, model: &ModelId) -> bool;
         fn prompt_cache_shape / prompt_cache_shape_for_adapter (&self, model: &ModelId) -> Option<PromptCacheShape>;
         fn provider_native_tools_config / provider_native_tools_config_for_adapter (&self, model: &ModelId) -> ProviderNativeToolsConfig;
         fn agena_tool_mode / agena_tool_mode_for_adapter (&self, model: &ModelId) -> AgenaToolMode;
@@ -491,6 +492,19 @@ impl ModelRuntime for MultiAdapterProvider {
             .get(&(adapter_id.to_string(), model.to_string()))
             .map(|route| route.native_compaction)
             .unwrap_or(true)
+    }
+
+    fn supports_native_compaction_for_adapter(
+        &self,
+        adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> bool {
+        self.map_route_and_adapter(
+            adapter_id,
+            model,
+            |_, target, _, _, _, adapter| adapter.supports_native_compaction(target),
+        )
+        .unwrap_or(false)
     }
 
     fn prompt_cache_shape_for_adapter(

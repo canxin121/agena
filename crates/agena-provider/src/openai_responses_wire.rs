@@ -129,6 +129,19 @@ pub struct OpenAiUsage {
     /// xAI reports exact request cost in 10^-10 USD ticks.
     #[serde(default)]
     pub cost_in_usd_ticks: Option<u64>,
+    /// Weighted rollout units reported by the Responses provider.
+    #[serde(default, deserialize_with = "rollout_units")]
+    pub codex_rollout_budget_units: Option<f64>,
+}
+
+fn rollout_units<'de, D: serde::Deserializer<'de>>(input: D) -> Result<Option<f64>, D::Error> {
+    let units = Option::<f64>::deserialize(input)?;
+    if units.is_some_and(|value| !value.is_finite() || value < 0.0) {
+        return Err(serde::de::Error::custom(
+            "usage.codex_rollout_budget_units must be finite and non-negative",
+        ));
+    }
+    Ok(units)
 }
 
 pub type OpenAiOutputTokenDetails = crate::ChatOutputTokensDetails;
@@ -136,7 +149,7 @@ pub type OpenAiOutputTokenDetails = crate::ChatOutputTokensDetails;
 pub type OpenAiInputTokenDetails = crate::ChatInputTokensDetails;
 
 pub fn openai_responses_usage_to_completion(usage: OpenAiUsage) -> crate::CompletionUsage {
-    crate::chat_usage_to_completion(crate::ChatUsage {
+    let mut normalized = crate::chat_usage_to_completion(crate::ChatUsage {
         input_tokens: usage.input_tokens,
         output_tokens: usage.output_tokens,
         total_tokens: usage.total_tokens,
@@ -145,7 +158,17 @@ pub fn openai_responses_usage_to_completion(usage: OpenAiUsage) -> crate::Comple
         output_tokens_details: usage.output_tokens_details,
         cost_in_usd_ticks: usage.cost_in_usd_ticks,
         ..Default::default()
-    })
+    });
+    if let Some(quantity) = usage.codex_rollout_budget_units {
+        normalized.billable_items.push(crate::BillableUsageItem {
+            kind: "codex_rollout_budget_units".into(),
+            unit: "codex_rollout_budget_unit".into(),
+            quantity,
+            pricing_source: Some("provider_reported".into()),
+            ..Default::default()
+        });
+    }
+    normalized
 }
 
 pub fn openai_responses_reasoning_delta(event: &serde_json::Value) -> Option<String> {
@@ -161,4 +184,28 @@ pub fn openai_responses_reasoning_delta(event: &serde_json::Value) -> Option<Str
             .map(ToOwned::to_owned);
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn imported_codex_rollout_units_are_optional_and_nonnegative() {
+        for value in [json!(-0.5), json!("2.5"), json!(true)] {
+            assert!(
+                serde_json::from_value::<OpenAiUsage>(json!({"codex_rollout_budget_units": value}))
+                    .is_err()
+            );
+        }
+        let observed = |wire| {
+            openai_responses_usage_to_completion(serde_json::from_value(wire).unwrap())
+                .billable_items
+        };
+        assert!(observed(json!({"input_tokens": 2})).is_empty());
+        let zero = observed(json!({"input_tokens": 2, "codex_rollout_budget_units": 0}));
+        assert_eq!(zero[0].quantity, 0.0);
+        assert_eq!(zero[0].kind, "codex_rollout_budget_units");
+    }
 }

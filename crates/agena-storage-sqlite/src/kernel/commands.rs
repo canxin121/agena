@@ -17,9 +17,11 @@ pub(super) async fn apply(
         | Command::PresentInteraction { .. }
         | Command::CreateConfigured { .. }
         | Command::CreateGlobal { .. }
+        | Command::CreateSeededAgent { .. }
         | Command::EnsureLocalBotSession { .. }
         | Command::DetachGlobal { .. }
         | Command::Configure { .. }
+        | Command::RegisterWorkingDirectory { .. }
         | Command::RecoverChannelAuthority { .. }
         | Command::FinishAgent { .. }
         | Command::Fork { .. }
@@ -180,6 +182,7 @@ pub(super) async fn apply(
             blobs,
             author,
             origin,
+            model_context,
         } => {
             reads::metadata(connection, *session).await?;
             if document.is_empty() {
@@ -203,10 +206,7 @@ pub(super) async fn apply(
                     return Err(KernelError::Busy);
                 }
             }
-            let body = encode_user_body(document, author.as_ref(), origin.as_ref())?;
-            if body.len() > 256 * 1024 {
-                return Err(invalid("composer document exceeds 256 KiB"));
-            }
+            let body = encode_user_body(document, author.as_ref(), origin.as_ref(), model_context)?;
             let execution = ExecutionId::new();
             let entry: i64 = sqlx::query_scalar("INSERT INTO agena_entries (origin_session_id,execution_id,generation,kind,body_json,created_at_ms) VALUES (?,?,1,'user',?,?) RETURNING id")
                 .bind(session.get()).bind(execution.to_string()).bind(body).bind(now)
@@ -237,6 +237,7 @@ pub(super) async fn apply(
             expected_revision,
             document,
             blobs,
+            model_context,
         } => {
             let (view, _) = reads::execution(connection, *session, *execution).await?;
             let (revision, started): (i64, bool) = sqlx::query_as("SELECT revision,EXISTS(SELECT 1 FROM agena_attempts a WHERE a.execution_id=? AND a.started_at_ms IS NOT NULL) FROM agena_entries WHERE id=?")
@@ -272,11 +273,20 @@ pub(super) async fn apply(
                     .await
                     .map_err(sql_error)?;
             let existing = decode_user_body(&existing)?;
-            let body =
-                encode_user_body(document, existing.author.as_ref(), existing.origin.as_ref())?;
-            if document.is_empty() || body.len() > 256 * 1024 {
-                return Err(invalid("message must be nonempty and within 256 KiB"));
+            if document.is_empty() {
+                return Err(invalid("message is empty"));
             }
+            let model_context = if *document == existing.document && !existing.model_context.is_empty() {
+                existing.model_context.as_slice()
+            } else {
+                model_context.as_slice()
+            };
+            let body = encode_user_body(
+                document,
+                existing.author.as_ref(),
+                existing.origin.as_ref(),
+                model_context,
+            )?;
             sqlx::query("UPDATE agena_entries SET body_json=?,revision=revision+1 WHERE id=?")
                 .bind(body)
                 .bind(view.message_id.get())
@@ -302,21 +312,25 @@ pub(super) async fn apply(
         Command::Claim {
             session,
             execution,
-            epoch,
+            ..
         }
         | Command::ClaimNext {
             session,
             execution,
-            epoch,
+            ..
+        }
+        | Command::CancelNext {
+            session,
+            execution,
             ..
         } => {
             let (view, _) = reads::execution(connection, *session, *execution).await?;
-            if let Command::ClaimNext {
-                expected_generation: Some(expected),
-                ..
-            } = command
-                && *expected != view.generation
-            {
+            let expected_generation = match command {
+                Command::ClaimNext { expected_generation, .. } => *expected_generation,
+                Command::CancelNext { expected_generation, .. } => Some(*expected_generation),
+                _ => None,
+            };
+            if expected_generation.is_some_and(|expected| expected != view.generation) {
                 return Err(KernelError::StaleAttempt);
             }
             // This check and the claim share the serialized writer transaction.
@@ -327,7 +341,7 @@ pub(super) async fn apply(
             {
                 return Err(KernelError::QueuePaused);
             }
-            if matches!(command, Command::ClaimNext { .. }) {
+            if !matches!(command, Command::Claim { .. }) {
                 let blocked: bool = sqlx::query_scalar(
                     "SELECT EXISTS(
                         SELECT 1 FROM agena_attempts a
@@ -341,6 +355,18 @@ pub(super) async fn apply(
                     return Err(KernelError::QueueOutOfOrder);
                 }
             }
+            let epoch = match command {
+                Command::Claim { epoch, .. } | Command::ClaimNext { epoch, .. } => epoch,
+                Command::CancelNext { notice, .. } => {
+                    if view.phase != ExecutionPhase::Queued {
+                        return Err(KernelError::StaleAttempt);
+                    }
+                    let view = finish(connection, view, ExecutionPhase::Cancelled).await?;
+                    super::lifecycle::notice(connection, *session, view.message_id, notice).await?;
+                    return Ok(Mutation::Execution(view));
+                }
+                _ => unreachable!(),
+            };
             let mut state = ExecutionState::from_stored(view.generation, view.phase);
             state.claim()?;
             sqlx::query("UPDATE agena_attempts SET phase='running',owner_epoch=?,started_at_ms=? WHERE execution_id=? AND generation=?")
@@ -414,6 +440,9 @@ pub(super) async fn apply(
         }
         Command::Retry { session, execution } => {
             let (view, _) = reads::execution(connection, *session, *execution).await?;
+            if view.purpose == ExecutionPurpose::PluginCommand {
+                return Err(invalid("invoke the plugin command again to start another job"));
+            }
             let mut state = ExecutionState::from_stored(view.generation, view.phase);
             let next = state.retry()?;
             sqlx::query("UPDATE agena_entries SET revision=revision+1 WHERE id=?")
@@ -666,6 +695,7 @@ pub(super) async fn apply(
             tool,
             result,
             blobs,
+            activity_reads,
         } => {
             check_scope(connection, *scope, true).await?;
             check_tool(connection, *scope, *tool).await?;
@@ -691,6 +721,17 @@ pub(super) async fn apply(
                     .await
                     .map_err(sql_error)?;
             super::blobs::publish(connection, scope.session, entry, blobs).await?;
+            if result.phase == ToolPhase::Succeeded {
+                if activity_reads.len() > 16 {
+                    return Err(invalid("a tool may acknowledge at most 16 activity outputs"));
+                }
+                for read in activity_reads {
+                    super::activity::acknowledge_output(connection, scope.session, *read).await?;
+                    if read.position.outcome_read {
+                        super::activity::retire_pending_notice(connection, scope.session, read.activity).await?;
+                    }
+                }
+            }
             sqlx::query(
                 "UPDATE agena_tool_calls SET phase=?,result_json=?,finished_at_ms=? WHERE id=?",
             )
@@ -724,9 +765,47 @@ pub(super) async fn apply(
             scope,
             tool,
             activity,
-        } => super::activity::begin(connection, *scope, *tool, activity).await,
-        Command::EndActivity { scope, outcome } => {
-            super::activity::end(connection, *scope, outcome).await
+            output_retention,
+        } => super::activity::begin(connection, *scope, *tool, activity, *output_retention).await,
+        Command::BeginPluginCommandActivity { scope, origin, activity, retention } => {
+            super::activity::begin_command(connection, *scope, origin, activity, *retention).await
+        }
+        Command::EndActivity { scope, outcome, notice, output_terminal } => {
+            let result = super::activity::end(connection, *scope, outcome, output_terminal.as_ref()).await?;
+            if let Some(notice) = notice {
+                let key = super::activity::notice_key(scope.id);
+                let mut payload = serde_json::json!({
+                    "kind": "integration_notice",
+                    "notice_id": key,
+                    "origin_message_id": notice.origin_message_id.get(),
+                    "text": notice.text,
+                    "wake": notice.wake,
+                });
+                if let Some(budget) = &notice.wake_budget {
+                    payload["wake_budget"] = serde_json::to_value(budget).map_err(storage)?;
+                }
+                if let Some(position) = notice.output_position {
+                    payload["activity_output"] = serde_json::to_value(ActivityOutputRead {
+                        activity: scope.id,
+                        position,
+                    }).map_err(storage)?;
+                }
+                super::lifecycle::publish_delivery(connection, scope.session, None, &key, &payload)
+                    .await?;
+            }
+            Ok(result)
+        }
+        Command::AppendActivityOutput { scope, total, chunks } => {
+            super::activity_output::append(connection, *scope, *total, chunks).await
+        }
+        Command::SetActivityOutputSpillPaths { scope, paths } => {
+            super::activity_output::set_spill_paths(connection, *scope, paths).await
+        }
+        Command::AcknowledgeActivityOutput { session, read, expected } => {
+            super::activity::acknowledge_direct_output(connection, *session, *read, *expected).await
+        }
+        Command::UnlistSettledActivity { session, activity } => {
+            super::activity::unlist_settled(connection, *session, *activity).await
         }
         Command::OpenActivityOutput { scope, kind } => {
             super::activity::open_output(connection, *scope, *kind).await
@@ -736,8 +815,12 @@ pub(super) async fn apply(
             round,
             tool,
             reasoning,
+            display,
         } => {
             let execution = check_scope(connection, *scope, true).await?;
+            if *display && (*reasoning || tool.is_some()) {
+                return Err(invalid("display streams require an assistant text entry"));
+            }
             if let Some(tool) = tool {
                 if *reasoning || check_tool(connection, *scope, *tool).await? != *round {
                     return Err(KernelError::Ownership);
@@ -751,11 +834,11 @@ pub(super) async fn apply(
             .fetch_one(&mut *connection)
             .await
             .map_err(sql_error)?;
-            if active >= content::MAX_LIVE_SOURCES {
+            if active + i64::from(*display) >= content::MAX_LIVE_SOURCES {
                 return Err(KernelError::Busy);
             }
             let id = agena_domain::ContentId::new();
-            let epoch = agena_domain::ContentEpoch::new();
+            let display = display.then(agena_domain::ContentId::new);
             let entry: i64 = if let Some(tool) = tool {
                 let entry = sqlx::query_scalar(
                     "SELECT id FROM agena_entries WHERE tool_id=? AND kind='tool'",
@@ -774,13 +857,23 @@ pub(super) async fn apply(
                 append_history(connection, scope.session, entry).await?;
                 entry
             };
-            sqlx::query("INSERT INTO agena_content_streams (id,entry_id,session_id,execution_id,generation,kind,epoch,capture_state) VALUES (?,?,?,?,?,'text',?,'open')")
-                .bind(id.to_string()).bind(entry).bind(scope.session.get()).bind(scope.execution.to_string()).bind(scope.generation.get()).bind(epoch.to_string())
-                .execute(&mut *connection).await.map_err(sql_error)?;
-            Ok(Mutation::Content({
+            let mut heads = Vec::with_capacity(1 + usize::from(display.is_some()));
+            // A display stream is the second text source owned by this
+            // assistant entry. Keep the primary entry pointer on raw text.
+            for id in std::iter::once(id).chain(display) {
+                let epoch = agena_domain::ContentEpoch::new();
+                sqlx::query("INSERT INTO agena_content_streams (id,entry_id,session_id,execution_id,generation,kind,epoch,capture_state) VALUES (?,?,?,?,?,'text',?,'open')")
+                    .bind(id.to_string()).bind(entry).bind(scope.session.get()).bind(scope.execution.to_string()).bind(scope.generation.get()).bind(epoch.to_string())
+                    .execute(&mut *connection).await.map_err(sql_error)?;
                 content::assign_ordinal(connection, id).await?;
-                content::stored_head(connection, id).await?
-            }))
+                heads.push(content::stored_head(connection, id).await?);
+            }
+            let mut heads = heads.into_iter();
+            let original = heads.next().expect("raw text source");
+            Ok(match heads.next() {
+                Some(display) => Mutation::TextWithDisplay { original, display },
+                None => Mutation::Content(original),
+            })
         }
         Command::OpenEvents {
             scope,
@@ -960,6 +1053,10 @@ async fn settle_children(
     view: &ExecutionView,
     now: i64,
 ) -> Result<()> {
+    // A plugin submission that lost its turn must still reach a new turn.
+    // Execution guidance below remains tied to the stopped attempt.
+    sqlx::query("UPDATE agena_deliveries SET target_execution_id=NULL WHERE target_execution_id=? AND state='pending' AND json_extract(payload_json,'$.kind')='plugin_prompt'")
+        .bind(view.id.to_string()).execute(&mut *connection).await.map_err(sql_error)?;
     // Guidance is scoped to this attempt's lifetime. Cancellation, failure or
     // interruption must not leave instructions for a later retry/followup.
     sqlx::query("UPDATE agena_deliveries SET state='failed' WHERE target_execution_id=? AND state='pending'")
@@ -1151,6 +1248,18 @@ async fn remember_rule(
     Ok(())
 }
 
+/// Allocate the next entry ID inside the writer transaction so a notice
+/// can use its own ID as its foreign-key anchor in one INSERT.
+pub(super) async fn next_entry_id(connection: &mut SqliteConnection) -> Result<i64> {
+    let previous: i64 = sqlx::query_scalar(
+        "SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name='agena_entries'),0)",
+    )
+    .fetch_one(connection)
+    .await
+    .map_err(sql_error)?;
+    previous.checked_add(1).ok_or_else(|| invalid("entry identity exhausted"))
+}
+
 /// Detach the tail inside the write transaction. Reuse it when there are no
 /// remaining edges, and copy the visible range when a branch or snapshot owns it.
 pub(super) async fn append_history(
@@ -1219,6 +1328,17 @@ pub(super) async fn append_history(
                 }
                 segment
             };
+            if first != 0 {
+                // A shared slice can start at a nonzero ordinal. Copying the
+                // tail rebases its positions, including the prompt checkpoint.
+                sqlx::query("UPDATE agena_prompt_windows SET through_ordinal=through_ordinal-? WHERE session_id=? AND through_sequence=?")
+                    .bind(first)
+                    .bind(session.get())
+                    .bind(sequence)
+                    .execute(&mut *connection)
+                    .await
+                    .map_err(sql_error)?;
+            }
             (sequence, segment, end - first, users, Some(latest))
         }
         Some((sequence, ..)) => (
@@ -1306,6 +1426,7 @@ pub(super) async fn recover(database: &sea_orm::DatabaseConnection) -> Result<()
         "UPDATE agena_entries SET revision=revision+1 WHERE tool_id IN (SELECT id FROM agena_tool_calls WHERE phase IN ('preparing','running'))",
         "UPDATE agena_tool_calls SET phase='interrupted',result_json='null',finished_at_ms=? WHERE phase IN ('preparing','running')",
         "UPDATE agena_rounds SET phase='interrupted',finished_at_ms=? WHERE phase='running'",
+        "UPDATE agena_deliveries SET target_execution_id=NULL WHERE state='pending' AND target_execution_id IS NOT NULL AND json_extract(payload_json,'$.kind')='plugin_prompt'",
         "UPDATE agena_deliveries SET state='failed' WHERE state='pending' AND target_execution_id IS NOT NULL AND EXISTS(SELECT 1 FROM agena_executions x JOIN agena_attempts a ON a.execution_id=x.id AND a.generation=x.current_generation WHERE x.id=agena_deliveries.target_execution_id AND a.phase!='queued')",
         "UPDATE agena_attempts SET phase='interrupted',finished_at_ms=MAX(?,COALESCE(started_at_ms,?)) WHERE phase='running'",
         "UPDATE agena_session_statistics SET processing_state='ready' WHERE queued_executions>0 AND running_executions=0 AND EXISTS(SELECT 1 FROM agena_sessions s WHERE s.id=agena_session_statistics.session_id AND COALESCE(json_extract(s.configuration_json,'$.message_queue_paused'),0)=1)",
@@ -1507,10 +1628,8 @@ async fn control_queue(
                 &document,
                 existing.author.as_ref(),
                 existing.origin.as_ref(),
+                &[],
             )?;
-            if body.len() > 256 * 1024 {
-                return Err(invalid("composer document exceeds 256 KiB"));
-            }
             sqlx::query("UPDATE agena_entries SET body_json=?,revision=revision+1 WHERE id=?")
                 .bind(body)
                 .bind(view.message_id.get())

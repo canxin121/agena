@@ -176,6 +176,7 @@ async fn live_channel_tool(
         generation: attempt.generation(),
         model: ModelRef::new("test", "test"),
         state: manager.state.load_full(),
+        cordis_child_jobs: Default::default(),
         cancel: CancellationToken::new(),
         phase: StdMutex::new(agena_domain::ExecutionPhase::ExecutingTools),
         done: Notify::new(),
@@ -190,6 +191,7 @@ async fn live_channel_tool(
             control,
             permit: Default::default(),
             permissions: Default::default(),
+            cordis_reads: Default::default(),
         },
     );
     (attempt, round, tool, queued.message_id)
@@ -912,6 +914,8 @@ async fn shared_channel_child_continuation_keeps_alice_after_bob_speaks() {
     }
     let mut agent = SessionAgentConfiguration {
         origin_message_id: Some(inputs[0].message_id),
+        workflow: None,
+        cordis: None,
         name: "alice_worker".into(),
         status: agena_domain::AgentStatus::Running,
         started_at_ms: Some(1000),

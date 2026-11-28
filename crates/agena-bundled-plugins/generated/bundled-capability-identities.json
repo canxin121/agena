@@ -3,7 +3,7 @@
   "snapshot_date": "2026-07-27",
   "counts": {
     "plugins": 27,
-    "tools": 220,
+    "tools": 226,
     "bundled_commands": 14
   },
   "plugins": [
@@ -47,8 +47,8 @@
           "tags": [
             "agent"
           ],
-          "definition_identity": "d2f55229c236d1a6f0932f7f651aa1c7808f27cde255ad9de54fb9c7901355a3",
-          "input_schema_sha256": "9d1e990449b29be4ea62d10651f1173e82bd28640139c0e7969df030e7626623",
+          "definition_identity": "aba01d3335e57262816be5a6ef537e81fdf45a2f1c7c1db04f24eee39e8f1b4e",
+          "input_schema_sha256": "4d3f5bcead9e1afaa96a3e6248852704a2e4f228956f0a20c5c829205da0df0c",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
         },
         {
@@ -1767,6 +1767,18 @@
       "version": "0.1.0",
       "tools": [
         {
+          "canonical_name": "agena.mcp.apps.call",
+          "conditional": "runtime:mcp-manager",
+          "tags": [
+            "execute",
+            "mcp",
+            "mutate"
+          ],
+          "definition_identity": "2d9a1cce5be07eb8104c30576b9e3b46e9e33ac28a72567d377bc926236c43f6",
+          "input_schema_sha256": "ce9f5909834607999da7b5ea25d7e26c4e2cdbac79ac4cd971f3b8e8c408680e",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+        },
+        {
           "canonical_name": "agena.mcp.connections.auth.cancel",
           "conditional": "runtime:mcp-manager",
           "tags": [
@@ -1982,6 +1994,19 @@
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
         },
         {
+          "canonical_name": "agena.mcp.resources.directory.list",
+          "conditional": "runtime:mcp-manager",
+          "tags": [
+            "query",
+            "mcp",
+            "discovery",
+            "read_only"
+          ],
+          "definition_identity": "d5ed9bf3d2d257230f033e2d6f30be5e3f65dde782859b0dfec215f28c28a066",
+          "input_schema_sha256": "619a1a532f030fb862164eca0bc41179d4d21794e8915c86d2b809f53bdd16ef",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+        },
+        {
           "canonical_name": "agena.mcp.resources.list",
           "conditional": "runtime:mcp-manager",
           "tags": [
@@ -2044,6 +2069,31 @@
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
         },
         {
+          "canonical_name": "agena.mcp.skills.list",
+          "conditional": "runtime:mcp-manager",
+          "tags": [
+            "query",
+            "mcp",
+            "discovery",
+            "read_only"
+          ],
+          "definition_identity": "4a0b2ee70848682a0db752f8f5e2a16d66a0caeed0b017cc30d240384900b431",
+          "input_schema_sha256": "9514258b23be12ef8841eeeeaa3adf7a5db2f44bf092209f6fb8309166f4f3af",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+        },
+        {
+          "canonical_name": "agena.mcp.skills.read",
+          "conditional": "runtime:mcp-manager",
+          "tags": [
+            "query",
+            "mcp",
+            "read_only"
+          ],
+          "definition_identity": "6998e6892e849bfe5d7fa9b6f70efc218e5f4f8952b2c19cad7443959867254f",
+          "input_schema_sha256": "1a943d0551ed6a3fb25d12798bc0bf714e1e7632afa3874406452309cd2e4c2a",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+        },
+        {
           "canonical_name": "agena.mcp.tools.call",
           "conditional": "runtime:mcp-manager",
           "tags": [
@@ -2064,8 +2114,8 @@
             "discovery",
             "read_only"
           ],
-          "definition_identity": "625ee1d49764ca43bdade5803b28f3847f6f5150af40daccc06c0929016d53e5",
-          "input_schema_sha256": "8858a7e1dbc6fe08ea08b16b75b1cbae082555cfc48bbb0d8400881a2d279519",
+          "definition_identity": "c53eec3912796715126555a221764b62dcead0f181dc1a9c0d1cd96615ad5e6b",
+          "input_schema_sha256": "f43be665308d0f99f3b78571bd55c21d965ef3dd62ddb1ff7060fac69dfd0a68",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
         }
       ],
@@ -2153,6 +2203,17 @@
       "version": "0.1.0",
       "tools": [
         {
+          "canonical_name": "agena.notebook.edit",
+          "conditional": null,
+          "tags": [
+            "mutate",
+            "filesystem"
+          ],
+          "definition_identity": "fe6fde2349da6778893144e3733dbb8754d5f96d30e5fbf841057ce5c0f24ad2",
+          "input_schema_sha256": "fdbb86228b05609d8e07bf9dcbaf807e4a3a4404b24f0ba1741aac02060e6e00",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+        },
+        {
           "canonical_name": "agena.notebook.edit_cell",
           "conditional": null,
           "tags": [
@@ -2161,6 +2222,18 @@
           ],
           "definition_identity": "4ee1687651cafa5c631e807f39ecef79c0ef20c811171eb70b48f5d86f801553",
           "input_schema_sha256": "e0a094f4a26529f661e12356c8b249a394d6729577fb10a082643a9682822ac9",
+          "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+        },
+        {
+          "canonical_name": "agena.notebook.read",
+          "conditional": null,
+          "tags": [
+            "query",
+            "filesystem",
+            "read_only"
+          ],
+          "definition_identity": "8b6bc2ead6dc5a4c9f9efa3eb27ff0b2ca92fd79c028ba37aae1f193780bb654",
+          "input_schema_sha256": "53f3d728eb67d3d769a9aeecbb3b34dc5b0b713d43bcb16b1dcb84f970f60949",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
         }
       ],
@@ -2690,8 +2763,8 @@
             "discovery",
             "read_only"
           ],
-          "definition_identity": "e2868aafb1550b4c61e73681665bd7c7b9595077f6b1d60056734012a7a85c2e",
-          "input_schema_sha256": "4cb593165658bd6d7bcc14ba06c2ffad5ef8861274be1d4aabd70387cd0474d8",
+          "definition_identity": "ddb3c485778ab24ec5606ae50b7f44023ca6265e4590af605d8854956755c092",
+          "input_schema_sha256": "e3634d7f450b3120e9c746ef4aa775c8dd9304ceb6aa5d96a87fd8c62294f311",
           "output_schema_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
         },
         {

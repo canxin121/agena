@@ -85,7 +85,13 @@ pub struct SessionExecutionContext {
     pub channel_verifier:
         Option<std::sync::Arc<dyn agena_runtime_contracts::ChannelAccessVerifier>>,
     pub capability_denied_tool_names: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_tool_allowlist: Option<BTreeSet<String>>,
     pub effective_workspace_root: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_directory: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_working_directories: Vec<PathBuf>,
 }
 impl agena_runtime_contracts::ToolSessionContext for SessionExecutionContext {
     fn is_global(&self) -> bool {
@@ -110,6 +116,12 @@ impl agena_runtime_contracts::ToolSessionContext for SessionExecutionContext {
     fn effective_workspace_root(&self) -> Option<&Path> {
         self.effective_workspace_root.as_deref()
     }
+    fn working_directory(&self) -> Option<&Path> {
+        self.working_directory.as_deref()
+    }
+    fn additional_working_directories(&self) -> &[PathBuf] {
+        &self.additional_working_directories
+    }
     fn effective_permission(&self) -> &PermissionConfig {
         &self.effective_permission
     }
@@ -121,6 +133,9 @@ impl agena_runtime_contracts::ToolSessionContext for SessionExecutionContext {
     }
     fn capability_denied_tool_names(&self) -> &BTreeSet<String> {
         &self.capability_denied_tool_names
+    }
+    fn profile_tool_allowlist(&self) -> Option<&BTreeSet<String>> {
+        self.profile_tool_allowlist.as_ref()
     }
     fn channel_authority(&self) -> Option<&agena_domain::ChannelAuthority> {
         self.channel_authority.as_ref()

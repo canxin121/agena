@@ -266,6 +266,7 @@
 //! | POST | `/api/v1/sessions/{session_id}/assistant/reminders/{reminder_id}` | `control_assistant_reminder()` |
 //! | POST | `/api/v1/sessions/{session_id}/assistant/memory` | `edit_assistant_memory()` |
 //! | GET,POST | `/api/v1/sessions/{session_id}/integrations` | `list_integrations()`, `create_integration()` |
+//! | GET,POST | `/api/v1/sessions/{session_id}/working-directories` | `list_working_directories()`, `register_working_directory()` |
 //! | GET | `/api/v1/sessions/{session_id}/integrations/{binding_id}` | `integration_detail()` |
 //! | POST | `/api/v1/sessions/{session_id}/integrations/{binding_id}/control` | `control_integration()` |
 //! | PUT | `/api/v1/sessions/{session_id}/integrations/{binding_id}/access` | `update_channel_access()` |
@@ -292,6 +293,13 @@
 //! | GET | `/api/v1/sessions/{session_id}/inline-ui/{reference}/stream` | `stream_inline_ui()` |
 //! | GET | `/api/v1/sessions/{session_id}/inline-ui/{reference}` | `read_inline_ui_reference()` |
 //! | GET | `/api/v1/sessions/{session_id}/parts/{part_id}/tool-sections/{section}` | `get_session_tool_detail()` |
+//! | GET,POST | `/api/v1/sessions/{session_id}/parts/{part_id}/mcp-app` | `get_mcp_app_document()`, `request_mcp_app()` |
+//! | GET | `/api/v1/sessions/{session_id}/parts/{part_id}/mcp-app/{catalog}/changes` | `watch_mcp_app_catalog()` |
+//! | POST | `/api/v1/sessions/{session_id}/parts/{part_id}/mcp-app/views` | `open_mcp_app_view()` |
+//! | PUT,DELETE | `/api/v1/sessions/{session_id}/parts/{part_id}/mcp-app/views/{view}` | `update_mcp_app_view()`, `close_mcp_app_view()` |
+//! | GET | `/api/v1/sessions/{session_id}/parts/{part_id}/mcp-app/views/{view}/calls` | `poll_mcp_app_view_calls()` |
+//! | POST | `/api/v1/sessions/{session_id}/parts/{part_id}/mcp-app/views/{view}/calls/{call}` | `reply_mcp_app_view_call()` |
+//! | POST | `/api/v1/sessions/{session_id}/parts/{part_id}/mcp-app/views/{view}/server` | `request_mcp_app_server()` |
 //! | GET | `/api/v1/sessions/{session_id}/runs` | `read_session_runs()` |
 //! | GET | `/api/v1/sessions/{session_id}/changes/stream` | `stream_session_changes()` |
 //! | POST | `/api/v1/sessions/{session_id}/messages` | `submit_message()` |

@@ -73,8 +73,23 @@ mod cancellation_tests;
 mod contract_tests;
 mod host_handle;
 mod host_scoped_client;
+mod imported_mods;
+mod imported_lifecycle;
+mod imported_prompt_scope;
+pub use imported_mods::{
+    ImportedPromptMediaReader, ImportedPromptSubmit, ImportedToolCall, ImportedToolDecision,
+};
+pub use imported_prompt_scope::ImportedPromptScope;
+
+pub struct UserPromptSubmitOutput {
+    pub prompt: String,
+    pub additional_context: Vec<String>,
+}
 mod lifecycle_dispatch;
 mod lifecycle_hooks;
+mod lifecycle_scope;
+pub(crate) use lifecycle_scope::SessionLifecycleScope;
+pub use lifecycle_scope::{is_session_disposal, is_shutdown_session_end, is_worktree_removal};
 #[cfg(test)]
 mod lifecycle_tests;
 #[cfg(test)]
@@ -260,6 +275,7 @@ pub struct LoadedPlugin {
     pub effect_scope: Arc<PluginEffectScope>,
     pub trust_level: String,
     pub provenance: Vec<String>,
+    pub(crate) agent_plugin: Option<Arc<crate::AgentPluginDescriptor>>,
     pub(crate) web_bundle: std::sync::OnceLock<Arc<crate::web::PluginWebBundle>>,
     pub(crate) web_generation: String,
 }
@@ -280,6 +296,10 @@ impl LoadedPlugin {
 
     pub fn configured_plugin(&self) -> &crate::config::ConfiguredPlugin {
         &self.configured_plugin
+    }
+
+    pub fn agent_plugin(&self) -> Option<&crate::AgentPluginDescriptor> {
+        self.agent_plugin.as_deref()
     }
 
     pub fn authority_summary(&self) -> PluginAuthoritySummary {
@@ -346,6 +366,7 @@ impl LoadedPlugin {
             effect_scope,
             trust_level,
             provenance,
+            agent_plugin: None,
             web_bundle: std::sync::OnceLock::new(),
             web_generation: uuid::Uuid::new_v4().to_string(),
         }
@@ -360,7 +381,7 @@ impl LoadedPlugin {
         effect_scope: Arc<PluginEffectScope>,
         transport: Arc<dyn PluginTransport>,
     ) -> Self {
-        Self::new_with_scope(
+        let mut plugin = Self::new_with_scope(
             self.kind,
             self.configured_plugin.clone(),
             transport,
@@ -368,7 +389,9 @@ impl LoadedPlugin {
             self.manifest.clone(),
             self.trust_level.clone(),
             self.provenance.clone(),
-        )
+        );
+        plugin.agent_plugin.clone_from(&self.agent_plugin);
+        plugin
     }
 
     pub fn subscribes(&self, sub: HookSubscription) -> bool {
@@ -464,6 +487,31 @@ pub use agena_plugin_sdk::inspection::{
 
 fn command_registry_name(plugin_id: &PluginKey, command_id: &str) -> String {
     format!("{plugin_id}/{command_id}")
+}
+
+pub fn decode_plugin_command_input(
+    definition: &CommandDefinition,
+    mut input: serde_json::Value,
+    raw: &str,
+) -> Result<serde_json::Value, PluginError> {
+    if input.is_null() || input.as_object().is_some_and(serde_json::Map::is_empty) {
+        if matches!(&definition.target, crate::sdk::CommandTarget::Method { handler }
+            if handler == crate::agent_plugin::claude_mods::COMMAND_HANDLER)
+        {
+            // The Claude function hook receives the literal argument tail.
+            input = serde_json::json!({"args":raw});
+        } else {
+            return definition
+                .input
+                .parse_shorthand(raw)
+                .map_err(|error| PluginError::invalid_params_error(&error));
+        }
+    }
+    definition
+        .input
+        .validate_value(&input)
+        .map_err(|error| PluginError::invalid_params_error(&error))?;
+    Ok(input)
 }
 
 /// The sort key is the order every client renders. `slash` sits above `id` so
@@ -662,6 +710,8 @@ fn tool_hook_context(
         authority_token: None,
         http_binding_id: None,
         sandbox_enabled: None,
+        mcp_app: None,
+        plugin_command: None,
     }
 }
 
@@ -740,6 +790,9 @@ fn hook_registration_for_plugin(
 fn plugin_source_summary(configured_plugin: &ConfiguredPlugin) -> (String, Option<String>) {
     match &configured_plugin.package {
         PluginPackage::Static {} => ("static".to_string(), None),
+        PluginPackage::AgentPlugin { path, .. } => {
+            ("agent_plugin".to_string(), Some(path.display().to_string()))
+        }
         PluginPackage::Cdylib { path, .. } => {
             ("cdylib".to_string(), Some(path.display().to_string()))
         }

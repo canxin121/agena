@@ -35,6 +35,7 @@ mod context_governor;
 mod error;
 mod guards;
 mod installation_id;
+mod mcp_app_views;
 mod metrics;
 mod periodic;
 mod prompt_budget;
@@ -60,6 +61,7 @@ pub use context_governor::ContextGovernor;
 pub use error::AppError;
 pub use guards::{AbortOnDrop, spawn_abortable, spawn_detached};
 pub use installation_id::resolve_installation_id;
+pub use mcp_app_views::{McpAppServerTask, McpAppServerTaskProtocol, McpAppViewError, McpAppViews};
 pub use metrics::{
     RuntimeMetricsSnapshot, record_provider_call, record_provider_stream, record_tool_execution,
     runtime_metrics_snapshot, session_finished, session_started,

@@ -18,6 +18,11 @@ impl SandboxPermissionSnapshot {
         if !self.workspace_root.as_os_str().is_empty() {
             candidates.push(self.workspace_root.clone());
         }
+        candidates.extend(
+            self.path_layers
+                .iter()
+                .flat_map(|layer| layer.additional_working_directories.iter().cloned()),
+        );
         for layer in &self.path_layers {
             for rule in &layer.rules {
                 if !rule.access.matches(AccessKind::Write) {
@@ -157,9 +162,9 @@ impl SandboxPathPolicy {
                 .iter()
                 .rev()
                 .find(|rule| rule.access.matches(access) && rule.patterns.iter().any(covers));
-            let in_workspace = !workspace.as_os_str().is_empty() && within(path, workspace);
+            let working_directory = self.containing_workspace(workspace, path);
             let mode = rule.map_or_else(
-                || match (access, in_workspace) {
+                || match (access, working_directory.is_some()) {
                     (AccessKind::Read, true) => self.workspace_read_default,
                     (AccessKind::Write, true) => self.workspace_write_default,
                     (AccessKind::Read, false) => self.external_read_default,
@@ -185,7 +190,7 @@ impl SandboxPathPolicy {
             } else {
                 grants
                     .iter()
-                    .any(|grant| within(path, grant) && (!in_workspace || within(grant, workspace)))
+                    .any(|grant| within(path, grant) && working_directory.is_none_or(|root| within(grant, root)))
             };
             if !approved {
                 return Ok(false);

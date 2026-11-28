@@ -336,6 +336,7 @@ impl LspPlugin {
             ),
             metadata: Default::default(),
             attachments: Vec::new(),
+            additional_context: Vec::new(),
         })
     }
 

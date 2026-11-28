@@ -41,6 +41,8 @@ async fn interrupted_agent_recovery_preserves_queued_compaction_without_resuming
                 relation_kind: SessionRelationKind::Subagent,
                 agent: Some(SessionAgentConfiguration {
                     origin_message_id: None,
+                    workflow: None,
+                    cordis: None,
                     name: "worker".into(),
                     status: AgentStatus::Running,
                     started_at_ms: Some(1),
@@ -214,4 +216,157 @@ async fn interrupted_agent_recovery_preserves_queued_compaction_without_resuming
             .is_empty()
     );
     reopened.ports.clone().shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn plugin_prompts_follow_frozen_rounds_and_keep_admission_when_the_turn_stops() {
+    let runtime = open_kernel_runtime("sqlite::memory:").await.unwrap();
+    let workspace = runtime
+        .workspaces
+        .ensure_id("/plugin-prompts")
+        .await
+        .unwrap();
+    let ports = &runtime.ports;
+    let session = ports
+        .sessions
+        .create_configured(
+            RequestId::new(),
+            workspace,
+            "Plugin prompts".into(),
+            Default::default(),
+        )
+        .await
+        .unwrap()
+        .value
+        .id;
+    let execution = ports
+        .sessions
+        .send(
+            RequestId::new(),
+            session,
+            ComposerDocument(vec![ComposerNode::Text {
+                text: "Start the turn".into(),
+            }]),
+        )
+        .await
+        .unwrap()
+        .value;
+    let attempt = ports
+        .executor
+        .claim_next(RequestId::new(), session, execution.id)
+        .await
+        .unwrap()
+        .value;
+    let in_flight = attempt
+        .begin_current_round(RequestId::new())
+        .await
+        .unwrap()
+        .value;
+    let author = agena_domain::MessageAuthor::plugin("claude.fixture", "fixture".into(), true);
+    let deliver = |label: &str| {
+        let payload = serde_json::json!({
+            "kind":"plugin_prompt", "text":label, "author":author,
+            "generation":execution.generation, "model_context":["private context"],
+        });
+        ports.executor.deliver_to_execution(
+            RequestId::new(),
+            session,
+            execution.id,
+            format!("plugin-prompt:{label}"),
+            payload,
+        )
+    };
+    let first = deliver("First").await.unwrap().value;
+    let second = deliver("Second").await.unwrap().value;
+    let queued = ports
+        .reader
+        .pending_deliveries(session, None, 64)
+        .await
+        .unwrap();
+    assert_eq!(
+        queued.iter().map(|item| item.id).collect::<Vec<_>>(),
+        [first.id, second.id]
+    );
+    drop(queued);
+    assert_eq!(in_flight.prompt().await.unwrap().entries.len(), 1);
+    in_flight
+        .finish(RequestId::new(), None, true)
+        .await
+        .unwrap();
+    let appended = ports
+        .executor
+        .consume_delivery(
+            RequestId::new(),
+            session,
+            first.id,
+            execution.message_id,
+            String::new(),
+        )
+        .await
+        .unwrap()
+        .value;
+    let next_round = attempt
+        .begin_current_round(RequestId::new())
+        .await
+        .unwrap()
+        .value;
+    let facts = next_round.prompt().await.unwrap();
+    assert_eq!(facts.entries.last().unwrap().entry.id, appended);
+    let EntryPayload::PluginPrompt(prompt) = &facts.entries.last().unwrap().entry.payload else {
+        panic!("the next round must contain an authored plugin prompt");
+    };
+    assert_eq!(prompt.text, "First");
+    assert_eq!(prompt.author, author);
+    assert_eq!(prompt.model_context, ["private context"]);
+    drop(facts);
+    next_round
+        .finish(RequestId::new(), None, true)
+        .await
+        .unwrap();
+    assert!(matches!(
+        attempt.finish(RequestId::new(), ExecutionPhase::Succeeded).await,
+        Err(KernelError::PendingDelivery(id)) if id == execution.id
+    ));
+    attempt
+        .finish(RequestId::new(), ExecutionPhase::Cancelled)
+        .await
+        .unwrap();
+    assert!(matches!(
+        deliver("Late").await,
+        Err(KernelError::Conflict(_))
+    ));
+    let pending = ports.reader.delivery(session, second.id).await.unwrap();
+    assert!(pending.target_execution.is_none() && !pending.consumed);
+    drop(pending);
+    let resumed = ports
+        .executor
+        .resume_plugin_prompt(RequestId::new(), session, second.id)
+        .await
+        .unwrap()
+        .value;
+    assert_ne!(resumed.id, execution.id);
+    let repeated = ports
+        .executor
+        .resume_plugin_prompt(RequestId::new(), session, second.id)
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(resumed.id, repeated.id);
+    let entry = ports
+        .reader
+        .entry(session, resumed.message_id)
+        .await
+        .unwrap();
+    let EntryPayload::User {
+        document,
+        author: Some(saved),
+        model_context,
+        ..
+    } = &entry.payload
+    else {
+        panic!("detached prompt must start its own authored user turn");
+    };
+    assert_eq!(document.text(), "Second");
+    assert_eq!(*saved, author);
+    assert_eq!(model_context, &["private context"]);
 }

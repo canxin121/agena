@@ -2,6 +2,10 @@
 
 use std::collections::BTreeMap;
 
+pub use rmcp::model::{
+    CreateTaskResult, DEFAULT_MRTR_MAX_ROUNDS, GetTaskResult, InputRequests, InputRequiredResult,
+    InputResponses, Task, TaskAckResult, TaskPayload, TaskStatus,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

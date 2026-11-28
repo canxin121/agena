@@ -33,7 +33,8 @@ impl PluginCallCompletion {
         self.finished.cancelled().await;
     }
 
-    pub(crate) async fn scope<T>(&self, future: impl Future<Output = T>) -> T {
+    /// Carry an already-admitted call's completion into a host-owned task.
+    pub async fn scope<T>(&self, future: impl Future<Output = T>) -> T {
         CURRENT_CALL.scope(self.clone(), future).await
     }
 }

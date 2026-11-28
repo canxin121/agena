@@ -73,6 +73,8 @@ pub enum SessionPermissionUpdateRequest {
 /// Request to create a session.
 pub struct SessionCreateRequest {
     pub workspace_id: i64,
+    #[serde(default)]
+    pub setup: Option<agena_api::commands::SessionSetupTrigger>,
     #[serde(flatten)]
     pub session: SessionHierarchyRequest,
 }
@@ -82,6 +84,8 @@ pub struct SessionCreateRequest {
 pub struct SessionRunRequest {
     pub run: SessionRunRequestBody,
     pub document: agena_domain::ComposerDocument,
+    pub prompt_command: Option<agena_api::commands::SessionPromptCommand>,
+    pub literal_leading_slash: bool,
 }
 
 impl<'de> serde::Deserialize<'de> for SessionRunRequest {
@@ -97,11 +101,25 @@ impl<'de> serde::Deserialize<'de> for SessionRunRequest {
             })
             .transpose()?
             .unwrap_or_default();
+        let prompt_command = object
+            .remove("prompt_command")
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(<D::Error as serde::de::Error>::custom)?
+            .flatten();
+        let literal_leading_slash = object
+            .remove("literal_leading_slash")
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(<D::Error as serde::de::Error>::custom)?
+            .unwrap_or_default();
         let options = serde_json::from_value(serde_json::Value::Object(object))
             .map_err(<D::Error as serde::de::Error>::custom)?;
         Ok(Self {
             run: SessionRunRequestBody { options },
             document,
+            prompt_command,
+            literal_leading_slash,
         })
     }
 }

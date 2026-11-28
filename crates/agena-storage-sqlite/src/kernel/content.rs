@@ -557,7 +557,7 @@ impl LiveContent {
                             CaptureState::Interrupted
                         }
                     }
-                    Command::EndActivity { scope, outcome }
+                    Command::EndActivity { scope, outcome, .. }
                         if source.scope == OutputScope::Activity(*scope) =>
                     {
                         let ending = outcome.capture_end();
@@ -926,7 +926,7 @@ pub(super) async fn seal_stored(
                 }
             },
         ),
-        Command::EndActivity { scope, outcome } => {
+        Command::EndActivity { scope, outcome, .. } => {
             (TerminalTarget::Activity(*scope), outcome.capture_end())
         }
         _ => return Ok(()),

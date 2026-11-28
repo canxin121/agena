@@ -343,16 +343,21 @@ impl App {
                         // the command in the composer; everything else runs.
                         if command.requires_arguments() {
                             let name = command.name();
-                            self.prepare_composer_command(name.as_str());
+                            self.prepare_composer_command(name.as_str(), false);
                         } else {
                             self.execute_command(command.as_ref(), "");
                         }
                     }
                     CommandPaletteCommand::Plugin(entry) => {
-                        if plugin_command_accepts_empty_arguments(&entry) {
-                            self.execute_plugin_slash_command(*entry, "");
+                        if !entry.accepts_attachments
+                            && plugin_command_accepts_empty_arguments(&entry)
+                        {
+                            self.execute_plugin_slash_command(*entry, "", None);
                         } else if let Some(command_name) = plugin_command_slash_name(&entry) {
-                            self.prepare_composer_command(command_name.as_str());
+                            self.prepare_composer_command(
+                                command_name.as_str(),
+                                entry.accepts_attachments || entry.submits_prompt,
+                            );
                         }
                     }
                 }
@@ -421,7 +426,10 @@ impl App {
             agena_tui::model_chooser::SessionModelChooserReducerEffect::Close => true,
             agena_tui::model_chooser::SessionModelChooserReducerEffect::KeepOpen => false,
             agena_tui::model_chooser::SessionModelChooserReducerEffect::Source => {
-                self.open_settings_model_source(dialog.meta.purpose);
+                self.open_settings_model_source(
+                    dialog.meta.purpose,
+                    dialog.meta.model_switch_source,
+                );
                 false
             }
             agena_tui::model_chooser::SessionModelChooserReducerEffect::Select {
@@ -432,6 +440,7 @@ impl App {
                     return self.apply_model_override_from_source(
                         model_ref_from_session_model_identity(identity),
                         dialog.meta.explicit_local,
+                        dialog.meta.model_switch_source,
                     );
                 }
                 // Every other purpose persists the picked model (and its modes)

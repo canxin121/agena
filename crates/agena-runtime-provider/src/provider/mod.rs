@@ -3,6 +3,7 @@
 pub mod auth;
 pub mod credential;
 
+mod attempt;
 mod catalog_decoration;
 mod cataloged_models;
 pub mod chat_wire;
@@ -18,6 +19,9 @@ pub use crate::provider_sse as sse;
 pub use agena_provider::CompletionResponse;
 pub use agena_provider::{
     self as copilot_models, self as prompt_cache, self as protocol_ids, self as tool_stream,
+};
+pub use attempt::{
+    ModelAttemptHooks, ModelAttemptObserver, ModelAttemptOutcome, ModelAttemptStatus,
 };
 pub use utils::{ProviderRequestHeaderHook, with_request_cancellation, with_request_header_hook};
 

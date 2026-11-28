@@ -54,6 +54,12 @@ fn filter<'a>(
     if query.agents_only {
         builder.push(" AND s.agent_name IS NOT NULL");
     }
+    if query.exclude_workflow_agents {
+        builder.push(" AND json_extract(s.configuration_json,'$.agent.workflow') IS NULL");
+    }
+    if query.exclude_cordis_agents {
+        builder.push(" AND json_extract(s.configuration_json,'$.agent.cordis') IS NULL");
+    }
     if query.roots_only {
         builder.push(" AND s.parent_session_id IS NULL");
     }

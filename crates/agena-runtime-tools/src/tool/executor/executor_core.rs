@@ -9,12 +9,18 @@ impl ToolExecutor {
         Self {
             read_path_authorizer: None,
             path_effect_authorizer: None,
+            dispatch_tool_after: true,
             session_relation_kind: agena_domain::SessionRelationKind::Root,
+            cordis_agent_permission: None,
             session_kind: agena_domain::SessionKind::default(),
             conversation: None,
             workspace_root: workspace_root.into(),
+            permission_workspace_root: None,
             global: false,
             session_id: None,
+            imported_shells: None,
+            claude_instruction_settings: None,
+            claude_skill_config_directory: None,
             principal,
             sandbox_enabled: true,
             configured_sandbox_enabled: true,
@@ -30,6 +36,7 @@ impl ToolExecutor {
             plugins,
             scheduler,
             lsp_registry,
+            mcp_manager: None,
             cancellation_token: None,
             permission_inspector: None,
             channel_authority: None,
@@ -54,6 +61,18 @@ impl ToolExecutor {
         check: Arc<super::super::PathEffectAuthorizer>,
     ) -> Self {
         self.path_effect_authorizer = Some(check);
+        self
+    }
+
+    /// The caller already owns a tool hook. Nested verification tools still
+    /// validate and execute normally, without dispatching another tool hook.
+    pub fn without_tool_after_hooks(mut self) -> Self {
+        self.dispatch_tool_after = false;
+        self
+    }
+
+    pub fn with_claude_skill_config_directory(mut self, directory: Arc<str>) -> Self {
+        self.claude_skill_config_directory = Some(directory);
         self
     }
 
@@ -98,6 +117,10 @@ impl ToolExecutor {
         &self.workspace_root
     }
 
+    pub fn permission_workspace_root(&self) -> &Path {
+        self.permission_workspace_root.as_deref().unwrap_or(&self.workspace_root)
+    }
+
     fn scope_session_principal<C: crate::ToolSessionContext + ?Sized>(
         &self,
         session_context: &C,
@@ -108,7 +131,9 @@ impl ToolExecutor {
         scoped.sandbox_persisted_rules = Arc::new(Vec::new());
         scoped.read_path_authorizer = None;
         scoped.path_effect_authorizer = None;
+        scoped.claude_skill_config_directory = None;
         scoped.session_relation_kind = session_context.relation_kind();
+        scoped.cordis_agent_permission = None;
         scoped.session_kind = session_context.session_kind();
         scoped.conversation = session_context.conversation().cloned();
         scoped.plugin_scope = session_context
@@ -118,8 +143,15 @@ impl ToolExecutor {
         scoped.session_id = session_context.session_id();
         if scoped.global {
             scoped.workspace_root = PathBuf::new();
+            scoped.permission_workspace_root = None;
         } else if let Some(root) = session_context.effective_workspace_root() {
-            scoped.workspace_root = root.to_path_buf();
+            if let Some(cwd) = session_context.working_directory() {
+                scoped.permission_workspace_root = Some(root.to_path_buf());
+                scoped.workspace_root = cwd.to_path_buf();
+            } else {
+                scoped.workspace_root = root.to_path_buf();
+                scoped.permission_workspace_root = None;
+            }
         }
         scoped.channel_authority = session_context.channel_authority().cloned();
         scoped.channel_verifier = session_context.channel_verifier();
@@ -139,6 +171,14 @@ impl ToolExecutor {
                 .clone()
                 .apply_permission_config_or_self(session_context.effective_permission());
         }
+        scoped
+            .principal
+            .permission_policy
+            .set_additional_working_directories(if scoped.global {
+                &[]
+            } else {
+                session_context.additional_working_directories()
+            });
         if !session_context.permission_ceiling().is_empty() {
             scoped.principal = scoped
                 .principal
@@ -183,31 +223,57 @@ impl ToolExecutor {
         &self,
         session_context: &C,
     ) -> Self {
-        let mut scoped = self.scope_session_principal(session_context);
+        let scoped = self.scope_session_principal(session_context);
         let definition_catalog = scoped
             .registered_tools_with_definition_overrides_async()
             .await;
-        scoped.definition_catalog = Some(Arc::new(definition_catalog.clone()));
-        if !session_context.capability_denied_tool_names().is_empty() {
-            let denied = session_context.capability_denied_tool_names();
+        scoped.with_session_tool_catalog(session_context, definition_catalog)
+    }
+
+    /// Check one declared tool's permissions under the session principal
+    /// without running definition hooks.
+    pub fn for_session_tool_permission<C: crate::ToolSessionContext + ?Sized>(
+        &self,
+        session_context: &C,
+        invocation: &ToolInvocation,
+    ) -> Self {
+        let scoped = self.scope_session_principal(session_context);
+        let catalog = scoped
+            .invocation_definition(invocation)
+            .into_iter()
+            .collect();
+        scoped.with_session_tool_catalog(session_context, catalog)
+    }
+
+    fn with_session_tool_catalog<C: crate::ToolSessionContext + ?Sized>(
+        mut self,
+        session_context: &C,
+        definition_catalog: Vec<RegisteredTool>,
+    ) -> Self {
+        let denied = session_context.capability_denied_tool_names();
+        let allowlist = session_context.profile_tool_allowlist();
+        if !denied.is_empty() || allowlist.is_some() {
             let allowed_tools = definition_catalog
                 .iter()
-                .filter(|entry| {
-                    !denied
-                        .iter()
-                        .any(|name| crate::tool::registered_tool_matches_name(entry, name.as_str()))
+                .filter_map(|entry| {
+                    let name = entry.canonical_name();
+                    (allowlist.is_none_or(|tools| tools.contains(&name))
+                        && !denied.iter().any(|name| {
+                            crate::tool::registered_tool_matches_name(entry, name.as_str())
+                        }))
+                    .then_some(name)
                 })
-                .map(|entry| entry.canonical_name())
                 .collect::<std::collections::HashSet<_>>();
-            match scoped.allowed_tool_names.as_mut() {
+            match self.allowed_tool_names.as_mut() {
                 Some(existing) => existing.retain(|name| allowed_tools.contains(name)),
-                None => scoped.allowed_tool_names = Some(allowed_tools),
+                None => self.allowed_tool_names = Some(allowed_tools),
             }
         }
         if let Some(model_id) = session_context.selected_model() {
-            scoped.model_id = Some(model_id.to_owned());
+            self.model_id = Some(model_id.to_owned());
         }
-        scoped
+        self.definition_catalog = Some(Arc::new(definition_catalog));
+        self
     }
 
     /// Attach the execution-wide cancellation signal to every tool reached
@@ -334,7 +400,7 @@ impl ToolExecutor {
     /// happens.
     pub fn path_class_prompt_flags(&self) -> agena_domain::PathClassPromptFlags {
         let policy = &self.principal.permission_policy;
-        let workspace_root = self.workspace_root();
+        let workspace_root = self.permission_workspace_root();
         let allowed = |target: &Path| {
             matches!(
                 policy.check_access(agena_domain::AccessKind::Write, workspace_root, target),
@@ -371,6 +437,19 @@ impl ToolExecutor {
 
     pub fn plugin_is_enabled(&self, plugin: &agena_plugin_host::sdk::PluginKey) -> bool {
         self.principal.plugin_is_enabled(plugin)
+    }
+
+    pub async fn agent_plugin_provided_skills(&self) -> Vec<agena_plugin_host::AgentPluginSkill> {
+        if self.is_global() {
+            return Vec::new();
+        }
+        self.plugins
+            .agent_plugin_provided_skills(
+                self.workspace_root(),
+                self.session_id,
+                |key| self.plugin_is_enabled(key),
+            )
+            .await
     }
 
     pub fn builtin_tool_set(&self) -> BuiltinToolSet {
@@ -421,13 +500,19 @@ impl ToolExecutor {
                     summary: tool_summary(entry),
                     help: entry.definition().docs.help.clone(),
                     input_schema: entry.input_schema(),
+                    hidden: false,
                 })
                 .collect::<Vec<_>>();
             let workspace_root = (!self.global && self.session_id.is_some())
                 .then(|| self.workspace_root.to_string_lossy().into_owned());
             let patched = self
                 .plugins
-                .dispatch_tool_definitions(inputs, self.session_id, workspace_root)
+                .dispatch_tool_definitions_for_enabled(
+                    inputs,
+                    self.session_id,
+                    workspace_root,
+                    |plugin| self.plugin_is_enabled(plugin),
+                )
                 .await;
             tools = apply_definition_overrides(tools, patched);
         }
@@ -470,6 +555,14 @@ impl ToolExecutor {
         entry.definition().applies_to.contains(self.session_kind)
     }
 
+    /// Only a scoped Cordis coordination callback may check a native agent
+    /// tool's policy without the native entry point's child restriction.
+    pub fn for_cordis_agent_permission(mut self, operation: &'static str) -> Self {
+        debug_assert!(matches!(operation, "spawn" | "cancel"));
+        self.cordis_agent_permission = Some(operation);
+        self
+    }
+
     pub(crate) fn tool_is_within_capability(&self, entry: &RegisteredTool) -> bool {
         if !self.tool_applies_to_session(entry) || !self.plugin_is_enabled(entry.plugin_key()) {
             return false;
@@ -486,14 +579,15 @@ impl ToolExecutor {
         // Derive role restrictions from live session identity so existing agents
         // are covered without copying parent-only restrictions into user forks.
         // Interactive terminals and browsers remain eligible.
+        let identity = (entry.namespace(), entry.plugin_name(), entry.tool_name());
         if self.session_relation_kind.is_subagent()
-            && matches!(
-                (entry.namespace(), entry.plugin_name(), entry.tool_name()),
+            && (matches!(
+                identity,
                 ("agena", "interaction", "ask" | "notify")
                     | ("agena", "plan", "set" | "review" | "phase" | "clear")
-                    | ("agena", "agent", "spawn" | "followup" | "cancel")
                     | ("agena", "bot", "profile")
-            )
+            ) || matches!(identity, ("agena", "agent", "spawn" | "followup" | "cancel"))
+                && self.cordis_agent_permission != Some(entry.tool_name()))
         {
             return false;
         }
@@ -577,7 +671,7 @@ impl ToolExecutor {
 
 use super::{
     Arc, BuiltinToolSet, ExecutionPrincipal, MonitorService, Path, PathBuf, PermissionDecision,
-    PluginHost, PluginToolDefinitionInput, RegisteredTool, ToolError, ToolExecutor,
+    PluginHost, PluginToolDefinitionInput, RegisteredTool, ToolError, ToolExecutor, ToolInvocation,
     suggest_tool_names, tool_summary, unknown_tool_hint,
 };
 use agena_plugin_host::PluginError;
@@ -615,17 +709,20 @@ fn apply_definition_overrides(
     let tools = tools
         .into_iter()
         .zip(patched)
-        .map(|(entry, patched)| match patched {
+        .filter_map(|(entry, patched)| match patched {
             Ok(patched) => {
+                if patched.hidden {
+                    return None;
+                }
                 let mut definition = entry.definition().clone();
                 definition.docs.summary = Some(patched.summary);
                 definition.docs.help = patched.help;
                 definition.contract.input_schema = patched.input_schema;
                 match entry.with_definition(definition) {
-                    Ok(patched) => patched,
+                    Ok(patched) => Some(patched),
                     Err(error) => {
                         tracing::warn!(tool = %entry.canonical_name(), %error, "invalid tool.definition contract; keeping original");
-                        entry
+                        Some(entry)
                     }
                 }
             }
@@ -638,7 +735,7 @@ fn apply_definition_overrides(
                         "tool.definition hook failed (keeping original): {err}"
                     );
                 }
-                entry
+                Some(entry)
             }
         })
         .collect();

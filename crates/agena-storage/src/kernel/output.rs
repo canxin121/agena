@@ -308,6 +308,7 @@ async fn begin_text(
                 round: round.id,
                 tool,
                 reasoning,
+                display: false,
             },
         )
         .await?;
@@ -327,6 +328,34 @@ impl RoundHandle {
         reasoning: bool,
     ) -> Result<CommitReceipt<TextOutput>> {
         begin_text(self, request, None, reasoning).await
+    }
+
+    /// Open adjacent raw and rendered streams for the same assistant entry.
+    pub async fn begin_text_with_display(
+        &self,
+        request: RequestId,
+    ) -> Result<CommitReceipt<(TextOutput, TextOutput)>> {
+        let inner = &self.attempt.inner;
+        let scope = self.attempt.scope;
+        let receipt = inner
+            .command(request, Command::OpenText {
+                scope,
+                round: self.id,
+                tool: None,
+                reasoning: false,
+                display: true,
+            })
+            .await?;
+        match receipt.value {
+            Mutation::TextWithDisplay { original, display } => Ok(CommitReceipt {
+                position: receipt.position,
+                value: (
+                    TextOutput::new(inner.clone(), OutputScope::Attempt(scope), original)?,
+                    TextOutput::new(inner.clone(), OutputScope::Attempt(scope), display)?,
+                ),
+            }),
+            _ => Err(unexpected()),
+        }
     }
 }
 

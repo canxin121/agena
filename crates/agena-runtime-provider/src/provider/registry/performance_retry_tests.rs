@@ -28,6 +28,27 @@ impl ModelRuntime for EmptyThenText {
     async fn complete(&self, _: CompletionRequest) -> Result<CompletionResponse, ProviderError> {
         unreachable!("the fixture only serves streaming requests")
     }
+    fn supports_native_compaction(&self, model: &ModelId) -> bool {
+        model == &self.model
+    }
+    async fn compact_conversation(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<Option<ProviderCompactionOutput>, ProviderError> {
+        if !self.supports_native_compaction(&request.model) {
+            return Ok(None);
+        }
+        Ok(Some(ProviderCompactionOutput::OpenAiResponses {
+            items: vec![serde_json::json!({"type":"compaction","encrypted_content":"fixture"})],
+            response_id: Some("cmp_fixture".into()),
+            usage: Some(CompletionUsage {
+                requests: 1,
+                input_tokens: 23,
+                output_tokens: 4,
+                ..Default::default()
+            }),
+        }))
+    }
     async fn complete_stream(
         &self,
         _: CompletionRequest,
@@ -149,4 +170,77 @@ async fn performance_exhausted_empty_retry_keeps_usage_and_final_terminal_event(
     assert_eq!(usage.performance.len(), 2);
     assert_eq!(usage.request_performance.unwrap().generated_tokens, Some(0));
     assert_eq!(usage.request_usage_snapshot().input_tokens, 11);
+}
+
+#[tokio::test]
+async fn native_compaction_reports_response_usage_and_retains_observer_charge() {
+    use crate::provider::{ModelAttemptObserver, ModelAttemptOutcome, ModelAttemptStatus};
+    use agena_provider::BillableUsageItem;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct Observer(Mutex<Vec<(u32, Option<String>)>>);
+
+    #[async_trait::async_trait]
+    impl ModelAttemptObserver for Observer {
+        async fn before(&self, _: &ModelRef, attempt: u32) {
+            self.0.lock().unwrap().push((attempt, None));
+        }
+
+        async fn after(
+            &self,
+            _: &ModelRef,
+            attempt: u32,
+            outcome: ModelAttemptOutcome,
+        ) -> Option<BillableUsageItem> {
+            assert!(matches!(outcome.status, ModelAttemptStatus::Completed));
+            assert_eq!(outcome.usage.unwrap().input_tokens, 23);
+            self.0.lock().unwrap().push((attempt, outcome.response_id));
+            Some(BillableUsageItem {
+                kind: "fixture_units".into(),
+                quantity: 1.25,
+                ..Default::default()
+            })
+        }
+    }
+
+    let mut registry = ProviderRegistry::new();
+    registry.register(EmptyThenText {
+        model: ModelId::new("test-model"),
+        calls: Arc::new(AtomicUsize::new(0)),
+        always_empty: false,
+    });
+    let observer = Arc::new(Observer::default());
+    let hooks = ModelAttemptHooks::new(observer.clone());
+    let request: CompletionRequest =
+        serde_json::from_value(serde_json::json!({"model":"test-model","messages":[]})).unwrap();
+    let unsupported = registry
+        .compact_conversation_observed(
+            &ModelRef::new("performance-fixture", "portable-model"),
+            request.clone(),
+            Some(&hooks),
+        )
+        .await
+        .unwrap();
+    assert!(unsupported.is_none());
+    assert!(observer.0.lock().unwrap().is_empty());
+
+    let compact = registry
+        .compact_conversation_observed(
+            &ModelRef::new("performance-fixture", "test-model"),
+            request,
+            Some(&hooks),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(compact.has_checkpoint());
+    let ProviderCompactionOutput::OpenAiResponses { usage, .. } = compact;
+    let usage = usage.unwrap();
+    assert_eq!(usage.input_tokens, 23);
+    assert_eq!(usage.billable_items[0].quantity, 1.25);
+    assert_eq!(
+        observer.0.lock().unwrap().as_slice(),
+        [(1, None), (1, Some("cmp_fixture".into()))]
+    );
 }

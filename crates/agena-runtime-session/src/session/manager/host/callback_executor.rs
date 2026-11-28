@@ -53,7 +53,10 @@ impl SessionManager {
             .acquire()
             .await
             .expect("host policy admission is never closed");
-        if self.shutdown.is_cancelled() {
+        let cleanup = !include_tool_catalog
+            && call.is_none()
+            && session.is_some_and(agena_plugin_host::host::is_shutdown_session_end);
+        if self.shutdown.is_cancelled() && !cleanup {
             return Err(AppError::Cancelled);
         }
         if session == Some(OPERATOR_SESSION) {
@@ -88,7 +91,13 @@ impl SessionManager {
             let cancel = live
                 .as_ref()
                 .map(|(_, control)| control.cancel.clone())
-                .unwrap_or_else(|| self.shutdown.child_token());
+                .unwrap_or_else(|| {
+                    if cleanup {
+                        agena_plugin_host::sdk::current_cancellation_token().unwrap_or_default()
+                    } else {
+                        self.shutdown.child_token()
+                    }
+                });
             let executor = if include_tool_catalog {
                 state.executor.for_session_context_async(&context).await
             } else {

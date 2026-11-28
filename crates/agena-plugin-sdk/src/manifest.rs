@@ -933,6 +933,26 @@ bitflags::bitflags! {
         const SUBAGENT_STOP             = 1 << 32;
         const PERMISSION_REQUEST        = 1 << 33;
         const APPLICATION_READY         = 1 << 34;
+        const USER_PROMPT_EXPANSION     = 1 << 35;
+        const TOOL_BATCH_AFTER          = 1 << 36;
+        const SESSION_FILE_CHANGED      = 1 << 37;
+        const SESSION_CWD_CHANGED       = 1 << 38;
+        const IMPORTED_TASK_BEFORE      = 1 << 39;
+        const IMPORTED_SESSION_SETUP    = 1 << 40;
+        const IMPORTED_MCP_ELICITATION   = 1 << 41;
+        const IMPORTED_MCP_ELICITATION_RESULT = 1 << 42;
+        const IMPORTED_SKILL_SHELL_BEFORE = 1 << 43;
+        const IMPORTED_MODEL_SWITCH_BEFORE = 1 << 44;
+        const IMPORTED_MODEL_SWITCH_AFTER = 1 << 45;
+        const IMPORTED_TURN_COMPLETED = 1 << 46;
+        const IMPORTED_INSTRUCTIONS_LOADED = 1 << 47;
+        const IMPORTED_MODEL_ATTEMPT_BEFORE = 1 << 48;
+        const IMPORTED_MODEL_ATTEMPT_AFTER = 1 << 49;
+        const WORKTREE_CREATE = 1 << 50;
+        const WORKTREE_REMOVE = 1 << 51;
+        const IMPORTED_MESSAGE_DISPLAY = 1 << 52;
+        const IMPORTED_CONFIG_CHANGE = 1 << 53;
+        const IMPORTED_DIRECTORY_ADDED = 1 << 54;
     }
 }
 
@@ -988,10 +1008,15 @@ impl<'de> Deserialize<'de> for HookSubscription {
 
 const HOOK_NAMES: &[(&str, HookSubscription)] = &[
     ("init", HookSubscription::INIT),
+    (
+        "imported.turn.completed",
+        HookSubscription::IMPORTED_TURN_COMPLETED,
+    ),
     ("application.ready", HookSubscription::APPLICATION_READY),
     ("shutdown", HookSubscription::SHUTDOWN),
     ("tool.before", HookSubscription::TOOL_BEFORE),
     ("tool.after", HookSubscription::TOOL_AFTER),
+    ("tool.batch.after", HookSubscription::TOOL_BATCH_AFTER),
     ("tool.failure", HookSubscription::TOOL_FAILURE),
     ("tool.invoke", HookSubscription::TOOL_INVOKE),
     ("tool.invoke.stream", HookSubscription::TOOL_INVOKE_STREAM),
@@ -1009,7 +1034,44 @@ const HOOK_NAMES: &[(&str, HookSubscription)] = &[
     ("config.resolved", HookSubscription::CONFIG),
     ("session.start", HookSubscription::SESSION_START),
     ("session.end", HookSubscription::SESSION_END),
+    (
+        "session.file.changed",
+        HookSubscription::SESSION_FILE_CHANGED,
+    ),
+    ("session.cwd.changed", HookSubscription::SESSION_CWD_CHANGED),
+    (
+        "instructions.loaded",
+        HookSubscription::IMPORTED_INSTRUCTIONS_LOADED,
+    ),
+    ("session.setup", HookSubscription::IMPORTED_SESSION_SETUP),
+    ("task.change.before", HookSubscription::IMPORTED_TASK_BEFORE),
+    (
+        "mcp.elicitation",
+        HookSubscription::IMPORTED_MCP_ELICITATION,
+    ),
+    (
+        "mcp.elicitation.result",
+        HookSubscription::IMPORTED_MCP_ELICITATION_RESULT,
+    ),
+    (
+        "skill.shell.before",
+        HookSubscription::IMPORTED_SKILL_SHELL_BEFORE,
+    ),
+    (
+        "model.switch.before",
+        HookSubscription::IMPORTED_MODEL_SWITCH_BEFORE,
+    ),
+    (
+        "model.switch.after",
+        HookSubscription::IMPORTED_MODEL_SWITCH_AFTER,
+    ),
+    ("worktree.create", HookSubscription::WORKTREE_CREATE),
+    ("worktree.remove", HookSubscription::WORKTREE_REMOVE),
+    ("message.display", HookSubscription::IMPORTED_MESSAGE_DISPLAY),
+    ("config.change", HookSubscription::IMPORTED_CONFIG_CHANGE),
+    ("directory.added", HookSubscription::IMPORTED_DIRECTORY_ADDED),
     ("prompt.submit", HookSubscription::USER_PROMPT_SUBMIT),
+    ("prompt.expand", HookSubscription::USER_PROMPT_EXPANSION),
     ("agent.stop", HookSubscription::AGENT_STOP),
     ("agent.cancel", HookSubscription::AGENT_CANCEL),
     ("run.pre", HookSubscription::PRE_RUN),
@@ -1019,6 +1081,14 @@ const HOOK_NAMES: &[(&str, HookSubscription)] = &[
         HookSubscription::MODEL_REQUEST_BEFORE,
     ),
     ("model.request.after", HookSubscription::MODEL_REQUEST_AFTER),
+    (
+        "model.attempt.before",
+        HookSubscription::IMPORTED_MODEL_ATTEMPT_BEFORE,
+    ),
+    (
+        "model.attempt.after",
+        HookSubscription::IMPORTED_MODEL_ATTEMPT_AFTER,
+    ),
     ("model.request.error", HookSubscription::MODEL_REQUEST_ERROR),
     ("compaction.before", HookSubscription::COMPACTION_BEFORE),
     ("compaction.after", HookSubscription::COMPACTION_AFTER),

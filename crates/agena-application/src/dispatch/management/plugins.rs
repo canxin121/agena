@@ -35,27 +35,44 @@ impl Application {
             }
             PluginQuery::Settings { plugin_id } => wire(self.plugin_settings(&plugin_id)?),
             PluginQuery::Architecture => wire(runtime.plugin_architecture_catalog()),
-            PluginQuery::Surface => wire(crate::dto::PluginSurfaceCatalogResponse {
-                catalog: runtime.plugin_surface_catalog(),
-                permission_tools: runtime
-                    .permission_tool_catalog()
-                    .into_iter()
-                    .map(|tool| crate::dto::PermissionToolCatalogResource {
-                        name: tool.name,
-                        summary: tool.summary,
-                        summary_translations: tool.summary_translations,
-                        tags: tool.tags,
-                    })
-                    .collect(),
-                notifications: runtime.host_notifications(),
-                notifications_at_ms: Some(chrono::Utc::now().timestamp_millis()),
-                activity_kinds: self.activity_kind_catalog(),
-                tool_registry_generation: runtime.tool_registry_generation(),
-                tool_registry_last_event: runtime
-                    .tool_registry_events_since(None, 1)
-                    .into_iter()
-                    .next(),
-            }),
+            query @ (PluginQuery::Surface | PluginQuery::SurfaceForSession { .. }) => {
+                let catalog = if let PluginQuery::SurfaceForSession { session_id } = query {
+                    if self.service().get_session(session_id).await?.is_none() {
+                        return Err(ApplicationError::not_found_with_diagnostic(
+                            "The session was not found.",
+                            format!("session not found: {session_id}"),
+                        ));
+                    }
+                    runtime
+                        .prepare_session_plugin_commands(session_id)
+                        .await
+                        .map_err(ApplicationError::internal)?;
+                    runtime.plugin_surface_catalog_for_session(session_id)
+                } else {
+                    runtime.plugin_surface_catalog()
+                };
+                wire(crate::dto::PluginSurfaceCatalogResponse {
+                    catalog,
+                    permission_tools: runtime
+                        .permission_tool_catalog()
+                        .into_iter()
+                        .map(|tool| crate::dto::PermissionToolCatalogResource {
+                            name: tool.name,
+                            summary: tool.summary,
+                            summary_translations: tool.summary_translations,
+                            tags: tool.tags,
+                        })
+                        .collect(),
+                    notifications: runtime.host_notifications(),
+                    notifications_at_ms: Some(chrono::Utc::now().timestamp_millis()),
+                    activity_kinds: self.activity_kind_catalog(),
+                    tool_registry_generation: runtime.tool_registry_generation(),
+                    tool_registry_last_event: runtime
+                        .tool_registry_events_since(None, 1)
+                        .into_iter()
+                        .next(),
+                })
+            }
             PluginQuery::ToolChanges {
                 after_generation,
                 limit,
@@ -116,17 +133,21 @@ impl Application {
                 session_id,
                 slash,
                 raw,
+                composer,
             } => {
-                let workspace_root = self.plugin_command_workspace_root(session_id, true).await?;
                 let result = self
                     .invoke_plugin_command(
                         &plugin_id,
                         &command_id,
-                        input,
-                        session_id,
-                        workspace_root,
-                        slash,
-                        raw,
+                        agena_api::resource::PluginCommandInvokeRequest {
+                            context: agena_api::resource::CommandRequestContext {
+                                input,
+                                session_id,
+                                slash,
+                                raw,
+                            },
+                            composer,
+                        },
                     )
                     .await?;
                 wire(agena_api::resource::PluginCommandInvokeResponse {
@@ -168,6 +189,8 @@ impl Application {
                             workspace_root,
                             slash: None,
                             raw: String::new(),
+                            prompt_context: String::new(),
+                            cordis_attachments: None,
                         },
                     )
                     .await?;

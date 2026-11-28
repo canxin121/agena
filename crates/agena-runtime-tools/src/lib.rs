@@ -15,11 +15,14 @@ mod file_diff;
 mod fs_broker;
 
 pub use file_diff::{FileDiffPreview, file_diff_preview};
-pub use fs_broker::read_regular_file_nofollow;
+pub use fs_broker::{
+    copy_regular_file_nofollow, fingerprint_regular_file_nofollow, read_regular_file_nofollow,
+};
 pub mod media_input;
 mod monitor;
 mod process_output;
 mod project_instructions;
+pub use project_instructions::{ClaudeInstructionSettings, claude_project_settings_paths};
 mod project_paths;
 pub mod sandbox_worker;
 pub mod shell_sandbox;

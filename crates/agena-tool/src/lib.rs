@@ -3331,7 +3331,9 @@ pub struct ToolPermissionCheck {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreparedToolInvocation {
     pub invocation: ToolInvocation,
+    pub permission_ask: Option<String>,
     pub title_override: Option<String>,
+    pub additional_context: Vec<String>,
     pub metadata: BTreeMap<String, String>,
 }
 

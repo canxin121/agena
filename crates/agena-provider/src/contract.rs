@@ -2376,13 +2376,19 @@ fn reserved_responses_metadata_key(key: &str) -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProviderCompactionOutput {
-    OpenAiResponses { items: Vec<serde_json::Value> },
+    OpenAiResponses {
+        items: Vec<serde_json::Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        response_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<CompletionUsage>,
+    },
 }
 
 impl ProviderCompactionOutput {
     pub fn is_empty(&self) -> bool {
         match self {
-            Self::OpenAiResponses { items } => items.is_empty(),
+            Self::OpenAiResponses { items, .. } => items.is_empty(),
         }
     }
 
@@ -2390,7 +2396,7 @@ impl ProviderCompactionOutput {
     /// of compaction. Never replace history without an actual native checkpoint.
     pub fn has_checkpoint(&self) -> bool {
         match self {
-            Self::OpenAiResponses { items } => {
+            Self::OpenAiResponses { items, .. } => {
                 items.iter().all(serde_json::Value::is_object)
                     && items.iter().any(|item| {
                         item.get("type").and_then(serde_json::Value::as_str) == Some("compaction")

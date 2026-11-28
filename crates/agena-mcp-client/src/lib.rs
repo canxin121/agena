@@ -8,22 +8,36 @@
 
 pub mod credentials;
 pub mod error;
+mod header_helper;
 mod http_transport;
+mod legacy_app;
+mod legacy_sse;
+pub mod apps;
 pub mod management;
 pub mod manager;
 pub mod oauth;
 mod oauth_http;
 pub mod protocol;
 pub mod token_store;
+mod websocket;
 
 pub use credentials::credential_store_name;
 pub use error::{McpError, McpResult};
+pub use header_helper::McpHeaderHelper;
+mod redaction;
 pub use http_transport::McpHttpNetworkAuthorizer;
+pub use manager::{ClaudeChannelEvent, ClaudeChannelPeer, ClaudeChannelStream};
 pub use manager::{
-    ConnectedServer, HttpAuth, McpConnectionManager, McpCredentialConflict, McpCredentialState,
-    McpSandboxContext, McpServerAuthMode, McpServerStatus, McpToolPolicy, McpToolRisk,
-    ReconnectPolicy, ServerSpec, StdioResourceDeclarations, TokenStore,
+    ConnectedServer, HttpAuth, McpConnectionManager, McpConnectionObservation, McpManagedConnection,
+    McpCredentialConflict, McpCredentialState, McpElicitationHandler, McpHttpTransport,
+    McpProbeOptions, McpProbeResult, McpSandboxContext, McpServerAuthMode, McpServerStatus,
+    McpToolPolicy, McpToolRisk, ReconnectPolicy, ScopedPluginServer, ScopedPluginServerResolver,
+    ScopedPluginTimeouts, ServerSpec, StdioResourceDeclarations, TokenStore,
 };
+pub use manager::{
+    MCP_TOOL_LOADER, McpOnDemandConfig, McpOnDemandScope, McpOnDemandSelection, McpOnDemandServer,
+};
+pub use manager::{McpSkill, McpSkillPage, McpSkillResources};
 pub use oauth::{
     McpOAuthRegistration, McpOAuthSessionManager, McpOAuthStart, oauth_credential_binding,
 };
@@ -33,6 +47,7 @@ pub use protocol::{
     PromptMessage, ReadResourceParams, ReadResourceResult, ResourceContents, ResourceDescriptor,
     ToolDescriptor,
 };
+pub use redaction::McpRedactions;
 pub use token_store::{
     FileOAuthCredentialStore, FileTokenStore, MCP_SECRET_NAMESPACE, OAuthCredentialHealth,
     OAuthCredentialState, OAuthExpiryState, TokenStoreError,

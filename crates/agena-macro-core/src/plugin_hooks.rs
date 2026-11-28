@@ -35,6 +35,7 @@ pub enum PluginHookKind {
     Shutdown,
     ToolExecuteBefore,
     ToolExecuteAfter,
+    ToolBatchAfter,
     ToolExecuteFailure,
     ToolDefinition,
     ChatMessage,
@@ -52,6 +53,7 @@ pub enum PluginHookKind {
     SessionStart,
     SessionEnd,
     UserPromptSubmit,
+    UserPromptExpansion,
     AgentStop,
     AgentCancel,
     ConfigResolved,
@@ -232,6 +234,9 @@ fn plugin_hook_subscription_expr(hook: PluginHookKind) -> proc_macro2::TokenStre
         PluginHookKind::ToolExecuteAfter => {
             quote! { ::agena_plugin_sdk::HookSubscription::TOOL_AFTER }
         }
+        PluginHookKind::ToolBatchAfter => {
+            quote! { ::agena_plugin_sdk::HookSubscription::TOOL_BATCH_AFTER }
+        }
         PluginHookKind::ToolExecuteFailure => {
             quote! { ::agena_plugin_sdk::HookSubscription::TOOL_FAILURE }
         }
@@ -273,6 +278,9 @@ fn plugin_hook_subscription_expr(hook: PluginHookKind) -> proc_macro2::TokenStre
         PluginHookKind::UserPromptSubmit => {
             quote! { ::agena_plugin_sdk::HookSubscription::USER_PROMPT_SUBMIT }
         }
+        PluginHookKind::UserPromptExpansion => {
+            quote! { ::agena_plugin_sdk::HookSubscription::USER_PROMPT_EXPANSION }
+        }
         PluginHookKind::AgentStop => quote! { ::agena_plugin_sdk::HookSubscription::AGENT_STOP },
         PluginHookKind::AgentCancel => {
             quote! { ::agena_plugin_sdk::HookSubscription::AGENT_CANCEL }
@@ -312,6 +320,7 @@ fn plugin_hook_order() -> &'static [PluginHookKind] {
         PluginHookKind::Shutdown,
         PluginHookKind::ToolExecuteBefore,
         PluginHookKind::ToolExecuteAfter,
+        PluginHookKind::ToolBatchAfter,
         PluginHookKind::ToolExecuteFailure,
         PluginHookKind::ToolDefinition,
         PluginHookKind::ChatMessage,
@@ -329,6 +338,7 @@ fn plugin_hook_order() -> &'static [PluginHookKind] {
         PluginHookKind::SessionStart,
         PluginHookKind::SessionEnd,
         PluginHookKind::UserPromptSubmit,
+        PluginHookKind::UserPromptExpansion,
         PluginHookKind::AgentStop,
         PluginHookKind::AgentCancel,
         PluginHookKind::ConfigResolved,
@@ -363,6 +373,12 @@ fn expand_plugin_layer_hook_method_group(
             "tool_execute_after",
             quote! { ::agena_plugin_sdk::ToolAfterInput },
             quote! { Option<::agena_plugin_sdk::ToolAfterPatch> },
+            bindings,
+        ),
+        PluginHookKind::ToolBatchAfter => expand_plugin_layer_single_arg_hook_group(
+            "tool_batch_after",
+            quote! { ::agena_plugin_sdk::ToolBatchInput },
+            quote! { Option<::agena_plugin_sdk::ToolBatchPatch> },
             bindings,
         ),
         PluginHookKind::ToolExecuteFailure => expand_plugin_layer_single_arg_hook_group(
@@ -465,6 +481,12 @@ fn expand_plugin_layer_hook_method_group(
             "user_prompt_submit",
             quote! { ::agena_plugin_sdk::UserPromptSubmitInput },
             quote! { Option<::agena_plugin_sdk::UserPromptSubmitPatch> },
+            bindings,
+        ),
+        PluginHookKind::UserPromptExpansion => expand_plugin_layer_single_arg_hook_group(
+            "user_prompt_expansion",
+            quote! { ::agena_plugin_sdk::UserPromptExpansionInput },
+            quote! { Option<::agena_plugin_sdk::UserPromptExpansionPatch> },
             bindings,
         ),
         PluginHookKind::AgentStop => expand_plugin_layer_single_arg_hook_group(

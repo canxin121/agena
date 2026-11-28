@@ -555,20 +555,15 @@ impl ToolPayloadOutput {
                 StructuredObject::default()
             }
         };
-        ToolOutput {
-            payload,
-            managed_outputs: Vec::new(),
-            truncated: false,
-        }
+        ToolOutput::from(payload)
     }
 
     /// Reverse of [`into_tool_output`]: try to decode a generic output
     /// payload for the named tool back into the execution-layer enum.
     pub fn from_tool_output(tool_name: &str, output: &ToolOutput) -> Option<Self> {
-        let value: serde_json::Value = output.payload.clone().into();
-        let mut object = match value {
-            serde_json::Value::Object(map) => map,
-            serde_json::Value::Null => serde_json::Map::new(),
+        let mut object = match output.to_json_payload() {
+            Some(serde_json::Value::Object(map)) => map,
+            None => serde_json::Map::new(),
             _ => return None,
         };
         let payload_name = payload_name_for_output_tool(tool_name)?;
@@ -900,8 +895,8 @@ mod output_tests {
     #[test]
     fn web_plugin_results_keep_their_engine_and_descriptions_in_typed_projection() {
         for engine in ["auto", "duckduckgo", "brave", "searxng"] {
-            let output = ToolOutput {
-                payload: StructuredObject::try_from(serde_json::json!({
+            let output = ToolOutput::from(
+                StructuredObject::try_from(serde_json::json!({
                     "query": "fixture query",
                     "engine": engine,
                     "attempted_engines": ["duckduckgo", "bing"],
@@ -914,9 +909,7 @@ mod output_tests {
                     }]
                 }))
                 .unwrap(),
-                managed_outputs: Vec::new(),
-                truncated: false,
-            };
+            );
             let original = output.clone();
             for name in [
                 "web.search",
@@ -946,16 +939,14 @@ mod output_tests {
 
     #[test]
     fn canonical_search_output_keeps_its_backend_and_snippet() {
-        let output = ToolOutput {
-            payload: StructuredObject::try_from(serde_json::json!({
+        let output = ToolOutput::from(
+            StructuredObject::try_from(serde_json::json!({
                 "query": "fixture query", "backend": "canonical", "engine": "other",
                 "results": [{"title":"Fixture", "url":"https://example.com/",
                     "snippet":"Canonical snippet", "description":"Other description"}]
             }))
             .unwrap(),
-            managed_outputs: Vec::new(),
-            truncated: false,
-        };
+        );
         let Some(ToolPayloadOutput::WebSearch {
             backend, results, ..
         }) = ToolPayloadOutput::from_tool_output("web.search", &output)

@@ -193,11 +193,13 @@ impl App {
                 model,
                 selected,
                 local_value,
+                model_switch_source,
             } => self.commit_session_model_source(
                 session_id,
                 model,
                 selected,
                 local_value,
+                model_switch_source,
                 choice_selection_value(&selection).as_str(),
             ),
             ChoiceOverlayAction::SessionModelModeSource {

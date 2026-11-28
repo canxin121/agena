@@ -216,6 +216,14 @@ impl HostClient for ScopedHostClient {
         .await
     }
 
+    async fn mcp_session_roots(&self) -> crate::sdk::Result<Option<Vec<std::path::PathBuf>>> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(self.context()?, inner.mcp_session_roots()).await
+        })
+        .await
+    }
+
     async fn require_pinned_http_permission(&self, target: String) -> crate::sdk::Result<()> {
         self.run_callback(async {
             let inner = self.handle.inner.read().await.clone();
@@ -381,10 +389,465 @@ impl HostClient for ScopedHostClient {
         .await
     }
 
+    async fn start_cordis_workflow(
+        &self,
+        start: host_api::CordisWorkflowStart,
+        run: host_api::CordisWorkflowRunner,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> crate::sdk::Result<host_api::CordisWorkflowStarted> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.start_cordis_workflow(start, run, cancellation),
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn start_cordis_job(
+        &self,
+        start: host_api::CordisJobStart,
+        produce: host_api::CordisJobStarter,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> crate::sdk::Result<String> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.start_cordis_job(start, produce, cancellation),
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn open_cordis_job_registry(
+        &self,
+        lifetime: tokio_util::sync::CancellationToken,
+    ) -> crate::sdk::Result<std::sync::Arc<dyn host_api::CordisJobRegistry>> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.open_cordis_job_registry(lifetime),
+            ).await
+        }).await
+    }
+
+    async fn cordis_workflow_job(
+        &self,
+        request: host_api::CordisWorkflowJobRequest,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> crate::sdk::Result<serde_json::Value> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.cordis_workflow_job(request, cancellation),
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn wait_imported_plugin_agent(
+        &self,
+        child: i64,
+        timeout_ms: u64,
+    ) -> crate::sdk::Result<crate::sdk::ToolInvokeOutput> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.wait_imported_plugin_agent(child, timeout_ms),
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn start_cordis_subagent(
+        &self,
+        start: host_api::CordisSubagentStart,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> crate::sdk::Result<host_api::CordisSubagentStarted> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.start_cordis_subagent(start, cancellation),
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn wait_for_cordis_subagent(
+        &self,
+        wait: host_api::CordisSubagentWait,
+    ) -> crate::sdk::Result<()> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.wait_for_cordis_subagent(wait),
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn cordis_subagent_control(
+        &self,
+        request: host_api::CordisSubagentControl,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> crate::sdk::Result<serde_json::Value> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.cordis_subagent_control(request, cancel),
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn cordis_llm_complete(
+        &self,
+        request: host_api::CordisLlmRequest,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> crate::sdk::Result<host_api::CordisLlmResponse> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.cordis_llm_complete(request, cancel),
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn evaluate_imported_plugin_prompt(&self, prompt: String) -> crate::sdk::Result<String> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.evaluate_imported_plugin_prompt(prompt),
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn find_imported_plugin_agent(
+        &self,
+        name: String,
+    ) -> crate::sdk::Result<Option<host_api::ImportedPluginAgentState>> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.find_imported_plugin_agent(name),
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn evaluate_imported_plugin_agent(&self, prompt: String) -> crate::sdk::Result<String> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.evaluate_imported_plugin_agent(prompt),
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn bind_imported_plugin_background(
+        &self,
+    ) -> crate::sdk::Result<host_api::ImportedPluginBackground> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.bind_imported_plugin_background(),
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn submit_imported_plugin_prompt(
+        &self,
+        request: host_api::ImportedPluginPromptRequest,
+    ) -> crate::sdk::Result<serde_json::Value> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            inner.submit_imported_plugin_prompt(request).await
+        })
+        .await
+    }
+
+    async fn imported_mod_tool(
+        &self,
+        request: host_api::ImportedModToolRequest,
+    ) -> crate::sdk::Result<serde_json::Value> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            inner.imported_mod_tool(request).await
+        })
+        .await
+    }
+
+    async fn configure_imported_plugin_files(
+        &self,
+        paths: Option<Vec<std::path::PathBuf>>,
+        _callback_generation: Option<u64>,
+    ) -> crate::sdk::Result<()> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.configure_imported_plugin_files(paths, Some(self.effect_scope.generation())),
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn imported_hook_environment(
+        &self,
+        _callback_generation: Option<u64>,
+    ) -> crate::sdk::Result<Option<host_api::ImportedHookEnvironment>> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.imported_hook_environment(Some(self.effect_scope.generation())),
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn imported_hook_transcripts(
+        &self,
+        format: host_api::HookTranscriptFormat,
+        scope: host_api::HookTranscriptScope,
+        _callback_generation: Option<u64>,
+    ) -> crate::sdk::Result<host_api::ImportedHookTranscripts> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.imported_hook_transcripts(
+                    format,
+                    scope,
+                    Some(self.effect_scope.generation()),
+                ),
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn imported_claude_stop_work(
+        &self,
+        parent: bool,
+        _callback_generation: Option<u64>,
+    ) -> crate::sdk::Result<Option<crate::sdk::ImportedClaudeStopWork>> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.imported_claude_stop_work(parent, Some(self.effect_scope.generation())),
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn visit_ending_session_history(
+        &self,
+        visit: &mut (dyn FnMut(host_api::SessionHistoryEvent) + Send),
+    ) -> crate::sdk::Result<()> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.visit_ending_session_history(visit),
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn imported_hook_profile(&self) -> crate::sdk::Result<Option<String>> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(self.context()?, inner.imported_hook_profile())
+                .await
+        })
+        .await
+    }
+
+    async fn check_imported_task(
+        &self,
+        input: crate::sdk::ImportedTaskBeforeInput,
+    ) -> crate::sdk::Result<()> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.check_imported_task(input),
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn imported_mcp_server_identity(
+        &self,
+        id: &str,
+    ) -> crate::sdk::Result<Option<host_api::ImportedMcpServerIdentity>> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.imported_mcp_server_identity(id),
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn call_imported_plugin_mcp(
+        &self,
+        server: String,
+        tool: String,
+        arguments: serde_json::Value,
+    ) -> crate::sdk::Result<crate::sdk::ToolInvokeOutput> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.call_imported_plugin_mcp(server, tool, arguments),
+            )
+            .await
+        })
+        .await
+    }
+
     async fn followup_agent(&self, req: AgentMessageRequest) -> crate::sdk::Result<AgentHandle> {
         self.run_callback(async {
             let inner = self.handle.inner.read().await.clone();
             host_api::run_in_host_callback_context(self.context()?, inner.followup_agent(req)).await
+        })
+        .await
+    }
+
+    async fn read_imported_plugin_mcp(
+        &self,
+        server: String,
+        uri: String,
+    ) -> crate::sdk::Result<crate::sdk::ToolInvokeOutput> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.read_imported_plugin_mcp(server, uri),
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn deepseek_mcp_manager(
+        &self,
+        request: host_api::DeepSeekMcpManagerRequest,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> crate::sdk::Result<serde_json::Value> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.deepseek_mcp_manager(request, cancellation),
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn observe_deepseek_mcp_manager(
+        &self,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> crate::sdk::Result<tokio::sync::watch::Receiver<serde_json::Value>> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.observe_deepseek_mcp_manager(cancellation),
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn imported_model_skills(&self) -> crate::sdk::Result<Vec<crate::AgentPluginSkill>> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            inner.imported_model_skills().await
+        })
+        .await
+    }
+
+    async fn prepare_managed_mcp_http(&self, server: String) -> crate::sdk::Result<bool> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.prepare_managed_mcp_http(server),
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn run_imported_skill_shell(
+        &self,
+        request: crate::sdk::ImportedSkillShellRequest,
+    ) -> crate::sdk::Result<crate::sdk::ImportedSkillShellResult> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.run_imported_skill_shell(request),
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn render_imported_skill(
+        &self,
+        path: &std::path::Path,
+        document: &str,
+        arguments: &str,
+    ) -> crate::sdk::Result<Option<crate::sdk::ImportedSkillRender>> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.render_imported_skill(path, document, arguments),
+            )
+            .await
         })
         .await
     }
@@ -612,10 +1075,38 @@ impl HostClient for ScopedHostClient {
         .await
     }
 
+    async fn storage_compare_exchange(
+        &self,
+        req: HostStorageSetRequest,
+        expected: Option<String>,
+    ) -> crate::sdk::Result<bool> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.storage_compare_exchange(req, expected),
+            )
+            .await
+        })
+        .await
+    }
+
     async fn storage_delete(&self, req: HostStorageDeleteRequest) -> crate::sdk::Result<()> {
         self.run_callback(async {
             let inner = self.handle.inner.read().await.clone();
             host_api::run_in_host_callback_context(self.context()?, inner.storage_delete(req)).await
+        })
+        .await
+    }
+
+    async fn imported_plugin_storage_directory(&self) -> crate::sdk::Result<std::path::PathBuf> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.imported_plugin_storage_directory(),
+            )
+            .await
         })
         .await
     }
@@ -707,6 +1198,23 @@ impl HostClient for ScopedHostClient {
         .await
     }
 
+    async fn mcp_elicitation(
+        &self,
+        server: &str,
+        request: crate::sdk::McpElicitation,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> crate::sdk::Result<crate::sdk::McpElicitationReply> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.mcp_elicitation(server, request, cancellation),
+            )
+            .await
+        })
+        .await
+    }
+
     async fn prepare_process_sandbox(
         &self,
         resources: crate::sdk::host_api::HostProcessResources,
@@ -716,6 +1224,40 @@ impl HostClient for ScopedHostClient {
             host_api::run_in_host_callback_context(
                 self.context()?,
                 crate::sdk::permission_wait::waiting(inner.prepare_process_sandbox(resources)),
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn mcp_sampling(
+        &self,
+        server: &str,
+        request: agena_domain::mcp_sampling::McpSamplingRequest,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> crate::sdk::Result<Option<agena_domain::mcp_sampling::McpSamplingReply>> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.mcp_sampling(server, request, cancellation),
+            )
+            .await
+        })
+        .await
+    }
+
+    async fn call_mcp_app_view_tool(
+        &self,
+        target: uuid::Uuid,
+        arguments: serde_json::Map<String, serde_json::Value>,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> crate::sdk::Result<agena_domain::mcp_app_tools::McpAppToolResult> {
+        self.run_callback(async {
+            let inner = self.handle.inner.read().await.clone();
+            host_api::run_in_host_callback_context(
+                self.context()?,
+                inner.call_mcp_app_view_tool(target, arguments, cancellation),
             )
             .await
         })

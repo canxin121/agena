@@ -15,6 +15,7 @@ use std::sync::Arc;
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt, OpenOptionsSyncExt};
 use cap_std::fs::{Dir, OpenOptions};
 use parking_lot::Mutex;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::tool::ToolError;
@@ -38,6 +39,59 @@ pub fn read_regular_file_nofollow(path: &Path, max_bytes: usize) -> io::Result<V
                 format!("file does not exist: {}", path.display()),
             )
         })
+}
+
+/// Copy an authorized regular file to a new path in a caller-owned directory.
+/// Return its content and permission fingerprint for subsequent verification.
+pub fn copy_regular_file_nofollow(source: &Path, target: &Path) -> io::Result<String> {
+    agena_process::sandbox::validate_resource_paths(&[source.to_owned(), target.to_owned()])?;
+    let source = FileCapability::open(source, false)?;
+    let file = source.open_existing()?;
+    let metadata = file.metadata()?;
+    let permissions = ordinary_copy_permissions(metadata.permissions());
+
+    let target = FileCapability::open(target, true)?;
+    let parent = target
+        .parent(true)?
+        .ok_or_else(|| target.missing_parent())?;
+    let (mut pending, mut output) = PendingFile::create(parent.clone(), false)?;
+    let fingerprint = source.copy_and_fingerprint(file, &metadata, &permissions, &mut output)?;
+    output.flush()?;
+    output.set_permissions(permissions)?;
+    output.sync_all()?;
+    drop(output);
+    parent.hard_link(&pending.name, &parent, &target.inner.leaf)?;
+    pending.cleanup_after_publish();
+    Ok(fingerprint)
+}
+
+/// Fingerprint an authorized regular file, refusing links in every component.
+pub fn fingerprint_regular_file_nofollow(path: &Path) -> io::Result<String> {
+    agena_process::sandbox::validate_resource_paths(&[path.to_owned()])?;
+    let capability = FileCapability::open(path, false)?;
+    let file = capability.open_existing()?;
+    let metadata = file.metadata()?;
+    capability.copy_and_fingerprint(file, &metadata, &metadata.permissions(), io::sink())
+}
+
+fn permission_bits(permissions: &Permissions) -> u32 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        permissions.mode() & 0o7777
+    }
+    #[cfg(not(unix))]
+    u32::from(permissions.readonly())
+}
+
+fn ordinary_copy_permissions(permissions: Permissions) -> Permissions {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        Permissions::from_mode(permissions.mode() & 0o777)
+    }
+    #[cfg(not(unix))]
+    permissions
 }
 
 #[derive(Clone, Debug)]
@@ -191,23 +245,10 @@ impl FileCapability {
         parent: &Dir,
         max_bytes: usize,
     ) -> io::Result<Option<(Vec<u8>, Permissions)>> {
-        match parent.symlink_metadata(&self.inner.leaf) {
-            Ok(metadata) if !metadata.is_file() => return Err(self.not_regular()),
-            Ok(_) => {}
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error),
-        }
-        let mut options = OpenOptions::new();
-        options.read(true).follow(FollowSymlinks::No).nonblock(true);
-        let mut file = match parent.open_with(&self.inner.leaf, &options) {
-            Ok(file) => file.into_std(),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error),
+        let Some(mut file) = self.open_from(parent)? else {
+            return Ok(None);
         };
         let before = file.metadata()?;
-        if !before.is_file() {
-            return Err(self.not_regular());
-        }
         if before.len() > max_bytes as u64 {
             return Err(self.too_large(max_bytes));
         }
@@ -226,6 +267,71 @@ impl FileCapability {
             return Err(self.changed());
         }
         Ok(Some((bytes, after.permissions())))
+    }
+
+    fn open_existing(&self) -> io::Result<std::fs::File> {
+        let file = match self.parent(false)? {
+            Some(parent) => self.open_from(&parent)?,
+            None => None,
+        };
+        file.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("file does not exist: {}", self.inner.path.display()),
+            )
+        })
+    }
+
+    fn open_from(&self, parent: &Dir) -> io::Result<Option<std::fs::File>> {
+        match parent.symlink_metadata(&self.inner.leaf) {
+            Ok(metadata) if !metadata.is_file() => return Err(self.not_regular()),
+            Ok(_) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        }
+        let mut options = OpenOptions::new();
+        options.read(true).follow(FollowSymlinks::No).nonblock(true);
+        let file = match parent.open_with(&self.inner.leaf, &options) {
+            Ok(file) => file.into_std(),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        if !file.metadata()?.is_file() {
+            return Err(self.not_regular());
+        }
+        Ok(Some(file))
+    }
+
+    fn copy_and_fingerprint(
+        &self,
+        mut file: std::fs::File,
+        before: &std::fs::Metadata,
+        permissions: &Permissions,
+        mut output: impl Write,
+    ) -> io::Result<String> {
+        let mut fingerprint = Sha256::new();
+        fingerprint.update(permission_bits(permissions).to_le_bytes());
+        let mut input = Read::by_ref(&mut file).take(before.len());
+        let mut buffer = [0; 64 * 1024];
+        loop {
+            let length = input.read(&mut buffer)?;
+            if length == 0 {
+                break;
+            }
+            let bytes = &buffer[..length];
+            fingerprint.update(bytes);
+            output.write_all(bytes)?;
+        }
+        let remaining = input.limit();
+        let after = file.metadata()?;
+        if remaining != 0
+            || before.len() != after.len()
+            || before.modified().ok() != after.modified().ok()
+            || permission_bits(&before.permissions()) != permission_bits(&after.permissions())
+        {
+            return Err(self.changed());
+        }
+        Ok(hex::encode(fingerprint.finalize()))
     }
 
     fn verify_with_permissions(&self, expected: Option<&[u8]>) -> io::Result<Option<Permissions>> {

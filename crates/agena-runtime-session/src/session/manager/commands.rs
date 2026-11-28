@@ -1,3 +1,4 @@
+use super::session_start::SessionStartPreparation;
 use super::*;
 use crate::session::usage as context_usage;
 use crate::{
@@ -6,6 +7,9 @@ use crate::{
 use agena_domain::{
     CancellationOutcome, CancellationResult, PermissionMode, PermissionReplyKind, PermissionScope,
     UserInputReplyKind,
+};
+use agena_plugin_host::sdk::{
+    HookSubscription, SessionStartInput, SessionStartPatch, SessionStartSource,
 };
 
 impl SessionManager {
@@ -161,47 +165,57 @@ impl SessionManager {
         .await
         .map_err(kernel_error)?
         .value;
-        let patch = state
+        self.start_session_plugins(metadata.id, SessionStartSource::Startup)
+            .await?;
+        self.get_session(metadata.id.get()).await
+    }
+
+    async fn start_session_plugins(
+        &self,
+        session: SessionId,
+        source: SessionStartSource,
+    ) -> Result<(), AppError> {
+        let state = self.state_for_session(session).await?;
+        self.track_imported_config_session(session);
+        if !state
             .executor
             .plugin_manager()
-            .dispatch_session_start(agena_plugin_host::SessionStartInput {
-                session_id: metadata.id.get(),
-                source: agena_plugin_host::SessionStartSource::Startup,
-                workspace_root: state.executor.workspace_root().to_string_lossy().into(),
-                model: None,
-            })
-            .await;
-        if let Ok(patch) = patch {
-            if let Some(context) = patch.additional_context {
-                self.kernel()
-                    .executor
-                    .deliver(
-                        RequestId::new(),
-                        metadata.id,
-                        format!("session-start-context:{}", metadata.id.get()),
-                        serde_json::json!({"text":context}),
-                    )
-                    .await
-                    .map_err(kernel_error)?;
-            }
+            .has_subscription(HookSubscription::SESSION_START)
+        {
+            return Ok(());
+        }
+        let options = self
+            .options_for_session(session, &ExecutionSelection::default())
+            .await
+            .ok();
+        let model = options.as_ref().map(|options| &options.model);
+        if let Some(patch) = self
+            .run_session_start_hooks(session, &state, source, model)
+            .await?
+        {
+            self.deliver_session_start_context(session, patch.additional_context)
+                .await?;
+            self.remember_session_start(session, patch.stop_reason);
             if let Some(message) = patch.initial_user_message {
-                if let Ok(options) = self
-                    .options_for_session(metadata.id, &ExecutionSelection::default())
-                    .await
-                {
+                if let Some(options) = options {
                     self.submit(crate::SessionUserRunRequest::new(
-                        metadata.id.get(),
+                        session.get(),
                         options,
                         ComposerDocument(vec![ComposerNode::Text { text: message }]),
                     ))
                     .await?;
                 } else {
                     let command = RequestId::new();
+                    let delivery = format!(
+                        "session-start-message:{}:{}",
+                        session.get(),
+                        uuid::Uuid::new_v4()
+                    );
                     persist(|| {
                         self.kernel().executor.deliver(
                             command,
-                            metadata.id,
-                            format!("session-start-message:{}", metadata.id.get()),
+                            session,
+                            delivery.clone(),
                             serde_json::json!({"text":message,"wake":false}),
                         )
                     })
@@ -210,7 +224,236 @@ impl SessionManager {
                 }
             }
         }
-        self.get_session(metadata.id.get()).await
+        Ok(())
+    }
+
+    pub(super) async fn prepare_session_start(
+        &self,
+        control: &RunControl,
+        state: &ExecutionState,
+        model: &ModelRef,
+    ) -> Result<SessionStartPreparation, AppError> {
+        let session = control.session;
+        self.track_imported_config_session(session);
+        if let Some(stop) = self
+            .plugin_session_starts
+            .lock()
+            .get(&session)
+            .map(|pending| pending.front().cloned())
+        {
+            return Ok(SessionStartPreparation::Ready(stop));
+        }
+        if !state
+            .executor
+            .plugin_manager()
+            .has_subscription(HookSubscription::SESSION_START)
+        {
+            return Ok(SessionStartPreparation::Ready(None));
+        }
+        let snapshot = read_with_busy_retry(session, "session_start", || {
+            self.kernel().reader.control_snapshot(session, 1)
+        })
+        .await?;
+        if snapshot.configuration.message_queue_paused {
+            return Ok(SessionStartPreparation::QueuePaused);
+        }
+        let execution = read_with_busy_retry(session, "execution", || {
+            self.kernel().reader.execution(session, control.execution)
+        })
+        .await?;
+        if execution.generation != control.generation || execution.phase != ExecutionPhase::Queued {
+            return Ok(SessionStartPreparation::Superseded);
+        }
+        let patch = tokio::select! {
+            biased;
+            _ = control.cancel.cancelled() => return Err(AppError::Cancelled),
+            patch = self.dispatch_session_start_hooks(
+                &snapshot, state, SessionStartSource::Resume, Some(model),
+            ) => patch?,
+        };
+        let patch = patch.unwrap_or_default();
+        self.deliver_session_start_context(session, patch.additional_context)
+            .await?;
+        Ok(SessionStartPreparation::Ready(
+            self.remember_session_start(session, patch.stop_reason),
+        ))
+    }
+
+    pub(super) async fn run_session_start_hooks(
+        &self,
+        session: SessionId,
+        state: &ExecutionState,
+        source: SessionStartSource,
+        model: Option<&ModelRef>,
+    ) -> Result<Option<SessionStartPatch>, AppError> {
+        let plugins = state.executor.plugin_manager();
+        if !plugins.has_subscription(HookSubscription::SESSION_START) {
+            return Ok(None);
+        }
+        let snapshot = read_with_busy_retry(session, "session_start", || {
+            self.kernel().reader.control_snapshot(session, 1)
+        })
+        .await?;
+        self.dispatch_session_start_hooks(&snapshot, state, source, model)
+            .await
+    }
+
+    async fn dispatch_session_start_hooks(
+        &self,
+        snapshot: &SessionControlSnapshot,
+        state: &ExecutionState,
+        source: SessionStartSource,
+        model: Option<&ModelRef>,
+    ) -> Result<Option<SessionStartPatch>, AppError> {
+        use agena_storage::kernel::SessionTitleSource;
+
+        let plugins = state.executor.plugin_manager();
+        let session = snapshot.metadata.id;
+        if matches!(
+            source,
+            SessionStartSource::Compact | SessionStartSource::Fork | SessionStartSource::Resume
+        ) && (snapshot.metadata.workspace_id.is_none()
+            || snapshot.configuration.owner.is_some()
+            || snapshot.configuration.relation_kind.is_subagent()
+            || snapshot
+                .configuration
+                .conversation
+                .as_ref()
+                .is_some_and(|conversation| conversation.is_read_only()))
+        {
+            return Ok(None);
+        }
+        if source == SessionStartSource::Resume
+            && snapshot.summary.created_at_ms >= self.started_at_ms
+        {
+            return Ok(None);
+        }
+        let session_title = (snapshot.configuration.title_state.source
+            == SessionTitleSource::Manual
+            && !snapshot.metadata.title.trim().is_empty())
+        .then(|| snapshot.metadata.title.clone());
+        let agent_type = snapshot.configuration.profile.as_ref().and_then(|profile| {
+            let resolved = plugins.imported_subagent_type(profile);
+            (resolved != *profile).then_some(resolved)
+        });
+        let resumed_cache = if matches!(
+            source,
+            SessionStartSource::Resume | SessionStartSource::Fork
+        ) {
+            self.session_start_cache_context(session, state, model)
+                .await
+        } else {
+            None
+        };
+        let input = SessionStartInput {
+            session_id: session.get(),
+            source,
+            workspace_root: snapshot
+                .configuration
+                .effective_workspace_root
+                .as_deref()
+                .unwrap_or_else(|| state.executor.workspace_root())
+                .to_string_lossy()
+                .into_owned(),
+            model: model.map(|model| model.model_id.to_string()),
+            session_title,
+            agent_type,
+            resumed_cache,
+        };
+        let Ok(patch) = plugins.dispatch_session_start(input).await else {
+            return Ok(None);
+        };
+        if patch.reload_skills
+            && snapshot.metadata.workspace_id.is_some()
+            && let Err(error) = Box::pin(self.invoke_imported_hook_tool(
+                session.get(),
+                "agena.commands.refresh",
+                serde_json::json!({}),
+            ))
+            .await
+        {
+            tracing::debug!(session_id = session.get(), %error, "could not refresh the session skill and command catalog");
+        }
+        if let Some(title) = &patch.session_title
+            && title != &snapshot.metadata.title
+            && matches!(
+                source,
+                SessionStartSource::Startup | SessionStartSource::Resume | SessionStartSource::Fork
+            )
+        {
+            let change = MetadataChange {
+                title: Some(title.clone()),
+                expected_version: Some(snapshot.metadata.metadata_version.get()),
+                ..Default::default()
+            };
+            let command = RequestId::new();
+            if let Err(error) = persist(|| {
+                self.kernel()
+                    .sessions
+                    .update_metadata(command, session, change.clone())
+            })
+            .await
+            {
+                tracing::warn!(session_id = session.get(), %error, "could not apply SessionStart title");
+            }
+        }
+        Ok(Some(patch))
+    }
+
+    pub(super) async fn deliver_session_start_context(
+        &self,
+        session: SessionId,
+        context: Option<String>,
+    ) -> Result<(), AppError> {
+        let Some(mut context) = context else {
+            return Ok(());
+        };
+        context
+            .retain(|character| !character.is_control() || matches!(character, '\n' | '\r' | '\t'));
+        context.truncate(context.floor_char_boundary(context.len().min(16 * 1024)));
+        if context.trim().is_empty() {
+            return Ok(());
+        }
+        let command = RequestId::new();
+        let delivery = format!(
+            "session-start-context:{}:{}",
+            session.get(),
+            uuid::Uuid::new_v4()
+        );
+        let payload = serde_json::json!({"text": context, "wake": false});
+        persist(|| {
+            self.kernel()
+                .executor
+                .deliver(command, session, delivery.clone(), payload.clone())
+        })
+        .await
+        .map_err(kernel_error)?;
+        Ok(())
+    }
+
+    async fn end_session_plugins(&self, id: i64, reason: agena_plugin_host::SessionEndReason) {
+        self.mcp_app_views.end_session(id);
+        if let Ok(session) = session_id(id) {
+            self.claude_channels.stop_session(session);
+            self.model_switches.lock().remove(&session);
+            self.plugin_session_starts.lock().remove(&session);
+            self.config_hook_sessions.lock().remove(&session);
+        }
+        self.imported_file_watches.end_session(id);
+        if let Ok(session) = session_id(id)
+            && let Ok(state) = self.state_for_session(session).await
+        {
+            state
+                .executor
+                .plugin_manager()
+                .broadcast_session_end(agena_plugin_host::SessionEndInput {
+                    session_id: id,
+                    reason,
+                })
+                .await;
+            state.executor.release_session_mcp(id).await;
+        }
+        self.imported_shells.end_session(id);
     }
     pub async fn rename_session(&self, id: i64, title: String) -> Result<Session, AppError> {
         self.kernel()
@@ -227,156 +470,6 @@ impl SessionManager {
             .map_err(kernel_error)?;
         self.get_session(id).await
     }
-    /// Persist a new model/option selection without starting a run.
-    ///
-    /// This is the explicit switch path: it refuses a target model whose prompt
-    /// window cannot hold the conversation, so the user is told to compact
-    /// before the selection is committed. A run that carries a smaller model
-    /// instead goes through [`Self::update_session_selection`], which does not
-    /// gate — the run loop compacts automatically there.
-    pub async fn switch_session_selection(
-        &self,
-        id: i64,
-        options: SessionRunOptions,
-    ) -> Result<(), AppError> {
-        self.ensure_model_fits_session(id, &options.model).await?;
-        self.persist_submission_selection(id, options).await
-    }
-    pub async fn clear_session_selection(&self, id: i64) -> Result<(), AppError> {
-        self.require_writable_bot_history(id).await?;
-        let session = session_id(id)?;
-        let snapshot = self
-            .kernel()
-            .reader
-            .control_snapshot(session, 1)
-            .await
-            .map_err(kernel_error)?;
-        let state = self.state_for_session(session).await?;
-        let selection = state
-            .config
-            .session_selection(&snapshot.configuration, &ExecutionSelection::default())
-            .map_err(AppError::Config)?;
-        if let Some(model) = state
-            .providers
-            .resolve_default_model_selection(&selection)?
-        {
-            self.ensure_model_fits_session(id, &model).await?;
-        }
-        self.kernel()
-            .sessions
-            .patch_selection(
-                RequestId::new(),
-                session,
-                snapshot.metadata.metadata_version.get(),
-                vec![
-                    SelectionChange::Model(None),
-                    SelectionChange::ThinkingMode(None),
-                    SelectionChange::SpeedMode(None),
-                    SelectionChange::Verbosity(None),
-                    SelectionChange::ParallelToolCalls(None),
-                ],
-            )
-            .await
-            .map_err(kernel_error)?;
-        Ok(())
-    }
-
-    pub async fn update_session_selection(
-        &self,
-        id: i64,
-        options: SessionRunOptions,
-    ) -> Result<(), AppError> {
-        let session = session_id(id)?;
-        let commands = &self.kernel().sessions;
-        let changes = [
-            SelectionChange::Model(Some(options.model)),
-            SelectionChange::ThinkingMode(options.thinking_mode),
-            SelectionChange::SpeedMode(options.speed_mode),
-            SelectionChange::Verbosity(options.verbosity),
-            SelectionChange::ParallelToolCalls(options.model_supports_parallel_tool_calls),
-        ];
-        // Admit every field command before waiting so the writer can group commit.
-        // Await every receipt, including when another field command fails.
-        let results = futures_util::future::join_all(
-            changes
-                .into_iter()
-                .map(|change| commands.update_selection(RequestId::new(), session, change)),
-        )
-        .await;
-        for result in results {
-            result.map_err(kernel_error)?;
-        }
-        Ok(())
-    }
-    /// Persist only the fields the user selected, never a resolved profile or
-    /// provider fallback. Complete internal selections retain their old contract.
-    pub(super) async fn persist_submission_selection(
-        &self,
-        id: i64,
-        options: SessionRunOptions,
-    ) -> Result<(), AppError> {
-        let Some(selection) = options.selection_override.as_ref() else {
-            return self.update_session_selection(id, options).await;
-        };
-        let mut changes = Vec::new();
-        let explicit_route = selection.provider.is_some()
-            || selection.adapter.is_some()
-            || selection.model.is_some();
-        if explicit_route {
-            // Public run requests carry complete ModelRef values; delegated
-            // requests can change just a provider, adapter, or model. Persist
-            // their resolved route without pinning mode-only inherited routes.
-            let model = selection
-                .model_ref()
-                .map_err(|error| AppError::Config(error.to_string()))?
-                .unwrap_or_else(|| options.model.clone());
-            changes.push(SelectionChange::Model(Some(model)));
-            // A newly selected route resets the previous route's mode choices.
-            // Keep only explicit mode inputs, matching ExecutionSelection cascade.
-            changes.push(SelectionChange::ThinkingMode(
-                selection.thinking_mode.clone(),
-            ));
-            changes.push(SelectionChange::SpeedMode(selection.speed_mode.clone()));
-            changes.push(SelectionChange::Verbosity(selection.verbosity.clone()));
-            changes.push(SelectionChange::ParallelToolCalls(
-                selection.parallel_tool_calls,
-            ));
-        } else {
-            if let Some(value) = &selection.thinking_mode {
-                changes.push(SelectionChange::ThinkingMode(Some(value.clone())));
-            }
-            if let Some(value) = &selection.speed_mode {
-                changes.push(SelectionChange::SpeedMode(Some(value.clone())));
-            }
-            if let Some(value) = &selection.verbosity {
-                changes.push(SelectionChange::Verbosity(Some(value.clone())));
-            }
-            if let Some(value) = selection.parallel_tool_calls {
-                changes.push(SelectionChange::ParallelToolCalls(Some(value)));
-            }
-        }
-        if !changes.is_empty() {
-            let session = session_id(id)?;
-            let metadata = self
-                .kernel()
-                .reader
-                .metadata(session)
-                .await
-                .map_err(kernel_error)?;
-            self.kernel()
-                .sessions
-                .patch_selection(
-                    RequestId::new(),
-                    session,
-                    metadata.metadata_version.get(),
-                    changes,
-                )
-                .await
-                .map_err(kernel_error)?;
-        }
-        Ok(())
-    }
-
     /// Refuse a switch the conversation provably cannot fit.
     ///
     /// Every other difference between routes degrades gracefully — history
@@ -448,23 +541,6 @@ impl SessionManager {
             });
         }
         Ok(())
-    }
-    pub async fn set_session_model_override(
-        &self,
-        id: i64,
-        model: ModelRef,
-    ) -> Result<Session, AppError> {
-        self.ensure_model_fits_session(id, &model).await?;
-        self.kernel()
-            .sessions
-            .update_selection(
-                RequestId::new(),
-                session_id(id)?,
-                SelectionChange::Model(Some(model)),
-            )
-            .await
-            .map_err(kernel_error)?;
-        self.get_session(id).await
     }
     pub async fn set_session_permission(
         &self,
@@ -588,6 +664,8 @@ impl SessionManager {
                 .await
                 .map_err(kernel_error)?;
         }
+        self.start_session_plugins(fork.id, SessionStartSource::Fork)
+            .await?;
         self.get_session(fork.id.get()).await
     }
     pub async fn rewind_session(
@@ -610,6 +688,9 @@ impl SessionManager {
             // queue: truncation edits history, it is not a stop, and the same
             // session must remain usable afterwards.
             crate::RewindMode::InPlace => {
+                let dispatch = self.session_dispatch(session);
+                let _submission = dispatch.submission.lock().await;
+                self.stop_cordis_workflows(session).await;
                 let mut after = None;
                 loop {
                     let page = self
@@ -645,6 +726,10 @@ impl SessionManager {
         }
         .map_err(kernel_error)?
         .value;
+        if request.mode == crate::RewindMode::Fork {
+            self.start_session_plugins(result.session.id, SessionStartSource::Fork)
+                .await?;
+        }
         Ok((
             self.get_session(result.session.id.get()).await?,
             result.document,
@@ -660,30 +745,120 @@ impl SessionManager {
         id: i64,
         mode: crate::SessionClearMode,
     ) -> Result<Session, AppError> {
+        let ownership = self.control_tasks.token();
+        if self.shutdown.is_cancelled() {
+            return Err(AppError::Cancelled);
+        }
+        let manager = self.clone();
+        tokio::spawn(async move {
+            let _ownership = ownership;
+            manager.clear_session_inner(id, mode).await
+        })
+        .await
+        .map_err(|error| AppError::internal_error(&error))?
+    }
+
+    async fn clear_session_inner(
+        &self,
+        id: i64,
+        mode: crate::SessionClearMode,
+    ) -> Result<Session, AppError> {
         self.require_writable_bot_history(id).await?;
         let session = session_id(id)?;
-        self.cancel_active_execution_with_outcome(id).await?;
-        let command = RequestId::new();
-        let kernel_mode: agena_storage::kernel::ClearMode = mode.into();
-        persist(|| self.kernel().sessions.clear(command, session, kernel_mode))
-            .await
-            .map_err(kernel_error)?;
+        let dispatch = self.session_dispatch(session);
+        let submission = dispatch.submission.lock().await;
+        let was_paused = read_with_busy_retry(session, "clear_session_configuration", || {
+            self.kernel().reader.configuration(session)
+        })
+        .await?
+        .message_queue_paused;
+        let cleared = async {
+            self.cancel_session_tree_inner(id, false, true).await?;
+            let command = RequestId::new();
+            persist(|| self.kernel().sessions.clear(command, session, mode.into()))
+                .await
+                .map_err(kernel_error)
+        }
+        .await;
+        // The temporary queue fence belongs to this operation. A clear must
+        // leave the session ready to accept its next user message.
+        let resumed = if was_paused {
+            Ok(())
+        } else {
+            self.persist_message_queue_pause(session, false).await
+        };
+        cleared?;
+        resumed?;
+        drop(submission);
+        self.end_session_plugins(id, agena_plugin_host::SessionEndReason::Clear)
+            .await;
+        self.start_session_plugins(session, agena_plugin_host::SessionStartSource::Clear)
+            .await?;
         self.schedule_memory(session, None);
         self.get_session(id).await
     }
     pub async fn delete_session(&self, id: i64) -> Result<(), AppError> {
-        self.cancel_active_execution_with_outcome(id).await?;
-        if let Some(monitors) = self.tool_executor().monitor_registry() {
-            monitors.stop_session(id);
+        self.delete_session_supervised(id, true).await
+    }
+
+    async fn delete_session_supervised(
+        &self,
+        id: i64,
+        cancel_descendants: bool,
+    ) -> Result<(), AppError> {
+        let ownership = self.control_tasks.token();
+        if self.shutdown.is_cancelled() {
+            return Err(AppError::Cancelled);
         }
-        let command = RequestId::new();
-        persist(|| {
-            self.kernel()
-                .sessions
-                .delete(command, session_id(id).expect("validated session"))
+        let manager = self.clone();
+        tokio::spawn(async move {
+            let _ownership = ownership;
+            manager.delete_session_inner(id, cancel_descendants).await
         })
         .await
-        .map_err(kernel_error)?;
+        .map_err(|error| AppError::internal_error(&error))?
+    }
+
+    async fn delete_session_inner(
+        &self,
+        id: i64,
+        cancel_descendants: bool,
+    ) -> Result<(), AppError> {
+        let session = session_id(id)?;
+        let dispatch = self.session_dispatch(session);
+        let _disposal = dispatch.disposal.lock().await;
+        let configuration = self
+            .kernel()
+            .reader
+            .configuration(session)
+            .await
+            .map_err(kernel_error)?;
+        let is_agent = configuration.relation_kind.is_subagent();
+        if cancel_descendants || is_agent {
+            self.cancel_active_execution_with_outcome(id).await?;
+        }
+        let _preparation = if is_agent {
+            Some(self.agent_preparation.lock().await)
+        } else {
+            None
+        };
+        let _submission = dispatch.submission.lock().await;
+        if cancel_descendants || is_agent {
+            if self.is_run_active(id).await {
+                return Err(AppError::ExecutionAlreadyActive(id));
+            }
+        } else {
+            self.cancel_owned_session(session, false).await?;
+        }
+        if is_agent {
+            self.release_worktree(session).await?;
+        }
+        self.end_session_plugins(id, agena_plugin_host::SessionEndReason::UserExit)
+            .await;
+        let command = RequestId::new();
+        persist(|| self.kernel().sessions.delete(command, session))
+            .await
+            .map_err(kernel_error)?;
         Ok(())
     }
     pub async fn withdraw_user_message(&self, id: i64, message: i64) -> Result<Session, AppError> {
@@ -750,7 +925,7 @@ impl SessionManager {
         Ok(())
     }
 
-    async fn persist_message_queue_pause(
+    pub(super) async fn persist_message_queue_pause(
         &self,
         session: SessionId,
         paused: bool,
@@ -802,6 +977,51 @@ impl SessionManager {
             .await
     }
 
+    /// The caller holds this session's submission lock while fencing claims.
+    async fn cancel_owned_session(
+        &self,
+        session: SessionId,
+        preserve_queue: bool,
+    ) -> Result<bool, AppError> {
+        let was_paused = self
+            .kernel()
+            .reader
+            .configuration(session)
+            .await
+            .map_err(kernel_error)?
+            .message_queue_paused;
+        self.persist_message_queue_pause(session, true).await?;
+        let mut found = self.stop_cordis_workflows(session).await;
+        let mut after = None;
+        loop {
+            let page = self
+                .kernel()
+                .reader
+                .active_executions(session, after, 128)
+                .await
+                .map_err(kernel_error)?;
+            for execution in &page.executions {
+                found = true;
+                if preserve_queue && execution.phase == ExecutionPhase::Queued {
+                    continue;
+                }
+                self.cancel_execution_with_outcome(session.get(), execution.id)
+                    .await?;
+            }
+            if !page.has_more {
+                break;
+            }
+            after = page.next;
+        }
+        if preserve_queue {
+            self.resume_empty_queue_after_stop(session, was_paused).await?;
+        }
+        if let Some(monitors) = self.tool_executor().monitor_registry() {
+            monitors.stop_session(session.get());
+        }
+        Ok(found)
+    }
+
     /// The channel recovery caller holds the root submission lock until its
     /// authority CAS is complete. Descendants still take their own locks.
     pub(super) async fn cancel_channel_tree_with_locked_root(
@@ -838,42 +1058,7 @@ impl SessionManager {
             } else {
                 Some(dispatch.submission.lock().await)
             };
-            let was_paused = self
-                .kernel()
-                .reader
-                .configuration(session)
-                .await
-                .map_err(kernel_error)?
-                .message_queue_paused;
-            self.persist_message_queue_pause(session, true).await?;
-            let mut after = None;
-            loop {
-                let page = self
-                    .kernel()
-                    .reader
-                    .active_executions(session, after, 128)
-                    .await
-                    .map_err(kernel_error)?;
-                for execution in &page.executions {
-                    found = true;
-                    if preserve_queue && execution.phase == ExecutionPhase::Queued {
-                        continue;
-                    }
-                    self.cancel_execution_with_outcome(session.get(), execution.id)
-                        .await?;
-                }
-                if !page.has_more {
-                    break;
-                }
-                after = page.next;
-            }
-            if preserve_queue {
-                self.resume_empty_queue_after_stop(session, was_paused)
-                    .await?;
-            }
-            if let Some(monitors) = self.tool_executor().monitor_registry() {
-                monitors.stop_session(session.get());
-            }
+            found |= self.cancel_owned_session(session, preserve_queue).await?;
             let mut before = None;
             loop {
                 let page = self
@@ -1060,8 +1245,9 @@ impl SessionManager {
         let options = self
             .options_for_session(session_id(session.id)?, &session.execution.selection)
             .await?;
-        self.submit(crate::SessionUserRunRequest::new(id, options, document))
-            .await?;
+        let mut request = crate::SessionUserRunRequest::new(id, options, document);
+        request.wait_for_turn = true;
+        self.submit(request).await?;
         Ok(())
     }
     pub async fn reply_permission(
@@ -1253,6 +1439,94 @@ fn command_error(error: AppError) -> SessionExecutionCommandError {
 }
 #[async_trait::async_trait]
 impl SessionExecutionCommandService for SessionManager {
+    async fn session_setup(
+        &self,
+        input: agena_plugin_host::sdk::ImportedSessionSetupInput,
+    ) -> Result<(), SessionExecutionCommandError> {
+        let session = session_id(input.session_id).map_err(command_error)?;
+        let state = self
+            .state_for_session(session)
+            .await
+            .map_err(command_error)?;
+        let plugins = state.executor.plugin_manager();
+        if !plugins.has_subscription(agena_plugin_host::HookSubscription::IMPORTED_SESSION_SETUP) {
+            return Ok(());
+        }
+        let context = self
+            .execution_context_with_state(session, &state)
+            .await
+            .map_err(command_error)?;
+        let executor = state.executor.for_session_resource_context(&context);
+        if !executor.is_global() {
+            plugins
+                .dispatch_imported_session_setup(input, |key| executor.plugin_is_enabled(key))
+                .await;
+        }
+        Ok(())
+    }
+
+    async fn session_started(
+        &self,
+        id: i64,
+        source: agena_plugin_host::SessionStartSource,
+    ) -> Result<(), SessionExecutionCommandError> {
+        let session = session_id(id).map_err(command_error)?;
+        self.start_session_plugins(session, source)
+            .await
+            .map_err(command_error)
+    }
+
+    async fn clear_runtime_session(
+        &self,
+        session: i64,
+        mode: crate::SessionClearMode,
+    ) -> Result<bool, SessionExecutionCommandError> {
+        self.clear_session(session, mode).await.map_err(command_error)?;
+        Ok(true)
+    }
+
+    async fn delete_runtime_session(&self, session: i64) -> Result<bool, SessionExecutionCommandError> {
+        self.delete_session_supervised(session, false).await.map_err(command_error)?;
+        Ok(true)
+    }
+
+    async fn session_ended(&self, session: i64, reason: agena_plugin_host::SessionEndReason) {
+        self.end_session_plugins(session, reason).await;
+    }
+
+    async fn list_claude_channels(
+        &self,
+        session: i64,
+    ) -> Result<Vec<agena_domain::claude_channels::ClaudeChannelView>, SessionExecutionCommandError> {
+        self.claude_channel_views(session).await.map_err(command_error)
+    }
+
+    async fn list_declared_claude_channels(
+        &self,
+        session: i64,
+    ) -> Result<Vec<agena_domain::claude_channels::ClaudeChannelDefinition>, SessionExecutionCommandError> {
+        self.claude_channel_catalog(session).await.map_err(command_error)
+    }
+
+    async fn configure_claude_channel(
+        &self,
+        session: i64,
+        action: agena_domain::claude_channels::ClaudeChannelAction,
+    ) -> Result<Vec<agena_domain::claude_channels::ClaudeChannelView>, SessionExecutionCommandError> {
+        self.update_claude_channel(session, action).await.map_err(command_error)
+    }
+
+    async fn register_working_directory(
+        &self,
+        session: i64,
+        request: agena_domain::RegisterSessionWorkingDirectory,
+    ) -> Result<agena_domain::SessionWorkingDirectoryRegistration, SessionExecutionCommandError>
+    {
+        self.add_session_working_directory(session, request)
+            .await
+            .map_err(command_error)
+    }
+
     async fn prepare_session_profile(
         &self,
         workspace_id: Option<i64>,
@@ -1387,24 +1661,50 @@ impl SessionExecutionCommandService for SessionManager {
                 )
             }
         };
+        let mut document = request.document;
+        use super::imported_skills::{has_declared_reference, selected_skill_context, typed_skill_names};
+        let typed = typed_skill_names(&document, false);
+        let model_context = if !typed.is_empty() || has_declared_reference(&document) {
+            let context = self
+                .execution_context_for_execution(session, &state, Some(request.execution_id))
+                .await
+                .map_err(command_error)?;
+            let executor = state.executor.for_session_resource_context(&context);
+            selected_skill_context(
+                &executor,
+                &mut document,
+                context.owner.is_none() && context.channel_authority.is_none(),
+                &typed,
+            )
+            .await
+            .map_err(command_error)?
+        } else {
+            Vec::new()
+        };
         let (document, blobs) = self
             .prepare_user_media_with_state(
                 session,
                 &model,
-                request.document,
+                document,
                 request.request_id,
                 state,
+                None,
                 None,
             )
             .await
             .map_err(command_error)?;
         persist(|| {
-            self.kernel().sessions.edit_queued_with_blobs(
+            self.kernel().sessions.edit_queued_user_message(
                 request.request_id,
                 session,
                 request.execution_id,
                 revision,
-                document.clone(),
+                UserMessageInput {
+                    document: document.clone(),
+                    author: None,
+                    origin: None,
+                    model_context: model_context.clone(),
+                },
                 &blobs,
             )
         })
@@ -1555,6 +1855,16 @@ impl SessionExecutionCommandService for SessionManager {
             .await
             .map_err(command_error)?;
         Ok(SessionExecutionCommandOutcome::completed(id))
+    }
+    async fn change_session_selection(
+        &self,
+        id: i64,
+        options: Option<SessionRunOptions>,
+        interaction: agena_domain::ModelSwitchInteraction,
+    ) -> Result<crate::SessionModelSwitchOutcome, SessionExecutionCommandError> {
+        self.change_model_selection(id, options, interaction)
+            .await
+            .map_err(command_error)
     }
     async fn set_session_permission(
         &self,

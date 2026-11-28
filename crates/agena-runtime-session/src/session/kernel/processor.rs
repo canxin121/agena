@@ -3,7 +3,7 @@
 //! second provider request or repeats an accepted append.
 
 use std::{
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     path::{Path, PathBuf},
     sync::{Arc, OnceLock},
 };
@@ -38,6 +38,7 @@ const MAX_HOSTED_IMAGE_COUNT: usize = 8;
 // The session media download endpoint serves at most 20 MiB per artifact.
 const MAX_HOSTED_IMAGE_DECODED_BYTES: usize = 20 * 1024 * 1024;
 const MAX_HOSTED_IMAGE_ENCODED_BYTES: usize = MAX_HOSTED_IMAGE_DECODED_BYTES * 4 / 3 + 16 * 1024;
+const DISPLAY_BATCH_BYTES: usize = 64 * 1024;
 static RUN_BUDGET: OnceLock<ReadBudget> = OnceLock::new();
 type CompletionEventStream = std::pin::Pin<
     Box<
@@ -47,6 +48,12 @@ type CompletionEventStream = std::pin::Pin<
     >,
 >;
 
+#[derive(Clone)]
+pub(crate) struct MessageDisplayHooks {
+    pub host: Arc<agena_plugin_host::PluginHost>,
+    pub enabled: Arc<BTreeSet<agena_plugin_host::sdk::PluginKey>>,
+}
+
 /// Parameters are fixed before the first provider effect. The model input can
 /// only come from the round's own frozen, route-bound KernelPrompt.
 pub struct KernelRoundRequest {
@@ -55,6 +62,8 @@ pub struct KernelRoundRequest {
     model: ModelRef,
     completion: CompletionRequest,
     cancel: Option<CancellationToken>,
+    model_attempt_hooks: Option<crate::provider::ModelAttemptHooks>,
+    message_display: Option<MessageDisplayHooks>,
 }
 
 impl KernelRoundRequest {
@@ -79,7 +88,22 @@ impl KernelRoundRequest {
             model,
             completion,
             cancel,
+            model_attempt_hooks: None,
+            message_display: None,
         })
+    }
+
+    pub(crate) fn with_model_attempt_hooks(
+        mut self,
+        hooks: Option<crate::provider::ModelAttemptHooks>,
+    ) -> Self {
+        self.model_attempt_hooks = hooks;
+        self
+    }
+
+    pub(crate) fn with_message_display(mut self, hooks: Option<MessageDisplayHooks>) -> Self {
+        self.message_display = hooks;
+        self
     }
 }
 
@@ -127,6 +151,17 @@ struct TextStream {
     reasoning: bool,
     output: Option<TextOutput>,
     head: Option<ContentStreamView>,
+    display: Option<TextOutput>,
+    display_buffer: String,
+    display_index: u32,
+}
+
+impl TextStream {
+    fn output(&self, display: bool) -> Result<TextOutput> {
+        if display { &self.display } else { &self.output }
+            .clone()
+            .ok_or_else(missing_handle)
+    }
 }
 struct Draft {
     handle: Option<ToolDraftHandle>,
@@ -159,10 +194,18 @@ enum Action {
     Append {
         slot: usize,
         text: String,
+        display: bool,
+    },
+    DisplayBatch {
+        slot: usize,
+        index: u32,
+        text: String,
+        final_batch: bool,
     },
     Seal {
         slot: usize,
         diagnostic: Option<String>,
+        display: bool,
     },
     OpenDraft {
         slot: usize,
@@ -189,9 +232,10 @@ enum Action {
     },
 }
 enum Applied {
-    OpenText(usize, TextOutput),
+    OpenText(usize, TextOutput, Option<TextOutput>),
     Append,
-    Seal(usize, ContentStreamView),
+    DisplayBatch(usize, String),
+    Seal(usize, ContentStreamView, bool),
     OpenDraft(usize, ToolDraftHandle),
     Finalize(usize, ToolHandle),
     OpenHosted(usize, ToolHandle),
@@ -216,6 +260,7 @@ pub struct KernelRoundRun {
     provider: Option<BoxFuture<'static, std::result::Result<CompletionEventStream, AppError>>>,
     stream: Option<CompletionEventStream>,
     definitions: Vec<agena_provider::ToolApiDefinition>,
+    message_display: Option<MessageDisplayHooks>,
     texts: Vec<TextStream>,
     active_text: Option<usize>,
     calls: BTreeMap<String, PendingToolCall>,
@@ -262,6 +307,8 @@ impl SessionProcessor {
             model,
             mut completion,
             cancel,
+            model_attempt_hooks,
+            message_display,
         } = request;
         let definitions = completion.tool_api_functions.clone();
         let route = model.clone();
@@ -288,7 +335,7 @@ impl SessionProcessor {
                 .await?;
             let request = crate::provider::with_request_cancellation(
                 cancellation.clone(),
-                providers.complete_stream_with_tool_drafts(&route, completion),
+                providers.complete_stream_with_tool_drafts(&route, completion, model_attempt_hooks),
             );
             let result = match cancellation.as_ref() {
                 Some(cancel) => {
@@ -311,6 +358,7 @@ impl SessionProcessor {
             provider: Some(provider),
             stream: None,
             definitions,
+            message_display,
             texts: Vec::new(),
             active_text: None,
             calls: BTreeMap::new(),
@@ -441,10 +489,48 @@ impl KernelRoundRun {
 
     fn seal_active(&mut self) {
         if let Some(slot) = self.active_text.take() {
+            self.queue_text_seal(slot, None);
+        }
+    }
+
+    fn queue_text_seal(&mut self, slot: usize, diagnostic: Option<String>) {
+        let text = &mut self.texts[slot];
+        if self.message_display.is_some() && !text.reasoning {
+            self.steps.push_back(Step::new(Action::DisplayBatch {
+                slot,
+                index: text.display_index,
+                text: std::mem::take(&mut text.display_buffer),
+                final_batch: true,
+            }));
             self.steps.push_back(Step::new(Action::Seal {
                 slot,
-                diagnostic: None,
+                diagnostic: diagnostic.clone(),
+                display: true,
             }));
+        }
+        self.steps.push_back(Step::new(Action::Seal { slot, diagnostic, display: false }));
+    }
+
+    fn queue_display_lines(&mut self, slot: usize, delta: &str) {
+        let text = &mut self.texts[slot];
+        text.display_buffer.push_str(delta);
+        loop {
+            let buffer = &mut text.display_buffer;
+            let bound = buffer.floor_char_boundary(buffer.len().min(DISPLAY_BATCH_BYTES));
+            let end = match buffer[..bound].rfind('\n') {
+                Some(newline) => newline + 1,
+                None if buffer.len() > DISPLAY_BATCH_BYTES => bound,
+                None => break,
+            };
+            let remaining = buffer.split_off(end);
+            let batch = std::mem::replace(buffer, remaining);
+            self.steps.push_back(Step::new(Action::DisplayBatch {
+                slot,
+                index: text.display_index,
+                text: batch,
+                final_batch: false,
+            }));
+            text.display_index = text.display_index.saturating_add(1);
         }
     }
 
@@ -475,6 +561,9 @@ impl KernelRoundRun {
                     reasoning,
                     output: None,
                     head: None,
+                    display: None,
+                    display_buffer: String::new(),
+                    display_index: 0,
                 });
                 self.active_text = Some(slot);
                 self.steps
@@ -491,8 +580,12 @@ impl KernelRoundRun {
             self.steps.push_back(Step::new(Action::Append {
                 slot,
                 text: delta[start..end].to_owned(),
+                display: false,
             }));
             start = end;
+        }
+        if self.message_display.is_some() && !reasoning {
+            self.queue_display_lines(slot, &delta);
         }
         Ok(())
     }
@@ -792,8 +885,7 @@ impl KernelRoundRun {
                 .failure
                 .as_ref()
                 .map(|_| "provider round did not complete".to_owned());
-            self.steps
-                .push_back(Step::new(Action::Seal { slot, diagnostic }));
+            self.queue_text_seal(slot, diagnostic);
         }
         if self.failure.is_some() {
             for (slot, hosted) in self
@@ -931,10 +1023,21 @@ impl KernelRoundRun {
         }
         let result = self.in_flight.as_mut().expect("pending operation").await;
         self.in_flight = None;
-        match result? {
-            Applied::OpenText(slot, output) => self.texts[slot].output = Some(output),
+        let applied = result?;
+        self.steps.pop_front();
+        match applied {
+            Applied::OpenText(slot, output, display) => {
+                self.texts[slot].output = Some(output);
+                self.texts[slot].display = display;
+            }
             Applied::Append => {}
-            Applied::Seal(slot, head) => self.texts[slot].head = Some(head),
+            Applied::DisplayBatch(slot, text) => {
+                if !text.is_empty() {
+                    self.steps.push_front(Step::new(Action::Append { slot, text, display: true }));
+                }
+            }
+            Applied::Seal(slot, head, false) => self.texts[slot].head = Some(head),
+            Applied::Seal(_, _, true) => {}
             Applied::OpenDraft(slot, handle) => self.drafts[slot].handle = Some(handle),
             Applied::Finalize(slot, handle) => self.drafts[slot].ready = Some(handle),
             Applied::OpenHosted(slot, handle) => self.hosted[slot].handle = Some(handle),
@@ -966,7 +1069,6 @@ impl KernelRoundRun {
                 });
             }
         }
-        self.steps.pop_front();
         Ok(())
     }
 
@@ -978,37 +1080,58 @@ impl KernelRoundRun {
                 let round = self.round.clone();
                 let slot = *slot;
                 let reasoning = *reasoning;
+                let display = self.message_display.is_some() && !reasoning;
                 Box::pin(async move {
+                    if display {
+                        let (original, display) = round.begin_text_with_display(request).await?.value;
+                        return Ok(Applied::OpenText(slot, original, Some(display)));
+                    }
                     Ok(Applied::OpenText(
                         slot,
                         round.begin_text(request, reasoning).await?.value,
+                        None,
                     ))
                 })
             }
-            Action::Append { slot, text } => {
-                let output = self.texts[*slot]
-                    .output
-                    .clone()
-                    .ok_or_else(missing_handle)?;
+            Action::Append { slot, text, display } => {
+                let output = self.texts[*slot].output(*display)?;
                 let text = text.clone();
                 Box::pin(async move {
                     output.append(&text).await?;
                     Ok(Applied::Append)
                 })
             }
-            Action::Seal { slot, diagnostic } => {
-                let output = self.texts[*slot]
-                    .output
-                    .clone()
-                    .ok_or_else(missing_handle)?;
+            Action::DisplayBatch { slot, index, text, final_batch } => {
                 let slot = *slot;
+                let hooks = self.message_display.clone().ok_or_else(missing_handle)?;
+                let cancel = self.cancel.clone().unwrap_or_default();
+                let input = agena_plugin_host::sdk::ImportedMessageDisplayInput {
+                    session_id: self.round.session_id().get(),
+                    turn_id: self.round.execution_id(),
+                    message_id: self.texts[slot].output(false)?.id(),
+                    index: *index,
+                    final_batch: *final_batch,
+                    delta: text.clone(),
+                };
+                Box::pin(async move {
+                    let original = input.delta.clone();
+                    let display = hooks.host.dispatch_imported_message_display(
+                        input, |key| hooks.enabled.contains(key), &cancel,
+                    ).await.unwrap_or(original);
+                    Ok(Applied::DisplayBatch(slot, display))
+                })
+            }
+            Action::Seal { slot, diagnostic, display } => {
+                let output = self.texts[*slot].output(*display)?;
+                let slot = *slot;
+                let display = *display;
                 let diagnostic = diagnostic.clone();
                 Box::pin(async move {
                     let receipt = match diagnostic {
                         Some(diagnostic) => output.interrupt(request, diagnostic).await?,
                         None => output.finish(request).await?,
                     };
-                    Ok(Applied::Seal(slot, receipt.value))
+                    Ok(Applied::Seal(slot, receipt.value, display))
                 })
             }
             Action::OpenDraft {

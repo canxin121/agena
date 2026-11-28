@@ -122,6 +122,10 @@ impl SessionManager {
         }
         let metadata = control.metadata.clone();
         let initial = title.source == SessionTitleSource::Default;
+        let wait_for_start = state
+            .executor
+            .plugin_manager()
+            .has_subscription(agena_plugin_host::HookSubscription::SESSION_START);
         drop(control);
         let first = self
             .kernel()
@@ -129,18 +133,11 @@ impl SessionManager {
             .history_after(session, None, 1)
             .await
             .map_err(kernel_error)?;
-        let mut last_user = first
-            .entries
-            .first()
-            .filter(|entry| matches!(entry.payload, EntryPayload::User { .. }))
-            .map(|entry| (entry.id, entry.revision));
-        let initial_prompt = first
-            .entries
-            .first()
-            .and_then(|entry| match &entry.payload {
-                EntryPayload::User { document, .. } => Some(document_text(document, 2048)),
-                _ => None,
-            });
+        let first_user = first.entries.first().and_then(|entry| {
+            title_user_document(entry, wait_for_start).map(|document| (entry, document))
+        });
+        let mut last_user = first_user.map(|(entry, _)| (entry.id, entry.revision));
+        let initial_prompt = first_user.map(|(_, document)| document_text(document, 2048));
         drop(first);
         let page = self
             .kernel()
@@ -151,11 +148,20 @@ impl SessionManager {
         if let Some(entry) = page
             .entries
             .iter()
-            .filter(|entry| matches!(entry.payload, EntryPayload::User { .. }))
+            .filter(|entry| title_user_document(entry, wait_for_start).is_some())
             .max_by_key(|entry| entry.id)
         {
             last_user = Some((entry.id, entry.revision));
         }
+        let initial_prompt = initial_prompt.or_else(|| {
+            page.entries
+                .iter()
+                .filter_map(|entry| {
+                    title_user_document(entry, wait_for_start).map(|document| (entry.id, document))
+                })
+                .min_by_key(|(id, _)| *id)
+                .map(|(_, document)| document_text(document, 2048))
+        });
         let mut recent = Vec::new();
         let mut replies = std::collections::HashSet::new();
         let mut remaining = CONTEXT_BYTES;
@@ -165,10 +171,13 @@ impl SessionManager {
                 break;
             }
             let (role, text) = match &entry.payload {
-                EntryPayload::User { document, .. } => {
+                EntryPayload::User { .. } => {
+                    let Some(document) = title_user_document(entry, wait_for_start) else {
+                        continue;
+                    };
                     ("user", document_text(document, remaining.min(2048)))
                 }
-                EntryPayload::Text { content_id } => {
+                EntryPayload::Text { content_id, .. } => {
                     if !replies.insert(entry.message_id) {
                         continue;
                     }
@@ -270,6 +279,18 @@ impl SessionManager {
             Ok(_) | Err(KernelError::Conflict(_)) | Err(KernelError::NotFound(_)) => Ok(()),
             Err(error) => Err(kernel_error(error)),
         }
+    }
+}
+
+fn title_user_document(entry: &EntryView, wait_for_start: bool) -> Option<&ComposerDocument> {
+    match &entry.payload {
+        EntryPayload::User { document, .. }
+            if entry.execution_started
+                || (!wait_for_start && entry.execution_phase != ExecutionPhase::Cancelled) =>
+        {
+            Some(document)
+        }
+        _ => None,
     }
 }
 

@@ -210,6 +210,8 @@ pub enum AuthorKind {
     /// An externally authenticated chat participant. `role` is resolved from
     /// `channel_policy.members` on the host, never from platform metadata.
     ChannelMember { role: ChannelRole },
+    /// Input submitted by a plugin. The flag changes only model presentation.
+    Plugin { as_user: bool },
     /// A host-produced author (automation, subagent, Bot instruction).
     System { source: SystemAuthorKind },
 }
@@ -283,6 +285,16 @@ impl MessageAuthor {
             id: format!("system:{}", system_slug(source)),
             display_name: None,
             kind: AuthorKind::System { source },
+            group_ids: Vec::new(),
+            channel_authority: None,
+        }
+    }
+
+    pub fn plugin(id: &str, name: String, as_user: bool) -> Self {
+        Self {
+            id: format!("plugin:{id}"),
+            display_name: Some(name),
+            kind: AuthorKind::Plugin { as_user },
             group_ids: Vec::new(),
             channel_authority: None,
         }

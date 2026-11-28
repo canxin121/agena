@@ -33,8 +33,10 @@ impl HostClient for AddressHost {
             workspace_root: String::new(),
             cwd: String::new(),
             policy: serde_json::to_value(agena_process::sandbox::SandboxPolicy::default()).unwrap(),
+            additional_working_directories: Vec::new(),
             permission_snapshot: None,
             call_bound: false,
+            execution: None,
         })
     }
     async fn check_resolved_network_permission(

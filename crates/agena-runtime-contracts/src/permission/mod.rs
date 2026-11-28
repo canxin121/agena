@@ -702,6 +702,7 @@ pub struct PermissionPolicy {
     pub(crate) workspace_write_default: PermissionMode,
     pub(crate) external_read_default: PermissionMode,
     pub(crate) external_write_default: PermissionMode,
+    pub(crate) additional_working_directories: Vec<PathBuf>,
     pub(crate) rules: Vec<PermissionRule>,
 }
 
@@ -712,12 +713,28 @@ impl PermissionPolicy {
             workspace_write_default: workspace_write,
             external_read_default: workspace_read,
             external_write_default: workspace_write,
+            additional_working_directories: Vec::new(),
             rules: Vec::new(),
         }
     }
 
     pub fn allow_all() -> Self {
         Self::new(PermissionMode::Allow, PermissionMode::Allow)
+    }
+
+    /// The session selects the additional roots for its base path policy.
+    /// Independent policy ceilings keep their original workspace boundary.
+    pub fn set_additional_working_directories(&mut self, directories: &[PathBuf]) {
+        self.additional_working_directories = directories
+            .iter()
+            .filter(|directory| {
+                directory.is_absolute()
+                    && std::fs::canonicalize(directory).is_ok_and(|resolved| {
+                        path_identity::equal(&resolved, directory) && resolved.is_dir()
+                    })
+            })
+            .cloned()
+            .collect();
     }
 
     pub fn add_path_pattern_rule(
@@ -767,7 +784,14 @@ impl PermissionPolicy {
             }
         }
 
-        match (access, context.in_workspace) {
+        let in_workspace = context.in_workspace
+            || self.additional_working_directories.iter().any(|root| {
+                path_identity::within(
+                    Path::new(&context.absolute_norm),
+                    Path::new(&normalize_path_string(root)),
+                )
+            });
+        match (access, in_workspace) {
             (AccessKind::Read, true) => decide_from_mode(
                 self.workspace_read_default,
                 "matched workspace default read permission",

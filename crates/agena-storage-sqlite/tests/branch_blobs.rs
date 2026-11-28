@@ -263,7 +263,7 @@ async fn late_tool_blobs_remain_hidden_across_nested_forks_and_archive_round_tri
         .entries
         .iter()
         .find_map(|entry| match entry.payload {
-            EntryPayload::Text { content_id } => Some(content_id),
+            EntryPayload::Text { content_id, .. } => Some(content_id),
             _ => None,
         })
         .unwrap();

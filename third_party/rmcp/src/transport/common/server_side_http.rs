@@ -274,16 +274,12 @@ mod tests {
     use http_body_util::StreamBody;
 
     use super::*;
-    use crate::model::{EmptyResult, JsonRpcResponse, JsonRpcVersion2_0, RequestId, ServerResult};
+    use crate::model::{EmptyResult, RequestId, ServerResult};
 
     const INITIALIZE_REQUEST: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"0.1"}}}"#;
 
     fn dummy_message() -> ServerJsonRpcMessage {
-        ServerJsonRpcMessage::Response(JsonRpcResponse {
-            jsonrpc: JsonRpcVersion2_0,
-            id: RequestId::Number(1),
-            result: ServerResult::EmptyResult(EmptyResult {}),
-        })
+        ServerJsonRpcMessage::response(ServerResult::EmptyResult(EmptyResult {}), RequestId::Number(1))
     }
 
     #[test]

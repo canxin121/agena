@@ -522,13 +522,6 @@ fn streamify_invoke_output(call_expr: proc_macro2::TokenStream) -> proc_macro2::
     quote! {{
         let result = #call_expr?;
 
-        Ok(::agena_plugin_sdk::ToolStreamEnd {
-            stream_id: sink.stream_id().to_string(),
-            title: result.title,
-            output_text: result.output_text,
-            payload: result.payload,
-            metadata: result.metadata,
-            attachments: result.attachments,
-        })
+        Ok(::agena_plugin_sdk::ToolStreamEnd::from_output(sink.stream_id().to_string(), result))
     }}
 }

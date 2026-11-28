@@ -13,7 +13,8 @@ use crate::effect_scope::PluginEffectScope;
 use crate::error::HostError;
 use crate::event_pipeline::{
     PluginBailPipeline, PluginGuardDecision, PluginGuardErrorPolicy, PluginGuardPipeline,
-    PluginObservePipeline,
+    PluginObservePipeline, PluginPipelineFailurePolicy, PluginTransformBailControl,
+    PluginTransformBailPipeline,
 };
 use crate::sdk::host_api::HostCallbackContext;
 use crate::sdk::rpc::method;
@@ -21,7 +22,7 @@ use crate::sdk::{
     CompactionAfterInput, CompactionBeforeInput, CompactionBeforePatch, HookSubscription,
     ModelRequestAfterInput, ModelRequestBeforeInput, ModelRequestBeforePatch,
     ModelRequestErrorInput, ModelRequestErrorPatch, PermissionRequestInput, PermissionRequestPatch,
-    SubagentStartInput, SubagentStartPatch, SubagentStopInput,
+    PluginKey, SubagentStartInput, SubagentStartPatch, SubagentStopInput,
 };
 
 trait SessionEvent: Serialize + Clone + Send + 'static {
@@ -78,9 +79,9 @@ async fn invoke<I: SessionEvent>(
         .map_err(|error| error.to_string())
 }
 
-fn install_guard<I, P>(
+fn install_guard<'a, I, P>(
     pipeline: &PluginGuardPipeline<I>,
-    plugins: &[Arc<LoadedPlugin>],
+    plugins: impl IntoIterator<Item = &'a Arc<LoadedPlugin>>,
     handle: &Arc<HostHandle>,
     subscription: HookSubscription,
     method: &'static str,
@@ -125,9 +126,9 @@ where
     Ok(())
 }
 
-fn install_observer<I: SessionEvent>(
+fn install_observer<'a, I: SessionEvent>(
     pipeline: &PluginObservePipeline<I>,
-    plugins: &[Arc<LoadedPlugin>],
+    plugins: impl IntoIterator<Item = &'a Arc<LoadedPlugin>>,
     handle: &Arc<HostHandle>,
     subscription: HookSubscription,
     method: &'static str,
@@ -201,13 +202,74 @@ fn install_error_recovery(
     Ok(())
 }
 
+type CompactionBeforePipeline =
+    PluginTransformBailPipeline<(CompactionBeforeInput, String), (PluginKey, String)>;
+
+fn install_compaction_before(
+    pipeline: &CompactionBeforePipeline,
+    plugins: &[Arc<LoadedPlugin>],
+    handle: &Arc<HostHandle>,
+    timeout: Duration,
+) -> Result<(), HostError> {
+    for plugin in plugins
+        .iter()
+        .filter(|plugin| plugin.subscribes(HookSubscription::COMPACTION_BEFORE))
+    {
+        let scope = scope_for(plugin, handle)?;
+        let plugin = Arc::clone(plugin);
+        let authority = Arc::clone(handle);
+        pipeline
+            .register(
+                &scope,
+                0,
+                format!("{} {}", plugin.key(), method::HOOK_COMPACTION_BEFORE),
+                move |(input, mut instructions)| {
+                    let plugin = Arc::clone(&plugin);
+                    let authority = Arc::clone(&authority);
+                    async move {
+                        let key = plugin.key();
+                        let raw = invoke(
+                            plugin,
+                            authority,
+                            method::HOOK_COMPACTION_BEFORE,
+                            input.clone(),
+                            timeout,
+                        )
+                        .await?;
+                        let patch: Option<CompactionBeforePatch> =
+                            serde_json::from_value(raw).map_err(|error| error.to_string())?;
+                        if let Some(patch) = patch {
+                            if let Some(reason) = patch.deny_reason {
+                                return Ok(PluginTransformBailControl::Bail((key, reason)));
+                            }
+                            if let Some(text) = patch.additional_instructions {
+                                let remaining =
+                                    (64_usize * 1024).saturating_sub(instructions.len() + 1);
+                                let end = text.floor_char_boundary(text.len().min(remaining));
+                                if end > 0 {
+                                    if !instructions.is_empty() {
+                                        instructions.push('\n');
+                                    }
+                                    instructions.push_str(&text[..end]);
+                                }
+                            }
+                        }
+                        Ok(PluginTransformBailControl::Continue((input, instructions)))
+                    }
+                },
+            )
+            .map_err(|error| HostError::Config(error.to_string()))?;
+    }
+    Ok(())
+}
+
 /// The current plugin host's owned runtime lifecycle hooks. All handlers live
 /// inside plugin effect scopes and are removed on generation disposal.
 pub(super) struct LifecycleHooks {
     pub model_before: PluginGuardPipeline<ModelRequestBeforeInput>,
     pub model_after: PluginObservePipeline<ModelRequestAfterInput>,
     pub model_error: PluginBailPipeline<ModelRequestErrorInput, bool>,
-    pub compaction_before: PluginGuardPipeline<CompactionBeforeInput>,
+    pub compaction_before: CompactionBeforePipeline,
     pub compaction_after: PluginObservePipeline<CompactionAfterInput>,
     pub subagent_start: PluginGuardPipeline<SubagentStartInput>,
     pub subagent_stop: PluginObservePipeline<SubagentStopInput>,
@@ -220,7 +282,7 @@ impl LifecycleHooks {
             model_before: PluginGuardPipeline::new(PluginGuardErrorPolicy::Deny),
             model_after: PluginObservePipeline::new(true),
             model_error: PluginBailPipeline::new(),
-            compaction_before: PluginGuardPipeline::new(PluginGuardErrorPolicy::Deny),
+            compaction_before: PluginTransformBailPipeline::new(PluginPipelineFailurePolicy::Abort),
             compaction_after: PluginObservePipeline::new(true),
             subagent_start: PluginGuardPipeline::new(PluginGuardErrorPolicy::Deny),
             subagent_stop: PluginObservePipeline::new(true),
@@ -245,25 +307,19 @@ impl LifecycleHooks {
         )?;
         install_observer(
             &hooks.model_after,
-            plugins,
+            plugins.iter(),
             handle,
             HookSubscription::MODEL_REQUEST_AFTER,
             method::HOOK_MODEL_REQUEST_AFTER,
             timeout,
         )?;
         install_error_recovery(&hooks.model_error, plugins, handle, timeout)?;
-        install_guard::<_, CompactionBeforePatch>(
-            &hooks.compaction_before,
-            plugins,
-            handle,
-            HookSubscription::COMPACTION_BEFORE,
-            method::HOOK_COMPACTION_BEFORE,
-            |patch| patch.deny_reason,
-            timeout,
-        )?;
+        install_compaction_before(&hooks.compaction_before, plugins, handle, timeout)?;
         install_observer(
             &hooks.compaction_after,
-            plugins,
+            plugins
+                .iter()
+                .filter(|plugin| plugin.agent_plugin().is_none()),
             handle,
             HookSubscription::COMPACTION_AFTER,
             method::HOOK_COMPACTION_AFTER,
@@ -271,7 +327,9 @@ impl LifecycleHooks {
         )?;
         install_guard::<_, SubagentStartPatch>(
             &hooks.subagent_start,
-            plugins,
+            plugins
+                .iter()
+                .filter(|plugin| plugin.agent_plugin().is_none()),
             handle,
             HookSubscription::SUBAGENT_START,
             method::HOOK_SUBAGENT_START,
@@ -280,7 +338,7 @@ impl LifecycleHooks {
         )?;
         install_observer(
             &hooks.subagent_stop,
-            plugins,
+            plugins.iter(),
             handle,
             HookSubscription::SUBAGENT_STOP,
             method::HOOK_SUBAGENT_STOP,

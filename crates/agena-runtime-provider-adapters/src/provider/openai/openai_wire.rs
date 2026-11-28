@@ -54,7 +54,9 @@ pub(super) struct OpenAiResponsesReasoningConfig {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct OpenAiResponsesCompactResponse {
+    pub(super) id: Option<String>,
     pub(super) output: Vec<serde_json::Value>,
+    pub(super) usage: Option<agena_provider::OpenAiUsage>,
 }
 
 /// The standalone compact endpoint has its own schema. Generation controls,

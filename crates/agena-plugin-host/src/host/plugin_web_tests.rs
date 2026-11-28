@@ -136,6 +136,8 @@ fn input(value: serde_json::Value) -> CommandInvokeInput {
         workspace_root: None,
         slash: None,
         raw: String::new(),
+        prompt_context: String::new(),
+        cordis_attachments: None,
     }
 }
 

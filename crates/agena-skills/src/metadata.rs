@@ -20,37 +20,48 @@ struct Frontmatter {
     license: Option<String>,
     compatibility: Option<String>,
     metadata: BTreeMap<String, String>,
-    #[serde(rename = "allowed-tools")]
+    #[serde(
+        rename = "allowed-tools",
+        deserialize_with = "deserialize_allowed_tools"
+    )]
     allowed_tools: Option<String>,
     #[serde(deserialize_with = "deserialize_aliases")]
     aliases: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StringOrList {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+fn deserialize_allowed_tools<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(
+        Option::<StringOrList>::deserialize(deserializer)?.map(|tools| match tools {
+            StringOrList::Single(value) => value,
+            StringOrList::Multiple(values) => values.join(" "),
+        }),
+    )
 }
 
 fn deserialize_aliases<'de, D>(deserializer: D) -> std::result::Result<Vec<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Aliases {
-        Single(String),
-        Multiple(Vec<String>),
-    }
-    Ok(match Option::<Aliases>::deserialize(deserializer)? {
+    Ok(match Option::<StringOrList>::deserialize(deserializer)? {
         None => Vec::new(),
-        Some(Aliases::Single(value)) => vec![value],
-        Some(Aliases::Multiple(values)) => values,
+        Some(StringOrList::Single(value)) => vec![value],
+        Some(StringOrList::Multiple(values)) => values,
     })
 }
 
-/// Parse complete YAML frontmatter, including folded and literal block strings.
-/// Unknown extension keys remain in the original document and are not rejected.
-pub fn parse_document(document: &str, expected_name: Option<&str>) -> Result<ParsedSkill> {
-    if document.len() > MAX_DOCUMENT_BYTES {
-        return Err(SkillError::too_large(
-            "SKILL.md exceeds the 1 MiB document limit",
-        ));
-    }
+fn split_document(document: &str) -> Result<(&str, &str)> {
     let source = document.strip_prefix('\u{feff}').unwrap_or(document);
     let first_end = source.find('\n').ok_or_else(|| {
         SkillError::invalid("SKILL.md must begin with YAML frontmatter delimited by ---")
@@ -72,7 +83,29 @@ pub fn parse_document(document: &str, expected_name: Option<&str>) -> Result<Par
     }
     let (end, body_start) = boundary
         .ok_or_else(|| SkillError::invalid("YAML frontmatter is missing its closing ---"))?;
-    let raw: Frontmatter = serde_yaml::from_str(&source[start..end])
+    Ok((&source[start..end], &source[body_start..]))
+}
+
+/// Read the original frontmatter fields of a size-checked skill for comparison
+/// with its published manifest. This preserves fields Agena does not interpret.
+pub fn parse_document_frontmatter(
+    document: &str,
+) -> Result<serde_json::Map<String, serde_json::Value>> {
+    let (frontmatter, _) = split_document(document)?;
+    serde_yaml::from_str(frontmatter)
+        .map_err(|error| SkillError::invalid(format!("Invalid skill frontmatter: {error}")))
+}
+
+/// Parse complete YAML frontmatter, including folded and literal block strings.
+/// Unknown extension keys remain in the original document and are not rejected.
+pub fn parse_document(document: &str, expected_name: Option<&str>) -> Result<ParsedSkill> {
+    if document.len() > MAX_DOCUMENT_BYTES {
+        return Err(SkillError::too_large(
+            "SKILL.md exceeds the 1 MiB document limit",
+        ));
+    }
+    let (frontmatter, body) = split_document(document)?;
+    let raw: Frontmatter = serde_yaml::from_str(frontmatter)
         .map_err(|error| SkillError::invalid(format!("Invalid skill frontmatter: {error}")))?;
     let metadata = SkillMetadata {
         name: raw.name,
@@ -107,9 +140,7 @@ pub fn parse_document(document: &str, expected_name: Option<&str>) -> Result<Par
     }
     Ok(ParsedSkill {
         metadata,
-        body: source[body_start..]
-            .trim_start_matches(['\r', '\n'])
-            .to_owned(),
+        body: body.trim_start_matches(['\r', '\n']).to_owned(),
         diagnostics,
     })
 }
@@ -194,6 +225,19 @@ mod tests {
             assert!(validate_name(name).is_err(), "{name}");
         }
         assert!(validate_name("data-review2").is_ok());
+    }
+
+    #[test]
+    fn accepts_claude_allowed_tools_list() {
+        let document = "---\nname: review\ndescription: Review changes\nallowed-tools:\n  - Read\n  - Bash(git diff *)\n---\nReview the changes.";
+        assert_eq!(
+            parse_document(document, Some("review"))
+                .unwrap()
+                .metadata
+                .allowed_tools
+                .as_deref(),
+            Some("Read Bash(git diff *)")
+        );
     }
 
     #[test]

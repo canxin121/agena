@@ -532,6 +532,9 @@ impl ModelRuntime for OpenAiResponsesAdapter {
             return self.complete_by_aggregating_stream(request).await;
         }
 
+        let incomplete_reason = (response.status.as_deref() == Some("incomplete"))
+            .then(|| response.terminal_reason().unwrap_or("incomplete"))
+            .map(ToOwned::to_owned);
         let usage = OpenAiTransport::map_usage(response.usage);
         let provider_metadata = openai_responses_metadata(
             response.id,
@@ -539,6 +542,7 @@ impl ModelRuntime for OpenAiResponsesAdapter {
                 &request,
                 openai_reasoning_items_from_output(response.output.as_deref()),
             ),
+            incomplete_reason.as_deref(),
         );
 
         Ok(CompletionResponse {
@@ -553,15 +557,18 @@ impl ModelRuntime for OpenAiResponsesAdapter {
         })
     }
 
+    fn supports_native_compaction(&self, _model: &ModelId) -> bool {
+        self.backend == OpenAiResponsesBackend::Api
+            && self.profile == OpenAiProfile::Standard
+            && !self.is_openai_compatible_family()
+    }
+
     async fn compact_conversation(
         &self,
         request: CompletionRequest,
     ) -> Result<Option<ProviderCompactionOutput>, ProviderError> {
         let model = request.model.clone();
-        if self.backend != OpenAiResponsesBackend::Api
-            || self.profile != OpenAiProfile::Standard
-            || self.is_openai_compatible_family()
-        {
+        if !self.supports_native_compaction(&model) {
             return Ok(None);
         }
 
@@ -606,6 +613,8 @@ impl ModelRuntime for OpenAiResponsesAdapter {
             .await?;
         let output = ProviderCompactionOutput::OpenAiResponses {
             items: response.output,
+            response_id: utils::normalize_optional_text(response.id),
+            usage: OpenAiTransport::map_usage(response.usage),
         };
         if !output.has_checkpoint() {
             return Err(ProviderError::ProviderClassified {
@@ -835,6 +844,7 @@ impl ModelRuntime for OpenAiResponsesAdapter {
                                             &request,
                                             reasoning_items.iter().map(|(_, item)| item.clone()),
                                         ),
+                                        None,
                                     ),
                                     end_turn: None,
                                 };
@@ -920,6 +930,9 @@ impl ModelRuntime for OpenAiResponsesAdapter {
                 }
 
                 if utils::responses_is_completed(&event) {
+                    let incomplete_reason = (event["type"] == "response.incomplete"
+                        || event["response"]["status"] == "incomplete")
+                        .then(|| utils::responses_finish_reason(&event).unwrap_or_else(|| "incomplete".to_owned()));
                     let finish_reason = CompletionFinishReason::normalize_with_tool_calls(
                         CompletionFinishReason::from_provider(stream_finish_reason.as_deref()),
                         stream_tool_call_seen,
@@ -941,6 +954,7 @@ impl ModelRuntime for OpenAiResponsesAdapter {
                                     .iter()
                                     .map(|(_, item)| item.clone()),
                             ),
+                            incomplete_reason.as_deref(),
                         ),
                         end_turn: utils::responses_end_turn(&event),
                     };
@@ -981,6 +995,7 @@ impl ModelRuntime for OpenAiResponsesAdapter {
                                     &request,
                                     reasoning_items.iter().map(|(_, item)| item.clone()),
                                 ),
+                                None,
                             ),
                             end_turn: None,
                         };

@@ -166,7 +166,11 @@ impl App {
                 .map(|entry| (entry, args.to_string()))
         });
         if client_command.is_some() || plugin_command.is_some() {
-            if draft.activities().next().is_some() {
+            let accepts_attachments = client_command.is_none()
+                && plugin_command.as_ref().is_some_and(|(entry, _)| {
+                    entry.accepts_attachments || entry.submits_prompt
+                });
+            if !accepts_attachments && draft.activities().next().is_some() {
                 self.restore_composer_draft(draft);
                 self.flash_warning(ui_text::t(
                     &self.i18n,
@@ -180,7 +184,7 @@ impl App {
                 // reaches the server.
                 self.execute_command(&command, args.as_str());
             } else if let Some((entry, args)) = plugin_command {
-                self.execute_plugin_slash_command(entry, args.as_str());
+                self.execute_plugin_slash_command(entry, args.as_str(), Some(draft));
             }
             return;
         }
@@ -192,17 +196,12 @@ impl App {
     /// An HTTP acknowledgment can arrive while the user writes the next draft;
     /// routing through `submit_composer` would read that newer editor state.
     pub(crate) fn submit_user_draft(&mut self, draft: ComposerDraft) {
-        let draft = if draft.text().starts_with("//") {
-            composer_draft_with_text_prefix_stripped(draft, 1)
-        } else {
-            draft
-        };
         let target_session_id = self
             .transcript
             .session_id
             .or_else(|| self.sessions.current_selected_id());
         match target_session_id {
-            Some(session_id) => self.request_submit_message(session_id, draft),
+            Some(session_id) => self.request_submit_message(session_id, draft, None),
             None => self.create_session(Some(draft)),
         }
     }
@@ -267,8 +266,8 @@ impl App {
 use crate::{
     App, AppMessage, ComposerDraft, Instant, PendingComposerSubmit, PermissionReplyKind,
     PermissionRequest, PermissionScope, RunActivityTarget, RunOperation, commands,
-    composer_draft_with_text_prefix_stripped, derive_session_title, draft_title_source,
-    plugin_command_matches_name, run_status_line_command, ui_text,
+    derive_session_title, draft_title_source, plugin_command_matches_name, run_status_line_command,
+    ui_text,
 };
 
 async fn deliver_status_line_update(

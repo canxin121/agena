@@ -64,7 +64,7 @@ pub(super) fn tokens(command: &str) -> Vec<String> {
 }
 
 /// Syntax whose effects cannot be derived from our literal argv parser.
-pub(super) fn has_uninspected_syntax(command: &str) -> bool {
+pub(super) fn has_uninspected_syntax(command: &str, literal_paths: bool) -> bool {
     let (mut single, mut double, mut escaped) = (false, false, false);
     for ch in command.chars() {
         if escaped {
@@ -77,6 +77,9 @@ pub(super) fn has_uninspected_syntax(command: &str) -> bool {
             '"' if !single => double = !double,
             '$' | '`' if !single => return true,
             '(' | ')' | '{' | '}' | '#' if !single && !double => return true,
+            '<' | '>' | '*' | '?' | '[' | '~' if literal_paths && !single && !double => {
+                return true;
+            }
             '\0' => return true,
             _ => {}
         }
@@ -93,7 +96,7 @@ fn assignment(value: &str) -> bool {
     })
 }
 
-fn executable_name(value: &str) -> String {
+pub(super) fn executable_name(value: &str) -> String {
     let name = value.rsplit(['/', '\\']).next().unwrap_or(value);
     name.strip_suffix(".exe").unwrap_or(name).to_owned()
 }

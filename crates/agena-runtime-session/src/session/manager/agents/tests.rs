@@ -35,6 +35,7 @@ impl SubagentProbe {
             .load(std::sync::atomic::Ordering::Acquire)
             .then(|| agena_plugin_host::SubagentStartPatch {
                 deny_reason: Some("subagent launch denied by plugin".into()),
+                ..Default::default()
             }))
     }
 
@@ -161,6 +162,8 @@ impl Fixture {
                     relation_kind: agena_domain::SessionRelationKind::Subagent,
                     agent: Some(SessionAgentConfiguration {
                         origin_message_id: None,
+                        workflow: None,
+                        cordis: None,
                         name: "worker".into(),
                         status: AgentStatus::Completed,
                         started_at_ms: Some(1),
@@ -630,6 +633,7 @@ async fn a_direct_turn_queued_after_delegation_waits_for_exactly_one_previous_se
         .launch_agent(AgentLaunch {
             parent_session_id: fixture.parent.get(),
             launch_call_id: None,
+            workflow: None,
             name: "worker".into(),
             prompt: "Delegated first task".into(),
             profile: None,
@@ -642,7 +646,9 @@ async fn a_direct_turn_queued_after_delegation_waits_for_exactly_one_previous_se
             timeout_ms: None,
             max_tokens: None,
             max_cost_microusd: None,
+            inherit_parent_context: false,
             existing: Some(fixture.child),
+            cordis: None,
         })
         .await
         .unwrap();
@@ -690,6 +696,7 @@ async fn denied_subagent_launch_settles_failed_without_running_a_model() {
         .launch_agent(AgentLaunch {
             parent_session_id: fixture.parent.get(),
             launch_call_id: None,
+            workflow: None,
             name: "worker".into(),
             prompt: "This work must not execute".into(),
             profile: None,
@@ -702,9 +709,12 @@ async fn denied_subagent_launch_settles_failed_without_running_a_model() {
             timeout_ms: None,
             max_tokens: None,
             max_cost_microusd: None,
+            inherit_parent_context: false,
             existing: Some(fixture.child),
+            cordis: None,
         })
-        .await;
+        .await
+        .map(|launch| launch.handle);
     assert!(matches!(outcome, Err(AppError::Config(_))), "{outcome:?}");
     assert_eq!(fixture.agent().await.status, AgentStatus::Failed);
     assert!(
@@ -787,6 +797,7 @@ async fn delegated_profile_keeps_the_parent_permission_ceiling() {
                 timeout_ms: None,
                 max_tokens: None,
                 max_cost_microusd: None,
+                inherit_parent_context: false,
             },
         )
         .await
@@ -906,6 +917,7 @@ async fn delegated_profile_freezes_parent_permissions_under_a_wider_ceiling() {
                 timeout_ms: None,
                 max_tokens: None,
                 max_cost_microusd: None,
+                inherit_parent_context: false,
             },
         )
         .await
@@ -1012,6 +1024,7 @@ fn role_spawn(name: &str, profile: Option<&str>) -> AgentSpawnRequest {
         timeout_ms: None,
         max_tokens: None,
         max_cost_microusd: None,
+        inherit_parent_context: false,
     }
 }
 

@@ -425,3 +425,43 @@ async fn cancellation_of_stdio_stream_uses_the_originating_request_after_setup()
     .await;
     transport.close().await.unwrap();
 }
+
+#[tokio::test]
+async fn imported_worktree_removal_keeps_owning_session_scope() {
+    use crate::host::{SessionLifecycleScope, is_worktree_removal};
+    use crate::sdk::{WorktreeHookInput, WorktreeHookOutput, WorktreeOperation, rpc::method};
+
+    struct WorktreeRemoval;
+
+    #[async_trait]
+    impl Plugin for WorktreeRemoval {
+        fn manifest(&self) -> PluginManifest {
+            PluginManifest::new("test", "worktree-removal", "1.0.0")
+        }
+
+        async fn worktree_hook(
+            &self,
+            input: WorktreeHookInput,
+        ) -> crate::sdk::Result<Option<WorktreeHookOutput>> {
+            assert!(is_worktree_removal(input.session_id));
+            assert!(!is_worktree_removal(input.session_id + 1));
+            Ok(Some(WorktreeHookOutput::Removed))
+        }
+    }
+
+    let transport = InProcessTransport::new(WorktreeRemoval);
+    let input = serde_json::to_value(WorktreeHookInput {
+        session_id: 17,
+        cwd: "project".into(),
+        operation: WorktreeOperation::Remove {
+            path: "checkout".into(),
+        },
+    })
+    .unwrap();
+    let result = SessionLifecycleScope::WorktreeRemoval(17)
+        .run(transport.dispatch(method::HOOK_WORKTREE_REMOVE, input))
+        .await
+        .unwrap();
+    assert_eq!(result["kind"], "removed");
+    assert!(!is_worktree_removal(17));
+}

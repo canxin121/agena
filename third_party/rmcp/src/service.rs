@@ -118,7 +118,8 @@ pub trait ServiceRole: std::fmt::Debug + Send + Sync + 'static + Copy + Clone {
     type Resp: TransferObject;
     type Not: TryInto<CancelledNotification, Error = Self::Not>
         + From<CancelledNotification>
-        + TransferObject;
+        + TransferObject
+        + GetExtensions;
     type PeerReq: TransferObject + GetMeta<Metadata = RequestMetaObject> + GetExtensions;
     type PeerResp: TransferObject;
     type PeerNot: TryInto<CancelledNotification, Error = Self::PeerNot>
@@ -263,6 +264,67 @@ pub enum InboundStreamOrigin {
     OutboundRequest(RequestId),
 }
 
+/// Local data supplied on an outbound request and returned in the context of
+/// an associated peer request. The transport never sends this data on the wire.
+#[derive(Clone)]
+pub struct AssociatedRequestData(std::sync::Arc<dyn std::any::Any + Send + Sync>);
+
+impl AssociatedRequestData {
+    pub fn new(data: impl std::any::Any + Send + Sync) -> Self {
+        Self(std::sync::Arc::new(data))
+    }
+
+    pub fn get<T: std::any::Any>(&self) -> Option<&T> {
+        self.0.downcast_ref()
+    }
+}
+
+#[derive(Clone, Default)]
+struct CallbackReplyExtensions(Arc<std::sync::Mutex<Extensions>>);
+
+impl CallbackReplyExtensions {
+    fn take(&self) -> Extensions {
+        std::mem::take(&mut *self.0.lock().unwrap_or_else(|error| error.into_inner()))
+    }
+}
+
+struct PendingResponse<T> {
+    responder: Responder<T>,
+    data: Option<AssociatedRequestData>,
+}
+
+impl<T> PendingResponse<T> {
+    fn send(self, value: T) -> Result<(), T> {
+        self.responder.send(value)
+    }
+}
+
+fn associated_request_data<T>(
+    extensions: &Extensions,
+    pending: &std::collections::HashMap<RequestId, PendingResponse<T>>,
+) -> Option<AssociatedRequestData> {
+    let request = match extensions.get::<InboundStreamOrigin>() {
+        Some(InboundStreamOrigin::OutboundRequest(id)) => pending.get(id)?,
+        Some(InboundStreamOrigin::Unassociated) => return None,
+        None => {
+            // Stdio and WebSocket carry no association field. Only an
+            // unambiguous pending request can supply the handler's authority.
+            let mut requests = pending
+                .values()
+                .filter(|request| !request.responder.is_closed());
+            let request = requests.next()?;
+            if requests.next().is_some() {
+                return None;
+            }
+            request
+        }
+    };
+    if request.responder.is_closed() {
+        return None;
+    }
+    request.data.clone()
+}
+
 pub type TxJsonRpcMessage<R> =
     JsonRpcMessage<<R as ServiceRole>::Req, <R as ServiceRole>::Resp, <R as ServiceRole>::Not>;
 pub type RxJsonRpcMessage<R> = JsonRpcMessage<
@@ -283,6 +345,15 @@ pub trait Service<R: ServiceRole>: Send + Sync + 'static {
         notification: R::PeerNot,
         context: NotificationContext<R>,
     ) -> impl Future<Output = Result<(), McpError>> + MaybeSendFuture + '_;
+    /// Dispatch a lightweight notification in transport order. Implementations
+    /// must return immediately without waiting on the peer or external work.
+    fn handle_ordered_notification(
+        &self,
+        _notification: &R::PeerNot,
+        _context: &NotificationContext<R>,
+    ) -> bool {
+        false
+    }
     fn get_info(&self) -> R::Info;
     /// The protocol versions this service can speak, bounding what `initialize`
     /// negotiation may agree to.
@@ -311,6 +382,13 @@ pub trait Service<R: ServiceRole>: 'static {
         notification: R::PeerNot,
         context: NotificationContext<R>,
     ) -> impl Future<Output = Result<(), McpError>> + MaybeSendFuture + '_;
+    fn handle_ordered_notification(
+        &self,
+        _notification: &R::PeerNot,
+        _context: &NotificationContext<R>,
+    ) -> bool {
+        false
+    }
     fn get_info(&self) -> R::Info;
     /// The protocol versions this service can speak.
     ///
@@ -366,6 +444,14 @@ impl<R: ServiceRole> Service<R> for Box<dyn DynService<R>> {
         DynService::handle_notification(self.as_ref(), notification, context)
     }
 
+    fn handle_ordered_notification(
+        &self,
+        notification: &R::PeerNot,
+        context: &NotificationContext<R>,
+    ) -> bool {
+        DynService::handle_ordered_notification(self.as_ref(), notification, context)
+    }
+
     fn get_info(&self) -> R::Info {
         DynService::get_info(self.as_ref())
     }
@@ -387,6 +473,13 @@ pub trait DynService<R: ServiceRole>: Send + Sync {
         notification: R::PeerNot,
         context: NotificationContext<R>,
     ) -> MaybeBoxFuture<'_, Result<(), McpError>>;
+    fn handle_ordered_notification(
+        &self,
+        _notification: &R::PeerNot,
+        _context: &NotificationContext<R>,
+    ) -> bool {
+        false
+    }
     fn get_info(&self) -> R::Info;
     /// See [`Service::supported_protocol_versions`].
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
@@ -406,6 +499,13 @@ pub trait DynService<R: ServiceRole> {
         notification: R::PeerNot,
         context: NotificationContext<R>,
     ) -> MaybeBoxFuture<'_, Result<(), McpError>>;
+    fn handle_ordered_notification(
+        &self,
+        _notification: &R::PeerNot,
+        _context: &NotificationContext<R>,
+    ) -> bool {
+        false
+    }
     fn get_info(&self) -> R::Info;
     /// See [`Service::supported_protocol_versions`].
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
@@ -427,6 +527,13 @@ impl<R: ServiceRole, S: Service<R>> DynService<R> for S {
         context: NotificationContext<R>,
     ) -> MaybeBoxFuture<'_, Result<(), McpError>> {
         Box::pin(self.handle_notification(notification, context))
+    }
+    fn handle_ordered_notification(
+        &self,
+        notification: &R::PeerNot,
+        context: &NotificationContext<R>,
+    ) -> bool {
+        Service::handle_ordered_notification(self, notification, context)
     }
     fn get_info(&self) -> R::Info {
         self.get_info()
@@ -723,6 +830,7 @@ pub struct Peer<R: ServiceRole> {
     client_request_metadata: Arc<OnceLock<ClientRequestMetadata>>,
     request_metadata_required: Arc<std::sync::atomic::AtomicBool>,
     subscription_channels: Arc<std::sync::RwLock<SubscriptionChannelMap<R::PeerNot>>>,
+    outbound_extensions: Extensions,
     #[cfg(feature = "client")]
     response_cache: client::cache::PeerResponseCache<R>,
 }
@@ -741,6 +849,7 @@ where
             client_request_metadata: self.client_request_metadata.clone(),
             request_metadata_required: self.request_metadata_required.clone(),
             subscription_channels: self.subscription_channels.clone(),
+            outbound_extensions: self.outbound_extensions.clone(),
             #[cfg(feature = "client")]
             response_cache: self.response_cache.clone(),
         }
@@ -817,13 +926,31 @@ impl<R: ServiceRole> Peer<R> {
                 client_request_metadata: Default::default(),
                 request_metadata_required: Default::default(),
                 subscription_channels: Default::default(),
+                outbound_extensions: Extensions::new(),
                 #[cfg(feature = "client")]
                 response_cache: Default::default(),
             },
             rx,
         )
     }
-    pub async fn send_notification(&self, notification: R::Not) -> Result<(), ServiceError> {
+    /// Attach local transport data to messages sent by this handle. Extensions
+    /// stay in memory and cannot be supplied by the peer through JSON-RPC.
+    pub fn with_outbound_extension<T: Clone + Send + Sync + 'static>(mut self, extension: T) -> Self {
+        self.outbound_extensions.insert(extension);
+        #[cfg(feature = "client")]
+        {
+            self.response_cache = Default::default();
+        }
+        self
+    }
+
+    /// Read local transport data attached to this handle.
+    pub fn outbound_extension<T: Send + Sync + 'static>(&self) -> Option<&T> {
+        self.outbound_extensions.get()
+    }
+
+    pub async fn send_notification(&self, mut notification: R::Not) -> Result<(), ServiceError> {
+        notification.extensions_mut().extend(self.outbound_extensions.clone());
         let (responder, receiver) = tokio::sync::oneshot::channel();
         self.tx
             .send(PeerSinkMessage::Notification {
@@ -864,6 +991,7 @@ impl<R: ServiceRole> Peer<R> {
         options: PeerRequestOptions,
         subscription_sender: Option<SubscriptionChannel<R::PeerNot>>,
     ) -> Result<RequestHandle<R>, ServiceError> {
+        request.extensions_mut().extend(self.outbound_extensions.clone());
         R::enforce_request_association(
             &request,
             self.peer_info().as_deref(),
@@ -976,7 +1104,8 @@ impl<R: ServiceRole> Peer<R> {
         }
     }
 
-    pub(crate) fn try_cancel_request(&self, id: RequestId, reason: Option<String>) {
+    /// Queue cancellation without blocking on the transport.
+    pub fn try_cancel_request(&self, id: RequestId, reason: Option<String>) {
         let notification = CancelledNotification {
             params: CancelledNotificationParam {
                 request_id: Some(id),
@@ -984,7 +1113,7 @@ impl<R: ServiceRole> Peer<R> {
                 meta: None,
             },
             method: crate::model::CancelledNotificationMethod,
-            extensions: Default::default(),
+            extensions: self.outbound_extensions.clone(),
         };
         let (responder, _receiver) = tokio::sync::oneshot::channel();
         let _ = self.tx.try_send(PeerSinkMessage::Notification {
@@ -1043,6 +1172,11 @@ impl<R: ServiceRole> Peer<R> {
 
     pub fn is_transport_closed(&self) -> bool {
         self.tx.is_closed()
+    }
+
+    /// Wait for the peer service to stop accepting requests.
+    pub async fn transport_closed(&self) {
+        self.tx.closed().await;
     }
 }
 
@@ -1217,6 +1351,17 @@ impl<R: ServiceRole> RequestContext<R> {
             peer,
         }
     }
+
+    /// Attach local transport data to a client reply to a server request.
+    pub fn set_reply_extension<T: Clone + Send + Sync + 'static>(&self, extension: T) {
+        if let Some(reply) = self.extensions.get::<CallbackReplyExtensions>() {
+            reply
+                .0
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .insert(extension);
+        }
+    }
 }
 
 #[cfg(feature = "server")]
@@ -1339,13 +1484,13 @@ where
         tokio::sync::mpsc::channel::<TxJsonRpcMessage<R>>(SINK_PROXY_BUFFER_SIZE);
     let peer_info = peer.peer_info();
     if R::IS_CLIENT {
-        tracing::info!(?peer_info, "Service initialized as client");
+        tracing::info!("Service initialized as client");
     } else {
         tracing::info!(?peer_info, "Service initialized as server");
     }
 
     let mut local_responder_pool =
-        HashMap::<RequestId, Responder<Result<R::PeerResp, ServiceError>>>::new();
+        HashMap::<RequestId, PendingResponse<Result<R::PeerResp, ServiceError>>>::new();
     let mut local_ct_pool = HashMap::<RequestId, CancellationToken>::new();
     let shared_service = Arc::new(service);
     // for return
@@ -1497,7 +1642,8 @@ where
                     id,
                     responder,
                 }) => {
-                    local_responder_pool.insert(id.clone(), responder);
+                    let data = request.extensions().get::<AssociatedRequestData>().cloned();
+                    local_responder_pool.insert(id.clone(), PendingResponse { responder, data });
                     let send = transport.send(JsonRpcMessage::request(request, id.clone()));
                     {
                         let id = id.clone();
@@ -1565,6 +1711,15 @@ where
                         // swap meta firstly, otherwise progress token will be lost
                         std::mem::swap(&mut meta, request.get_meta_mut());
                         std::mem::swap(&mut extensions, request.extensions_mut());
+                        if R::IS_CLIENT
+                            && let Some(data) = associated_request_data(&extensions, &local_responder_pool)
+                        {
+                            extensions.insert(data);
+                        }
+                        let reply_extensions = R::IS_CLIENT.then(CallbackReplyExtensions::default);
+                        if let Some(reply) = &reply_extensions {
+                            extensions.insert(reply.clone());
+                        }
                         let context = RequestContext {
                             ct: context_ct,
                             id: id.clone(),
@@ -1578,14 +1733,23 @@ where
                             let result = ORIGINATING_REQUEST
                                 .scope(handler_id, service.handle_request(request, context))
                                 .await;
+                            let extensions =
+                                reply_extensions.map_or_else(Extensions::new, |reply| reply.take());
                             let response = match result {
                                 Ok(result) => {
                                     tracing::debug!(%id, ?result, "response message");
-                                    JsonRpcMessage::response(result, id)
+                                    JsonRpcMessage::Response(JsonRpcResponse {
+                                        jsonrpc: crate::model::JsonRpcVersion2_0,
+                                        id,
+                                        result,
+                                        extensions,
+                                    })
                                 }
                                 Err(error) => {
                                     tracing::warn!(%id, ?error, "response error");
-                                    JsonRpcMessage::error(error, Some(id))
+                                    let mut error = JsonRpcError::new(Some(id), error);
+                                    error.extensions = extensions;
+                                    JsonRpcMessage::Error(error)
                                 }
                             };
                             let _send_result = sink.send(response).await;
@@ -1674,6 +1838,13 @@ where
                             meta,
                             extensions,
                         };
+                        if Service::handle_ordered_notification(
+                            service.as_ref(),
+                            &notification,
+                            &context,
+                        ) {
+                            continue;
+                        }
                         let current_span = tracing::Span::current();
                         spawn_service_task(async move {
                             let result = service.handle_notification(notification, context).await;

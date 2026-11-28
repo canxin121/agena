@@ -250,6 +250,50 @@ pub struct RunOptions {
     pub max_output_tokens: Option<u32>,
 }
 
+/// A selection request keeps the usual flat model and mode fields. Clients
+/// can opt into the interactive model-switch confirmation exchange.
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionSelectionRequest {
+    #[serde(flatten)]
+    pub options: RunOptions,
+    pub model_switch: agena_domain::ModelSwitchInteraction,
+}
+
+impl<'de> Deserialize<'de> for SessionSelectionRequest {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let mut fields = serde_json::Map::<String, serde_json::Value>::deserialize(deserializer)?;
+        let model_switch = fields
+            .remove("model_switch")
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(serde::de::Error::custom)?
+            .unwrap_or_default();
+        let options = serde_json::from_value(serde_json::Value::Object(fields))
+            .map_err(serde::de::Error::custom)?;
+        Ok(Self {
+            options,
+            model_switch,
+        })
+    }
+}
+
+/// On success, old clients can continue reading the ordinary execution fields.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SessionSelectionResponse {
+    ConfirmationRequired {
+        confirmation: agena_domain::ModelSwitchConfirmation,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        system_messages: Vec<String>,
+    },
+    Applied {
+        #[serde(flatten)]
+        execution: Box<SessionExecutionResource>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        system_messages: Vec<String>,
+    },
+}
+
 /// Provider, optional adapter, and model selection carried over the public
 /// wire. The application validates these strings and constructs its internal
 /// model identifier only after receiving the request.

@@ -5,7 +5,8 @@ use agena_api::{
         Command, CommandResult, ReplacePermissionRuleParams, RevokePermissionRuleParams,
         UpsertPermissionRuleParams,
     },
-    resource::PermissionRuleResource,
+    management::PluginCommandComposer,
+    resource::{CommandRequestContext, PermissionRuleResource, PluginCommandInvokeRequest},
 };
 use anyhow::{Context, Result, anyhow, bail};
 
@@ -80,6 +81,7 @@ pub(crate) fn plugin_logs(
 /// palette from offering an operation that cannot run.
 pub(crate) fn plugin_slash_commands(
     application: &super::TuiBackend,
+    session_id: Option<i64>,
     is_bot_session: bool,
 ) -> Vec<agena_plugin_sdk::inspection::CommandCatalogItem> {
     let kind = if is_bot_session {
@@ -88,31 +90,26 @@ pub(crate) fn plugin_slash_commands(
         agena_plugin_sdk::SessionKind::Project
     };
     application
-        .plugin_catalog()
-        .map(|catalog| {
-            catalog
-                .commands
-                .into_iter()
-                .filter(|entry| {
-                    entry.command.applies_to.contains(kind)
-                        && !matches!(
-                            entry.command.target,
-                            agena_plugin_sdk::CommandTarget::Client { .. }
-                        )
-                        && !entry
-                            .command
-                            .category
-                            .as_deref()
-                            .is_some_and(|category| category.eq_ignore_ascii_case("skill"))
-                        && entry
-                            .command
-                            .slash
-                            .as_deref()
-                            .is_some_and(|slash| !slash.trim().trim_start_matches('/').is_empty())
-                })
-                .collect()
+        .plugin_commands(session_id)
+        .into_iter()
+        .filter(|entry| {
+            entry.command.applies_to.contains(kind)
+                && !matches!(
+                    entry.command.target,
+                    agena_plugin_sdk::CommandTarget::Client { .. }
+                )
+                && !entry
+                    .command
+                    .category
+                    .as_deref()
+                    .is_some_and(|category| category.eq_ignore_ascii_case("skill"))
+                && entry
+                    .command
+                    .slash
+                    .as_deref()
+                    .is_some_and(|slash| !slash.trim().trim_start_matches('/').is_empty())
         })
-        .unwrap_or_default()
+        .collect()
 }
 
 pub(crate) async fn invoke_plugin_slash_command(
@@ -120,17 +117,23 @@ pub(crate) async fn invoke_plugin_slash_command(
     entry: &agena_plugin_sdk::inspection::CommandCatalogItem,
     session_id: Option<i64>,
     raw: &str,
+    composer: Option<PluginCommandComposer>,
 ) -> Result<PluginCommandEffect> {
     let plugin_id = entry.plugin_id.to_string();
     let response = application
         .client()
-        .invoke_plugin_command(
+        .invoke_plugin_command_request(
             plugin_id.as_str(),
             entry.command.id.as_str(),
-            serde_json::json!({}),
-            session_id,
-            entry.command.slash.as_deref(),
-            raw,
+            PluginCommandInvokeRequest {
+                context: CommandRequestContext {
+                    input: serde_json::json!({}),
+                    session_id,
+                    slash: entry.command.slash.clone(),
+                    raw: raw.to_owned(),
+                },
+                composer,
+            },
         )
         .await
         .context("failed to invoke plugin command through the server")?;

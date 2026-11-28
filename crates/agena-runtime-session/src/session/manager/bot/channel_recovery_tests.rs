@@ -153,6 +153,7 @@ async fn reviewed_recovery_drains_old_work_keeps_history_and_preserves_the_local
         generation: old_attempt.generation(),
         model: ModelRef::new("test", "test"),
         state: manager.global_state.load_full(),
+        cordis_child_jobs: Default::default(),
         cancel: CancellationToken::new(),
         phase: StdMutex::new(agena_domain::ExecutionPhase::StreamingModel),
         done: Notify::new(),

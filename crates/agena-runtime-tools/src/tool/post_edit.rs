@@ -18,7 +18,7 @@ pub(super) async fn validate(
         .unwrap_or(&invocation.name);
     if !matches!(
         name,
-        "fs.write" | "fs.replace" | "fs.apply_patch" | "notebook.edit_cell"
+        "fs.write" | "fs.replace" | "fs.apply_patch" | "notebook.edit" | "notebook.edit_cell"
     ) {
         return;
     }
@@ -35,7 +35,11 @@ pub(super) async fn validate(
         .unwrap_or_default();
     if paths.is_empty()
         && let Some(path) = serde_json::Value::from(invocation.input.clone())
-            .get("path")
+            .get(if name == "notebook.edit" {
+                "notebook_path"
+            } else {
+                "path"
+            })
             .and_then(serde_json::Value::as_str)
     {
         paths.push(path.into());

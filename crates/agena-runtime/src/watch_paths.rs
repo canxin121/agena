@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use agena_plugin_host::{PluginPackage, PluginsConfig};
+use agena_plugin_host::{PluginHost, PluginPackage, PluginsConfig};
 
 /// Immutable, deduplicated paths watched by runtime reload tasks.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,14 +17,6 @@ impl WatchPathSet {
         paths.sort();
         paths.dedup();
         Self { paths }
-    }
-
-    /// Add a path while preserving the set invariant.
-    pub fn insert(&mut self, path: PathBuf) {
-        if !self.paths.iter().any(|existing| existing == &path) {
-            self.paths.push(path);
-            self.paths.sort();
-        }
     }
 
     pub fn as_slice(&self) -> &[PathBuf] {
@@ -46,21 +38,44 @@ impl Default for WatchPathSet {
 pub fn runtime_watch_paths(
     config_path: &Path,
     project_config_path: &Path,
+    workspace_root: &Path,
     plugins: &PluginsConfig,
+    global_plugins: &PluginsConfig,
+    hosts: [&PluginHost; 2],
 ) -> WatchPathSet {
-    let mut paths = WatchPathSet::new();
-    paths.insert(config_path.to_path_buf());
-    paths.insert(project_config_path.to_path_buf());
+    let mut paths = vec![config_path.to_path_buf(), project_config_path.to_path_buf()];
+    paths.extend(
+        agena_runtime_tools::claude_project_settings_paths(workspace_root).map(|(_, path)| path),
+    );
+    let base = config_path.parent().unwrap_or_else(|| Path::new("."));
 
-    let base_dir = config_path.parent().unwrap_or_else(|| Path::new("."));
-    for entry in plugins.list.values() {
-        if let PluginPackage::Cdylib { path, .. } = &entry.package {
-            paths.insert(if path.is_absolute() {
-                path.clone()
-            } else {
-                base_dir.join(path)
-            });
+    for entry in plugins.list.values().chain(global_plugins.list.values()) {
+        match &entry.package {
+            PluginPackage::Cdylib { path, .. } => paths.push(base.join(path)),
+            PluginPackage::AgentPlugin { path, bridge, .. } if entry.enabled => {
+                paths.extend(agena_plugin_host::agent_plugin::manifest_watch_paths(
+                    &base.join(path),
+                ));
+                if let Some(bridge) = bridge
+                    .as_deref()
+                    .filter(|bridge| bridge.follow_installation)
+                {
+                    paths.extend(
+                        agena_plugin_host::agent_plugin::native_installation_watch_paths(bridge),
+                    );
+                }
+            }
+            _ => {}
         }
     }
-    paths
+    for host in hosts {
+        for package in host
+            .plugins()
+            .iter()
+            .filter_map(|plugin| plugin.agent_plugin())
+        {
+            paths.extend(package.watch_paths.iter().cloned());
+        }
+    }
+    WatchPathSet::from_paths(paths)
 }

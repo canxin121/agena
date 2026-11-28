@@ -18,6 +18,7 @@ agena-async = { workspace = true }
 sha2 = { workspace = true }
 agena-process = { workspace = true }
 agena-runtime = { workspace = true }
+agena-runtime-config = { workspace = true }
 agena-runtime-tools = { workspace = true }
 anyhow = { workspace = true }
 agena-runtime-contracts = { workspace = true }
@@ -36,6 +37,7 @@ agena-runtime-notifications = { workspace = true }
 agena-scheduler = { workspace = true }
 libc.workspace = true
 lru.workspace = true
+json5 = "1"
 base64.workspace = true
 chrono.workspace = true
 path-clean.workspace = true

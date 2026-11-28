@@ -48,7 +48,63 @@ pub struct SessionConfiguration {
     pub owner: Option<agena_domain::SessionOwner>,
     pub capability_denied_tool_names: BTreeSet<String>,
     pub effective_workspace_root: Option<PathBuf>,
+    /// Optional tool working directory relative to the effective workspace.
+    /// Filesystem permission aliases still resolve from the workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_directory: Option<PathBuf>,
+    /// Absolute directories explicitly registered for this session on this host.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_working_directories: Vec<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<SessionWorktree>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_model_switch_context: Option<PendingModelSwitchContext>,
     pub agent: Option<SessionAgentConfiguration>,
+}
+
+/// Undelivered `PostModelSwitch` hook context bound to its target model route.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingModelSwitchContext {
+    pub id: uuid::Uuid,
+    pub model: agena_domain::ModelRef,
+    pub text: String,
+}
+
+/// The checkout a project session owns, retained across server restarts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionWorktree {
+    pub source: PathBuf,
+    pub path: PathBuf,
+    pub provider: SessionWorktreeProvider,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum SessionWorktreeProvider {
+    Git {
+        name: String,
+        start_commit: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        repository_paths: Option<SessionGitWorktreePaths>,
+        /// Fingerprints of gitignored files copied when this checkout was created.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        included_files: BTreeMap<PathBuf, String>,
+    },
+    Hook,
+}
+
+/// Repository roots when the owning project opens a Git subdirectory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionGitWorktreePaths {
+    pub source_root: PathBuf,
+    pub checkout_root: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionWorktreeChange {
+    Attach(SessionWorktree),
+    Release,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -94,12 +150,80 @@ pub struct SessionAgentConfiguration {
     /// Verified parent input that launched this exact agent run.
     #[serde(default)]
     pub origin_message_id: Option<EntryId>,
+    /// The workflow activity collects this child's result for the parent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<agena_domain::ActivityId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cordis: Option<CordisAgentConfiguration>,
     pub name: String,
     pub status: AgentStatus,
     pub started_at_ms: Option<i64>,
     pub finished_at_ms: Option<i64>,
     pub failure: Option<agena_failure::Failure>,
     pub limits: AgentExecutionLimits,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CordisAgentConfiguration {
+    pub provider: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// The initial activation reports through its caller's handle only.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub result_to_caller: bool,
+    /// Tree-wide active child concurrency limit configured when this child was created.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_active_children: Option<u64>,
+    /// Caller-reserved opaque child identifier bound to this Cordis child session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reserved_id: Option<String>,
+}
+
+impl SessionAgentConfiguration {
+    pub fn valid_native_name(name: &str) -> bool {
+        name.len() <= 64
+            && !matches!(name, "parent" | "self")
+            && !name.bytes().all(|byte| byte.is_ascii_digit())
+            && name.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+    }
+
+    pub fn valid_cordis_name(name: &str) -> bool {
+        name != "lead"
+            && name.len() <= 32
+            && name.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
+            && name.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    }
+
+    pub fn valid_cordis_reserved_id(id: &str) -> bool {
+        !id.is_empty()
+            && id.len() <= 128
+            && id != "lead"
+            && id
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b':'))
+    }
+
+    pub fn valid_identity(&self) -> bool {
+        match &self.cordis {
+            Some(cordis) => {
+                Self::valid_cordis_name(&self.name)
+                    && !cordis.provider.is_empty()
+                    && cordis.provider.len() <= 128
+                    && cordis.provider.trim() == cordis.provider
+                    && cordis.label.as_ref().is_none_or(|label| !label.trim().is_empty() && label.len() <= 1024)
+                    && cordis.max_active_children != Some(0)
+                    && cordis
+                        .reserved_id
+                        .as_deref()
+                        .is_none_or(Self::valid_cordis_reserved_id)
+            }
+            None => Self::valid_native_name(&self.name),
+        }
+    }
+
+    pub fn delivers_to_parent(&self) -> bool {
+        self.workflow.is_none() && self.cordis.as_ref().is_none_or(|agent| !agent.result_to_caller)
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -137,6 +261,11 @@ pub struct SessionConfigurationChange {
     pub owner: Option<Option<agena_domain::SessionOwner>>,
     pub capability_denied_tool_names: Option<BTreeSet<String>>,
     pub effective_workspace_root: Option<Option<PathBuf>>,
+    pub working_directory: Option<Option<PathBuf>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<SessionWorktreeChange>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_model_switch_context: Option<Option<PendingModelSwitchContext>>,
     pub agent: Option<Option<SessionAgentConfiguration>>,
 }
 
@@ -272,6 +401,17 @@ pub struct PromptWindowStatus {
     pub last_before_tokens: Option<u64>,
     pub last_after_tokens: Option<u64>,
 }
+
+/// The latest completed model response visible in the session, together with
+/// any subsequent rewrite of its prompt window.
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionResumeFacts {
+    pub finished_at_ms: i64,
+    pub model: Option<agena_domain::ModelRef>,
+    pub usage: Option<serde_json::Value>,
+    pub context_rewritten: bool,
+    pub compacted_context_tokens: Option<u64>,
+}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum CompactionPolicyOutcome {
@@ -312,6 +452,11 @@ pub struct SummaryQuery {
     pub exclude_subagents: bool,
     pub temporary_only: bool,
     pub agents_only: bool,
+    /// Internal agent coordination excludes members owned by workflow jobs.
+    #[serde(default)]
+    pub exclude_workflow_agents: bool,
+    #[serde(default)]
+    pub exclude_cordis_agents: bool,
     pub search: Option<String>,
     pub favorite: Option<bool>,
     pub pinned: Option<bool>,
@@ -353,6 +498,27 @@ pub struct DeliveryView {
     pub payload: serde_json::Value,
     pub entry: Option<EntryId>,
     pub consumed: bool,
+}
+
+impl DeliveryView {
+    /// Agent input that can start a system-origin turn in an idle recipient.
+    pub fn wakes_agent(&self) -> bool {
+        self.payload["wake"].as_bool() == Some(true)
+            && matches!(self.payload["kind"].as_str(), Some("agent_message" | "agent_result"))
+    }
+}
+
+/// One published local child in its creator's durable agent catalog.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentCatalogMember {
+    pub id: SessionId,
+    pub parent: SessionId,
+    pub name: String,
+    pub label: String,
+    pub depth: u32,
+    pub running: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reserved_id: Option<String>,
 }
 
 /// Bounded scheduler facts captured before the serialized stop decision.
@@ -472,6 +638,29 @@ impl SessionCommands {
                 .await?,
         )
     }
+
+    /// Create a subagent whose initial history contains the parent's completed turns.
+    pub async fn create_seeded_agent(
+        &self,
+        request: RequestId,
+        parent: SessionId,
+        title: String,
+        configuration: SessionConfiguration,
+    ) -> Result<CommitReceipt<SessionMetadata>> {
+        session_receipt(
+            self.0
+                .command(
+                    request,
+                    Command::CreateSeededAgent {
+                        parent,
+                        title,
+                        configuration,
+                    },
+                )
+                .await?,
+        )
+    }
+
     pub async fn configure(
         &self,
         request: RequestId,
@@ -486,6 +675,35 @@ impl SessionCommands {
             Mutation::Configuration(value) => Ok(CommitReceipt {
                 position: r.position,
                 value: *value,
+            }),
+            _ => Err(unexpected()),
+        }
+    }
+
+    pub async fn register_working_directory(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        metadata_version: MetadataVersion,
+        workspace_root: PathBuf,
+        directory: PathBuf,
+    ) -> Result<CommitReceipt<agena_domain::SessionWorkingDirectoryRegistration>> {
+        let receipt = self
+            .0
+            .command(
+                request,
+                Command::RegisterWorkingDirectory {
+                    session,
+                    metadata_version,
+                    workspace_root,
+                    directory,
+                },
+            )
+            .await?;
+        match receipt.value {
+            Mutation::WorkingDirectoryRegistration(value) => Ok(CommitReceipt {
+                position: receipt.position,
+                value,
             }),
             _ => Err(unexpected()),
         }
@@ -817,6 +1035,18 @@ impl KernelReader {
         self.0.backend.find_agent(parent, agent_name).await
     }
 
+    pub async fn agent_catalog(
+        &self,
+        parent: SessionId,
+        limit: usize,
+    ) -> Result<ReadView<Vec<AgentCatalogMember>>> {
+        self.0.backend.agent_catalog(parent, limit).await
+    }
+
+    pub async fn active_agent_count(&self, root: SessionId) -> Result<ReadView<u64>> {
+        self.0.backend.active_agent_count(root).await
+    }
+
     pub async fn latest_round(
         &self,
         session: SessionId,
@@ -828,6 +1058,12 @@ impl KernelReader {
         session: SessionId,
     ) -> Result<ReadView<Option<ProviderRoundView>>> {
         self.0.backend.latest_usage_round(session).await
+    }
+    pub async fn session_resume_facts(
+        &self,
+        session: SessionId,
+    ) -> Result<ReadView<Option<SessionResumeFacts>>> {
+        self.0.backend.session_resume_facts(session).await
     }
     pub async fn configuration(
         &self,
@@ -939,8 +1175,29 @@ impl KernelReader {
             .pending_deliveries(session, after, limit)
             .await
     }
+
+    pub async fn notice_wakes_since_user_message(
+        &self,
+        session: SessionId,
+        source: &str,
+    ) -> Result<u64> {
+        self.0.backend.notice_wakes_since_user_message(session, source).await
+    }
 }
 impl ExecutorCommands {
+    pub async fn resume_agent_delivery(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        delivery: agena_domain::CommandId,
+        text: String,
+    ) -> Result<CommitReceipt<ExecutionView>> {
+        execution_receipt(self.0.command(
+            request,
+            Command::ResumeDelivery { session, delivery, message: None, text },
+        ).await?)
+    }
+
     /// Atomic proactive handoff: publish and queue a control continuation in
     /// one commit, with the business identity surviving a lost acknowledgement.
     /// System-origin event delivery has no fabricated direct-user anchor.
@@ -1031,6 +1288,28 @@ impl ExecutorCommands {
                         delivery,
                         message: Some(message),
                         text,
+                    },
+                )
+                .await?,
+        )
+    }
+
+    /// Start a new turn for a plugin prompt whose earlier turn ended first.
+    pub async fn resume_plugin_prompt(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        delivery: agena_domain::CommandId,
+    ) -> Result<CommitReceipt<ExecutionView>> {
+        execution_receipt(
+            self.0
+                .command(
+                    request,
+                    Command::ResumeDelivery {
+                        session,
+                        delivery,
+                        message: None,
+                        text: String::new(),
                     },
                 )
                 .await?,

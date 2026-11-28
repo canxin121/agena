@@ -5,16 +5,27 @@ use agena_domain::{ActivityPayload, AgentStatus, CommandReferenceActivity, Compo
 use agena_plugin_host::sdk::host_api::{AgentHandle, AgentSpawnRequest};
 use sha2::{Digest, Sha256};
 
+mod cordis;
+mod cordis_control;
 mod messaging;
+pub(super) use cordis::CordisExecution;
 
 #[cfg(test)]
 mod tests;
 
 const MAX_AGENTS_PER_PARENT: usize = 8;
 
+#[derive(Clone)]
+pub(super) struct WorkflowOwner {
+    pub id: agena_domain::ActivityId,
+    pub origin: EntryId,
+    pub model: ModelRef,
+}
+
 struct AgentLaunch {
     parent_session_id: i64,
     launch_call_id: Option<i64>,
+    workflow: Option<WorkflowOwner>,
     name: String,
     prompt: String,
     profile: Option<String>,
@@ -23,14 +34,61 @@ struct AgentLaunch {
     timeout_ms: Option<u64>,
     max_tokens: Option<u64>,
     max_cost_microusd: Option<u64>,
+    inherit_parent_context: bool,
     existing: Option<SessionId>,
+    cordis: Option<cordis::Launch>,
 }
+
+impl AgentLaunch {
+    fn new(parent_session_id: i64, launch_call_id: Option<i64>, request: AgentSpawnRequest) -> Self {
+        let selection = request.selection.unwrap_or_default();
+        Self {
+            parent_session_id,
+            launch_call_id,
+            workflow: None,
+            name: request.name,
+            prompt: request.prompt,
+            profile: request.profile,
+            commands: request.commands,
+            selection: agena_domain::ModelSelectionConfig {
+                provider: selection.provider,
+                adapter: selection.adapter,
+                model: selection.model,
+                thinking_mode: selection.thinking_mode,
+                speed_mode: selection.speed_mode,
+                verbosity: selection.verbosity,
+                parallel_tool_calls: selection.parallel_tool_calls,
+            },
+            timeout_ms: request.timeout_ms,
+            max_tokens: request.max_tokens,
+            max_cost_microusd: request.max_cost_microusd,
+            inherit_parent_context: request.inherit_parent_context,
+            existing: None,
+            cordis: None,
+        }
+    }
+
+    fn check_startup(&self) -> Result<(), AppError> {
+        if self.cordis.as_ref().is_some_and(|launch| launch.cancellation.is_cancelled()) {
+            return Err(AppError::Cancelled);
+        }
+        Ok(())
+    }
+}
+
+struct LaunchedAgent {
+    handle: AgentHandle,
+    cordis: Option<agena_plugin_host::sdk::host_api::CordisSubagentStarted>,
+}
+
 struct PreparingAgent {
     child: SessionId,
     name: String,
     started: i64,
     origin: Option<EntryId>,
     activity: Option<ActivityHandle>,
+    new_worktree: bool,
+    provisional: bool,
 }
 struct AgentSettlement {
     child: SessionId,
@@ -89,29 +147,19 @@ impl SessionManager {
         call: Option<i64>,
         request: AgentSpawnRequest,
     ) -> Result<AgentHandle, AppError> {
-        let selection = request.selection.unwrap_or_default();
-        self.launch_agent(AgentLaunch {
-            parent_session_id: caller,
-            launch_call_id: call,
-            name: request.name,
-            prompt: request.prompt,
-            profile: request.profile,
-            commands: request.commands,
-            selection: agena_domain::ModelSelectionConfig {
-                provider: selection.provider,
-                adapter: selection.adapter,
-                model: selection.model,
-                thinking_mode: selection.thinking_mode,
-                speed_mode: selection.speed_mode,
-                verbosity: selection.verbosity,
-                parallel_tool_calls: selection.parallel_tool_calls,
-            },
-            timeout_ms: request.timeout_ms,
-            max_tokens: request.max_tokens,
-            max_cost_microusd: request.max_cost_microusd,
-            existing: None,
-        })
-        .await
+        self.spawn_agent_with_workflow(caller, call, request, None).await
+    }
+
+    pub(super) async fn spawn_agent_with_workflow(
+        &self,
+        caller: i64,
+        call: Option<i64>,
+        request: AgentSpawnRequest,
+        workflow: Option<WorkflowOwner>,
+    ) -> Result<AgentHandle, AppError> {
+        let mut launch = AgentLaunch::new(caller, call, request);
+        launch.workflow = workflow;
+        self.launch_agent(launch).await.map(|launch| launch.handle)
     }
     /// The kernel interrupts provider attempts and external activities on open.
     /// Complete the corresponding agent state and reliable parent handoff.
@@ -141,7 +189,7 @@ impl SessionManager {
                 // The kernel fences interrupted work before the runtime is
                 // published. A current Running identity may be preparing or
                 // settling; guessing from an empty execution list races both.
-                if agent.status != AgentStatus::Interrupted {
+                if agent.status != AgentStatus::Interrupted || !agent.delivers_to_parent() {
                     continue;
                 }
                 let active =
@@ -180,20 +228,19 @@ impl SessionManager {
         Ok(reconciled)
     }
 
-    async fn launch_agent(&self, request: AgentLaunch) -> Result<AgentHandle, AppError> {
+    async fn launch_agent(&self, request: AgentLaunch) -> Result<LaunchedAgent, AppError> {
         let manager = self.clone();
         let (tx, rx) = tokio::sync::oneshot::channel();
         tokio::spawn(async move {
             let preparation = StdMutex::new(None);
-            let result = manager.launch_agent_inner(request, &preparation).await;
+            let mut tree_work = None;
+            let result = manager.launch_agent_inner(request, &preparation, &mut tree_work).await;
             if let Err(error) = &result {
                 let pending = preparation.lock().unwrap_or_else(|p| p.into_inner()).take();
-                if let Some(pending) = pending
-                    && let Err(settle) = manager
-                        .fail_agent_preparation(pending, error.failure())
-                        .await
-                {
-                    tracing::error!(%settle,"agent launch failure could not be settled");
+                if let Some(pending) = pending {
+                    if let Err(settle) = manager.abort_agent_preparation(pending, error.failure()).await {
+                        tracing::error!(%settle, "agent launch failure could not be settled");
+                    }
                 }
             }
             let _ = tx.send(result);
@@ -203,10 +250,19 @@ impl SessionManager {
     }
     async fn launch_agent_inner(
         &self,
-        request: AgentLaunch,
+        mut request: AgentLaunch,
         preparing: &StdMutex<Option<PreparingAgent>>,
-    ) -> Result<AgentHandle, AppError> {
-        if request.name.trim().is_empty() || request.prompt.trim().is_empty() {
+        tree_work: &mut Option<cordis::TreeWork>,
+    ) -> Result<LaunchedAgent, AppError> {
+        request.check_startup()?;
+        let auto_name = request.cordis.is_some() && request.name.is_empty();
+        let has_cordis_attachments = request
+            .cordis
+            .as_ref()
+            .is_some_and(|cordis| !cordis.attachments.is_empty());
+        if (!auto_name && request.name.trim().is_empty())
+            || (request.prompt.trim().is_empty() && !has_cordis_attachments)
+        {
             return Err(AppError::Config(
                 "agent name and prompt must not be empty".into(),
             ));
@@ -224,6 +280,7 @@ impl SessionManager {
                 "agent prompt exceeds its byte budget".into(),
             ));
         }
+        let parent_session = session_id(request.parent_session_id)?;
         let permit = self.reserve_execution()?;
         let settlement = self
             .agent_settlements
@@ -236,36 +293,43 @@ impl SessionManager {
         };
         let state = match &launch {
             Some((_, control)) => control.state.clone(),
-            None => {
-                self.state_for_session(session_id(request.parent_session_id)?)
-                    .await?
-            }
+            None => self.state_for_session(parent_session).await?,
         };
         let parent = self
             .get_session_with_state(request.parent_session_id, Some(state.clone()))
             .await?;
-        if parent.is_subagent() {
+        if parent.is_subagent() && request.cordis.is_none() {
             return Err(AppError::Config(
                 "delegated agents cannot create nested agents".into(),
             ));
         }
+        let cordis_parent = if let Some(cordis) = &request.cordis {
+            let lineage = self.cordis_lineage(parent_session).await?;
+            lineage.admit_child(cordis.max_depth)?;
+            Some(lineage)
+        } else {
+            None
+        };
         let name = request.name.trim().to_owned();
-        if name.is_empty()
-            || name == "parent"
-            || name == "self"
-            || name.bytes().all(|b| b.is_ascii_digit())
-            || name.len() > 64
-            || !name
-                .bytes()
-                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
-        {
-            return Err(AppError::Config(
-                "agent name must contain 1–64 lowercase letters, digits or underscores".into(),
-            ));
+        let valid = if request.cordis.is_some() {
+            auto_name || SessionAgentConfiguration::valid_cordis_name(&request.name)
+        } else {
+            SessionAgentConfiguration::valid_native_name(&name)
+                || (request.existing.is_some() && SessionAgentConfiguration::valid_cordis_name(&name))
+        };
+        if !valid {
+            let reason = if request.cordis.is_some() {
+                "Cordis child names must be 1–32 lowercase letters, digits or hyphens, start with a letter and differ from lead"
+            } else {
+                "agent name must contain 1–64 lowercase letters, digits or underscores"
+            };
+            return Err(AppError::Config(reason.into()));
         }
         let mut denials = parent.execution.capability_denied_tool_names.clone();
-        denials.extend(agent_child_capability_denials());
-        let selected = request.selection;
+        if request.cordis.is_none() {
+            denials.extend(agent_child_capability_denials());
+        }
+        let selected = std::mem::take(&mut request.selection);
         let explicit_selection = ExecutionSelection {
             provider: selected.provider,
             adapter: selected.adapter,
@@ -279,7 +343,7 @@ impl SessionManager {
         let parent_configuration = self
             .kernel()
             .reader
-            .configuration(session_id(parent.id)?)
+            .configuration(parent_session)
             .await
             .map_err(kernel_error)?;
         let references = resolve_agent_command_references(
@@ -295,9 +359,9 @@ impl SessionManager {
                     .map_err(kernel_error)?
                     .message_id,
             ),
+            None if request.workflow.is_some() => request.workflow.as_ref().map(|owner| owner.origin),
             None if parent.execution.channel_authority.is_some() => {
-                let parent_id = session_id(parent.id)?;
-                let execution = self.running_execution(parent_id).await?.ok_or_else(|| {
+                let execution = self.running_execution(parent_session).await?.ok_or_else(|| {
                     AppError::Config(
                         "channel agent launch requires an active originating execution".into(),
                     )
@@ -305,21 +369,27 @@ impl SessionManager {
                 Some(
                     self.kernel()
                         .reader
-                        .execution(parent_id, execution)
+                        .execution(parent_session, execution)
                         .await
                         .map_err(kernel_error)?
                         .message_id,
                 )
             }
-            None => self.latest_origin_message(session_id(parent.id)?).await?,
+            None => self.latest_origin_message(parent_session).await?,
         };
         let preparation = self.agent_preparation.lock().await;
+        request.check_startup()?;
+        let name = if auto_name {
+            self.next_cordis_agent_name(parent_session).await?
+        } else {
+            name
+        };
         let existing = request.existing;
         if existing.is_none() {
             if self
                 .kernel()
                 .reader
-                .find_agent(session_id(parent.id)?, &name)
+                .find_agent(parent_session, &name)
                 .await
                 .map_err(kernel_error)?
                 .is_some()
@@ -328,19 +398,55 @@ impl SessionManager {
                     "agent name already exists; use agent.followup".into(),
                 ));
             }
-            let members = self
-                .kernel()
-                .reader
-                .query_summaries(SummaryQuery {
-                    parent_id: Some(session_id(parent.id)?),
-                    agents_only: true,
-                    limit: MAX_AGENTS_PER_PARENT + 1,
-                    ..Default::default()
-                })
-                .await
-                .map_err(kernel_error)?;
-            if members.sessions.len() >= MAX_AGENTS_PER_PARENT {
-                return Err(AppError::Config("a parent may have at most 8 agents; reuse an existing agent with agent.followup".into()));
+            if let Some(cordis) = &request.cordis {
+                let root = cordis_parent.as_ref().expect("Cordis lineage").root_id();
+                if let Some(reserved) = cordis.identity.reserved_id.as_deref() {
+                    if reserved == root.get().to_string()
+                        || reserved == parent_session.get().to_string()
+                    {
+                        return Err(AppError::Config(format!(
+                            "Cordis childId {reserved:?} is already in use in this tree"
+                        )));
+                    }
+                    let catalog = read_with_busy_retry(root, "cordis_reserved_id", || {
+                        self.kernel().reader.agent_catalog(root, 1025)
+                    })
+                    .await?;
+                    if catalog.iter().any(|member| {
+                        member.reserved_id.as_deref() == Some(reserved)
+                            || member.id.get().to_string() == reserved
+                    }) {
+                        return Err(AppError::Config(format!(
+                            "Cordis childId {reserved:?} is already in use in this tree"
+                        )));
+                    }
+                }
+                let limit = cordis.max_active_children;
+                if self.cordis_active_agent_count(root).await? >= limit {
+                    return Err(AppError::Config(format!(
+                        "Cordis subagent concurrency limit reached ({limit} per tree)"
+                    )));
+                }
+                *tree_work = Some(self.register_cordis_tree_work(root));
+            } else if request.workflow.is_none() {
+                let members = self
+                    .kernel()
+                    .reader
+                    .query_summaries(SummaryQuery {
+                        parent_id: Some(parent_session),
+                        agents_only: true,
+                        exclude_workflow_agents: true,
+                        exclude_cordis_agents: true,
+                        limit: MAX_AGENTS_PER_PARENT,
+                        ..Default::default()
+                    })
+                    .await
+                    .map_err(kernel_error)?;
+                if members.sessions.len() >= MAX_AGENTS_PER_PARENT {
+                    return Err(AppError::Config(
+                        "a parent may have at most 8 agents; reuse an existing agent with agent.followup".into(),
+                    ));
+                }
             }
         }
         let existing_configuration = if let Some(id) = existing {
@@ -350,6 +456,14 @@ impl SessionManager {
                 .configuration(id)
                 .await
                 .map_err(kernel_error)?;
+            if configuration
+                .agent
+                .as_ref()
+                .and_then(|agent| agent.workflow)
+                .is_some_and(|id| self.cordis_workflows.is_running(id))
+            {
+                return Err(AppError::Config("This agent is still owned by a running Cordis workflow".into()));
+            }
             if configuration
                 .agent
                 .as_ref()
@@ -390,12 +504,19 @@ impl SessionManager {
                 agena_domain::SessionRelationKind::Subagent,
             )
             .map_err(AppError::Config)?;
+        let needs_worktree = resolved_profile.worktree
+            && existing_configuration.as_ref().is_none_or(|configuration| configuration.worktree.is_none());
+        if needs_worktree && (parent.workspace_id.is_none() || parent.execution.channel_authority.is_some()) {
+            return Err(AppError::Config("worktree isolation requires a project session".into()));
+        }
         let mut parent_selection = parent.execution.selection.clone();
-        if let Some((_, control)) = &launch {
+        if let Some(model) = launch.as_ref().map(|(_, control)| &control.model)
+            .or_else(|| request.workflow.as_ref().map(|owner| &owner.model))
+        {
             parent_selection = parent_selection.overlay_with_cascade(&ExecutionSelection {
-                provider: Some(control.model.provider_id.to_string()),
-                adapter: control.model.adapter_id.as_ref().map(ToString::to_string),
-                model: Some(control.model.model_id.to_string()),
+                provider: Some(model.provider_id.to_string()),
+                adapter: model.adapter_id.as_ref().map(ToString::to_string),
+                model: Some(model.model_id.to_string()),
                 ..Default::default()
             });
         }
@@ -416,8 +537,15 @@ impl SessionManager {
         } else {
             explicit_selection.clone()
         };
+        let cordis_identity = request.cordis.as_ref().map(|launch| launch.identity.clone()).or_else(|| {
+            let mut identity = existing_configuration.as_ref()?.agent.as_ref()?.cordis.clone()?;
+            identity.result_to_caller = false;
+            Some(identity)
+        });
         let agent = SessionAgentConfiguration {
             origin_message_id: origin,
+            workflow: request.workflow.as_ref().map(|owner| owner.id),
+            cordis: cordis_identity,
             name: name.clone(),
             status: AgentStatus::Running,
             started_at_ms: Some(now),
@@ -464,7 +592,7 @@ impl SessionManager {
                 denials.extend(previous.capability_denied_tool_names.iter().cloned());
                 let change = SessionConfigurationChange {
                     agent: Some(Some(agent.clone())),
-                    message_queue_paused: Some(false),
+                    message_queue_paused: Some(needs_worktree),
                     capability_denied_tool_names: Some(denials.clone()),
                     permission_ceiling_layers: Some(previous.permission_ceiling_layers),
                     ..Default::default()
@@ -501,7 +629,7 @@ impl SessionManager {
                     &resolved_profile.permission,
                 )?;
                 let configuration = SessionConfiguration {
-                    parent_session_id: Some(session_id(parent.id)?),
+                    parent_session_id: Some(parent_session),
                     relation_kind: agena_domain::SessionRelationKind::Subagent,
                     profile: profile.clone(),
                     selection_defaults,
@@ -513,6 +641,11 @@ impl SessionManager {
                     channel_authority: parent.execution.channel_authority.clone(),
                     capability_denied_tool_names: denials.clone(),
                     effective_workspace_root: parent.execution.effective_workspace_root.clone(),
+                    working_directory: request.cordis.as_ref().map_or_else(
+                        || parent_configuration.working_directory.clone(),
+                        |launch| launch.cwd.clone(),
+                    ),
+                    message_queue_paused: needs_worktree,
                     agent: Some(agent.clone()),
                     ..Default::default()
                 };
@@ -522,7 +655,21 @@ impl SessionManager {
                     &state,
                 )
                 .await?;
+                request.check_startup()?;
+                let title = request.cordis.as_ref().map(|launch| launch.label.as_str()).unwrap_or(&name);
                 persist(|| async {
+                    if request.inherit_parent_context {
+                        return self
+                            .kernel()
+                            .sessions
+                            .create_seeded_agent(
+                                command,
+                                parent_session,
+                                title.into(),
+                                configuration.clone(),
+                            )
+                            .await;
+                    }
                     match parent.workspace_id {
                         Some(workspace) => {
                             self.kernel()
@@ -530,7 +677,7 @@ impl SessionManager {
                                 .create_configured(
                                     command,
                                     workspace,
-                                    request.name.trim().into(),
+                                title.into(),
                                     configuration.clone(),
                                 )
                                 .await
@@ -540,7 +687,7 @@ impl SessionManager {
                                 .sessions
                                 .create_global(
                                     command,
-                                    request.name.trim().into(),
+                                title.into(),
                                     configuration.clone(),
                                 )
                                 .await
@@ -559,25 +706,66 @@ impl SessionManager {
             started: now,
             origin,
             activity: None,
+            new_worktree: false,
+            provisional: request.cordis.is_some(),
         });
-        state
-            .executor
-            .plugin_manager()
+        if needs_worktree {
+            self.provision_worktree(child, &state).await?;
+            if let Some(pending) = preparing.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {
+                pending.new_worktree = true;
+            }
+            let configuration = self.kernel().reader.configuration(child).await.map_err(kernel_error)?;
+            self.validate_session_permission_configuration_with_state(parent.workspace_id, &configuration, &state).await?;
+            if let Some(relative) = &configuration.working_directory
+                && let Some(root) = &configuration.effective_workspace_root
+            {
+                let cwd = super::working_directories::canonical_directory(&root.join(relative)).await?;
+                if !cwd.starts_with(root) {
+                    return Err(AppError::Config("Agent working directory resolves outside its worktree".into()));
+                }
+            }
+        }
+        let plugins = state.executor.plugin_manager();
+        let start_context = plugins
             .dispatch_subagent_start(agena_plugin_host::SubagentStartInput {
                 session_id: request.parent_session_id,
                 child_session_id: child.get(),
                 name: name.clone(),
-            })
-            .await
-            .map_err(|error| AppError::Config(error.diagnostic_message().to_owned()))?;
+                agent_type: Some(plugins.imported_subagent_type(&effective_profile)),
+                model: Some(options.model.model_id.to_string()),
+            });
+        let start_context = if let Some(launch) = &request.cordis {
+            tokio::select! {
+                biased;
+                _ = launch.cancellation.cancelled() => return Err(AppError::Cancelled),
+                result = start_context => result,
+            }
+        } else {
+            start_context.await
+        }.map_err(|error| AppError::Config(error.diagnostic_message().to_owned()))?;
         self.persist_submission_selection(child.get(), options.clone())
             .await?;
         self.prepare_options_with_state(child, &mut options, &state)
             .await?;
+        if !start_context.is_empty() {
+            let mut text = start_context.join("\n");
+            truncate(&mut text, 16 * 1024);
+            let command = request_key("subagent-start-context", &format!("{}:{text}", child.get()));
+            let key = format!("subagent-start:{command}");
+            let payload = serde_json::json!({"text":text,"wake":false});
+            persist(|| {
+                self.kernel()
+                    .executor
+                    .deliver(command, child, key.clone(), payload.clone())
+            })
+            .await
+            .map_err(kernel_error)?;
+        }
         let activity = match launch {
             Some((tool, _)) => {
                 let activity_request = RequestId::new();
-                let mut label = format!("Agent {name}");
+                let mut label = request.cordis.as_ref().map(|launch| launch.label.clone())
+                    .unwrap_or_else(|| format!("Agent {name}"));
                 truncate(&mut label, 1024);
                 let start = BackgroundActivityStart {
                     kind: BackgroundActivityKind::Agent,
@@ -597,9 +785,127 @@ impl SessionManager {
         }
         // No child provider is polled before its durable configuration and
         // launch intent have committed. An uncertain send retains its identity.
-        let mut document = ComposerDocument(vec![ComposerNode::Text {
-            text: request.prompt,
-        }]);
+        let mut document = ComposerDocument(Vec::new());
+        let prompt_text = std::mem::take(&mut request.prompt);
+        if !prompt_text.is_empty() {
+            document.0.push(ComposerNode::Text { text: prompt_text });
+        }
+        let mut blobs = Vec::new();
+        if let Some(cordis) = request.cordis.as_mut()
+            && !cordis.attachments.is_empty()
+        {
+            use agena_domain::{
+                ActivityProvenance, AttachmentKind, AttachmentSource, ResourceActivity,
+                ResourceDelivery, ResourceKind, ResourceReference,
+            };
+            use base64::{Engine as _, engine::general_purpose::STANDARD};
+            use sha2::{Digest, Sha256};
+
+            let route = state.providers.media_route_binding(&options.model).ok();
+            let attachments = std::mem::take(&mut cordis.attachments);
+            for (index, item) in attachments.into_iter().enumerate() {
+                let kind = match item.kind {
+                    AttachmentKind::Image => ResourceKind::Image,
+                    AttachmentKind::Audio => ResourceKind::Audio,
+                    AttachmentKind::Video => ResourceKind::Video,
+                    AttachmentKind::Pdf => ResourceKind::Pdf,
+                    AttachmentKind::File => ResourceKind::File,
+                };
+                let name = item
+                    .filename
+                    .clone()
+                    .filter(|name| !name.trim().is_empty())
+                    .unwrap_or_else(|| format!("attachment-{index}"));
+                let mut bound_for_model = false;
+                if let (Some(route), AttachmentSource::Base64 { data }) =
+                    (route.as_ref(), &item.source)
+                    && let Ok(bytes) = STANDARD.decode(data)
+                {
+                    let mut candidate = item.clone();
+                    candidate.source = AttachmentSource::ProviderData {
+                        route: route.clone(),
+                        data: data.clone(),
+                    };
+                    if state
+                        .providers
+                        .validate_media_inputs(&options.model, std::slice::from_ref(&candidate))
+                        .is_ok()
+                    {
+                        let sha256 = hex::encode(Sha256::digest(&bytes));
+                        let blob_cmd = request_key(
+                            &format!("cordis-subagent-media:{}:{now}", child.get()),
+                            &index.to_string(),
+                        );
+                        let blob = self
+                            .prepare_immutable_blob(blob_cmd, child, &bytes)
+                            .await?;
+                        let mut metadata = item.clone();
+                        metadata.source = AttachmentSource::Base64 {
+                            data: String::new(),
+                        };
+                        metadata.size_bytes = Some(bytes.len() as u64);
+                        metadata.sha256 = Some(sha256.clone());
+                        let binding = crate::session::kernel::media::MediaBinding {
+                            version: 1,
+                            model: options.model.clone(),
+                            route: route.clone(),
+                            blob: blob.descriptor().id,
+                            attachment: metadata,
+                        };
+                        let uri = crate::session::kernel::media::uri(&binding)
+                            .map_err(kernel_error)?;
+                        blobs.push(blob);
+                        document.0.push(ComposerNode::Activity {
+                            activity: Box::new(ComposerActivity {
+                                id: agena_domain::ActivityId::new(),
+                                payload: ActivityPayload::Resource(ResourceActivity {
+                                    delivery: ResourceDelivery::ModelInput,
+                                    kind,
+                                    reference: ResourceReference::Artifact { sha256, uri },
+                                    name: name.clone(),
+                                    media_type: Some(item.mime.clone()),
+                                    size_bytes: Some(bytes.len() as u64),
+                                    width: item.width,
+                                    height: item.height,
+                                    duration_ms: item.duration_ms,
+                                    page_count: item.page_count,
+                                }),
+                                provenance: ActivityProvenance {
+                                    source: Some("cordis.subagent".into()),
+                                    content_hash: item.sha256.clone(),
+                                    plugin_id: None,
+                                },
+                            }),
+                        });
+                        bound_for_model = true;
+                    }
+                }
+                if !bound_for_model {
+                    document.0.push(ComposerNode::Activity {
+                        activity: Box::new(ComposerActivity {
+                            id: agena_domain::ActivityId::new(),
+                            payload: ActivityPayload::Resource(ResourceActivity {
+                                delivery: ResourceDelivery::Reference,
+                                kind,
+                                reference: ResourceReference::WorkspacePath { path: name.clone() },
+                                name,
+                                media_type: Some(item.mime),
+                                size_bytes: item.size_bytes,
+                                width: item.width,
+                                height: item.height,
+                                duration_ms: item.duration_ms,
+                                page_count: item.page_count,
+                            }),
+                            provenance: ActivityProvenance {
+                                source: Some("cordis.subagent".into()),
+                                content_hash: item.sha256,
+                                plugin_id: None,
+                            },
+                        }),
+                    });
+                }
+            }
+        }
         for reference in references {
             document.0.push(ComposerNode::Activity {
                 activity: Box::new(ComposerActivity {
@@ -609,37 +915,73 @@ impl SessionManager {
                 }),
             });
         }
+        if needs_worktree {
+            self.persist_message_queue_pause(child, false).await?;
+        }
+        request.check_startup()?;
         let command = RequestId::new();
-        let execution = persist(|| {
-            self.kernel()
-                .sessions
-                .send(command, child, document.clone())
+        let execution = persist(|| async {
+            if blobs.is_empty() {
+                self.kernel()
+                    .sessions
+                    .send(command, child, document.clone())
+                    .await
+            } else {
+                self.kernel()
+                    .sessions
+                    .send_with_blobs(command, child, document.clone(), &blobs)
+                    .await
+            }
         })
         .await
         .map_err(kernel_error)?
         .value;
+        if let Some(pending) = preparing.lock().unwrap_or_else(|p| p.into_inner()).as_mut() {
+            pending.provisional = false;
+        }
         let execution_id = execution.id;
         let generation = execution.generation;
+        let message_id = execution.message_id;
+        let (cordis, result_sender) = if let Some(parent) = cordis_parent {
+            let (run, sender) = cordis::Run::new(self.clone(), child, execution_id, generation);
+            (Some(agena_plugin_host::sdk::host_api::CordisSubagentStarted {
+                child_id: child.get(),
+                reserved_id: request
+                    .cordis
+                    .as_ref()
+                    .and_then(|launch| launch.identity.reserved_id.clone()),
+                message_id: message_id.get(),
+                name: parent.child_name(&name, child),
+                ancestor_sessions: parent.ancestor_ids(),
+                run: Arc::new(run),
+            }), Some(sender))
+        } else {
+            (None, None)
+        };
         let registration = self.register_agent_settlement(child, now, execution_id, generation);
-        let control = self
-            .supervise_with_budget_and_state(
-                execution,
-                options.clone(),
-                false,
-                permit,
-                Some(AgentBudget {
-                    max_tokens: request.max_tokens,
-                    max_cost_microusd: request.max_cost_microusd,
-                }),
-                state.clone(),
-            )
-            .await?;
+        let control = self.supervise_with_budget_and_state(
+            execution,
+            options,
+            false,
+            permit,
+            Some(AgentBudget {
+                max_tokens: request.max_tokens,
+                max_cost_microusd: request.max_cost_microusd,
+                cordis: request
+                    .cordis
+                    .as_ref()
+                    .map(|launch| CordisExecution::new(launch.max_output_tokens)),
+            }),
+            state,
+        );
         preparing.lock().unwrap_or_else(|p| p.into_inner()).take();
         drop(preparation);
         let manager = self.clone();
         let agent_name = name.clone();
         let timeout = request.timeout_ms;
+        let tree_work = tree_work.take();
         tokio::spawn(async move {
+            let _tree_work = tree_work;
             let _registration = registration;
             let _settlement = settlement;
             let wait = async {
@@ -662,7 +1004,7 @@ impl SessionManager {
             };
             if timed_out {
                 let _ = manager
-                    .cancel_execution_with_outcome(child.get(), execution_id)
+                    .cancel_execution_attempt_with_outcome(child.get(), execution_id, generation)
                     .await;
                 loop {
                     let notified = control.done.notified();
@@ -678,22 +1020,32 @@ impl SessionManager {
                     name: agent_name,
                     started: now,
                     timed_out,
-                    control,
+                    control: control.clone(),
                     activity,
                     execution: execution_id,
                     generation,
                     origin,
                 })
                 .await;
-            if let Err(error) = result {
+            if let Err(error) = &result {
                 tracing::error!(%error, agent_id = child.get(), "agent settlement failed");
             }
+            if let Some(sender) = result_sender {
+                let result = match result {
+                    Ok(status) => manager.capture_cordis_subagent(&control, status).await,
+                    Err(error) => Err(cordis::result_error(&error)),
+                };
+                let _ = sender.send(Some(result));
+            }
         });
-        Ok(AgentHandle {
-            agent_id: child.get(),
-            name,
-            profile: Some(effective_profile),
-            status: AgentStatus::Running,
+        Ok(LaunchedAgent {
+            handle: AgentHandle {
+                agent_id: child.get(),
+                name,
+                profile: Some(effective_profile),
+                status: AgentStatus::Running,
+            },
+            cordis,
         })
     }
 
@@ -799,6 +1151,9 @@ impl SessionManager {
             agent.started_at_ms = Some(started);
             agent.finished_at_ms = None;
             agent.failure = None;
+            if let Some(cordis) = &mut agent.cordis {
+                cordis.result_to_caller = false;
+            }
             let command = RequestId::new();
             persist(|| {
                 self.kernel().sessions.configure(
@@ -847,6 +1202,7 @@ impl SessionManager {
             origin: agent.origin,
         })
         .await
+        .map(|_| ())
     }
 
     /// Retrying reuses an execution ID with a new generation. Keep a terminal
@@ -918,7 +1274,7 @@ impl SessionManager {
         }
     }
 
-    async fn settle_agent(&self, settlement: AgentSettlement) -> Result<(), AppError> {
+    async fn settle_agent(&self, settlement: AgentSettlement) -> Result<AgentStatus, AppError> {
         let AgentSettlement {
             child,
             name,
@@ -930,6 +1286,9 @@ impl SessionManager {
             generation,
             origin,
         } = settlement;
+        // A terminal child reports only after its attempt's detached jobs
+        // finish. Cleanup can itself use the agent preparation lock.
+        control.cordis_child_jobs.finish().await;
         let _preparation = self.agent_preparation.lock().await;
         let view = persist(|| self.kernel().reader.execution(child, execution))
             .await
@@ -975,6 +1334,8 @@ impl SessionManager {
             .unwrap_or_default();
         let agent = SessionAgentConfiguration {
             origin_message_id: origin,
+            workflow: configuration.agent.as_ref().and_then(|agent| agent.workflow),
+            cordis: configuration.agent.as_ref().and_then(|agent| agent.cordis.clone()),
             name: name.clone(),
             status,
             started_at_ms: Some(started),
@@ -985,9 +1346,12 @@ impl SessionManager {
         let text = self
             .final_text_for(child, Some(execution), 12 * 1024)
             .await?;
-        let value = bounded_agent_payload(
+        let mut value = bounded_agent_payload(
             serde_json::json!({"kind":"agent_result","message_id":origin.map(EntryId::get),"agent_id":child.get(),"name":name,"run_id":execution.to_string(),"attempt_generation":view.generation.get(),"status":status,"text":format!("Agent {} ({}) {}:\n{}",name,child.get(),status.as_ref(),text.unwrap_or_default()),"failure":failure}),
         )?;
+        if agent.cordis.is_some() {
+            value["wake"] = true.into();
+        }
         if let Some(activity) = activity {
             let command = RequestId::new();
             let outcome = match status {
@@ -1011,6 +1375,15 @@ impl SessionManager {
                 .await
                 .map_err(kernel_error)?;
         }
+        let cordis_root = if agent.cordis.is_some() {
+            self.cordis_lineage(child)
+                .await
+                .ok()
+                .map(|lineage| lineage.root_id())
+        } else {
+            None
+        };
+        let _tree_work = cordis_root.map(|root| self.register_cordis_tree_work(root));
         let run_key = format!("{execution}:{}", view.generation.get());
         let command = request_key("agent-completed", &run_key);
         persist(|| {
@@ -1025,18 +1398,59 @@ impl SessionManager {
         .await
         .map_err(kernel_error)?;
         if let Some(parent) = parent_session_id {
-            self.state_for_session(session_id(parent)?)
-                .await?
-                .executor
-                .plugin_manager()
-                .broadcast_subagent_stop(agena_plugin_host::SubagentStopInput {
-                    session_id: parent,
-                    child_session_id: child.get(),
-                    name: name.clone(),
-                    status: status.as_ref().to_owned(),
-                })
-                .await;
+            self.publish_agent_settled(session_id(parent)?, child, name, status)
+                .await?;
         }
+        drop(_preparation);
+        if let Some(parent) = parent_session_id
+            && agent.cordis.is_some() && agent.delivers_to_parent()
+            && let Err(error) = self.wake_agent_inbox(session_id(parent)?).await
+        {
+            tracing::debug!(%error, "Cordis agent completion wake deferred");
+        }
+        if let Some(root) = cordis_root {
+            self.wake_deferred_cordis_agents(root).await;
+        }
+        Ok(status)
+    }
+
+    async fn abort_agent_preparation(
+        &self,
+        pending: PreparingAgent,
+        failure: agena_failure::Failure,
+    ) -> Result<(), AppError> {
+        let dispatch = self.session_dispatch(pending.child);
+        let _preparation;
+        let _submission;
+        let discard = if pending.provisional {
+            _preparation = self.agent_preparation.lock().await;
+            _submission = dispatch.submission.lock().await;
+            // A project operator may have submitted directly to the temporary
+            // session during startup. Preserve that work.
+            !self.is_run_active(pending.child.get()).await
+                && self.latest_origin_message(pending.child).await?.is_none()
+        } else {
+            false
+        };
+        if pending.new_worktree && (!pending.provisional || discard)
+            && let Err(error) = self.release_worktree(pending.child).await
+        {
+            tracing::warn!(%error, "failed agent launch retained its worktree");
+            return self.fail_agent_preparation(pending, failure).await;
+        }
+        if !discard {
+            return self.fail_agent_preparation(pending, failure).await;
+        }
+        if let Some(activity) = pending.activity {
+            let command = RequestId::new();
+            persist(|| activity.end(command, BackgroundActivityOutcome::Stopped))
+                .await
+                .map_err(kernel_error)?;
+        }
+        let command = RequestId::new();
+        persist(|| self.kernel().sessions.delete(command, pending.child))
+            .await
+            .map_err(kernel_error)?;
         Ok(())
     }
     async fn fail_agent_preparation(
@@ -1057,6 +1471,8 @@ impl SessionManager {
             .unwrap_or_default();
         let agent = SessionAgentConfiguration {
             origin_message_id: pending.origin,
+            workflow: configuration.agent.as_ref().and_then(|agent| agent.workflow),
+            cordis: configuration.agent.as_ref().and_then(|agent| agent.cordis.clone()),
             name: pending.name.clone(),
             status: AgentStatus::Failed,
             started_at_ms: Some(pending.started),
@@ -1105,17 +1521,47 @@ impl SessionManager {
             .map_err(kernel_error)?
             .parent_session_id
         {
-            self.state_for_session(parent)
-                .await?
-                .executor
-                .plugin_manager()
-                .broadcast_subagent_stop(agena_plugin_host::SubagentStopInput {
-                    session_id: parent.get(),
-                    child_session_id: pending.child.get(),
-                    name: pending.name,
-                    status: "failed".into(),
-                })
-                .await;
+            self.publish_agent_settled(parent, pending.child, pending.name, AgentStatus::Failed)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn publish_agent_settled(
+        &self,
+        parent: SessionId,
+        child: SessionId,
+        name: String,
+        status: AgentStatus,
+    ) -> Result<(), AppError> {
+        let state = self.state_for_session(parent).await?;
+        let host = state.executor.plugin_manager();
+        host.broadcast_subagent_stop(agena_plugin_host::SubagentStopInput {
+            session_id: parent.get(),
+            child_session_id: child.get(),
+            name: name.clone(),
+            status: status.as_ref().to_owned(),
+        })
+        .await;
+        if host.has_imported_notification_hooks()
+            && let Ok(context) = self.execution_context_with_state(parent, &state).await
+        {
+            let executor = state.executor.for_session_resource_context(&context);
+            tokio::spawn(async move {
+                executor
+                    .plugin_manager()
+                    .broadcast_imported_notification(
+                        agena_plugin_host::NotificationInput {
+                            kind: "agent_completed".into(),
+                            session_id: Some(parent.get()),
+                            title: "Agent finished".into(),
+                            message: format!("Agent {name} {}.", status.as_ref()),
+                            payload: serde_json::json!({"agent_id":child.get(), "status":status}),
+                        },
+                        |plugin| executor.plugin_is_enabled(plugin),
+                    )
+                    .await;
+            });
         }
         Ok(())
     }

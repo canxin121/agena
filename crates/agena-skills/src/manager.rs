@@ -13,7 +13,7 @@ use crate::import::{ignored_path, join_relative, path_string, read_bounded, safe
 use crate::{
     DeclaredSkill, MAX_DOCUMENT_BYTES, MAX_PACKAGE_BYTES, MAX_PACKAGE_DEPTH, MAX_PACKAGE_FILES,
     Result, STATE_FILE, SkillCatalog, SkillDetail, SkillDiagnostic, SkillError, SkillErrorKind,
-    SkillFile, SkillImport, SkillInstallPreview, SkillInstallResult, SkillMetadata, SkillResource,
+    SkillFile, SkillImport, SkillInstallPreview, SkillInstallResult, SkillMetadata, SkillResource, SkillResourceBase,
     SkillRoot, SkillScope, SkillSource, SkillSummary, parse_document, validate_document,
 };
 
@@ -25,6 +25,7 @@ pub struct SkillManager {
     workspace: PathBuf,
     global_root: PathBuf,
     additional_roots: Vec<PathBuf>,
+    exact_skill_dirs: BTreeSet<PathBuf>,
     declared: Vec<DeclaredSkill>,
     disabled_names: Vec<String>,
     read_filter: Option<ReadFilter>,
@@ -115,6 +116,7 @@ impl SkillManager {
             workspace,
             global_root,
             additional_roots: Vec::new(),
+            exact_skill_dirs: BTreeSet::new(),
             declared: Vec::new(),
             disabled_names: Vec::new(),
             read_filter: None,
@@ -134,9 +136,25 @@ impl SkillManager {
         self
     }
 
+    /// Discover only the `SKILL.md` at each package directory. This is used
+    /// for plugin components whose manifests define immediate child packages.
+    pub fn with_exact_skill_dirs(mut self, directories: Vec<PathBuf>) -> Self {
+        self.exact_skill_dirs = directories.into_iter().collect();
+        self
+    }
+
     pub fn with_declared_skills(mut self, skills: Vec<DeclaredSkill>) -> Self {
         self.declared = skills;
         self
+    }
+
+    pub fn with_provided_skills(mut self, skills: impl IntoIterator<Item = DeclaredSkill>) -> Self {
+        self.declared.extend(skills);
+        self
+    }
+
+    pub fn declared_resource_base(&self, id: &str) -> Option<&SkillResourceBase> {
+        self.declared.iter().find(|skill| declared_id(skill) == id)?.resource_base.as_ref()
     }
 
     pub fn with_disabled_names(mut self, names: Vec<String>) -> Self {
@@ -156,6 +174,7 @@ impl SkillManager {
             workspace: self.workspace.clone(),
             global_root: self.global_root.clone(),
             roots: self.roots(),
+            exact_skill_dirs: self.exact_skill_dirs.iter().cloned().collect(),
             declared: self.declared.clone(),
             disabled_names: self.disabled_names.clone(),
         }
@@ -166,6 +185,7 @@ impl SkillManager {
             workspace: snapshot.workspace,
             global_root: snapshot.global_root,
             additional_roots: Vec::new(),
+            exact_skill_dirs: snapshot.exact_skill_dirs.into_iter().collect(),
             declared: snapshot.declared,
             disabled_names: snapshot.disabled_names,
             read_filter: None,
@@ -185,25 +205,37 @@ impl SkillManager {
         if let Some(roots) = &self.resolved_roots {
             return roots.clone();
         }
-        if self.instance_only {
-            return vec![SkillRoot {
+        let mut roots = if self.instance_only {
+            vec![SkillRoot {
                 path: self.global_root.to_string_lossy().into_owned(),
                 scope: SkillScope::Global,
                 editable: true,
-            }];
-        }
-        let mut roots = default_roots(Some(&self.workspace), &self.global_root);
-        let insert_at = roots.len().saturating_sub(1);
-        for (offset, root) in self.additional_roots.iter().enumerate() {
-            roots.insert(
-                insert_at + offset,
-                SkillRoot {
+            }]
+        } else {
+            let mut roots = default_roots(Some(&self.workspace), &self.global_root);
+            roots.splice(
+                roots.len() - 1..roots.len() - 1,
+                self.additional_roots.iter().map(|root| SkillRoot {
                     path: self.workspace.join(root).to_string_lossy().into_owned(),
                     scope: SkillScope::Workspace,
                     editable: false,
-                },
+                }),
             );
-        }
+            roots
+        };
+        let insert_at = roots.len().saturating_sub(1);
+        roots.splice(
+            insert_at..insert_at,
+            self.exact_skill_dirs.iter().map(|directory| SkillRoot {
+                path: directory.to_string_lossy().into_owned(),
+                scope: if self.instance_only {
+                    SkillScope::Global
+                } else {
+                    SkillScope::Workspace
+                },
+                editable: false,
+            }),
+        );
         let mut seen = BTreeSet::new();
         roots.reverse();
         roots.retain(|root| seen.insert(root.path.clone()));
@@ -276,6 +308,14 @@ impl SkillManager {
         if let Some(declared) = self.declared.iter().find(|entry| declared_id(entry) == id) {
             let mut detail = declared_detail(declared);
             detail.summary.enabled = !self.disabled_by_name(&detail.summary.name);
+            if let Some(directory) = detail.resource_base.as_ref().and_then(SkillResourceBase::directory)
+                && self.allowed(directory)
+                && reject_symlink_components(directory).is_ok()
+            {
+                let (files, diagnostics) = inventory(self, directory, &mut Sha256::new());
+                detail.files = files;
+                detail.summary.diagnostics.extend(diagnostics);
+            }
             if self.read_filter.is_none() {
                 detail.summary.shadowed = self
                     .list()?
@@ -308,6 +348,7 @@ impl SkillManager {
             document,
             metadata,
             files,
+            resource_base: None,
         })
     }
 
@@ -396,7 +437,10 @@ impl SkillManager {
     pub fn read_resource(&self, id: &str, path: &str) -> Result<SkillResource> {
         let detail = self.get(id)?;
         let relative = resource_path(path)?;
-        let root = filesystem_directory(&detail.summary)?;
+        let root = match detail.resource_base.as_ref().and_then(SkillResourceBase::directory) {
+            Some(path) => path.to_path_buf(),
+            None => filesystem_directory(&detail.summary)?,
+        };
         let candidate = checked_resource(&root, &relative, false)?;
         if !self.allowed(&candidate) {
             return Err(SkillError::new(
@@ -703,6 +747,16 @@ impl SkillManager {
             if !self.allowed(&path) {
                 continue;
             }
+            if !root.editable && self.exact_skill_dirs.contains(&path) {
+                let skill = path.join("SKILL.md");
+                let same_directory = path.canonicalize().is_ok_and(|resolved| resolved == path);
+                let skill_is_regular_file =
+                    std::fs::symlink_metadata(&skill).is_ok_and(|metadata| metadata.is_file());
+                if same_directory && skill_is_regular_file && self.allowed(&skill) {
+                    paths.push((skill, root));
+                }
+                continue;
+            }
             let mut entries = 0;
             scan_directory(
                 self,
@@ -800,6 +854,29 @@ impl SkillManager {
         } else {
             !self.disabled_by_name(&name)
         };
+        let invocation = crate::parse_document_frontmatter(&document)
+            .ok()
+            .and_then(|frontmatter| {
+                let user = frontmatter.get("user-invocable");
+                let disable_model = frontmatter.get("disable-model-invocation");
+                if user.is_none() && disable_model.is_none() {
+                    return None;
+                }
+                let user_invocable = match user {
+                    None => true,
+                    Some(serde_json::Value::Bool(value)) => *value,
+                    Some(_) => return None,
+                };
+                let disable_model = match disable_model {
+                    None => false,
+                    Some(serde_json::Value::Bool(value)) => *value,
+                    Some(_) => return None,
+                };
+                Some(crate::SkillInvocation {
+                    model_invocable: !disable_model,
+                    user_invocable,
+                })
+            });
         Ok((
             SkillSummary {
                 id: path_id(path),
@@ -814,6 +891,7 @@ impl SkillManager {
                 revision: hex::encode(digest.finalize()),
                 source: state.source,
                 diagnostics,
+                invocation,
             },
             document,
             files,
@@ -1326,6 +1404,16 @@ fn declared_id(skill: &DeclaredSkill) -> String {
     )
 }
 
+impl DeclaredSkill {
+    pub fn id(&self) -> String {
+        declared_id(self)
+    }
+
+    pub fn summary(&self) -> SkillSummary {
+        declared_summary(self)
+    }
+}
+
 fn declared_document(skill: &DeclaredSkill) -> String {
     // JSON strings and arrays are valid YAML scalars and sequences.
     let name = serde_json::to_string(&skill.name).unwrap_or_default();
@@ -1339,6 +1427,12 @@ fn declared_document(skill: &DeclaredSkill) -> String {
 
 fn declared_summary(skill: &DeclaredSkill) -> SkillSummary {
     let document = declared_document(skill);
+    let mut digest = Sha256::new();
+    digest.update(document.as_bytes());
+    if let Some(base) = &skill.resource_base {
+        digest.update([0]);
+        digest.update(serde_json::to_vec(base).unwrap_or_default());
+    }
     SkillSummary {
         id: declared_id(skill),
         name: skill.name.clone(),
@@ -1351,7 +1445,7 @@ fn declared_summary(skill: &DeclaredSkill) -> SkillSummary {
         // naming restrictions do not retroactively invalidate legacy aliases.
         valid: true,
         shadowed: false,
-        revision: hash_bytes(document.as_bytes()),
+        revision: hex::encode(digest.finalize()),
         source: Some(SkillSource {
             kind: "plugin".into(),
             location: skill.plugin_id.clone(),
@@ -1360,6 +1454,7 @@ fn declared_summary(skill: &DeclaredSkill) -> SkillSummary {
             revision: Some(skill.version.clone()),
         }),
         diagnostics: Vec::new(),
+        invocation: skill.invocation,
     }
 }
 
@@ -1374,5 +1469,6 @@ fn declared_detail(skill: &DeclaredSkill) -> SkillDetail {
             ..Default::default()
         }),
         files: Vec::new(),
+        resource_base: skill.resource_base.clone(),
     }
 }

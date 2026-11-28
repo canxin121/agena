@@ -1,6 +1,7 @@
 use super::shell_tools::{
-    ExitInterpretation, analyze_command, inherited_environment, prepare_posix_launch,
-    resolve_workdir_in_folder, shell_settings, validate_declared_filesystem_effects,
+    ExitInterpretation, analyze_command, inherited_environment, prepare_detected_launch,
+    prepare_posix_launch, resolve_workdir_in_folder, shell_settings,
+    validate_declared_filesystem_effects,
 };
 use agena_tool::{
     ShellOutput, ShellRequest,
@@ -12,6 +13,7 @@ use crate::part::ShellCommandInput;
 use agena_domain::{ProcessShell, ProcessStatus};
 use agena_plugin_host::{CommandAfterInput, CommandBeforeInput, CommandBeforeOutcome};
 
+use super::imported_shell::DirectoryCapture;
 use super::{
     PreparedShellCommand, ToolError, ToolExecutionView, ToolExecutor, ToolPayloadExecution,
     ToolPayloadOutput, ToolRuntimeContext,
@@ -23,18 +25,23 @@ pub(super) async fn prepare_command_async(
     session_id: i64,
     call_id: i64,
     tool_name: &str,
+    bash: Option<&agena_process::shell::DetectedShell>,
 ) -> Result<Option<PreparedShellCommand>, ToolError> {
     let cwd =
         resolve_workdir_in_folder(executor, input.workdir.as_deref(), input.folder.as_deref())?;
     let mut env = inherited_environment();
     // Resolved before plugin overrides so the precedence is
     // inherited < snapshot < plugin `shell.env`/`command.before` values.
-    let launch = prepare_posix_launch(shell_settings(), &mut env).await?;
+    let launch = match bash {
+        Some(bash) => prepare_detected_launch(shell_settings(), bash, &mut env).await?,
+        None => prepare_posix_launch(shell_settings(), &mut env).await?,
+    };
     env.extend(
         executor
             .shell_env_overrides_async(&cwd, Some(session_id), Some(call_id))
             .await?,
     );
+    add_agent_plugin_bins(executor, &mut env);
     let fallback_env = env.clone();
     let hook_input = CommandBeforeInput {
         session_id: Some(session_id),
@@ -118,7 +125,7 @@ pub(super) async fn execute_async(
     executor: &ToolExecutor,
     input: &ShellCommandInput,
     context: ToolRuntimeContext,
-) -> Result<ToolPayloadExecution, ToolError> {
+) -> Result<(ToolPayloadExecution, Option<std::path::PathBuf>), ToolError> {
     if input.command.trim().is_empty() {
         return Err(ToolError::invalid_input(
             "bash command must not be empty".to_string(),
@@ -133,8 +140,15 @@ pub(super) async fn execute_async(
         Some(prepared) => Some(prepared),
         None => match (context.session_id, context.call_id) {
             (Some(session_id), Some(call_id)) => {
-                prepare_command_async(executor, input, session_id, call_id, "agena.shell.exec")
-                    .await?
+                prepare_command_async(
+                    executor,
+                    input,
+                    session_id,
+                    call_id,
+                    "agena.shell.exec",
+                    None,
+                )
+                .await?
             }
             _ => None,
         },
@@ -154,35 +168,84 @@ pub(super) async fn execute_async(
                     .shell_env_overrides_async(&cwd, context.session_id, context.call_id)
                     .await?,
             );
+            add_agent_plugin_bins(executor, &mut env);
             (input.command.clone(), cwd, env, Some(launch))
         }
     };
     let final_analysis = analyze_command(final_command.as_str());
     let command_rewritten = final_command != input.command;
+    let files = executor
+        .imported_shell_files(launch.as_ref().is_some_and(|spec| spec.dialect.is_posix()))
+        .await;
+    let sourced = files.source(&final_command);
+    let script = sourced.as_deref().unwrap_or(&final_command);
+    let tracked = executor.track_imported_shell(context.call_id);
+    let capture = match (&tracked, launch.as_ref()) {
+        (Some(_), Some(spec)) if spec.dialect.is_posix() => match DirectoryCapture::new() {
+            Ok(capture) => capture.argv(spec, script).map(|argv| (capture, argv)),
+            Err(error) => {
+                tracing::warn!(%error, "could not prepare shell directory capture");
+                None
+            }
+        },
+        _ => None,
+    };
+    let (capture, command) = match capture {
+        Some((capture, argv)) => (Some(capture), argv),
+        None => (
+            None,
+            launch.as_ref().map_or_else(
+                || shell_command_for_platform(script),
+                |spec| spec.argv(script),
+            ),
+        ),
+    };
+    let mut private_files = files.readonly_mounts();
+    if let Some(capture) = capture.as_ref() {
+        private_files.push(capture.resource());
+    }
     let mut request = ShellRequest {
         // The resolved launch owns the program and the login flag; callers that
         // never resolved a user shell keep the historical platform default.
-        command: match launch.as_ref() {
-            Some(spec) => spec.argv(final_command.as_str()),
-            None => shell_command_for_platform(&final_command),
-        },
+        command,
         cwd: final_cwd,
         env,
         timeout_ms: Some(input.timeout_ms.unwrap_or(DEFAULT_SHELL_TIMEOUT_MS)),
     };
-    (request.command, request.env) = crate::shell_sandbox::protect_async(
+    (request.command, request.env) = crate::shell_sandbox::protect_async_with_files(
         executor,
         request.command,
         &request.cwd,
         input,
         request.env,
+        private_files,
     )
     .await?;
     let _worker_permit = super::shell::acquire_worker_permit().await?;
     let execution = executor
         .execute_shell_command_with_live(&request, context.output.clone())
         .await?;
+    drop(files);
     executor.ensure_not_cancelled()?;
+    let instruction_target = if !executor.is_global()
+        && !execution.timed_out
+        && execution.exit_code == 0
+        && !execution.stdout.is_empty()
+        && launch.as_ref().is_none_or(|spec| spec.dialect.is_posix())
+    {
+        agena_tool::shell_analysis::single_file_read(&final_command)
+            .map(|path| request.cwd.join(path))
+    } else {
+        None
+    };
+    if !execution.timed_out
+        && let Some(shell) = tracked
+        && let Some(cwd) = capture.and_then(DirectoryCapture::into_cwd)
+    {
+        executor
+            .record_imported_shell_cwd(&shell, &request.cwd, cwd)
+            .await;
+    }
 
     let hook_input = CommandAfterInput {
         session_id: context.session_id,
@@ -214,7 +277,7 @@ pub(super) async fn execute_async(
         .output
         .as_ref()
         .map(super::ToolOutputStreams::reference);
-    render_execution(
+    let execution = render_execution(
         input,
         analysis,
         final_analysis,
@@ -225,7 +288,83 @@ pub(super) async fn execute_async(
         aggregated_for_display,
         launch.as_ref(),
         output_resource,
-    )
+    )?;
+    Ok((execution, instruction_target))
+}
+
+fn add_agent_plugin_bins(
+    executor: &ToolExecutor,
+    env: &mut std::collections::HashMap<String, String>,
+) {
+    if executor.is_global() || !executor.sandbox_enabled() {
+        return;
+    }
+    let mut directories = executor.plugin_manager().agent_plugin_bin_dirs().peekable();
+    if directories.peek().is_none() {
+        return;
+    }
+    let policy = executor.sandbox_permission_snapshot();
+    let authorized = directories.filter(|directory| {
+        matches!(
+            policy.authorize_path_access(agena_domain::AccessKind::Read, directory),
+            agena_domain::PermissionDecision::Allow
+        )
+    });
+    append_search_paths(env, authorized);
+}
+
+fn append_search_paths<'a>(
+    env: &mut std::collections::HashMap<String, String>,
+    directories: impl Iterator<Item = &'a std::path::Path>,
+) {
+    let key = if cfg!(windows) {
+        env.keys()
+            .find(|key| key.eq_ignore_ascii_case("PATH"))
+            .cloned()
+    } else {
+        None
+    }
+    .unwrap_or_else(|| "PATH".to_owned());
+    let mut paths = env
+        .get(&key)
+        .map(|value| std::env::split_paths(value).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let original_len = paths.len();
+    for directory in directories {
+        if !paths.iter().any(|entry| entry == directory)
+            && std::env::join_paths([directory]).is_ok()
+        {
+            paths.push(directory.to_path_buf());
+        }
+    }
+    if paths.len() != original_len
+        && let Ok(value) = std::env::join_paths(paths)
+        && let Ok(value) = value.into_string()
+    {
+        env.insert(key, value);
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn plugin_bins_are_added_after_existing_shell_executables_once() {
+    use std::{
+        collections::HashMap,
+        path::{Path, PathBuf},
+    };
+
+    let before = PathBuf::from("host-bin");
+    let plugin = Path::new("package/bin");
+    let existing = std::env::join_paths([&before])
+        .unwrap()
+        .into_string()
+        .unwrap();
+    let mut env = HashMap::from([("PATH".to_owned(), existing)]);
+    append_search_paths(&mut env, [plugin, plugin].into_iter());
+    assert_eq!(
+        std::env::split_paths(&env["PATH"]).collect::<Vec<_>>(),
+        [before, plugin.to_path_buf()]
+    );
 }
 
 #[allow(clippy::too_many_arguments)]

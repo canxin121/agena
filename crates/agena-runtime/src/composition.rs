@@ -90,6 +90,7 @@ pub(crate) struct RuntimeSessionBuildConfig {
 /// session policy.
 pub(crate) fn session_build_config_from_resolved(
     config: &crate::ResolvedConfig,
+    host: &agena_plugin_host::PluginHost,
 ) -> RuntimeSessionBuildConfig {
     RuntimeSessionBuildConfig {
         default_selection: config.default_selection.clone(),
@@ -113,7 +114,7 @@ pub(crate) fn session_build_config_from_resolved(
             })
             .unwrap_or_default(),
         prompts: config.prompts.clone(),
-        profiles: config.profiles.clone(),
+        profiles: profiles_with_agent_plugins(config, host),
         default_profile: config.default_profile.clone(),
         default_subagent_profile: config.default_subagent_profile.clone(),
         auto_title: config.session.auto_title.clone(),
@@ -131,6 +132,157 @@ pub(crate) fn session_build_config_from_resolved(
         // `replies_execution.rs`).
         max_turns: config.session.max_turns,
     }
+}
+
+fn profiles_with_agent_plugins(
+    config: &crate::ResolvedConfig,
+    host: &agena_plugin_host::PluginHost,
+) -> std::collections::BTreeMap<String, agena_runtime_config::AgentProfileConfig> {
+    use agena_prompt_layers::{FragmentId, PromptFragment, PromptLayer};
+    use agena_runtime_config::{AgentProfileConfig, AgentProfileMode};
+
+    let mut profiles = config.profiles.clone();
+    for plugin in host.plugins() {
+        let Some(package) = plugin.agent_plugin() else {
+            continue;
+        };
+        let key = plugin.key();
+        for role in &package.roles {
+            let name = if role.output_style {
+                format!("{key}.style.{}", role.name)
+            } else {
+                format!("{key}.{}", role.name)
+            };
+            let make_profile = || -> Result<AgentProfileConfig, String> {
+                let id = FragmentId::parse(&name).map_err(|error| error.to_string())?;
+                let prompts = PromptLayer {
+                    order: vec![id.clone()],
+                    inline: vec![PromptFragment::new(id, &role.instructions)],
+                    ..Default::default()
+                };
+                prompts.validate().map_err(|error| error.to_string())?;
+                let model = role.model.as_deref().and_then(|requested| {
+                    let route = resolve_imported_claude_model(config, requested);
+                    if route.is_none() {
+                        host.append_plugin_log(
+                            key.to_string(),
+                            "warn",
+                            "agent_plugin.profile",
+                            format!("Agent {name} inherits its model because {requested:?} has no unique enabled Agena route"),
+                            serde_json::Value::Null,
+                        );
+                    }
+                    route
+                });
+                Ok(AgentProfileConfig {
+                    title: role.name.clone(),
+                    model,
+                    description: role.description.clone(),
+                    mode: Some(if role.output_style {
+                        AgentProfileMode::Primary
+                    } else {
+                        AgentProfileMode::Subagent
+                    }),
+                    prompts,
+                    max_turns: role.max_turns,
+                    worktree: role.worktree,
+                    tool_allowlist: role.tool_allowlist.clone(),
+                    tool_denials: role.tool_denials.clone(),
+                    claude_agent: (!role.output_style)
+                        .then(|| (key.clone(), role.claude_options.clone())),
+                    ..Default::default()
+                })
+            };
+            let profile = if profiles.contains_key(&name) {
+                Err(format!("profile {name:?} already exists"))
+            } else if profiles.len() >= agena_runtime_config::agent_profiles::MAX_AGENT_PROFILES {
+                Err(format!(
+                    "profile {name:?} exceeds the agent profile catalog limit"
+                ))
+            } else {
+                make_profile()
+            };
+            match profile {
+                Ok(profile) => {
+                    profiles.insert(name, profile);
+                }
+                Err(error) => {
+                    host.append_plugin_log(
+                        key.to_string(),
+                        "warn",
+                        "agent_plugin.profile",
+                        error,
+                        serde_json::Value::Null,
+                    );
+                }
+            }
+        }
+    }
+    profiles
+}
+
+/// Select an existing route for a Claude role's exact model ID or family alias.
+/// An equal ranking leaves the choice with the inherited Agena session route.
+fn resolve_imported_claude_model(
+    config: &crate::ResolvedConfig,
+    requested: &str,
+) -> Option<agena_domain::ModelSelectionConfig> {
+    let family = matches!(requested, "sonnet" | "opus" | "haiku").then_some(requested);
+    let preferred = &config.default_selection;
+    let mut best_rank = None;
+    let mut best = None;
+    for (provider_id, provider) in config
+        .providers
+        .iter()
+        .filter(|(_, provider)| provider.enabled)
+    {
+        for (route, definition) in provider.models.iter().filter(|(_, model)| model.enabled) {
+            let Some((adapter, model)) = route.split_once('/') else {
+                continue;
+            };
+            if !provider
+                .adapters
+                .get(adapter)
+                .is_some_and(|adapter| adapter.enabled)
+            {
+                continue;
+            }
+            let catalog_id = definition
+                .definition
+                .catalog_model_id
+                .as_deref()
+                .unwrap_or(model);
+            let exact = requested == model || requested == catalog_id;
+            let matches_family = family.is_some_and(|family| {
+                let mut parts = catalog_id.split(|ch: char| !ch.is_ascii_alphanumeric());
+                parts.any(|part| part == "claude") && parts.any(|part| part == family)
+            });
+            if !exact && !matches_family {
+                continue;
+            }
+            let rank = (
+                exact,
+                preferred.provider.as_ref() == Some(provider_id),
+                preferred.adapter.as_deref() == Some(adapter),
+                preferred.model.as_deref() == Some(model),
+            );
+            match best_rank {
+                Some(previous) if previous > rank => {}
+                Some(previous) if previous == rank => best = None,
+                _ => {
+                    best_rank = Some(rank);
+                    best = Some((provider_id, adapter, model));
+                }
+            }
+        }
+    }
+    let (provider, adapter, model) = best?;
+    Some(agena_domain::ModelSelectionConfig {
+        provider: Some(provider.clone()),
+        adapter: Some(adapter.to_owned()),
+        model: Some(model.to_owned()),
+        ..Default::default()
+    })
 }
 
 /// Typed inputs for tool-executor construction.

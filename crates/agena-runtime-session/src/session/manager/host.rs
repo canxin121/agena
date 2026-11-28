@@ -1,5 +1,6 @@
 //! Host callbacks use the currently running tool capability. They never find
 //! a mutable transcript part and cannot recover authority from an integer ID.
+use super::execution::PermissionInvocation;
 use super::*;
 use agena_domain::{
     ToolInvocation, UserInputReply, UserInputReplyKind, UserInputRequest, UserInputSource,
@@ -8,6 +9,10 @@ use agena_plugin_host::sdk::host_api::AskUserResponse;
 use tokio::sync::Semaphore;
 
 mod callback_executor;
+mod cordis;
+mod mcp_apps;
+mod mcp_elicitation;
+mod mcp_sampling;
 mod operator;
 mod process_sandbox;
 mod session_scope;
@@ -32,6 +37,23 @@ pub(super) fn parent_interaction_required(
         source: agena_domain::CapabilitySourceKind::AgentProfile,
         retryable: false,
     })
+}
+
+fn require_live_tool_for_hook_approval(
+    prepared: &agena_tool::PreparedToolInvocation,
+) -> Result<(), ToolError> {
+    if let Some(reason) = &prepared.permission_ask {
+        return Err(ToolError::CapabilityUnavailable(Box::new(
+            agena_domain::CapabilityUnavailableResult {
+                capability: "user_interaction".into(),
+                tool_name: Some(prepared.invocation.name.clone()),
+                reason: format!("{reason}. This tool request has no approval interaction."),
+                source: agena_domain::CapabilitySourceKind::RuntimeConfiguration,
+                retryable: false,
+            },
+        )));
+    }
+    Ok(())
 }
 
 impl SessionManager {
@@ -80,9 +102,19 @@ impl SessionManager {
             .for_session_context_async(&context)
             .await
             .with_cancellation_token(Some(control.cancel.clone()));
-        self.authorize_tool(&tool, &invocation, &executor, &control, &state)
-            .await
-            .map_err(tool_error)
+        self.authorize_tool(
+            &tool,
+            PermissionInvocation {
+                tool: &invocation,
+                run_mod_check: false,
+                hook_ask: None,
+            },
+            &executor,
+            &control,
+            &state,
+        )
+        .await
+        .map_err(tool_error)
     }
 
     /// Read-only resolution of remembered rules. This never classifies an
@@ -270,6 +302,39 @@ impl SessionManager {
         call: i64,
         input: crate::part::AskUserToolInput,
     ) -> Result<AskUserResponse, AppError> {
+        self.request_host_user_input_inner(session, call, input, None)
+            .await
+    }
+
+    async fn request_cancellable_host_user_input(
+        &self,
+        session: i64,
+        call: i64,
+        input: crate::part::AskUserToolInput,
+        cancellation: &CancellationToken,
+    ) -> Result<AskUserResponse, AppError> {
+        let cancellation = cancellation.child_token();
+        let _cancel_on_drop = cancellation.clone().drop_guard();
+        let manager = self.clone();
+        // Persistence may already be in progress when the callback is dropped.
+        // The worker owns the request until it can durably close the dialog.
+        let worker = self.control_tasks.spawn(async move {
+            manager
+                .request_host_user_input_inner(session, call, input, Some(cancellation))
+                .await
+        });
+        agena_async::permission_wait::waiting(worker)
+            .await
+            .map_err(|error| AppError::Internal(format!("MCP user input worker failed: {error}")))?
+    }
+
+    async fn request_host_user_input_inner(
+        &self,
+        session: i64,
+        call: i64,
+        input: crate::part::AskUserToolInput,
+        cancellation: Option<CancellationToken>,
+    ) -> Result<AskUserResponse, AppError> {
         let (tool, control) = self.live_tool(session, call)?;
         let configuration = self
             .kernel()
@@ -283,6 +348,15 @@ impl SessionManager {
                     "The parent handles user questions and approval workflows.",
                 ),
             ));
+        }
+        if cancellation
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+        {
+            return Ok(AskUserResponse {
+                cancelled: true,
+                ..Default::default()
+            });
         }
         let sequence = {
             let mut sequences = self
@@ -317,14 +391,62 @@ impl SessionManager {
             .map_err(kernel_error)?
             .value;
         control.phase(agena_domain::ExecutionPhase::AwaitingInteraction);
-        let decision = tokio::time::timeout(
+        let wait = tokio::time::timeout(
             timeout,
             self.wait_interaction(control.session, id, Some(&control.cancel)),
-        )
-        .await;
+        );
+        let decision = if let Some(cancellation) = cancellation {
+            tokio::select! {
+                biased;
+                _ = cancellation.cancelled() => None,
+                result = wait => Some(result),
+            }
+        } else {
+            Some(wait.await)
+        };
         control.phase(agena_domain::ExecutionPhase::ExecutingTools);
+        let decision = match decision {
+            Some(Ok(decision)) => decision?,
+            other => {
+                let timed_out = other.is_some();
+                let command = request_key("host-input-closed", &id.get().to_string());
+                // A racing user reply remains authoritative and is read again
+                // after the close command.
+                match persist(|| {
+                    self.kernel().sessions.reply(
+                        command,
+                        control.session,
+                        id,
+                        InteractionDecision::Cancel,
+                        None,
+                    )
+                })
+                .await
+                {
+                    Ok(_) => {
+                        return Ok(AskUserResponse {
+                            cancelled: !timed_out,
+                            timed_out,
+                            ..Default::default()
+                        });
+                    }
+                    Err(KernelError::Conflict(_)) => self
+                        .kernel()
+                        .reader
+                        .interaction(control.session, id)
+                        .await
+                        .map_err(kernel_error)?
+                        .decision
+                        .clone()
+                        .ok_or_else(|| {
+                            AppError::Internal("the input interaction could not be closed".into())
+                        })?,
+                    Err(error) => return Err(kernel_error(error)),
+                }
+            }
+        };
         match decision {
-            Ok(Ok(InteractionDecision::Input(text))) => {
+            InteractionDecision::Input(text) => {
                 let reply: UserInputReply = serde_json::from_str(&text)?;
                 super::commands::validate_answers(&request, &reply)?;
                 Ok(AskUserResponse {
@@ -339,64 +461,13 @@ impl SessionManager {
                     answers: reply.answers,
                 })
             }
-            Ok(Ok(InteractionDecision::Cancel)) => Ok(AskUserResponse {
+            InteractionDecision::Cancel => Ok(AskUserResponse {
                 cancelled: true,
                 ..Default::default()
             }),
-            Ok(Ok(_)) => Err(AppError::Internal(
+            _ => Err(AppError::Internal(
                 "an input interaction received an incompatible decision".into(),
             )),
-            Ok(Err(error)) => Err(error),
-            Err(_) => {
-                let command = request_key("host-input-timeout", &id.get().to_string());
-                // A timeout is a durable negative decision. A racing user reply
-                // remains authoritative and is read again after the command.
-                match persist(|| {
-                    self.kernel().sessions.reply(
-                        command,
-                        control.session,
-                        id,
-                        InteractionDecision::Cancel,
-                        None,
-                    )
-                })
-                .await
-                {
-                    Ok(_) => Ok(AskUserResponse {
-                        timed_out: true,
-                        ..Default::default()
-                    }),
-                    Err(KernelError::Conflict(_)) => {
-                        let view = self
-                            .kernel()
-                            .reader
-                            .interaction(control.session, id)
-                            .await
-                            .map_err(kernel_error)?;
-                        match view.decision.as_ref() {
-                            Some(InteractionDecision::Input(text)) => {
-                                let reply: UserInputReply = serde_json::from_str(text)?;
-                                super::commands::validate_answers(&request, &reply)?;
-                                Ok(AskUserResponse {
-                                    reply: reply
-                                        .answers
-                                        .get("0")
-                                        .and_then(|a| a.first())
-                                        .cloned()
-                                        .unwrap_or_default(),
-                                    answers: reply.answers,
-                                    ..Default::default()
-                                })
-                            }
-                            _ => Ok(AskUserResponse {
-                                cancelled: true,
-                                ..Default::default()
-                            }),
-                        }
-                    }
-                    Err(error) => Err(kernel_error(error)),
-                }
-            }
         }
     }
     pub async fn execute_host_invoked_tool(
@@ -404,6 +475,7 @@ impl SessionManager {
         session: i64,
         call: i64,
         invocation: ToolInvocation,
+        run_mod_hooks: bool,
     ) -> Result<ToolInvocationExecution, AppError> {
         if session == OPERATOR_SESSION {
             return self
@@ -412,8 +484,15 @@ impl SessionManager {
                 .map_err(tool_error);
         }
         let (tool, control) = self.live_tool(session, call)?;
-        let state = self.state_for_session(session_id(session)?).await?;
-        let context = self.execution_context_value(session_id(session)?).await?;
+        let key = session_id(session)?;
+        let state = if run_mod_hooks {
+            control.state.clone()
+        } else {
+            self.state_for_session(key).await?
+        };
+        let context = self
+            .execution_context_for_execution(key, &state, Some(control.execution))
+            .await?;
         let executor = state
             .executor
             .for_session_context_async(&context)
@@ -446,9 +525,19 @@ impl SessionManager {
             .prepare_shell_invocation(&prepared.invocation, session, call)
             .await
             .map_err(tool_error)?;
-        self.authorize_tool(&tool, &invocation, &executor, &control, &state)
-            .await
-            .map_err(tool_error)?;
+        self.authorize_tool(
+            &tool,
+            PermissionInvocation {
+                tool: &invocation,
+                run_mod_check: run_mod_hooks,
+                hook_ask: prepared.permission_ask.as_deref(),
+            },
+            &executor,
+            &control,
+            &state,
+        )
+        .await
+        .map_err(tool_error)?;
         let executor = self
             .sandbox_executor_for_session(&executor, session)
             .await
@@ -464,21 +553,27 @@ impl SessionManager {
             ),
             None => None,
         };
-        match executor
-            .execute_invocation(
-                &invocation,
-                crate::tool::ToolRuntimeContext {
-                    session_id: Some(session),
-                    call_id: Some(call),
-                    prepared_shell_command: shell,
-                    launch_provenance: None,
-                    output,
-                    tool: Some(tool),
-                },
-            )
-            .await
-        {
-            Ok(execution) => Ok(execution),
+        let context = crate::tool::ToolRuntimeContext {
+            session_id: Some(session),
+            call_id: Some(call),
+            prepared_shell_command: shell,
+            launch_provenance: None,
+            output,
+            tool: Some(tool),
+        };
+        let result = if run_mod_hooks {
+            executor.run_authorized_tool(&invocation, context).await
+        } else {
+            executor.execute_invocation(&invocation, context).await
+        };
+        match result {
+            Ok(mut execution) => {
+                execution
+                    .view
+                    .additional_context
+                    .splice(..0, prepared.additional_context);
+                Ok(execution)
+            }
             Err(ToolError::UserInputRequired(input)) => {
                 let response = self.request_host_user_input(session, call, *input).await?;
                 Ok(input_execution(response))
@@ -521,6 +616,30 @@ pub(super) fn input_execution(response: AskUserResponse) -> ToolInvocationExecut
 }
 #[async_trait::async_trait]
 impl crate::SessionToolExecutionService for SessionManager {
+    fn mcp_app_views(&self) -> Option<Arc<crate::McpAppViews>> {
+        Some(self.mcp_app_views.clone())
+    }
+
+    async fn execute_mcp_app_tool(
+        &self,
+        id: i64,
+        invocation: ToolInvocation,
+    ) -> Result<agena_tool::ToolExecutionSummary, crate::SessionToolExecutionError> {
+        self.execute_session_scoped_app_tool(id, invocation)
+            .await
+            .map(|execution| execution.summary())
+            .map_err(|error| crate::SessionToolExecutionError::Execution(error.to_string()))
+    }
+
+    async fn sample_mcp_app(
+        &self,
+        scope: agena_domain::mcp_app_tools::McpAppViewScope,
+        params: serde_json::Value,
+        cancellation: CancellationToken,
+    ) -> agena_mcp_client::McpResult<serde_json::Value> {
+        self.sample_from_mcp_app(scope, params, cancellation).await
+    }
+
     async fn execute_session_tool(
         &self,
         id: i64,
@@ -530,11 +649,17 @@ impl crate::SessionToolExecutionService for SessionManager {
             let session = session_id(id)?;
             let state = self.state_for_session(session).await?;
             let context = self.execution_context_with_state(session, &state).await?;
+            self.prepare_imported_mod_session(&state.executor, id, &context)
+                .await;
             let executor = state.executor.for_session_context_async(&context).await;
+            if executor.is_claude_mod_tool(&invocation) {
+                return self.execute_session_scoped_mod_tool(id, invocation, false).await;
+            }
             let prepared = executor
                 .prepare_invocation(&invocation, id, -1)
                 .await
                 .map_err(tool_error)?;
+            require_live_tool_for_hook_approval(&prepared).map_err(tool_error)?;
             let (invocation, shell) = executor
                 .prepare_shell_invocation(&prepared.invocation, id, -1)
                 .await
@@ -575,51 +700,71 @@ impl crate::SessionToolExecutionService for SessionManager {
         }
     }
 }
-#[async_trait::async_trait]
-impl crate::SessionPluginCommandService for SessionManager {
-    async fn invoke_session_plugin_command(
+
+impl SessionManager {
+    pub async fn resolve_plugin_tool_for_session(
         &self,
-        request: crate::SessionPluginCommandRequest,
-    ) -> Result<agena_plugin_host::sdk::CommandResult, crate::SessionPluginCommandError> {
-        let session = self
-            .get_session(request.session_id)
-            .await
-            .map_err(|e| crate::SessionPluginCommandError::Execution(e.to_string()))?;
-        // Applicability is the declaration's own statement, so the session
-        // kind — not the presence of a workspace — decides whether this
-        // command belongs here. A Bot-only command is legitimate in a Bot and
-        // a project command is not, which the host also enforces per
-        // declaration; this check keeps the error honest before dispatch.
-        let kind = agena_domain::SessionKind::from_scope(
-            session.workspace_id,
-            session.execution.owner.is_some(),
-        );
-        let applies = self
-            .tool_executor()
-            .plugin_manager()
-            .resolve_command(&request.plugin_id, &request.command_id)
-            .is_none_or(|definition| definition.applies_to.contains(kind));
-        if !applies {
-            return Err(crate::SessionPluginCommandError::Execution(format!(
-                "This command is not available in a {} conversation",
-                kind.as_str()
-            )));
+        id: i64,
+        plugin_id: Option<&str>,
+        tool_name: &str,
+    ) -> Result<Option<agena_plugin_host::registry::RegisteredTool>, AppError> {
+        let session = session_id(id)?;
+        let state = self.state_for_session(session).await?;
+        let plugins = state.executor.plugin_manager();
+        if plugins.has_imported_mod_session_start() {
+            let context = self.execution_context_with_state(session, &state).await?;
+            self.prepare_imported_mod_session(&state.executor, id, &context).await;
         }
-        self.tool_executor()
-            .plugin_manager()
-            .invoke_plugin_command_async(
-                &request.plugin_id,
-                agena_plugin_host::sdk::CommandInvokeInput {
-                    session_id: Some(request.session_id),
-                    call_id: None,
-                    workspace_root: request.workspace_root,
-                    command_id: request.command_id,
-                    slash: request.slash,
-                    raw: request.raw,
-                    input: request.input,
+        let scope = agena_plugin_host::PluginScopeKey::session(id);
+        Ok(match plugin_id {
+            Some(plugin_id) => plugins.resolve_registered_tool_for_plugin_tool(
+                plugin_id, tool_name, Some(&scope),
+            ),
+            None => plugins.lookup_tool_for_name_scope(tool_name, Some(&scope)),
+        })
+    }
+
+    pub async fn prepare_imported_mod_commands(&self, id: i64) -> Result<(), AppError> {
+        let state = self.state_for_session(session_id(id)?).await?;
+        if !state.executor.plugin_manager().has_imported_mod_session_start() {
+            return Ok(());
+        }
+        let session = self.get_session(id).await?;
+        self.prepare_imported_mod_session(&state.executor, id, &session.execution)
+            .await;
+        Ok(())
+    }
+
+    pub(super) async fn prepare_imported_mod_session(
+        &self,
+        executor: &ToolExecutor,
+        id: i64,
+        context: &crate::session::model::SessionExecutionContext,
+    ) {
+        use agena_plugin_host::sdk::{SessionStartInput, SessionStartSource};
+
+        let plugins = executor.plugin_manager();
+        if !plugins.has_imported_mod_session_start()
+            || context.global
+            || context.owner.is_some()
+            || context.conversation.as_ref().is_some_and(|session| session.is_read_only())
+        {
+            return;
+        }
+        let executor = executor.for_session_resource_context(context);
+        plugins
+            .prepare_imported_mod_session(
+                &SessionStartInput {
+                    session_id: id,
+                    workspace_root: executor.workspace_root().to_string_lossy().into_owned(),
+                    source: SessionStartSource::Resume,
+                    model: context.selection.model.clone(),
+                    session_title: None,
+                    agent_type: None,
+                    resumed_cache: None,
                 },
+                |plugin| executor.plugin_is_enabled(plugin),
             )
-            .await
-            .map_err(|e| crate::SessionPluginCommandError::Execution(e.to_string()))
+            .await;
     }
 }

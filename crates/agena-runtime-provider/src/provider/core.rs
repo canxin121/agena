@@ -201,6 +201,19 @@ pub trait ModelRuntime: Send + Sync {
         self.native_compaction_enabled(model)
     }
 
+    /// Whether this adapter can send a dedicated compaction request.
+    fn supports_native_compaction(&self, _model: &ModelId) -> bool {
+        false
+    }
+
+    fn supports_native_compaction_for_adapter(
+        &self,
+        _adapter_id: Option<&AdapterId>,
+        model: &ModelId,
+    ) -> bool {
+        self.supports_native_compaction(model)
+    }
+
     fn capability_family(&self) -> Option<CapabilityFamily> {
         None
     }

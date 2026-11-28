@@ -549,6 +549,7 @@ impl SessionManager {
         tools_enabled: bool,
         profile: Option<&str>,
         config: &RuntimeSessionManagerConfig,
+        project_guidance: &str,
     ) -> String {
         let tools = if tools_enabled {
             let available = scoped_executor.available_execution_tools();
@@ -562,14 +563,13 @@ impl SessionManager {
             AvailableTools::new()
         };
         let conversation_instruction = scoped_executor.conversation_instruction();
-        let project_guidance = scoped_executor.project_instruction_section(&[]);
         assemble_system_prompt(
             scoped_executor.session_relation_kind(),
             tools_enabled,
             &tools,
             user_system,
             conversation_instruction.as_deref(),
-            &project_guidance,
+            project_guidance,
             Some(AgentProfilePromptContext {
                 config,
                 selected: profile,

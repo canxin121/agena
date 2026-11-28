@@ -162,7 +162,11 @@ impl App {
         self.open_choice_overlay(dialog);
         self.dispatch_backend_operation(
             move |application| async move {
-                Ok::<_, anyhow::Error>(application.client().list_skills(workspace_id).await?)
+                let client = application.client();
+                Ok::<_, anyhow::Error>(match draft_slot {
+                    crate::DraftSlot::Session(session_id) => client.list_session_skills(session_id).await?,
+                    crate::DraftSlot::NewSession => client.list_skills(workspace_id).await?,
+                })
             },
             move |app, result| {
                 if app.application.workspace_id() != workspace_id
@@ -187,9 +191,12 @@ impl App {
                 dialog.presentation.set_loading(false);
                 match result {
                     Ok(mut catalog) => {
-                        catalog
-                            .skills
-                            .retain(|skill| skill.enabled && skill.valid && !skill.shadowed);
+                        catalog.skills.retain(|skill| {
+                            skill.enabled
+                                && skill.valid
+                                && !skill.shadowed
+                                && skill.invocation.is_none_or(|policy| policy.user_invocable)
+                        });
                         catalog.skills.sort_by(|left, right| {
                             left.name.cmp(&right.name).then(left.id.cmp(&right.id))
                         });

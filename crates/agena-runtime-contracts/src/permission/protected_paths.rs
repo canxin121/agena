@@ -38,36 +38,21 @@ impl ProtectedPaths {
             private_paths.push(PathBuf::from(sidecar));
         }
         let mut readonly_paths = Vec::new();
-        let mut git_paths = Vec::new();
-        let mut git_directories = Vec::new();
         let own_state = workspace
             .is_absolute()
             .then(|| layout.workspace_dir(workspace));
+        let mut git_paths = Vec::new();
+        let mut git_directories = Vec::new();
         if own_state.is_some() {
             readonly_paths.push(project_config_path(workspace));
-            if let Some(marker) = workspace
-                .ancestors()
-                .map(|directory| directory.join(".git"))
-                .find(|marker| fs::symlink_metadata(marker).is_ok())
-            {
-                if marker.is_dir() {
-                    git_directories.push(marker);
-                } else {
-                    if let Some(gitdir) = read_git_path(&marker, "gitdir:") {
-                        git_directories.push(gitdir);
-                    }
-                    git_paths.push(marker);
-                }
-                if let Some(directory) = git_directories.first()
-                    && let Some(common) = read_git_path(&directory.join("commondir"), "")
-                {
-                    git_directories.push(common);
-                }
-                for directory in &git_directories {
-                    git_paths.extend(
-                        ["config", "config.worktree", "hooks"].map(|name| directory.join(name)),
-                    );
-                }
+            for root in std::iter::once(workspace).chain(
+                base.into_iter()
+                    .flat_map(|policy| &policy.additional_working_directories)
+                    .map(PathBuf::as_path),
+            ) {
+                let (paths, directories) = git_protections(root);
+                git_paths.extend(paths);
+                git_directories.extend(directories);
             }
         }
         for path in git_paths {
@@ -151,6 +136,31 @@ impl ProtectedPaths {
     pub(super) fn git_directories(&self) -> impl Iterator<Item = &PathBuf> {
         self.git_directories.iter()
     }
+}
+
+fn git_protections(root: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let Some(marker) = root
+        .ancestors()
+        .map(|directory| directory.join(".git"))
+        .find(|marker| fs::symlink_metadata(marker).is_ok())
+    else {
+        return (Vec::new(), Vec::new());
+    };
+    let (mut paths, mut directories) = if marker.is_dir() {
+        (Vec::new(), vec![marker])
+    } else {
+        let gitdir = read_git_path(&marker, "gitdir:");
+        (vec![marker], gitdir.into_iter().collect())
+    };
+    if let Some(directory) = directories.first()
+        && let Some(common) = read_git_path(&directory.join("commondir"), "")
+    {
+        directories.push(common);
+    }
+    for directory in &directories {
+        paths.extend(["config", "config.worktree", "hooks"].map(|name| directory.join(name)));
+    }
+    (paths, directories)
 }
 
 fn normalized(path: &Path) -> PathBuf {

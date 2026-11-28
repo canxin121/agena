@@ -1,12 +1,62 @@
-use super::super::kernel::{KernelRoundOutcome, KernelRoundRequest, KernelRoundRun};
+use super::super::kernel::{KernelRoundOutcome, KernelRoundRequest, KernelRoundRun, MessageDisplayHooks};
+use super::super::model::SessionExecutionContext as ToolContext;
+use super::session_start::SessionStartPreparation;
 use super::*;
-use agena_domain::{PermissionAction, PermissionDecision, Role, ToolInvocation};
+use agena_domain::{
+    PermissionAction, PermissionDecision, PermissionResolution, Role, ToolInvocation,
+};
+use agena_plugin_host::host::ImportedPromptScope;
 use futures_util::{FutureExt, StreamExt, stream};
 use serde_json::{Value, json};
+
+mod imported_permissions;
+mod imported_prompt;
+mod imported_sampling;
+mod imported_turn;
+
+#[derive(Clone, Copy)]
+pub(super) struct PermissionInvocation<'a> {
+    pub tool: &'a ToolInvocation,
+    pub run_mod_check: bool,
+    pub hook_ask: Option<&'a str>,
+}
 
 enum DriveExit {
     Settled,
     QueuePaused,
+}
+
+fn message_display_hooks(executor: &ToolExecutor) -> Option<MessageDisplayHooks> {
+    let host = executor.plugin_manager();
+    let event = agena_plugin_host::HookSubscription::IMPORTED_MESSAGE_DISPLAY;
+    if executor.is_global() || !host.has_subscription(event) {
+        return None;
+    }
+    let enabled = host.plugins().iter()
+        .filter(|plugin| plugin.subscribes(event) && executor.plugin_is_enabled(&plugin.key()))
+        .map(|plugin| plugin.key())
+        .collect::<std::collections::BTreeSet<_>>();
+    (!enabled.is_empty()).then(|| MessageDisplayHooks {
+        host: host.clone(),
+        enabled: Arc::new(enabled),
+    })
+}
+
+#[derive(Debug)]
+enum CompactionProgress {
+    Unchanged,
+    Committed,
+    Stopped,
+}
+
+enum StopHookCause<'a> {
+    Completed,
+    AwaitingBackground(&'a ToolExecutor),
+    ProviderFailure {
+        category: agena_failure::FailureCategory,
+        message: String,
+    },
+    LocalFailure(String),
 }
 
 impl SessionManager {
@@ -38,11 +88,10 @@ impl SessionManager {
         budget: Option<AgentBudget>,
     ) -> Result<Arc<RunControl>, AppError> {
         let state = self.state_for_session(execution.session_id).await?;
-        self.supervise_with_budget_and_state(execution, options, compact, permit, budget, state)
-            .await
+        Ok(self.supervise_with_budget_and_state(execution, options, compact, permit, budget, state))
     }
 
-    pub(super) async fn supervise_with_budget_and_state(
+    pub(super) fn supervise_with_budget_and_state(
         &self,
         execution: ExecutionView,
         options: SessionRunOptions,
@@ -50,21 +99,23 @@ impl SessionManager {
         permit: OwnedSemaphorePermit,
         budget: Option<AgentBudget>,
         state: Arc<ExecutionState>,
-    ) -> Result<Arc<RunControl>, AppError> {
+    ) -> Arc<RunControl> {
         let compact = compact || execution.purpose == ExecutionPurpose::Compaction;
         let mut active = self.active.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(run) = active.get(&execution.id)
             && run.generation >= execution.generation
         {
-            return Ok(run.clone());
+            return run.clone();
         }
+        let cancel = self.shutdown.child_token();
         let run = Arc::new(RunControl {
             session: execution.session_id,
             execution: execution.id,
             generation: execution.generation,
             model: options.model.clone(),
             state: state.clone(),
-            cancel: self.shutdown.child_token(),
+            cordis_child_jobs: cordis_workflows::ChildCordisJobs::new(cancel.child_token()),
+            cancel,
             phase: StdMutex::new(agena_domain::ExecutionPhase::Starting),
             done: Notify::new(),
             budget,
@@ -124,6 +175,7 @@ impl SessionManager {
                 *run.failure.lock().unwrap_or_else(|p| p.into_inner()) = Some(error.failure());
                 tracing::error!(session_id=run.session.get(),execution_id=%run.execution,%error,"supervised execution settled with an error");
             }
+            run.cordis_child_jobs.finish().await;
             let recover_queued = matches!(result, Ok(DriveExit::QueuePaused));
             drop(_session);
             manager
@@ -134,7 +186,7 @@ impl SessionManager {
                 manager.schedule_memory(run.session, Some(run.execution));
             }
         });
-        Ok(result)
+        result
     }
     pub(super) fn settle_supervised_run(&self, run: &Arc<RunControl>) {
         // A continuation may commit its next generation before this task has
@@ -190,63 +242,88 @@ impl SessionManager {
         author: Option<agena_domain::MessageAuthor>,
         origin: Option<agena_domain::MessageOrigin>,
     ) -> Result<crate::SessionExecutionCommandOutcome, AppError> {
+        self.submit_with_snapshots(request, author, origin, Default::default())
+            .await
+    }
+
+    pub(super) async fn submit_with_snapshots(
+        &self,
+        request: crate::SessionUserRunRequest,
+        author: Option<agena_domain::MessageAuthor>,
+        origin: Option<agena_domain::MessageOrigin>,
+        snapshots: super::media::UserMediaSnapshots,
+    ) -> Result<crate::SessionExecutionCommandOutcome, AppError> {
+        self.admit_user_message(request, author, origin, None, snapshots)
+            .await?
+            .execution
+            .ok_or_else(|| AppError::Internal("User submission did not return an execution".into()))
+    }
+
+    async fn admit_user_message(
+        &self,
+        request: crate::SessionUserRunRequest,
+        author: Option<agena_domain::MessageAuthor>,
+        origin: Option<agena_domain::MessageOrigin>,
+        plugin: Option<imported_prompt::PluginSubmission>,
+        snapshots: super::media::UserMediaSnapshots,
+    ) -> Result<imported_prompt::PromptAdmission, AppError> {
         let permit = self.reserve_execution()?;
         let manager = self.clone();
         let (tx, rx) = tokio::sync::oneshot::channel();
+        let scope = ImportedPromptScope::current();
         tokio::spawn(async move {
             let result = async {
                 let session = session_id(request.run.session_id)?;
                 let dispatch = manager.session_dispatch(session);
                 // Preparation, commit and supervisor registration form one
-                // admission sequence, independently of the running provider.
-                let _submission = dispatch.submission.lock().await;
-                manager.require_writable_bot_history(session.get()).await?;
-                manager.restore_queued_executions(session).await?;
-                let state = manager.state_for_session(session).await?;
-                let context = manager
-                    .execution_context_for_submission(session, &state, author.as_ref())
-                    .await?;
-                let mut options = request.run.options;
-                manager.prepare_options_for_selection(&context.selection, &mut options, &state)?;
-                let send_id = request
-                    .idempotency_key
-                    .as_deref()
-                    .map(|key| request_key(&format!("send:{}", session.get()), key))
-                    .unwrap_or_default();
-                let document = manager
-                    .submit_hook(session, request.document, &state)
-                    .await?;
-                let (document, blobs) = manager
-                    .prepare_user_media_with_state(
-                        session,
-                        &options.model,
-                        document,
-                        send_id,
-                        state,
-                        Some(context),
-                    )
-                    .await?;
-                manager
-                    .persist_submission_selection(session.get(), options.clone())
-                    .await?;
-                let receipt = persist(|| {
-                    manager.kernel().sessions.send_with_blobs_as(
-                        send_id,
-                        session,
-                        document.clone(),
-                        &blobs,
-                        author.clone(),
-                        origin.clone(),
-                    )
-                })
-                .await
-                .map_err(kernel_error)?;
-                let result = execution_outcome(&receipt.value);
-                manager
-                    .supervise(receipt.value, options, false, permit)
-                    .await?;
-                manager.schedule_title(session);
-                Ok(result)
+                // admission sequence. A nested plugin submission can run
+                // within its enclosing submission's lock.
+                let scope = scope.acquire(&dispatch.submission).await;
+                scope
+                    .run(async {
+                        manager.require_writable_bot_history(session.get()).await?;
+                        manager.restore_queued_executions(session).await?;
+                        let state = manager.state_for_session(session).await?;
+                        let context = manager
+                            .execution_context_for_submission(session, &state, author.as_ref())
+                            .await?;
+                        let mut options = request.run.options;
+                        manager.prepare_options_for_context(
+                            &context,
+                            &mut options,
+                            &state,
+                        )?;
+                        let send_id = request
+                            .idempotency_key
+                            .as_deref()
+                            .map(|key| request_key(&format!("send:{}", session.get()), key))
+                            .unwrap_or_default();
+                        manager
+                            .submit_prompt(imported_prompt::PendingSubmission {
+                                session,
+                                state,
+                                context,
+                                options,
+                                message: UserMessageInput {
+                                    document: request.document,
+                                    author,
+                                    origin,
+                                    model_context: Vec::new(),
+                                },
+                                plugin,
+                                turn: None,
+                                command: request.prompt_command,
+                                literal_leading_slash: request.literal_leading_slash,
+                                snapshots,
+                                wait: request.wait_for_turn,
+                                ingress_author: request.author,
+                                ingress_origin: request.origin,
+                                send_id,
+                                permit,
+                            })
+                            .await
+                    })
+                    .await
             }
             .await;
             let _ = tx.send(result);
@@ -254,67 +331,6 @@ impl SessionManager {
         rx.await
             .map_err(|_| AppError::Internal("submission supervisor stopped before commit".into()))?
     }
-    async fn submit_hook(
-        &self,
-        session: SessionId,
-        mut document: ComposerDocument,
-        state: &ExecutionState,
-    ) -> Result<ComposerDocument, AppError> {
-        let original = document
-            .0
-            .iter()
-            .filter_map(|node| match node {
-                ComposerNode::Text { text } => Some(text.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        if original.is_empty() {
-            return Ok(document);
-        }
-        let updated = state
-            .executor
-            .plugin_manager()
-            .dispatch_user_prompt_submit_cancellable(
-                agena_plugin_host::UserPromptSubmitInput {
-                    session_id: session.get(),
-                    prompt: original.clone(),
-                },
-                Some(self.shutdown.child_token()),
-            )
-            .await
-            .map_err(|error| {
-                AppError::Internal(format!(
-                    "prompt blocked by plugin: {}",
-                    error.diagnostic_message()
-                ))
-            })?;
-        if updated.prompt != original {
-            if updated.prompt.len() > 256 * 1024 {
-                return Err(AppError::Config(
-                    "rewritten prompt exceeds the input byte budget".into(),
-                ));
-            }
-            let mut placed = false;
-            document.0.retain_mut(|node| {
-                if let ComposerNode::Text { text } = node {
-                    if placed {
-                        return false;
-                    }
-                    *text = updated.prompt.clone();
-                    placed = true;
-                }
-                true
-            });
-            if !placed {
-                document.0.push(ComposerNode::Text {
-                    text: updated.prompt,
-                });
-            }
-        }
-        Ok(document)
-    }
-
     pub async fn continue_session(
         &self,
         request: SessionExecutionRequest,
@@ -418,6 +434,20 @@ impl SessionManager {
         compact: bool,
         state: Arc<ExecutionState>,
     ) -> Result<DriveExit, AppError> {
+        let startup = match self
+            .prepare_session_start(&control, &state, &options.model)
+            .await
+        {
+            Ok(SessionStartPreparation::Ready(Some(reason))) if !compact => {
+                return self.stop_before_claim(&control, reason).await;
+            }
+            Ok(SessionStartPreparation::Ready(_)) => Ok(()),
+            Ok(SessionStartPreparation::QueuePaused) => return Ok(DriveExit::QueuePaused),
+            Ok(SessionStartPreparation::Superseded) => return Ok(DriveExit::Settled),
+            // A preparation error still settles the accepted attempt through
+            // the usual claim and failure path.
+            Err(error) => Err(error),
+        };
         let claim = RequestId::new();
         let attempt = match persist(|| {
             self.kernel().executor.claim_next_generation(
@@ -442,6 +472,14 @@ impl SessionManager {
             }
             Err(error) => return Err(kernel_error(error)),
         };
+        if !compact
+            && state
+                .executor
+                .plugin_manager()
+                .has_subscription(agena_plugin_host::HookSubscription::SESSION_START)
+        {
+            self.schedule_title(control.session);
+        }
         let execution = persist(|| {
             self.kernel()
                 .reader
@@ -474,6 +512,7 @@ impl SessionManager {
         let mut independent_agent = None;
         let mut timed_out = false;
         let result=async {
+            startup?;
             if compact {self.perform_compaction(&attempt,&control,&options,&state,None,false).await?;return Ok(());}
             if control.budget.is_none() {
                 independent_agent = self.begin_independent_agent_run(&control, execution.generation).await?;
@@ -481,6 +520,7 @@ impl SessionManager {
             let agent_budget = control.budget.clone().or_else(|| independent_agent.as_ref().map(|agent| AgentBudget {
                 max_tokens: agent.limits.max_tokens,
                 max_cost_microusd: agent.limits.max_cost_microusd,
+                cordis: None,
             }));
             let timeout_ms = independent_agent.as_ref().and_then(|agent| agent.limits.timeout_ms);
             let work = async {
@@ -488,6 +528,7 @@ impl SessionManager {
             let mut model_error_retries = 0u32;
             let mut follow_ups=0usize;let mut stop_follow_ups=0usize;let mut compactions=0usize;let mut proactive_suppressed=false;
             let mut stop_hook_active = false;
+            let mut model_selection_observed = false;
             let mut recent_tools=std::collections::VecDeque::<String>::new();
             let max_turns=match self.execution_context_with_state(control.session, &state).await?.max_turns{Some(0)=>usize::MAX,Some(max)=>max,None=>DEFAULT_MAX_MODEL_TURNS};let mut provider_calls=0usize;
             'turns: loop {
@@ -499,6 +540,12 @@ impl SessionManager {
                 // Configuration changes are read only at a provider boundary;
                 // the request's frozen facts and route then stay fixed.
                 self.prepare_options_with_state(control.session,&mut options,&state).await?;
+                let cordis = agent_budget.as_ref().and_then(|budget| budget.cordis.as_ref());
+                if let Some(cap) = cordis.and_then(|cordis| cordis.max_output_tokens) {
+                    let output = options.max_output_tokens.unwrap_or(cap).min(cap);
+                    options.max_output_tokens = Some(output);
+                    crate::prompt_budget::align_output_token_overrides(&mut options.request_override, output);
+                }
                 if let Some(max)=agent_budget.as_ref().and_then(|b|b.max_tokens){
                     let remaining=max.saturating_sub(usage.total_tokens());if remaining==0{return Err(AppError::AgentBudgetExceeded("the delegated run reached its token budget".into()));}
                     let output=options.max_output_tokens.unwrap_or(u32::MAX).min(remaining.min(u32::MAX as u64) as u32);options.max_output_tokens=Some(output);crate::prompt_budget::align_output_token_overrides(&mut options.request_override,output);
@@ -507,27 +554,58 @@ impl SessionManager {
                 let round=match persist(||attempt.begin_current_round(round_id)).await{
                     Ok(receipt)=>receipt.value,
                     Err(KernelError::Invalid(message)) if state.config.auto_compaction.enabled&&compactions<4&&(message.contains("prompt exceeds input identity budget")||message.contains("current prompt scan exceeds"))=>{
-                        compactions+=1;if self.perform_compaction(&attempt,&control,&options,&state,None,true).await?{continue;}return Err(AppError::Config(message));
+                        compactions += 1;
+                        match self.perform_compaction(&attempt, &control, &options, &state, None, true).await? {
+                            CompactionProgress::Committed => continue,
+                            CompactionProgress::Stopped => return Ok(()),
+                            CompactionProgress::Unchanged => return Err(AppError::Config(message)),
+                        }
                     },Err(error)=>return Err(kernel_error(error)),
                 };
                 let facts=read_with_busy_retry(control.session,"round_prompt",||round.prompt()).await?;
                 let context=self.execution_context_for_execution(control.session,&state,Some(control.execution)).await?;
+                tokio::select! {
+                    biased;
+                    _ = control.cancel.cancelled() => return Err(AppError::Cancelled),
+                    _ = self.prepare_imported_mod_session(&state.executor, control.session.get(), &context) => {}
+                }
                 let executor=state.executor.for_session_context_async(&context).await.with_cancellation_token(Some(control.cancel.clone()));
+                if !model_selection_observed {
+                    model_selection_observed = true;
+                    tokio::select! {
+                        biased;
+                        _ = control.cancel.cancelled() => return Err(AppError::Cancelled),
+                        _ = self.observe_implicit_model_switch(control.session, &state, &options.model, &executor) => {}
+                    }
+                }
                 let native=state.providers.native_compaction_enabled(&options.model)?;
                 let mut prompt=self.prompt_hydrator.hydrate_with_executor(&self.kernel().reader,facts,&options.model,native,&executor,context.conversation.as_ref()).await.map_err(kernel_error)?;
                 let bindings=if state.providers.agena_tool_mode(&options.model)?.is_disabled(){Vec::new()}else{agena_tool_api::ToolApiRegistry.definitions()};
                 let request_layer=super::session_prompt::request_system_layer(options.system.as_deref());
                 let bot_prompt=self.bot_prompt_layer(context.owner.as_ref(),context.relation_kind).await?;
-                let prompt_inputs=super::session_prompt::PromptInputs{profile:&context.profile_prompts,session:&context.prompts,bot:bot_prompt.as_ref(),request_layer:request_layer.as_ref(),model:&options.model,session_id:control.session.get(),workspace:context.effective_workspace_root.as_ref().map(|path|path.to_string_lossy().into_owned()).unwrap_or_default(),global:context.global,tools_enabled:!bindings.is_empty()};
+                let prompt_inputs=super::session_prompt::PromptInputs{profile:&context.profile_prompts,session:&context.prompts,bot:bot_prompt.as_ref(),request_layer:request_layer.as_ref(),model:&options.model,session_id:control.session.get(),workspace:executor.workspace_root().to_string_lossy().into_owned(),global:context.global,tools_enabled:!bindings.is_empty()};
                 let additional_system=super::session_prompt::resolve_configured_prompts(&state,&prompt_inputs);
-                let mut system_text=self.assemble_session_system_prompt_with_executor(&executor,(!additional_system.is_empty()).then_some(additional_system.as_str()),!bindings.is_empty(),context.profile.as_deref(),&state.config);
+                let claude_agent = state.config.claude_agent(context.profile.as_deref());
+                let (project_guidance, instruction_files) = session_project_guidance(&executor, claude_agent).await;
+                let mut system_text=self.assemble_session_system_prompt_with_executor(&executor,(!additional_system.is_empty()).then_some(additional_system.as_str()),!bindings.is_empty(),context.profile.as_deref(),&state.config,&project_guidance);
+                executor.notify_project_instructions_loaded(control.session.get(), instruction_files, false);
                 system_text.push_str(&self.agent_roster(control.session).await?);
+                if !bindings.is_empty() {
+                    self.append_on_demand_mcp_catalog(&executor, &control, &mut system_text).await;
+                }
                 state.processor.transform_model_input(
+                    &executor,
                     control.session.get(),
-                    context.effective_workspace_root.as_deref(),
+                    (!context.global).then(|| executor.workspace_root()),
                     &mut system_text,
                     prompt.turns_mut(),
                 ).await?;
+                let system_len = system_text.len();
+                let switch_context = self.pending_model_switch_context(control.session, &options.model, &control.cancel).await;
+                if let Some(context) = &switch_context {
+                    system_text.push_str("\n\n");
+                    system_text.push_str(&context.text);
+                }
                 let system=Some(system_text);
                 let token_estimate=prompt.estimate_tokens(system.as_deref(),&bindings).map_err(kernel_error)?;
                 let metadata=state.providers.model_metadata(&options.model).unwrap_or_default();
@@ -540,8 +618,10 @@ impl SessionManager {
                         return Err(AppError::Config(format!("additional system instructions alone need about {layer_tokens} tokens, but this model's prompt budget is {limit} tokens. Shorten the Bot's instructions, disable some prompt fragments, or choose a model with a larger context window{detail}")));
                     }
                 }
-                let budget=crate::estimate_auto_compaction_limit_tokens(metadata.limits.context_window_tokens,metadata.limits.max_input_tokens,options.max_output_tokens,state.config.auto_compaction.reserved_tokens).unwrap_or_else(||crate::estimate_prompt_tokens_from_chars(state.governor.max_prompt_chars()));
-                let policy=compaction_policy_key(&options,&state)?;
+                let default_budget=crate::estimate_auto_compaction_limit_tokens(metadata.limits.context_window_tokens,metadata.limits.max_input_tokens,options.max_output_tokens,state.config.auto_compaction.reserved_tokens).unwrap_or_else(||crate::estimate_prompt_tokens_from_chars(state.governor.max_prompt_chars()));
+                let compact_window = claude_agent.and_then(|(_, agent)| agent.auto_compact_window);
+                let budget = default_budget.min(compact_window.unwrap_or(default_budget));
+                let policy=compaction_policy_key(&options,&state,compact_window)?;
                 let status=read_with_busy_retry(control.session,"prompt_window_status",||self.kernel().reader.prompt_window_status(control.session)).await?;
                 let disabled=status.policy_key.as_deref()==Some(policy.as_str())&&status.auto_compaction_disabled;
                 let hard_exceeded=hard_limit.is_some_and(|limit|token_estimate>limit);
@@ -553,14 +633,33 @@ impl SessionManager {
                     let finish=RequestId::new();persist(||round.finish(finish,None,false)).await.map_err(kernel_error)?;
                     if state.config.auto_compaction.enabled&&!disabled&&compactions<4 {
                         compactions+=1;match self.perform_compaction(&attempt,&control,&options,&state,Some(token_estimate),true).await{
-                            Ok(true)=>continue,Ok(false)=>{},Err(AppError::Cancelled)=>return Err(AppError::Cancelled),Err(error)=>tracing::warn!(%error,"automatic compaction did not produce a usable checkpoint"),
+                            Ok(CompactionProgress::Committed) => continue,
+                            Ok(CompactionProgress::Stopped) => return Ok(()),
+                            Ok(CompactionProgress::Unchanged) => {},
+                            Err(AppError::Cancelled) => return Err(AppError::Cancelled),
+                            Err(error) => tracing::warn!(%error,"automatic compaction did not produce a usable checkpoint"),
                         }
                     }
                     if hard_exceeded{return Err(AppError::PromptBudgetExceeded{session_id:control.session.get(),estimated_tokens:token_estimate,limit_tokens:hard_limit.unwrap_or_default()});}
                     proactive_suppressed=true;continue;
                 }
+                let mut system = system;
+                if let Some(context) = switch_context
+                    && !self
+                        .consume_model_switch_context(control.session, context.id)
+                        .await
+                    && let Some(text) = &mut system
+                {
+                    text.truncate(system_len);
+                }
                 let completion=completion_request(&options,system,Vec::new(),bindings);
-                let request=KernelRoundRequest::new(round,prompt,completion,Some(control.cancel.clone())).map_err(kernel_error)?;
+                let model_attempt_hooks = self.imported_model_attempt_hooks(
+                    &control, &executor, &context, &round,
+                    agena_plugin_host::sdk::ImportedSamplingKind::Sampling,
+                ).await;
+                let request=KernelRoundRequest::new(round,prompt,completion,Some(control.cancel.clone())).map_err(kernel_error)?
+                    .with_model_attempt_hooks(model_attempt_hooks)
+                    .with_message_display(message_display_hooks(&executor));
                 // Managed image artifacts use the owning workspace root: the
                 // session-media download route resolves this same workspace
                 // regardless of a child session's effective working directory.
@@ -609,40 +708,74 @@ impl SessionManager {
                         model_error_retries += 1;
                         continue;
                     }
-                    if self.stop_hook_followup(&attempt,&control,&state,&mut stop_follow_ups,&mut stop_hook_active,Some(failure.user.fallback.clone())).await?{continue;}
+                    let cause = StopHookCause::ProviderFailure { category: failure.category, message: failure.user.fallback.clone() };
+                    if self.stop_hook_followup(&attempt,&control,&state,&mut stop_follow_ups,&mut stop_hook_active,cause).await?{continue;}
                     structured_round_failure=true;
                     return Err(AppError::Internal(failure.user.fallback));
                 }
                 model_error_retries = 0;
+                let cordis_stop = cordis.is_some()
+                    && matches!(outcome.finish_reason, agena_domain::FinishReason::MaxTokens | agena_domain::FinishReason::ContentFilter);
+                if let Some(cordis) = cordis {
+                    cordis.record_finish(outcome.finish_reason);
+                }
                 if let Some(observed)=&outcome.usage {usage.add_assign(observed);}
                 if let Some(budget)=&agent_budget
                     && (budget.max_tokens.is_some_and(|max|usage.total_tokens()>=max)||budget.max_cost_microusd.is_some_and(|max|usage.effective_cost_usd()*1_000_000.0>=max as f64)){
                         return Err(AppError::AgentBudgetExceeded("the delegated run reached its token or cost budget".into()));
                 }
-                if !outcome.tools.is_empty(){
+                let mut mod_end_turn = false;
+                if !cordis_stop && !outcome.tools.is_empty(){
                     for tool in &outcome.tools{
                         if tool_call_repeats(&recent_tools,&tool.signature){return Err(AppError::Config("the model repeated the same tool call without progress".into()));}
                         recent_tools.push_back(tool.signature.clone());if recent_tools.len()>32{recent_tools.pop_front();}
                     }
                     follow_ups=0;
                     control.phase(agena_domain::ExecutionPhase::ExecutingTools);
+                    let observe_batch = executor.plugin_manager().plugins().iter().any(|plugin| {
+                        plugin.subscribes(agena_plugin_host::HookSubscription::TOOL_BATCH_AFTER)
+                            && executor.plugin_is_enabled(&plugin.key())
+                    });
+                    let check_end_turn = executor
+                        .plugin_manager()
+                        .has_imported_tool_run_hooks(|plugin| executor.plugin_is_enabled(plugin))
+                        || executor
+                            .plugin_manager()
+                            .has_imported_tool_call_hooks(|plugin| executor.plugin_is_enabled(plugin));
+                    let batch_ids = (observe_batch || check_end_turn)
+                        .then(|| outcome.tools.iter().map(|call| call.tool.id()).collect::<Vec<_>>());
                     let max=state.config.max_concurrent_tools.max(1);
                     let tools=stream::iter(outcome.tools.into_iter().map(|tool|{
                         let executor=executor.clone();let control=control.clone();let state=state.clone();let model=options.model.clone();
-                        async move {self.dispatch_tool_api(tool,executor,control,state,model).await}
+                        let manager = self.clone();
+                        async move {
+                            agena_runtime_tools::tool::run_tool_task(Box::pin(async move {
+                                Box::pin(manager.dispatch_tool_api(tool, executor, control, state, model)).await
+                            })).await.map_err(tool_error)?
+                        }
                     })).buffer_unordered(max).collect::<Vec<_>>().await;
                     for result in tools {result?;}
-                    continue;
+                    if let Some(batch) = batch_ids.as_deref().filter(|_| observe_batch) {
+                        self.after_tool_batch(&attempt, &control, &state, &executor, batch).await?;
+                    }
+                    if let Some(ids) = batch_ids.as_deref().filter(|_| check_end_turn) {
+                        mod_end_turn = self.tool_batch_requested_end_turn(control.session, ids).await;
+                    }
+                    if !mod_end_turn {
+                        continue;
+                    }
                 }
-                if !outcome.follow_up_requested && outcome.finish_reason!=agena_domain::FinishReason::MaxTokens {
+                if mod_end_turn || cordis_stop || (!outcome.follow_up_requested && outcome.finish_reason!=agena_domain::FinishReason::MaxTokens) {
                     let conditions=self.stop_conditions(control.session,&state).await?;
                     let stop=RequestId::new();
                     let decision=persist(||attempt.prepare_stop(stop,conditions.clone())).await.map_err(kernel_error)?.value;
                     match decision {
                         agena_storage::kernel::StopDecision::Continue=>continue,
-                        agena_storage::kernel::StopDecision::AwaitingBackground=>{},
+                        agena_storage::kernel::StopDecision::AwaitingBackground=>{
+                            if self.stop_hook_followup(&attempt,&control,&state,&mut stop_follow_ups,&mut stop_hook_active,StopHookCause::AwaitingBackground(&executor)).await?{continue;}
+                        },
                         agena_storage::kernel::StopDecision::Ready=>{
-                            if self.stop_hook_followup(&attempt,&control,&state,&mut stop_follow_ups,&mut stop_hook_active,None).await?{continue;}
+                            if self.stop_hook_followup(&attempt,&control,&state,&mut stop_follow_ups,&mut stop_hook_active,StopHookCause::Completed).await?{continue;}
                             self.flush_hook_runs(&attempt,control.session,&state).await?;
                         },
                     }
@@ -656,7 +789,7 @@ impl SessionManager {
                 follow_ups+=1;if follow_ups>=4{return Err(AppError::Config("the model reached the continuation limit".into()));}
             }
             let budget_error=AppError::ModelTurnBudgetExhausted{max_turns};
-            if self.stop_hook_followup(&attempt,&control,&state,&mut stop_follow_ups,&mut stop_hook_active,Some(budget_error.public_message().to_owned())).await?{
+            if self.stop_hook_followup(&attempt,&control,&state,&mut stop_follow_ups,&mut stop_hook_active,StopHookCause::LocalFailure(budget_error.public_message().to_owned())).await?{
                 provider_calls=0;
                 continue 'turns;
             }
@@ -763,6 +896,9 @@ impl SessionManager {
             Err(_) if control.cancel.is_cancelled() => agena_plugin_host::RunStatus::Cancelled,
             Err(_) => agena_plugin_host::RunStatus::Failed,
         };
+        if completed && execution.purpose == ExecutionPurpose::Message {
+            self.observe_imported_turn((*execution).clone(), state.clone());
+        }
         state
             .executor
             .plugin_manager()
@@ -775,6 +911,43 @@ impl SessionManager {
             })
             .await;
         settlement
+    }
+
+    async fn stop_before_claim(
+        &self,
+        control: &RunControl,
+        reason: String,
+    ) -> Result<DriveExit, AppError> {
+        use agena_runtime_contracts::part_content::{HookContent, hook_notice_text};
+
+        let notice = hook_notice_text(&HookContent {
+            hook: "session.start".into(),
+            summary: "SessionStart hook stopped this turn".into(),
+            detail: Some(reason),
+            ..Default::default()
+        })?;
+        let command = RequestId::new();
+        match persist(|| {
+            self.kernel().executor.cancel_next_generation(
+                command,
+                control.session,
+                control.execution,
+                control.generation,
+                notice.clone(),
+            )
+        })
+        .await
+        {
+            Ok(_) => {
+                if let Some(pending) = self.plugin_session_starts.lock().get_mut(&control.session) {
+                    pending.pop_front();
+                }
+                Ok(DriveExit::Settled)
+            }
+            Err(KernelError::QueuePaused) => Ok(DriveExit::QueuePaused),
+            Err(KernelError::QueueOutOfOrder | KernelError::StaleAttempt) => Ok(DriveExit::Settled),
+            Err(error) => Err(kernel_error(error)),
+        }
     }
     async fn drive_round(
         &self,
@@ -811,6 +984,7 @@ impl SessionManager {
     ) -> Result<(), AppError> {
         let key = (control.session.get(), tool.id().get());
         let permit_slot: ToolPermitSlot = Arc::new(tokio::sync::Mutex::new(None));
+        let cordis_reads = Arc::new(tokio::sync::Mutex::new(cordis_workflows::CordisToolReads::default()));
         self.tools.lock().unwrap_or_else(|p| p.into_inner()).insert(
             key,
             LiveTool {
@@ -818,9 +992,12 @@ impl SessionManager {
                 control: control.clone(),
                 permit: permit_slot.clone(),
                 permissions: Default::default(),
+                cordis_reads: cordis_reads.clone(),
             },
         );
+        let _registration = ActiveToolRegistration { manager: self, key };
         let mut applied_invocation = invocation.clone();
+        let mut duration_ms = None;
         let runtime = tokio::runtime::Handle::current();
         let manager = self.clone();
         let authorizer = executor.clone();
@@ -844,35 +1021,71 @@ impl SessionManager {
                 )),
             ))
         }));
-        let effect=async {
-            let prepared=executor.prepare_invocation(&invocation,key.0,key.1).await?;
-            let (invocation,shell)=executor.prepare_shell_invocation(&prepared.invocation,key.0,key.1).await?;
-            applied_invocation=invocation.clone();
-            self.authorize_tool(&tool,&invocation,&executor,&control,&state).await?;
-            let executor = self.sandbox_executor_for_session(&executor, key.0).await?;
-            if control.cancel.is_cancelled(){return Err(ToolError::Cancelled);}
-            let kind=executor.streaming_content_kind(&invocation)?;
-            let output=match kind {Some(kind)=>Some(crate::tool::ToolOutputStreams::open(&tool,kind).await.map_err(|e|ToolError::invalid_input(e.to_string()))?),None=>None};
-            let permit=tokio::select!{_ = control.cancel.cancelled()=>return Err(ToolError::Cancelled),permit=state.tools.clone().acquire_owned()=>permit.map_err(|_|ToolError::Cancelled)?};
-            *permit_slot.lock().await = Some(permit);
-            let mut execution=executor.execute_invocation(&invocation,crate::tool::ToolRuntimeContext{
-                session_id:Some(key.0),call_id:Some(key.1),prepared_shell_command:shell,launch_provenance:None,
-                output,tool:Some(tool.clone()),
-            }).await?;
-            if let Some(title)=prepared.title_override{execution.view.set_title(title);}execution.view.metadata.extend(prepared.metadata);
-            Ok(execution)
-        }.await;
-        permit_slot.lock().await.take();
+        let effect = executor.run_imported_tool_call(&invocation, key.0, key.1, |invocation| {
+            let executor = &executor;
+            let tool = &tool;
+            let control = &control;
+            let state = &state;
+            let permit_slot = &permit_slot;
+            let applied_invocation = &mut applied_invocation;
+            let duration_ms = &mut duration_ms;
+            Box::pin(async move {
+                let prepared = executor.prepare_invocation(&invocation, key.0, key.1).await?;
+                let (invocation, shell) = executor.prepare_shell_invocation(&prepared.invocation, key.0, key.1).await?;
+                *applied_invocation = invocation.clone();
+                self.authorize_tool(
+                    tool,
+                    PermissionInvocation {
+                        tool: &invocation,
+                        run_mod_check: true,
+                        hook_ask: prepared.permission_ask.as_deref(),
+                    },
+                    executor, control, state,
+                ).await?;
+                let executor = self.sandbox_executor_for_session(executor, key.0).await?;
+                if control.cancel.is_cancelled() {
+                    return Err(ToolError::Cancelled);
+                }
+                let output = match executor.streaming_content_kind(&invocation)? {
+                    Some(kind) => Some(crate::tool::ToolOutputStreams::open(tool, kind).await
+                        .map_err(|error| ToolError::invalid_input(error.to_string()))?),
+                    None => None,
+                };
+                let permit = tokio::select! {
+                    _ = control.cancel.cancelled() => return Err(ToolError::Cancelled),
+                    permit = state.tools.clone().acquire_owned() => permit.map_err(|_| ToolError::Cancelled)?,
+                };
+                *permit_slot.lock().await = Some(permit);
+                let started = std::time::Instant::now();
+                let result = executor.run_authorized_tool(&invocation, crate::tool::ToolRuntimeContext {
+                    session_id: Some(key.0),
+                    call_id: Some(key.1),
+                    prepared_shell_command: shell,
+                    launch_provenance: None,
+                    output,
+                    tool: Some(tool.clone()),
+                }).await;
+                *duration_ms = Some(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
+                permit_slot.lock().await.take();
+                if let Err(ToolError::UserInputRequired(input)) = result {
+                    return self
+                        .request_host_user_input(key.0, key.1, *input)
+                        .await
+                        .map(super::host::input_execution)
+                        .map_err(|error| ToolError::invalid_input(error.to_string()));
+                }
+                let mut execution = result?;
+                if let Some(title) = prepared.title_override {
+                    execution.view.set_title(title);
+                }
+                execution.view.metadata.extend(prepared.metadata);
+                execution.view.additional_context.splice(..0, prepared.additional_context);
+                Ok(execution)
+            })
+        }).await;
         // The effect is now over. Everything below only retries persistence of
         // this exact observed value, never invocation preparation or execution.
-        let effect = match effect {
-            Err(ToolError::UserInputRequired(input)) => self
-                .request_host_user_input(key.0, key.1, *input)
-                .await
-                .map(super::host::input_execution)
-                .map_err(|e| ToolError::invalid_input(e.to_string())),
-            other => other,
-        };
+        let mut failed = None;
         let (phase, value, blobs) = match effect {
             Ok(execution) => match self
                 .prepare_tool_result(
@@ -898,29 +1111,58 @@ impl SessionManager {
             },
             Err(error) => {
                 let cancelled = matches!(error, ToolError::Cancelled);
+                let automatic_denial = match &error {
+                    ToolError::PolicyDenied(denial)
+                        if denial.authority
+                            == agena_domain::PermissionAuthorityKind::AutoApprovalModel =>
+                    {
+                        Some(denial.reason.clone())
+                    }
+                    _ => None,
+                };
                 let failure = tool_error(error).failure();
+                let value = failure_result_value(&failure, &applied_invocation);
+                if !cancelled {
+                    failed = Some((failure, automatic_denial));
+                }
                 (
                     if cancelled {
                         ToolPhase::Cancelled
                     } else {
                         ToolPhase::Failed
                     },
-                    failure_result_value(&failure, &applied_invocation),
+                    value,
                     Vec::new(),
                 )
             }
         };
+        let claims = cordis_reads.lock().await.seal();
+        let activity_reads = if phase == ToolPhase::Succeeded {
+            claims.iter().map(|claim| claim.read).collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
         let result = ToolResult { phase, value };
         let command = RequestId::new();
-        let committed = persist(|| tool.complete_with_blobs(command, result.clone(), &blobs)).await;
-        self.tools
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(&key);
-        self.host_sequences
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .remove(&key);
+        let committed = persist(|| {
+            tool.complete_with_activity_reads(command, result.clone(), &blobs, &activity_reads)
+        })
+        .await;
+        drop(claims);
+        if committed.is_ok()
+            && let Some((failure, automatic_denial)) = failed
+        {
+            executor
+                .broadcast_tool_failure(
+                    &applied_invocation,
+                    key.0,
+                    key.1,
+                    &failure,
+                    duration_ms,
+                    automatic_denial,
+                )
+                .await;
+        }
         match committed {
             Ok(_) => Ok(()),
             Err(KernelError::StaleAttempt | KernelError::Conflict(_))
@@ -959,19 +1201,26 @@ impl SessionManager {
     pub(super) async fn authorize_tool(
         &self,
         tool: &ToolHandle,
-        invocation: &ToolInvocation,
+        invocation: PermissionInvocation<'_>,
         executor: &ToolExecutor,
         control: &Arc<RunControl>,
         state: &ExecutionState,
     ) -> Result<(), ToolError> {
         let checks = executor
             .collect_permission_checks_for_invocation_in_session(
-                invocation,
+                invocation.tool,
                 Some(control.session.get()),
             )
             .await?;
-        self.authorize_checks(tool, checks, executor, control, state)
-            .await
+        self.authorize_checks_for_invocation(
+            tool,
+            checks,
+            executor,
+            control,
+            state,
+            Some(invocation),
+        )
+        .await
     }
 
     pub(super) async fn authorize_checks(
@@ -982,6 +1231,19 @@ impl SessionManager {
         control: &Arc<RunControl>,
         state: &ExecutionState,
     ) -> Result<(), ToolError> {
+        self.authorize_checks_for_invocation(tool, checks, executor, control, state, None)
+            .await
+    }
+
+    async fn authorize_checks_for_invocation(
+        &self,
+        tool: &ToolHandle,
+        checks: Vec<agena_tool::ToolPermissionCheck>,
+        executor: &ToolExecutor,
+        control: &Arc<RunControl>,
+        state: &ExecutionState,
+        invocation: Option<PermissionInvocation<'_>>,
+    ) -> Result<(), ToolError> {
         let permissions = self
             .tools
             .lock()
@@ -989,10 +1251,6 @@ impl SessionManager {
             .get(&(control.session.get(), tool.id().get()))
             .map(|live| live.permissions.clone())
             .ok_or(ToolError::Cancelled)?;
-        let mut granted = tokio::select! {
-            _ = control.cancel.cancelled() => return Err(ToolError::Cancelled),
-            granted = permissions.lock() => granted,
-        };
         // Persisted workspace rules follow the owning session, independently
         // of the server's default workspace or this tool's effective cwd.
         let workspace = {
@@ -1007,32 +1265,45 @@ impl SessionManager {
                 .map_err(|e| ToolError::invalid_input(e.to_string()))?
                 .workspace_id
         };
+        let mut imported = match invocation {
+            Some(invocation)
+                if invocation.hook_ask.is_some()
+                    || (invocation.run_mod_check && executor.has_imported_tool_check_hooks()) =>
+            {
+                self.imported_permission_decision(
+                    invocation,
+                    &checks,
+                    executor,
+                    control,
+                    tool.id().get(),
+                    workspace,
+                )
+                .await?
+            }
+            _ => None,
+        };
+        let invocation = invocation.map(|invocation| invocation.tool);
+        let mut granted = tokio::select! {
+            _ = control.cancel.cancelled() => return Err(ToolError::Cancelled),
+            granted = permissions.lock() => granted,
+        };
         for check in checks {
             if control.cancel.is_cancelled() {
                 return Err(ToolError::Cancelled);
             }
             let action_key = permission_key(&check.action)
                 .map_err(|e| ToolError::invalid_input(e.to_string()))?;
-            let rules = self
-                .kernel_runtime
-                .permissions
-                .resolve(&action_key, Some(control.session.get()), workspace)
-                .await
-                .map_err(|e| ToolError::invalid_input(e.to_string()))?;
-            let rules = rules
-                .into_iter()
-                .map(|r| agena_permission::RuleEntry {
-                    id: r.id,
-                    revision_ms: r.updated_at_ms.or(r.created_at_ms),
-                    scope: r.scope,
-                    source: r.source,
-                    reason: r.reason,
-                    operator: r.operator,
-                    mode: r.mode,
-                })
-                .collect::<Vec<_>>();
-            let resolution = agena_permission::apply_rules(&check.decision, &rules);
+            let resolution = self
+                .resolve_tool_permission(&action_key, &check.decision, control.session, workspace)
+                .await?;
             let decision = resolution.decision.clone();
+            // A mod decision applies to this invocation. The remaining resource
+            // checks keep their own rules and their own approval state.
+            let ask = imported
+                .take()
+                .map(|verdict| verdict.apply(&check.action, &resolution))
+                .transpose()?
+                .flatten();
             let grant_key = match &check.action {
                 PermissionAction::NetworkAccess { host, port, .. } => {
                     serde_json::to_string(&("network", host, port))
@@ -1042,7 +1313,9 @@ impl SessionManager {
             };
             // Re-read policy/rules even for a grant made earlier in this call:
             // a newly effective deny always wins over a remembered grant.
-            if !matches!(decision, PermissionDecision::Deny { .. }) && granted.contains(&grant_key)
+            if ask.is_none()
+                && !matches!(decision, PermissionDecision::Deny { .. })
+                && granted.contains(&grant_key)
             {
                 continue;
             }
@@ -1062,6 +1335,12 @@ impl SessionManager {
                 }
             } else {
                 decision
+            };
+            let decision = match (decision, ask) {
+                (PermissionDecision::Allow | PermissionDecision::Ask { .. }, Some(reason)) => {
+                    PermissionDecision::Ask { reason }
+                }
+                (decision, _) => decision,
             };
             match decision {
                 PermissionDecision::Allow => {}
@@ -1089,11 +1368,7 @@ impl SessionManager {
                                 None,
                                 None,
                                 None,
-                                if automatic {
-                                    agena_domain::PermissionAuthorityKind::AutoApprovalModel
-                                } else {
-                                    agena_domain::PermissionAuthorityKind::StaticPolicy
-                                },
+                                agena_domain::PermissionAuthorityKind::StaticPolicy,
                             ),
                         };
                     return Err(ToolError::PolicyDenied(Box::new(
@@ -1106,7 +1381,11 @@ impl SessionManager {
                             source,
                             scope,
                             operator,
-                            authority,
+                            authority: if automatic {
+                                agena_domain::PermissionAuthorityKind::AutoApprovalModel
+                            } else {
+                                authority
+                            },
                             rule_id,
                             rule_revision_ms: revision,
                             trace: resolution.trace,
@@ -1121,16 +1400,27 @@ impl SessionManager {
                     }
                     let tool_name = match &check.action {
                         PermissionAction::Tool { tool_name, .. } => tool_name.clone(),
-                        _ => "resource".to_owned(),
+                        _ => invocation
+                            .map_or_else(|| "resource".to_owned(), |tool| tool.name.clone()),
                     };
                     if let Err(error) = state
                         .executor
                         .plugin_manager()
                         .dispatch_permission_request(agena_plugin_host::PermissionRequestInput {
                             session_id: control.session.get(),
-                            tool_name,
+                            tool_name: tool_name.clone(),
                             action: action_key.clone(),
                             description: reason.clone(),
+                            tool_input: invocation
+                                .map(|tool| serde_json::Value::from(tool.input.clone())),
+                            tool_cwd: invocation
+                                .and_then(|tool| {
+                                    executor
+                                        .shell_hook_cwd(tool, Some(control.session.get()))
+                                        .ok()
+                                        .flatten()
+                                })
+                                .map(|path| path.to_string_lossy().into_owned()),
                         })
                         .await
                     {
@@ -1154,7 +1444,7 @@ impl SessionManager {
                     let command = RequestId::new();
                     let request = InteractionRequest::Permission {
                         action_key: action_key.clone(),
-                        description: reason,
+                        description: reason.clone(),
                     };
                     let interaction =
                         persist(|| tool.request_interaction(command, request.clone()))
@@ -1162,8 +1452,15 @@ impl SessionManager {
                             .map_err(|e| ToolError::invalid_input(e.to_string()))?
                             .value;
                     control.phase(agena_domain::ExecutionPhase::AwaitingInteraction);
+                    let _channel_relays = self.relay_claude_channel_permission(
+                        control,
+                        interaction,
+                        &tool_name,
+                        &reason,
+                        invocation.map(|tool| &tool.input),
+                    );
                     let decision = self
-                        .wait_interaction(control.session, interaction, Some(&control.cancel))
+                        .wait_permission_interaction(control, interaction, executor, reason)
                         .await
                         .map_err(|e| ToolError::invalid_input(e.to_string()))?;
                     control.phase(agena_domain::ExecutionPhase::ExecutingTools);
@@ -1206,6 +1503,34 @@ impl SessionManager {
         }
         Ok(())
     }
+
+    pub(super) async fn resolve_tool_permission(
+        &self,
+        action_key: &str,
+        base: &PermissionDecision,
+        session: SessionId,
+        workspace: Option<i64>,
+    ) -> Result<PermissionResolution, ToolError> {
+        let rules = self
+            .kernel_runtime
+            .permissions
+            .resolve(action_key, Some(session.get()), workspace)
+            .await
+            .map_err(|error| ToolError::invalid_input(error.to_string()))?
+            .into_iter()
+            .map(|rule| agena_permission::RuleEntry {
+                id: rule.id,
+                revision_ms: rule.updated_at_ms.or(rule.created_at_ms),
+                scope: rule.scope,
+                source: rule.source,
+                reason: rule.reason,
+                operator: rule.operator,
+                mode: rule.mode,
+            })
+            .collect::<Vec<_>>();
+        Ok(agena_permission::apply_rules(base, &rules))
+    }
+
     async fn stop_hook_followup(
         &self,
         attempt: &AttemptHandle,
@@ -1213,29 +1538,73 @@ impl SessionManager {
         state: &ExecutionState,
         count: &mut usize,
         stop_hook_active: &mut bool,
-        error: Option<String>,
+        cause: StopHookCause<'_>,
     ) -> Result<bool, AppError> {
         if control.cancel.is_cancelled() {
             return Err(AppError::Cancelled);
         }
+        let plugins = state.executor.plugin_manager();
+        let claude_only = match &cause {
+            StopHookCause::AwaitingBackground(executor) => {
+                if !plugins.has_imported_claude_stop_hook(|key| executor.plugin_is_enabled(key)) {
+                    return Ok(false);
+                }
+                Some(*executor)
+            }
+            _ => None,
+        };
         let last = self
             .final_text_for(control.session, Some(control.execution), 64 * 1024)
             .await?;
-        let result = state
-            .executor
-            .plugin_manager()
-            .dispatch_agent_stop_cancellable(
-                agena_plugin_host::AgentStopInput {
+        let (run_error, provider_failure) = match cause {
+            StopHookCause::Completed | StopHookCause::AwaitingBackground(_) => (None, None),
+            StopHookCause::ProviderFailure { category, message } => (Some(message), Some(category)),
+            StopHookCause::LocalFailure(message) => (Some(message), None),
+        };
+        let subagent = if plugins.plugins().iter().any(|plugin| {
+            plugin.agent_plugin().is_some()
+                && plugin.subscribes(agena_plugin_host::sdk::HookSubscription::AGENT_STOP)
+        }) {
+            let config = self
+                .kernel()
+                .reader
+                .configuration(control.session)
+                .await
+                .map_err(kernel_error)?;
+            config
+                .parent_session_id
+                .filter(|_| config.relation_kind.is_subagent())
+                .map(|parent| {
+                    let profile = state
+                        .config
+                        .effective_profile_name(config.profile.as_deref(), config.relation_kind);
+                    agena_plugin_host::sdk::SubagentHookContext {
+                        parent_session_id: parent.get(),
+                        agent_type: plugins.imported_subagent_type(profile),
+                        name: config.agent.as_ref().map(|agent| agent.name.clone()),
+                    }
+                })
+        } else {
+            None
+        };
+        let input = agena_plugin_host::AgentStopInput {
                     session_id: control.session.get(),
+                    execution_id: Some(control.execution.to_string()),
+                    model: Some(control.model.model_id.to_string()),
                     // A previous stop hook already forced this execution to
                     // continue. Plugins can prevent accidental recursive vetoes.
                     stop_hook_active: *stop_hook_active,
                     last_assistant_message: last,
-                    run_error: error,
-                },
-                Some(control.cancel.clone()),
-            )
-            .await;
+                    run_error,
+                    provider_failure,
+                    subagent,
+        };
+        let cancellation = Some(control.cancel.clone());
+        let result = if let Some(executor) = claude_only {
+            plugins.dispatch_imported_claude_stop(input, cancellation, |key| executor.plugin_is_enabled(key)).await
+        } else {
+            plugins.dispatch_agent_stop_cancellable(input, cancellation).await
+        };
         let dispatch = match result {
             Ok(dispatch) => dispatch,
             Err(error) => {
@@ -1302,6 +1671,41 @@ impl SessionManager {
             },_=tokio::time::sleep(Duration::from_secs(1))=>{}}
         }
     }
+
+    async fn wait_permission_interaction(
+        &self,
+        control: &RunControl,
+        interaction: InteractionId,
+        executor: &ToolExecutor,
+        reason: String,
+    ) -> Result<InteractionDecision, AppError> {
+        let wait = self.wait_interaction(control.session, interaction, Some(&control.cancel));
+        if !executor.plugin_manager().has_imported_notification_hooks() {
+            return wait.await;
+        }
+        tokio::pin!(wait);
+        tokio::select! {
+            biased;
+            decision = &mut wait => decision,
+            _ = tokio::time::sleep(Duration::from_secs(6)) => {
+                let executor = executor.clone();
+                let session = control.session.get();
+                tokio::spawn(async move {
+                    executor.plugin_manager().broadcast_imported_notification(
+                        agena_plugin_host::NotificationInput {
+                            kind: "permission_prompt".into(),
+                            session_id: Some(session),
+                            title: "Permission required".into(),
+                            message: reason,
+                            payload: json!({"request_id":interaction.get()}),
+                        },
+                        |plugin| executor.plugin_is_enabled(plugin),
+                    ).await;
+                });
+                wait.await
+            }
+        }
+    }
     pub(super) async fn wait_session_idle(&self, session: i64) {
         loop {
             let run = self
@@ -1336,19 +1740,19 @@ impl SessionManager {
         state: &ExecutionState,
     ) -> Result<(), AppError> {
         let context = self.execution_context_with_state(session, state).await?;
-        self.prepare_options_for_selection(&context.selection, options, state)
+        self.prepare_options_for_context(&context, options, state)
     }
 
-    fn prepare_options_for_selection(
+    fn prepare_options_for_context(
         &self,
-        selection: &ExecutionSelection,
+        context: &ToolContext,
         options: &mut SessionRunOptions,
         state: &ExecutionState,
     ) -> Result<(), AppError> {
         let selection = state
             .config
             .default_selection
-            .overlay_with_cascade(selection);
+            .overlay_with_cascade(&context.selection);
         if selection.model_ref().ok().flatten().as_ref() == Some(&options.model) {
             if options.thinking_mode.is_none() {
                 options.thinking_mode = selection.thinking_mode;
@@ -1362,6 +1766,13 @@ impl SessionManager {
             if let Some(parallel) = selection.parallel_tool_calls {
                 options.model_supports_parallel_tool_calls = Some(parallel);
             }
+        }
+        if let Some((_, agent)) = state.config.claude_agent(context.profile.as_deref())
+            && let Some(effort) = agent.effort
+            && state.providers.model_thinking_modes(&options.model)?.iter()
+                .any(|mode| mode.selector().as_deref() == Some(effort.as_ref()))
+        {
+            options.thinking_mode = Some(effort.to_string());
         }
         self.apply_model_modes_with_state(options, state)?;
         let metadata = state
@@ -1506,6 +1917,7 @@ pub(super) fn permission_key(action: &PermissionAction) -> Result<String, serde_
 fn compaction_policy_key(
     options: &SessionRunOptions,
     state: &ExecutionState,
+    compact_window: Option<u64>,
 ) -> Result<String, AppError> {
     use sha2::{Digest, Sha256};
     let route = state.providers.media_route_binding(&options.model)?;
@@ -1519,7 +1931,25 @@ fn compaction_policy_key(
         state.config.auto_compaction.reserved_tokens,
         state.governor.max_prompt_chars(),
     ))?;
-    Ok(hex::encode(Sha256::digest(facts)))
+    let mut fingerprint = Sha256::new();
+    fingerprint.update(facts);
+    if let Some(window) = compact_window {
+        fingerprint.update(window.to_le_bytes());
+    }
+    Ok(hex::encode(fingerprint.finalize()))
+}
+
+async fn session_project_guidance(
+    executor: &ToolExecutor,
+    claude_agent: Option<&(agena_plugin_host::sdk::PluginKey, agena_plugin_host::agent_plugin::ClaudeAgentOptions)>,
+) -> (String, Vec<agena_plugin_host::sdk::ImportedInstructionFile>) {
+    let omit_claude_md = claude_agent.is_some_and(|(_, agent)| agent.omit_claude_md);
+    let (mut guidance, files) = executor.load_initial_project_instructions_async(omit_claude_md).await;
+    if let Some((plugin, agent)) = claude_agent {
+        guidance.push_str(&executor.preload_claude_agent_skills(plugin, &agent.skills).await);
+        guidance.push_str(&executor.preload_claude_agent_memory(plugin, agent).await);
+    }
+    (guidance, files)
 }
 
 impl SessionManager {
@@ -1663,7 +2093,8 @@ impl SessionManager {
         let mut options = self.options_for_selection_with_state(&context.selection, &state)?;
         self.prepare_options_with_state(session, &mut options, &state)
             .await?;
-        let policy = compaction_policy_key(&options, &state)?;
+        let compact_window = state.config.claude_agent(context.profile.as_deref()).and_then(|(_, agent)| agent.auto_compact_window);
+        let policy = compaction_policy_key(&options, &state, compact_window)?;
         if status.policy_key.as_deref() != Some(policy.as_str()) {
             status.policy_key = Some(policy);
             status.consecutive_compaction_failures = 0;
@@ -1682,37 +2113,90 @@ impl SessionManager {
         state: &ExecutionState,
         before_tokens: Option<u64>,
         automatic: bool,
-    ) -> Result<bool, AppError> {
+    ) -> Result<CompactionProgress, AppError> {
         let hooks = state.executor.plugin_manager();
-        hooks
-            .dispatch_compaction_before(agena_plugin_host::CompactionBeforeInput {
+        let custom_instructions = (!automatic)
+            .then(|| options.system.as_deref())
+            .flatten()
+            .filter(|text| !text.trim().is_empty());
+        let instructions = tokio::select! {
+            biased;
+            _ = control.cancel.cancelled() => return Err(AppError::Cancelled),
+            result = hooks.dispatch_compaction_before(agena_plugin_host::CompactionBeforeInput {
                 session_id: control.session.get(),
                 model: options.model.model_id.to_string(),
                 automatic,
                 estimated_tokens: before_tokens,
-            })
-            .await
-            .map_err(|error| AppError::Config(error.diagnostic_message().to_owned()))?;
+                custom_instructions: custom_instructions.map(str::to_owned),
+            }) => result.map_err(|error| AppError::Config(error.diagnostic_message().to_owned()))?,
+        };
         let outcome = self
-            .perform_compaction_inner(attempt, control, options, state, before_tokens)
+            .perform_compaction_inner(
+                attempt,
+                control,
+                options,
+                state,
+                before_tokens,
+                custom_instructions,
+                &instructions,
+            )
             .await;
-        hooks
-            .broadcast_compaction_after(agena_plugin_host::CompactionAfterInput {
-                session_id: control.session.get(),
-                model: options.model.model_id.to_string(),
-                automatic,
-                status: match &outcome {
-                    Ok(true) => "committed",
-                    Ok(false) => "unchanged",
-                    Err(AppError::Cancelled) => "cancelled",
-                    Err(_) => "error",
+        let after_stop =
+            hooks
+                .broadcast_compaction_after(agena_plugin_host::CompactionAfterInput {
+                    session_id: control.session.get(),
+                    model: options.model.model_id.to_string(),
+                    automatic,
+                    status: match &outcome {
+                        Ok(Some(_)) => "committed",
+                        Ok(None) => "unchanged",
+                        Err(AppError::Cancelled) => "cancelled",
+                        Err(_) => "error",
+                    }
+                    .to_owned(),
+                    compact_summary: outcome.as_ref().ok().and_then(Option::as_deref).map(
+                        |summary| {
+                            let end = summary.floor_char_boundary(summary.len().min(128 * 1024));
+                            summary[..end].to_owned()
+                        },
+                    ),
+                })
+                .await;
+        if outcome?.is_none() {
+            return Ok(CompactionProgress::Unchanged);
+        }
+        if after_stop.is_some() {
+            if let Err(error) = self.flush_hook_runs(attempt, control.session, state).await {
+                tracing::warn!(session_id = control.session.get(), %error, "could not record PostCompact stop");
+            }
+            return Ok(CompactionProgress::Stopped);
+        }
+        let patch = tokio::select! {
+            biased;
+            _ = control.cancel.cancelled() => return Err(AppError::Cancelled),
+            patch = self.run_session_start_hooks(
+                control.session,
+                state,
+                agena_plugin_host::SessionStartSource::Compact,
+                Some(&options.model),
+            ) => patch?,
+        };
+        if let Some(patch) = patch {
+            self.deliver_session_start_context(control.session, patch.additional_context)
+                .await?;
+            if automatic && patch.stop_reason.is_some() {
+                if let Err(error) = self.flush_hook_runs(attempt, control.session, state).await {
+                    tracing::warn!(session_id = control.session.get(), %error, "could not record SessionStart stop after compaction");
                 }
-                .to_owned(),
-            })
-            .await;
-        outcome
+                return Ok(CompactionProgress::Stopped);
+            } else if patch.stop_reason.is_some() {
+                self.remember_session_start(control.session, patch.stop_reason);
+            }
+        }
+        Ok(CompactionProgress::Committed)
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn perform_compaction_inner(
         &self,
         attempt: &AttemptHandle,
@@ -1720,9 +2204,16 @@ impl SessionManager {
         options: &SessionRunOptions,
         state: &ExecutionState,
         before_tokens: Option<u64>,
-    ) -> Result<bool, AppError> {
+        custom_instructions: Option<&str>,
+        hook_instructions: &str,
+    ) -> Result<Option<String>, AppError> {
         control.phase(agena_domain::ExecutionPhase::PreparingModel);
-        let policy = compaction_policy_key(options, state)?;
+        let context = self
+            .execution_context_with_state(control.session, state)
+            .await?;
+        let claude_agent = state.config.claude_agent(context.profile.as_deref());
+        let compact_window = claude_agent.and_then(|(_, agent)| agent.auto_compact_window);
+        let policy = compaction_policy_key(options, state, compact_window)?;
         let status = self
             .kernel()
             .reader
@@ -1731,9 +2222,6 @@ impl SessionManager {
             .map_err(kernel_error)?;
         let native_unavailable = status.policy_key.as_deref() == Some(policy.as_str())
             && status.native_compaction_unavailable;
-        let context = self
-            .execution_context_with_state(control.session, state)
-            .await?;
         let executor = state.executor.for_session_context_async(&context).await;
         let native = state.providers.native_compaction_enabled(&options.model)?;
         let request_layer = super::session_prompt::request_system_layer(options.system.as_deref());
@@ -1757,14 +2245,20 @@ impl SessionManager {
         };
         let additional_system =
             super::session_prompt::resolve_configured_prompts(state, &prompt_inputs);
+        let (project_guidance, instruction_files) = session_project_guidance(&executor, claude_agent).await;
         let mut system = self.assemble_session_system_prompt_with_executor(
             &executor,
             (!additional_system.is_empty()).then_some(additional_system.as_str()),
             false,
             context.profile.as_deref(),
             &state.config,
+            &project_guidance,
         );
         system.push_str(&self.agent_roster(control.session).await?);
+        if !hook_instructions.is_empty() {
+            system.push_str("\n\nCompaction hook instructions:\n");
+            system.push_str(hook_instructions);
+        }
         let mut completion = completion_request(options, Some(system), Vec::new(), Vec::new());
         let metadata = state
             .providers
@@ -1826,7 +2320,7 @@ impl SessionManager {
                 })
                 .await
                 .map_err(kernel_error)?;
-                return Ok(false);
+                return Ok(None);
             };
             let prompt = self
                 .prompt_hydrator
@@ -1879,17 +2373,24 @@ impl SessionManager {
             .await
             .map_err(kernel_error)?
             .value;
+        let model_attempt_hooks = self.imported_model_attempt_hooks(
+            control, &executor, &context, &round,
+            agena_plugin_host::sdk::ImportedSamplingKind::ForegroundCompaction,
+        ).await;
         let effect=async {
             let mut native_context=None;
+            let mut native_usage = None;
             if native&&!native_unavailable {
-                let future=crate::provider::with_request_cancellation(Some(control.cancel.clone()),state.providers.compact_conversation(&options.model,completion.clone()));
+                let future=crate::provider::with_request_cancellation(Some(control.cancel.clone()),state.providers.compact_conversation_observed(&options.model,completion.clone(),model_attempt_hooks.as_ref()));
                 let output=tokio::select!{_ = control.cancel.cancelled()=>return Err(AppError::Cancelled),result=future=>result};
                 match output {
                     Ok(Some(output)) if output.has_checkpoint()=>{
                         let summary=native_portable_summary(&output)?;
-                        let context=match output{agena_provider::ProviderCompactionOutput::OpenAiResponses{items}=>agena_provider::ProviderCompactionContext::OpenAiResponses{items}};
-                        if let Some(summary)=summary{return Ok(Some((summary,Some(context),None)));}
+                        let agena_provider::ProviderCompactionOutput::OpenAiResponses { items, usage, .. } = output;
+                        let context = agena_provider::ProviderCompactionContext::OpenAiResponses{items};
+                        if let Some(summary)=summary{return Ok(Some((summary,Some(context),usage)));}
                         native_context=Some(context);
+                        native_usage=usage;
                     },
                     Ok(Some(_))=>return Ok(None),
                     unavailable=>{
@@ -1898,14 +2399,29 @@ impl SessionManager {
                     },
                 }
             }
-            completion.system=Some("Summarize the conversation for the next assistant continuation. Preserve user instructions, decisions, implementation state, exact paths and identifiers, unfinished work, and tool outcomes. Omit repetition. Return only the compact checkpoint text. Do not perform work or call tools.".into());
+            let mut system = "Summarize the conversation for the next assistant continuation. Preserve user instructions, decisions, implementation state, exact paths and identifiers, unfinished work, and tool outcomes. Omit repetition. Return only the compact checkpoint text. Do not perform work or call tools.".to_owned();
+            if let Some(custom) = custom_instructions {
+                system.push_str("\n\nUser's instructions for the summary:\n");
+                system.push_str(custom);
+            }
+            if !hook_instructions.is_empty() {
+                system.push_str("\n\nCompaction hook instructions:\n");
+                system.push_str(hook_instructions);
+            }
+            completion.system = Some(system);
             completion.max_output_tokens=Some(completion.max_output_tokens.unwrap_or(8192).min(8192));
             crate::prompt_budget::align_output_token_overrides(&mut completion.request_override,completion.max_output_tokens.unwrap_or(8192));
             state.processor.apply_chat_params_hook(options.model.provider_id.as_ref(),options.model.model_id.as_ref(),control.session.get(),&mut completion,Some(control.cancel.clone())).await;
-            let future=crate::provider::with_request_cancellation(Some(control.cancel.clone()),state.providers.complete(&options.model,completion));
-            let response=tokio::select!{_ = control.cancel.cancelled()=>return Err(AppError::Cancelled),result=future=>result?};
+            let future=crate::provider::with_request_cancellation(Some(control.cancel.clone()),state.providers.complete_observed(&options.model,completion,model_attempt_hooks.as_ref()));
+            let mut response=tokio::select!{_ = control.cancel.cancelled()=>return Err(AppError::Cancelled),result=future=>result?};
             if response.text.trim().is_empty(){return Err(AppError::EmptyResponse);}
             if response.text.len()>1024*1024{return Err(AppError::Config("compaction summary exceeds its byte budget".into()));}
+            if let Some(usage) = native_usage {
+                let total = response.usage.get_or_insert_default();
+                let request_usage = total.request_usage_snapshot();
+                total.add_assign(&usage);
+                total.request_usage = Some(request_usage);
+            }
             Ok(Some((response.text,native_context,response.usage)))
         }.await;
         let (summary, compaction, usage) = match effect {
@@ -1925,7 +2441,7 @@ impl SessionManager {
                 })
                 .await
                 .map_err(kernel_error)?;
-                return Ok(false);
+                return Ok(None);
             }
             Err(error) => {
                 let finish = RequestId::new();
@@ -1998,7 +2514,8 @@ impl SessionManager {
         .await
         .map_err(kernel_error)?;
         self.schedule_memory(control.session, Some(control.execution));
-        Ok(true)
+        executor.notify_project_instructions_loaded(control.session.get(), instruction_files, true);
+        Ok(Some(summary))
     }
     pub(super) async fn classify_permission(
         &self,
@@ -2050,6 +2567,7 @@ impl SessionManager {
                     document,
                     author,
                     origin,
+                    ..
                 } => {
                     if let Some(line) = crate::session::kernel::input::message_source_line(
                         author.as_ref(),
@@ -2064,6 +2582,17 @@ impl SessionManager {
                             transcript.push('\n');
                         }
                     }
+                }
+                EntryPayload::PluginPrompt(prompt) => {
+                    if let Some(line) = crate::session::kernel::input::message_source_line(
+                        Some(&prompt.author),
+                        None,
+                    ) {
+                        transcript.push_str(&line);
+                        transcript.push('\n');
+                    }
+                    transcript.push_str(&prompt.text);
+                    transcript.push('\n');
                 }
                 EntryPayload::Notice { text } => {
                     use agena_runtime_contracts::part_content::DecodedNotice;
@@ -2182,7 +2711,7 @@ impl SessionManager {
 fn native_portable_summary(
     output: &agena_provider::ProviderCompactionOutput,
 ) -> Result<Option<String>, AppError> {
-    let agena_provider::ProviderCompactionOutput::OpenAiResponses { items } = output;
+    let agena_provider::ProviderCompactionOutput::OpenAiResponses { items, .. } = output;
     let mut text = String::new();
     let mut append = |value: &str| -> Result<(), AppError> {
         if text.len().saturating_add(value.len()).saturating_add(1) > 1024 * 1024 {
@@ -2258,3 +2787,4 @@ mod compaction_tests;
 mod failure_result_tests;
 #[cfg(test)]
 mod stop_hook_tests;
+mod tool_batch;

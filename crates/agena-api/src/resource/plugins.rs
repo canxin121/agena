@@ -109,7 +109,7 @@ pub struct PluginSurfaceCatalogResponse {
 
 use super::PermissionToolCatalogResource;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Context of a user-driven plugin command/tool request.
 pub struct CommandRequestContext {
     #[serde(default = "empty_object")]
@@ -122,6 +122,15 @@ pub struct CommandRequestContext {
     pub slash: Option<String>,
     #[serde(default)]
     pub raw: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A plugin command invoked by a user surface, optionally with a session draft.
+pub struct PluginCommandInvokeRequest {
+    #[serde(flatten)]
+    pub context: CommandRequestContext,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composer: Option<agena_session_api::management::PluginCommandComposer>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

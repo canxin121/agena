@@ -86,7 +86,20 @@ pub(super) fn validate_plugin_target(
     path: &Path,
     strict: bool,
 ) -> Result<PluginValidateOutput, AppError> {
-    let path = resolve_plugin_validate_path(path)?;
+    let path = match resolve_plugin_validate_path(path) {
+        Ok(path) => path,
+        Err(_) if path.is_dir() => return validate_agent_plugin_directory(path, path, strict),
+        Err(error) => return Err(error),
+    };
+    if path.file_name().is_some_and(|name| name == "plugin.json")
+        && let Some(parent) = path.parent()
+        && parent
+            .file_name()
+            .is_some_and(|name| name == ".codex-plugin" || name == ".claude-plugin")
+        && let Some(root) = parent.parent()
+    {
+        return validate_agent_plugin_directory(&path, root, strict);
+    }
     let raw = fs::read_to_string(&path)?;
     if path.file_name().is_some_and(|name| {
         name == agena_plugin_marketplace::project::AGENA_PROJECT_MANIFEST_FILENAME
@@ -122,6 +135,16 @@ pub(super) fn validate_plugin_target(
     let mut manifest_hash = None;
     let mut messages: PluginValidationMessages = (Vec::new(), Vec::new());
     let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
+
+    if value
+        .get("$schema")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|schema| schema.starts_with("https://agent-plugins.org/schemas/"))
+        || (path.file_name().is_some_and(|name| name == "package.json")
+            && value.pointer("/dsh/bundle").is_some())
+    {
+        return validate_agent_plugin_directory(&path, base_dir, strict);
+    }
 
     if value.get("plugins").is_some() && value.get("version").is_some() {
         target_kind = "marketplace_index".to_string();
@@ -262,6 +285,45 @@ pub(super) fn validate_plugin_target(
     finish_plugin_validation(&path, &target_kind, manifest_hash, messages, strict)
 }
 
+fn validate_agent_plugin_directory(
+    path: &Path,
+    root: &Path,
+    strict: bool,
+) -> Result<PluginValidateOutput, AppError> {
+    let root = if root.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        root
+    };
+    let mut messages = (Vec::new(), Vec::new());
+    let compatibility = match agena_plugin_host::load_agent_plugin(root) {
+        Ok(package) => {
+            let compatibility = package.compatibility();
+            for diagnostic in package.diagnostics {
+                push_warning(
+                    &mut messages,
+                    "transport.agent_plugin.component",
+                    diagnostic,
+                    None::<&str>,
+                );
+            }
+            Some(compatibility)
+        }
+        Err(error) => {
+            push_error(
+                &mut messages,
+                "transport.agent_plugin.invalid",
+                error,
+                None::<&str>,
+            );
+            None
+        }
+    };
+    let mut output = finish_plugin_validation(path, "agent_plugin", None, messages, strict)?;
+    output.compatibility = compatibility;
+    Ok(output)
+}
+
 fn finish_plugin_validation(
     path: &Path,
     target_kind: &str,
@@ -285,6 +347,7 @@ fn finish_plugin_validation(
         target_kind: target_kind.to_string(),
         ok: errors.is_empty(),
         manifest_hash,
+        compatibility: None,
         errors,
         warnings,
     })
@@ -615,6 +678,57 @@ pub(super) fn validate_configured_plugin_value(
 
     match &configured.package {
         agena_plugin_host::PluginPackage::Static {} => {}
+        agena_plugin_host::PluginPackage::AgentPlugin {
+            path: package_path,
+            environment,
+            user_config_env,
+            bridge,
+            source,
+            ..
+        } => {
+            let resolved = resolve_config_path(base_dir, package_path);
+            match agena_plugin_host::agent_plugin::resolve_agent_plugin_path(
+                &resolved,
+                bridge.as_deref(),
+            )
+            .and_then(|path| {
+                agena_plugin_host::agent_plugin::load_agent_plugin_for_ecosystem(
+                    &path,
+                    environment,
+                    source.as_ref().map(|source| source.ecosystem),
+                )
+            }) {
+                Ok(package) => {
+                    if let Err(error) =
+                        agena_plugin_host::agent_plugin::validate_agent_plugin_environment(
+                            environment,
+                            user_config_env,
+                        )
+                    {
+                        push_error(
+                            output,
+                            "transport.agent_plugin.options",
+                            error,
+                            Some(format!("{path}.package")),
+                        );
+                    }
+                    for message in package.diagnostics {
+                        push_warning(
+                            output,
+                            "transport.agent_plugin.component",
+                            message,
+                            Some(format!("{path}.package.path")),
+                        );
+                    }
+                }
+                Err(error) => push_error(
+                    output,
+                    "transport.agent_plugin.invalid",
+                    format!("Agent Plugin package is invalid: {error}"),
+                    Some(format!("{path}.package.path")),
+                ),
+            }
+        }
         agena_plugin_host::PluginPackage::Cdylib {
             path: package_path,
             sha256,

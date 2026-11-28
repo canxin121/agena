@@ -179,6 +179,28 @@ impl SessionCommands {
         document: ComposerDocument,
         blobs: &[PreparedBlob],
     ) -> Result<CommitReceipt<ExecutionView>> {
+        self.edit_queued_user_message(
+            request,
+            session,
+            execution,
+            expected_revision,
+            UserMessageInput { document, author: None, origin: None, model_context: Vec::new() },
+            blobs,
+        )
+        .await
+    }
+
+    /// Replace queued content and its host-supplied context. Sender identity
+    /// remains the identity recorded by the original submission.
+    pub async fn edit_queued_user_message(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        execution: ExecutionId,
+        expected_revision: EntryRevision,
+        message: UserMessageInput,
+        blobs: &[PreparedBlob],
+    ) -> Result<CommitReceipt<ExecutionView>> {
         let blobs = bindings(&self.0, session, blobs)?;
         execution_receipt(
             self.0
@@ -188,8 +210,9 @@ impl SessionCommands {
                         session,
                         execution,
                         expected_revision,
-                        document,
+                        document: message.document,
                         blobs,
+                        model_context: message.model_context,
                     },
                 )
                 .await?,
@@ -302,6 +325,29 @@ impl SessionCommands {
         author: Option<agena_domain::MessageAuthor>,
         origin: Option<agena_domain::MessageOrigin>,
     ) -> Result<CommitReceipt<ExecutionView>> {
+        self.send_user_message(
+            request,
+            session,
+            UserMessageInput {
+                document,
+                author,
+                origin,
+                model_context: Vec::new(),
+            },
+            blobs,
+        )
+        .await
+    }
+
+    /// Commit the prompt, verified identity, attachments and hook context in
+    /// the same command and execution receipt.
+    pub async fn send_user_message(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        message: UserMessageInput,
+        blobs: &[PreparedBlob],
+    ) -> Result<CommitReceipt<ExecutionView>> {
         let blobs = bindings(&self.0, session, blobs)?;
         execution_receipt(
             self.0
@@ -309,10 +355,11 @@ impl SessionCommands {
                     request,
                     Command::Send {
                         session,
-                        document,
+                        document: message.document,
                         blobs,
-                        author,
-                        origin,
+                        author: message.author,
+                        origin: message.origin,
+                        model_context: message.model_context,
                     },
                 )
                 .await?,
@@ -327,6 +374,16 @@ impl ToolHandle {
         result: ToolResult,
         blobs: &[PreparedBlob],
     ) -> Result<CommitReceipt<ToolId>> {
+        self.complete_with_activity_reads(request, result, blobs, &[]).await
+    }
+
+    pub async fn complete_with_activity_reads(
+        &self,
+        request: RequestId,
+        result: ToolResult,
+        blobs: &[PreparedBlob],
+        activity_reads: &[ActivityOutputRead],
+    ) -> Result<CommitReceipt<ToolId>> {
         let inner = &self.round.attempt.inner;
         let scope = self.round.attempt.scope;
         let blobs = bindings(inner, scope.session, blobs)?;
@@ -338,6 +395,7 @@ impl ToolHandle {
                     tool: self.id,
                     result,
                     blobs,
+                    activity_reads: activity_reads.to_vec(),
                 },
             )
             .await?;

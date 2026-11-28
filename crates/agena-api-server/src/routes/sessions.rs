@@ -69,6 +69,20 @@ pub(super) fn routes() -> Router<AppState> {
             get(rest::list_integrations).post(rest::create_integration),
         )
         .route(
+            "/api/v1/sessions/{session_id}/working-directories",
+            get(rest::list_working_directories).post(rest::register_working_directory),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/claude-channels",
+            get(rest::list_claude_channels)
+                .put(rest::configure_claude_channel)
+                .layer(DefaultBodyLimit::max(4096)),
+        )
+        .route(
+            "/api/v1/sessions/{session_id}/claude-channels/catalog",
+            get(rest::list_declared_claude_channels),
+        )
+        .route(
             "/api/v1/sessions/{session_id}/integrations/{binding_id}",
             get(rest::integration_detail),
         )

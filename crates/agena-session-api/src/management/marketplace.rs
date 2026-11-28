@@ -4,6 +4,12 @@
 /// A plugin entry in the marketplace.
 pub struct MarketplacePluginResource {
     pub plugin_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_spec: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_registry: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_source: Option<String>,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub name: String,
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -85,6 +91,8 @@ pub struct MarketplaceSearchRequest {
     #[serde(default)]
     pub query: Option<String>,
     #[serde(default)]
+    pub ecosystem: Option<String>,
+    #[serde(default)]
     pub refresh: bool,
 }
 
@@ -113,6 +121,8 @@ pub struct MarketplaceInstalledPluginResource {
     pub require_signature: bool,
     pub require_github_distribution: bool,
     pub archive_extracted: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_install_source: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,6 +149,18 @@ pub struct MarketplaceInstallRequest {
     pub refresh: bool,
     #[serde(default)]
     pub require_signature: bool,
+    #[serde(default)]
+    pub agent_options: AgentMarketplaceInstallOptions,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AgentMarketplaceInstallOptions {
+    pub enable_hooks: bool,
+    pub environment: Vec<String>,
+    pub option_env: std::collections::BTreeMap<String, String>,
+    pub accept_command: Option<String>,
+    pub package_source: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

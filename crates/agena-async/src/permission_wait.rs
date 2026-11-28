@@ -38,7 +38,7 @@ impl Clock {
             .try_with(|key| *key)
             .ok()
             .flatten()
-            .filter(|(session, call)| *session >= 0 && *call >= 0);
+            .filter(|(session, _)| *session >= 0);
         let Some(key) = key else {
             return Arc::default();
         };

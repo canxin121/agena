@@ -39,6 +39,19 @@ impl<H: ClientHandler> Service<RoleClient> for H {
         }
     }
 
+    fn handle_ordered_notification(
+        &self,
+        notification: &ServerNotification,
+        context: &NotificationContext<RoleClient>,
+    ) -> bool {
+        match notification {
+            ServerNotification::CustomNotification(notification) => {
+                self.on_ordered_custom_notification(notification, context)
+            }
+            _ => false,
+        }
+    }
+
     async fn handle_notification(
         &self,
         notification: <RoleClient as ServiceRole>::PeerNot,
@@ -274,6 +287,14 @@ macro_rules! client_handler_methods {
             std::future::ready(())
         }
 
+        fn on_ordered_custom_notification(
+            &self,
+            _notification: &CustomNotification,
+            _context: &NotificationContext<RoleClient>,
+        ) -> bool {
+            false
+        }
+
         fn get_info(&self) -> ClientInfo {
             ClientInfo::default()
         }
@@ -420,6 +441,14 @@ macro_rules! impl_client_handler_for_wrapper {
                 context: NotificationContext<RoleClient>,
             ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
                 (**self).on_custom_notification(notification, context)
+            }
+
+            fn on_ordered_custom_notification(
+                &self,
+                notification: &CustomNotification,
+                context: &NotificationContext<RoleClient>,
+            ) -> bool {
+                (**self).on_ordered_custom_notification(notification, context)
             }
 
             fn get_info(&self) -> ClientInfo {

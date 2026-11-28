@@ -388,7 +388,7 @@ impl App {
                 self.focus = Focus::Composer;
 
                 if let Some(draft) = submit_draft {
-                    self.request_submit_message(session.id, draft);
+                    self.request_submit_message(session.id, draft, None);
                 } else {
                     self.flash_success(self.i18n.text_args(
                         "flash-created-session",
@@ -757,7 +757,15 @@ impl App {
         let Some(document) = outcome.restored_user_message else {
             return;
         };
-        let mut draft = ComposerDraft { document };
+        self.restore_submitted_composer_draft(session_id, ComposerDraft { document });
+    }
+
+    pub(crate) fn restore_submitted_composer_draft(
+        &mut self,
+        session_id: i64,
+        mut draft: ComposerDraft,
+    ) {
+        let current = self.transcript.session_id == Some(session_id);
         let slot = DraftSlot::Session(session_id);
         if current {
             let previous = self.current_composer_draft();

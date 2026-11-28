@@ -363,7 +363,9 @@ impl App {
             )));
         }
 
-        let plugin_id = "agena.skills".to_owned();
+        let plugin_id = skill.source.as_ref()
+            .filter(|source| skill.invocation.is_some() && source.kind == "plugin")
+            .map_or_else(|| "agena.skills".to_owned(), |source| source.location.clone());
         let content_hash = skill.revision.clone();
         let payload = agena_domain::ActivityPayload::CommandReference(
             agena_domain::CommandReferenceActivity {

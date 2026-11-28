@@ -1706,6 +1706,8 @@ mod strict_non_empty_path_tests {
             workspace_root: Some("/fixture".to_owned()),
             slash: None,
             raw: String::new(),
+            prompt_context: String::new(),
+            cordis_attachments: None,
         };
         let mut tool_command = invoke(valid.clone());
         tool_command.command_id = "collect".to_owned();

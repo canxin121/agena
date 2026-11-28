@@ -598,7 +598,12 @@ impl App {
         });
     }
 
-    pub(crate) fn request_submit_message(&mut self, session_id: i64, draft: ComposerDraft) {
+    pub(crate) fn request_submit_message(
+        &mut self,
+        session_id: i64,
+        draft: ComposerDraft,
+        prompt_command: Option<agena_api::commands::SessionPromptCommand>,
+    ) {
         if self.transcript.session_id == Some(session_id) {
             self.transcript.scroll_to_bottom(
                 self.layout.transcript_body.width,
@@ -631,7 +636,7 @@ impl App {
         let options = self.run_options.submission_request();
         tokio::spawn(async move {
             let result = application
-                .submit_document(session_id, document, options)
+                .submit_document(session_id, document, options, prompt_command)
                 .await
                 .map_err(crate::UiFailure::from_backend);
             let _ = tx

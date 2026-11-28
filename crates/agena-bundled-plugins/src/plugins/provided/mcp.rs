@@ -3,35 +3,96 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+mod app_http;
+mod apps;
 mod connections;
 mod scoped;
+mod skills;
+mod tool_loading;
 use connections::*;
+pub use connections::{ConnectionNetworkAuthority, network_permission_target};
+pub use scoped::prepare_stdio_sandbox;
+use skills::{McpResourceDirectoryInput, McpSkillReadInput};
 
 use crate::{
     MCP_PLUGIN_ID,
     config::{McpConfig, McpRuntimeConfig},
 };
+use agena_domain::mcp_elicitation::{McpElicitation, McpElicitationAction, McpElicitationReply};
 use agena_macros::ToolInput;
-use agena_mcp_client::McpConnectionManager;
+use agena_mcp_client::apps::{
+    APP_METADATA_KEY, APP_RESULT_METADATA_KEY, McpAppBinding, app_resource_uri, tool_visible_to,
+};
 use agena_mcp_client::protocol::{
     CallToolResult, ContentBlock, GetPromptResult, ListPromptsResult, ListResourceTemplatesResult,
     ListResourcesResult, ReadResourceResult, ResourceContents,
 };
+use agena_mcp_client::{McpConnectionManager, McpElicitationHandler};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use tokio_util::sync::CancellationToken;
 
 use crate::part::{AttachmentItem, AttachmentKind, AttachmentSource};
 use agena_plugin_host::PluginError;
 use agena_plugin_host::sdk::{
-    InitOutcome, Result as SdkResult, ToolDefinitionInput, ToolDefinitionPatch, ToolInvokeOutput,
+    InitOutcome, Result as SdkResult, ToolDefinitionInput, ToolDefinitionPatch, ToolInvokeContext,
+    ToolInvokeOutput,
 };
 use base64::Engine as _;
 
 pub(crate) struct McpPlugin {
     manager: Arc<McpConnectionManager>,
     host: std::sync::OnceLock<Arc<dyn agena_plugin_host::sdk::HostClient>>,
+}
+
+#[async_trait::async_trait]
+impl McpElicitationHandler for McpPlugin {
+    async fn elicit(
+        &self,
+        server: &str,
+        request: McpElicitation,
+        cancellation: CancellationToken,
+    ) -> McpElicitationReply {
+        if let Some(host) = self.host.get() {
+            match host
+                .mcp_elicitation(server, request, cancellation.clone())
+                .await
+            {
+                Ok(reply) => return reply,
+                Err(error) => {
+                    tracing::debug!(%server, kind = ?error.kind, "MCP interaction unavailable")
+                }
+            }
+        }
+        McpElicitationReply::new(if cancellation.is_cancelled() {
+            McpElicitationAction::Cancel
+        } else {
+            McpElicitationAction::Decline
+        })
+    }
+
+    async fn sample(
+        &self,
+        server: &str,
+        request: agena_domain::mcp_sampling::McpSamplingRequest,
+        cancellation: CancellationToken,
+    ) -> agena_mcp_client::McpResult<agena_domain::mcp_sampling::McpSamplingReply> {
+        use agena_mcp_client::McpError;
+        let host = self.host.get().ok_or(McpError::SamplingUnsupported)?;
+        match host
+            .mcp_sampling(server, request, cancellation.clone())
+            .await
+        {
+            Ok(Some(reply)) if !cancellation.is_cancelled() => Ok(reply),
+            Ok(_) => Err(McpError::SamplingDeclined),
+            Err(error) => {
+                tracing::debug!(%server, kind = ?error.kind, "MCP sampling unavailable");
+                Err(McpError::SamplingDeclined)
+            }
+        }
+    }
 }
 
 fn mcp_settings_metadata() -> &'static [(&'static str, &'static str, &'static str)] {
@@ -245,7 +306,14 @@ impl McpPlugin {
             locale("pt-BR", summary = "Liste os recursos de um servidor MCP.")
         )
     )]
-    async fn invoke_resources_list(&self, input: &McpServerInput) -> SdkResult<ToolInvokeOutput> {
+    async fn invoke_resources_list(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &McpServerInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        if let Some(connection) = self.app_connection(context, Some(&input.server)).await? {
+            return connection.list_resources(input.cursor.clone()).await;
+        }
         let manager = self.authorize_server(&input.server).await?;
         let result = manager
             .list_resources(&input.server, input.cursor.clone())
@@ -287,8 +355,12 @@ impl McpPlugin {
     )]
     async fn invoke_resource_templates_list(
         &self,
+        context: &ToolInvokeContext<'_>,
         input: &McpServerInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        if let Some(connection) = self.app_connection(context, Some(&input.server)).await? {
+            return connection.list_resource_templates(input.cursor.clone()).await;
+        }
         let manager = self.authorize_server(&input.server).await?;
         let result = manager
             .list_resource_templates(&input.server, input.cursor.clone())
@@ -321,11 +393,20 @@ impl McpPlugin {
     )]
     async fn invoke_resources_read(
         &self,
+        context: &ToolInvokeContext<'_>,
         input: &ReadResourceInput,
     ) -> SdkResult<ToolInvokeOutput> {
+        if let Some(connection) = self.app_connection(context, Some(&input.server)).await? {
+            return self.read_app_resource(input, connection).await;
+        }
+        if agena_mcp_client::apps::is_app_uri(&input.uri) {
+            return Err(PluginError::invalid_params(
+                "Open this MCP App in its transcript card.",
+            ));
+        }
         let manager = self.authorize_server(&input.server).await?;
-        let result = manager
-            .read_resource(&input.server, input.uri.as_str())
+        let mut result = manager
+            .read_resource_with_elicitation(&input.server, input.uri.as_str(), Some(self))
             .await
             .map_err(|err| {
                 PluginError::internal(format!(
@@ -333,7 +414,62 @@ impl McpPlugin {
                     input.server, input.uri
                 ))
             })?;
+        result
+            .contents
+            .retain(|item| !apps::is_app_content(&item.uri, item.mime_type.as_deref()));
         read_resource_output(&input.server, input.uri.as_str(), result)
+    }
+
+    #[tool(
+        tags(query, mcp, discovery, read_only),
+        name = "resources.directory.list",
+        summary = "List direct children of a resource directory on an MCP server with Skills directory support.",
+        translations(locale(
+            "zh-CN",
+            summary = "列出支持 MCP Skills 目录协议的服务器上某个资源目录的直接子项。"
+        ))
+    )]
+    async fn invoke_resource_directory_list(
+        &self,
+        input: &McpResourceDirectoryInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let server = self.resolve_skill_server(&input.server).await?;
+        let manager = self.authorize_server(&server).await?;
+        let result = manager
+            .list_resource_directory(&server, &input.uri, input.cursor.clone())
+            .await
+            .map_err(|error| PluginError::internal_error(&error))?;
+        list_resources_output(&input.server, result)
+    }
+
+    #[tool(
+        tags(query, mcp, discovery, read_only),
+        name = "skills.list",
+        summary = "Discover Agent Skills published by one MCP server, without downloading their files.",
+        translations(locale(
+            "zh-CN",
+            summary = "发现一个 MCP 服务器发布的技能，仅读取目录信息。"
+        ))
+    )]
+    async fn invoke_skills_list(&self, input: &McpServerInput) -> SdkResult<ToolInvokeOutput> {
+        self.list_remote_skills(input).await
+    }
+
+    #[tool(
+        tags(query, mcp, read_only),
+        name = "skills.read",
+        summary = "Read an MCP skill document or supporting file after user approval, verifying metadata and any published digest.",
+        translations(locale(
+            "zh-CN",
+            summary = "经用户同意后，读取 MCP 技能文档或配套文件，并校验元数据与服务端提供的摘要。"
+        ))
+    )]
+    async fn invoke_skills_read(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &McpSkillReadInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        self.read_remote_skill(context, input).await
     }
 
     #[tool(
@@ -393,7 +529,12 @@ impl McpPlugin {
     async fn invoke_prompts_get(&self, input: &GetPromptInput) -> SdkResult<ToolInvokeOutput> {
         let manager = self.authorize_server(&input.server).await?;
         let result = manager
-            .get_prompt(&input.server, input.name.as_str(), input.arguments.clone())
+            .get_prompt_with_elicitation(
+                &input.server,
+                input.name.as_str(),
+                input.arguments.clone(),
+                Some(self),
+            )
             .await
             .map_err(|err| {
                 PluginError::internal(format!(
@@ -402,6 +543,33 @@ impl McpPlugin {
                 ))
             })?;
         get_prompt_output(&input.server, input.name.as_str(), result)
+    }
+
+    #[tool(
+        tags(execute, mcp, mutate),
+        name = "apps.call",
+        summary = "Call a tool published by an open MCP App in this session."
+    )]
+    async fn invoke_app_view_tool(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &CallAppToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let target = input
+            .target
+            .parse()
+            .map_err(|_| PluginError::invalid_params("Invalid MCP App tool identity."))?;
+        let host = self
+            .host
+            .get()
+            .ok_or_else(|| PluginError::internal("MCP permission host is not initialized"))?;
+        let called = host
+            .call_mcp_app_view_tool(target, input.arguments.clone(), context.cancellation.clone())
+            .await?;
+        let mut result: CallToolResult = serde_json::from_value(called.result)
+            .map_err(|_| PluginError::invalid_params("Invalid MCP App tool response."))?;
+        result.meta = None;
+        invoke_tool_output(&called.app, &called.name, result)
     }
 
     #[tool(
@@ -421,22 +589,179 @@ impl McpPlugin {
             locale("pt-BR", summary = "Chame uma ferramenta MCP descoberta.")
         )
     )]
-    async fn invoke_tools_call(&self, input: &CallToolInput) -> SdkResult<ToolInvokeOutput> {
+    async fn invoke_tools_call(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &CallToolInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let app_task = agena_plugin_host::sdk::host_api::current_host_callback_context()
+            .and_then(|context| context.mcp_app)
+            .and_then(|binding| binding.server_task);
+        let app = self.app_connection(context, Some(&input.server));
+        let connection = if let Some(task) = &app_task {
+            tokio::select! {
+                biased;
+                _ = task.cancellation().cancelled() => return Err(PluginError::from_kind(
+                    agena_plugin_host::sdk::PluginErrorKind::Cancelled, "MCP App task cancelled",
+                )),
+                connection = app => connection?,
+            }
+        } else {
+            app.await?
+        };
+        if let Some(connection) = connection {
+            return self.call_app_tool(input, connection, app_task.as_ref()).await;
+        }
+        if let Some(output) = self.invoke_on_demand_tool(context, input).await? {
+            return Ok(output);
+        }
+        let name = input.name.trim();
+        if name.is_empty() {
+            return Err(PluginError::invalid_params(
+                "MCP tool name must not be empty",
+            ));
+        }
         let manager = self.authorize_server(&input.server).await?;
-        let result = manager
-            .call_tool(
+        self.call_remote_tool(context, &manager, input, name).await
+    }
+
+    async fn call_remote_tool(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        manager: &McpConnectionManager,
+        input: &CallToolInput,
+        name: &str,
+    ) -> SdkResult<ToolInvokeOutput> {
+        let descriptor = self
+            .model_tool_descriptor(manager, &input.server, name)
+            .await?;
+        if !tool_visible_to(&descriptor, "model") {
+            return Err(PluginError::invalid_params(
+                "The MCP tool is unavailable to the model.",
+            ));
+        }
+        let mut setup = None;
+        if app_resource_uri(&descriptor).is_some() && context.session_id > 0 && context.call_id > 0
+        {
+            let spec = manager
+                .server_spec(&input.server)
+                .await
+                .map_err(|error| PluginError::internal_error(&error))?;
+            match self.prepare_app_http(context, &input.server, &spec).await {
+                Ok(Some(candidate)) => {
+                    let offered = candidate
+                        .manager
+                        .connected_tools(&input.server)
+                        .await
+                        .map_err(|error| PluginError::internal_error(&error))?;
+                    if offered.iter().any(|tool| {
+                        tool.name == name
+                            && tool_visible_to(tool, "model")
+                            && app_resource_uri(tool) == app_resource_uri(&descriptor)
+                    }) {
+                        setup = Some(candidate);
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    tracing::debug!(server = %input.server, kind = ?error.kind, "MCP App HTTP retention setup unavailable")
+                }
+            }
+        }
+        let manager = setup
+            .as_ref()
+            .map_or(manager, |setup| setup.manager.as_ref());
+        let (mut result, peer_id) = manager
+            .call_tool_with_peer(
                 &input.server,
-                input.name.as_str(),
+                name,
                 empty_object_to_none(input.arguments.clone()),
+                Some(self),
             )
             .await
             .map_err(|err| {
                 PluginError::internal(format!(
                     "mcp:{}:tool:{} call failed: {err}",
-                    input.server, input.name
+                    input.server, name
                 ))
             })?;
-        invoke_tool_output(&input.server, input.name.as_str(), result)
+        result.content.retain(|block| !apps::is_app_block(block));
+        if app_resource_uri(&descriptor).is_none() {
+            return invoke_tool_output(&input.server, name, result);
+        }
+        let result_meta = result.meta.take();
+        let mut output = invoke_tool_output(&input.server, name, result)?;
+        if context.session_id > 0 && context.call_id > 0 {
+            let workspace = std::path::Path::new(context.workspace_root);
+            let spec = manager
+                .server_spec(&input.server)
+                .await
+                .map_err(|error| PluginError::internal_error(&error))?;
+            let binding = match spec {
+                agena_mcp_client::ServerSpec::Stdio { .. } => {
+                    let Ok(source) = self
+                        .manager
+                        .app_stdio_spec(context.session_id, &input.server, workspace, peer_id)
+                        .await
+                    else {
+                        return Ok(output);
+                    };
+                    McpAppBinding::issue_stdio(
+                        context.session_id,
+                        context.call_id,
+                        &input.server,
+                        &descriptor,
+                        &source,
+                        peer_id,
+                    )
+                    .await
+                }
+                agena_mcp_client::ServerSpec::Http { .. } => {
+                    let requires_original_peer =
+                        manager.app_requires_original_peer(&input.server).await;
+                    let binding = McpAppBinding::issue(
+                        context.session_id,
+                        context.call_id,
+                        &input.server,
+                        &descriptor,
+                        &spec,
+                        requires_original_peer,
+                    )
+                    .await;
+                    let retained = if let Some(setup) = &setup
+                        && binding.is_some()
+                    {
+                        self.manager
+                            .retain_app_http_connection(
+                                context.session_id,
+                                context.call_id,
+                                &input.server,
+                                workspace,
+                                setup.manager.clone(),
+                            )
+                            .await
+                            .is_some()
+                    } else {
+                        false
+                    };
+                    binding.filter(|_| !requires_original_peer || retained)
+                }
+            };
+            if let Some(binding) = binding {
+                output.metadata.insert(
+                    APP_METADATA_KEY.into(),
+                    serde_json::to_string(&binding)
+                        .map_err(|error| PluginError::internal_error(&error))?,
+                );
+                if let Some(meta) = result_meta
+                    .map(|meta| meta.to_string())
+                    .filter(|meta| meta.len() <= 64 * 1024)
+                {
+                    output.metadata.insert(APP_RESULT_METADATA_KEY.into(), meta);
+                }
+            }
+        }
+        Ok(output)
     }
 
     #[tool(
@@ -477,28 +802,30 @@ impl McpPlugin {
             )
         )
     )]
-    async fn invoke_tools_search(&self, input: &McpToolSearchInput) -> SdkResult<ToolInvokeOutput> {
+    async fn invoke_tools_search(
+        &self,
+        context: &ToolInvokeContext<'_>,
+        input: &McpToolSearchInput,
+    ) -> SdkResult<ToolInvokeOutput> {
+        if let Some(connection) = self.app_connection(context, None).await? {
+            return Self::list_app_tools(input.catalog_offset, connection);
+        }
         // Discovery must respect the same exact server/tool boundary as calls.
         // A missing scope lookup fails closed instead of returning the global
         // catalog to a channel member. Normal local sessions have no authority.
-        let context = self
-            .host
-            .get()
-            .ok_or_else(|| PluginError::internal("MCP host unavailable"))?
-            .companion_context()
-            .await?;
-        let channel = context
-            .get("channel_authority")
-            .filter(|value| !value.is_null())
-            .map(|value| serde_json::from_value::<agena_domain::ChannelAuthority>(value.clone()))
-            .transpose()
-            .map_err(|_| PluginError::internal("invalid channel tool discovery scope"))?;
+        let channel = self.discovery_channel().await?;
+        if input.on_demand_catalog {
+            return self.on_demand_catalog(input, channel.as_ref()).await;
+        }
         let query = input.query.trim().to_ascii_lowercase();
         let mut tools = self
             .scoped_tools(channel.as_ref())
             .await?
             .into_iter()
             .filter_map(|(server, tool)| {
+                if !tool_visible_to(&tool, "model") {
+                    return None;
+                }
                 if channel.as_ref().is_some_and(|authority| {
                     !authority.allows_mcp_tool(
                         &server,
@@ -509,9 +836,10 @@ impl McpPlugin {
                     return None;
                 }
                 let haystack = format!(
-                    "{} {} {}",
+                    "{} {} {} {}",
                     server,
                     tool.name,
+                    tool.aliases.join(" "),
                     tool.description.as_deref().unwrap_or_default()
                 )
                 .to_ascii_lowercase();
@@ -535,7 +863,7 @@ impl McpPlugin {
         let results = tools
             .into_iter()
             .map(|(_, server, tool)| {
-                serde_json::json!({
+                let mut result = serde_json::json!({
                     "server": server,
                     "name": tool.name,
                     "title": tool.title,
@@ -544,7 +872,11 @@ impl McpPlugin {
                     "output_schema": tool.output_schema,
                     "annotations": tool.annotations,
                     "risk_hint": mcp_annotation_risk(tool.annotations.as_ref()),
-                })
+                });
+                if !tool.aliases.is_empty() {
+                    result["aliases"] = serde_json::json!(tool.aliases);
+                }
+                result
             })
             .collect::<Vec<_>>();
         let fingerprint = mcp_tool_index_fingerprint(&results);
@@ -1020,6 +1352,7 @@ impl McpPlugin {
                 summary: None,
                 help: Some("Manage Agena connections to external MCP servers. Use connections.list and connections.get before editing; pass returned opaque IDs and current revisions. Global and server-workspace scopes are distinct; workspace copies override complete same-name global definitions. Native configs use transport=stdio with process={command,args,env,cwd,reads,writes,network}, or transport=http with endpoint={url,headers} and optional auth. Return config secrets are [REDACTED]; preserve only unchanged secret_paths explicitly, or replace/remove them. Import mcpServers or native servers JSON with import_preview, then import selected names using the original document and preview revision. Saved changes queue a runtime reload after the originating call; check status after it completes. Use connections.test for an isolated probe, including disabled copies. Use auth.start then auth.complete for OAuth; never infer sign-in success from opening a URL. These tools manage the running server workspace, independently of the selected chat directory.".into()),
                 input_schema: None,
+                hidden: None,
             }));
         }
         let servers = self.manager.server_names().await;
@@ -1072,6 +1405,7 @@ impl McpPlugin {
             summary,
             help: Some(lines.join("\n")),
             input_schema: None,
+            hidden: None,
         }))
     }
 }
@@ -1174,6 +1508,13 @@ struct McpToolSearchInput {
     query: String,
     #[serde(default = "default_mcp_search_limit")]
     limit: u32,
+    /// List raw on-demand tool names with short descriptions for use with the
+    /// server's loader.
+    #[serde(default)]
+    on_demand_catalog: bool,
+    /// Offset within the matching on-demand catalog entries.
+    #[serde(default)]
+    catalog_offset: u32,
 }
 
 const fn default_mcp_search_limit() -> u32 {
@@ -1198,7 +1539,16 @@ fn mcp_tool_index_fingerprint(results: &[serde_json::Value]) -> String {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ToolInput, PartialEq)]
-#[input(trim("server", "name"), non_empty("server", "name"))]
+#[input(trim("target"), non_empty("target"))]
+#[serde(deny_unknown_fields)]
+struct CallAppToolInput {
+    target: String,
+    #[serde(default)]
+    arguments: serde_json::Map<String, Value>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, ToolInput, PartialEq)]
+#[input(trim("server"), non_empty("server", "name"))]
 #[serde(deny_unknown_fields)]
 struct CallToolInput {
     server: String,

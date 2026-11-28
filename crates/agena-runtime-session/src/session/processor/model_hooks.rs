@@ -235,6 +235,7 @@ impl SessionProcessor {
     /// the authoritative session history.
     pub(crate) async fn transform_model_input(
         &self,
+        executor: &crate::tool::ToolExecutor,
         session_id: i64,
         workspace_root: Option<&std::path::Path>,
         system: &mut String,
@@ -255,10 +256,13 @@ impl SessionProcessor {
         if system_hook {
             let updated = self
                 .plugins
-                .dispatch_chat_system_transform(ChatSystemTransformInput {
-                    session_id,
-                    current_system: system.clone(),
-                })
+                .dispatch_chat_system_transform_for(
+                    ChatSystemTransformInput {
+                        session_id,
+                        current_system: system.clone(),
+                    },
+                    |plugin| !executor.is_global() && executor.plugin_is_enabled(plugin),
+                )
                 .await
                 .map_err(|error| invalid_projection(error.diagnostic_message()))?;
             *system = updated.current_system;

@@ -17,6 +17,8 @@
 //! `status` modules hold the concrete implementations.
 
 pub mod activation;
+pub mod agent_plugin;
+pub use agena_skills::DeclaredSkill as AgentPluginSkill;
 pub mod config;
 pub mod dispatcher;
 pub mod effect_scope;
@@ -44,6 +46,10 @@ pub use activation::{
     plugin_activation_epochs,
 };
 pub use agena_plugin_sdk as sdk;
+pub use agent_plugin::{
+    AgentPluginContext, AgentPluginDescriptor, AgentPluginFormat, AgentPluginMcpServer,
+    ResolvedAgentPluginMcp, agent_plugin_data_path, load_agent_plugin,
+};
 pub use config::{
     ConfiguredPlugin, HttpAuth, PluginActivationConfig, PluginHostConfig, PluginPackage,
     PluginPolicyConfig, PluginSignature, PluginsConfig, RestartPolicy, TimeoutsConfig,

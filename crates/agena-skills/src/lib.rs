@@ -16,7 +16,7 @@ pub use import::{SkillImport, SkillImportFile};
 pub use manager::{
     SkillManager, default_roots, package_enabled, package_enabled_override, with_mutation_lock,
 };
-pub use metadata::{ParsedSkill, parse_document, validate_document, validate_name};
+pub use metadata::{ParsedSkill, parse_document, parse_document_frontmatter, validate_document, validate_name};
 pub use types::*;
 
 pub const MAX_DOCUMENT_BYTES: usize = 1_048_576;

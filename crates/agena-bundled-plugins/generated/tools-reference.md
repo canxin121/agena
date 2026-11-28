@@ -6,7 +6,7 @@
 > agena inspect --tools-reference > crates/agena-bundled-plugins/generated/tools-reference.md
 > ```
 
-This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **27 plugins and 220 tool definitions**.
+This document is deterministically generated from the real `agena-bundled-plugins` plugin manifests, covering **27 plugins and 226 tool definitions**.
 
 - Each tool entry includes: name, summary, detailed help (`before_help` / `help` / `after_help`), tags, the streaming runtime flag, an input parameter table, and the full input / output JSON Schema.
 - This catalog contains plugin execution tools only. The runtime-owned Tool API protocol (`plugins_list`, `tools_list`, `tools_help`, `tools_call`) has its own registry and is excluded from plugin and tool counts.
@@ -28,9 +28,9 @@ This document is deterministically generated from the real `agena-bundled-plugin
 - [`agena.inline_ui`](#agenainline_ui) — Inline Generative UI: composable, stateful interfaces and live work updates inside answers. guide() teaches the complete core workflow; use sections only for advanced references. prepare/read/update. (4 tools)
 - [`agena.interaction`](#agenainteraction) — User interaction tools. (2 tools)
 - [`agena.lsp`](#agenalsp) — LSP read-only observability and navigation tools. (5 tools)
-- [`agena.mcp`](#agenamcp) — MCP discovery and bridge tools. (26 tools)
+- [`agena.mcp`](#agenamcp) — MCP discovery and bridge tools. (30 tools)
 - [`agena.memory`](#agenamemory) — Persistent memory with searchable retrieval and write tools. (5 tools)
-- [`agena.notebook`](#agenanotebook) — Revision-safe Jupyter notebook cell editing. (1 tools)
+- [`agena.notebook`](#agenanotebook) — Revision-safe Jupyter notebook cell editing. (3 tools)
 - [`agena.notifications`](#agenanotifications) — AI completion, question and approval notifications for browsers and terminals, with terminal window titles. (0 tools)
 - [`agena.plan`](#agenaplan) — Plan orchestration and plan-autorun tools. (6 tools)
 - [`agena.provider`](#agenaprovider) — Discover model routes across all enabled adapters of the current provider. (1 tools)
@@ -401,7 +401,7 @@ Agent communication and delegation.
 
 ### spawn
 
-`agena.agent.spawn` · **Summary**: Delegate a bounded task to a role profile and return its handle immediately. Choose profile from the available subagent catalog: explore for investigation, worker for implementation, reviewer for verification. Omission uses the configured subagent default. Parent history is not copied; include scope, constraints, and expected result in prompt. Final replies are delivered automatically.
+`agena.agent.spawn` · **Summary**: Delegate a bounded task to a role profile and return its handle immediately. Choose profile from the available subagent catalog: explore for investigation, worker for implementation, reviewer for verification. Omission uses the configured subagent default. The child starts fresh by default. Set inherit_parent_context to include completed parent turns. Final replies are delivered automatically.
 
 **Tags**: `agent`
 
@@ -411,11 +411,12 @@ Agent communication and delegation.
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
 | `commands` | `array<string>` | — | `[]` | Command instructions attached to the initial message. |
+| `inherit_parent_context` | `boolean` | — | — | Seed the subagent with the parent's completed turns as of creation. |
 | `max_cost_microusd` | `integer / null` | — | — |  |
 | `max_tokens` | `integer / null` | — | — | Per-execution token budget, retained for followup executions. |
 | `name` | `string` | ✓ | — | Unique nonnumeric name: 1–64 lowercase letters, digits or underscores; `parent` and `self` are reserved. |
 | `profile` | `string / null` | — | — | Role profile from the available subagent catalog. Choose the role that<br>fits the task; omission uses the configured subagent default. |
-| `prompt` | `string` | ✓ | — | Scope, constraints, required context and output contracts, and expected final result.<br>Parent history is not copied; include any chart or UI contract the task needs. |
+| `prompt` | `string` | ✓ | — | Scope, constraints, required context and output contracts, and expected final result. |
 | `selection` | `AgentModelSelection / null` | — | — |  |
 | `timeout_ms` | `integer / null` | — | — |  |
 
@@ -497,7 +498,7 @@ Agent communication and delegation.
       }
     },
     "prompt": {
-      "description": "Scope, constraints, required context and output contracts, and expected final result.\nParent history is not copied; include any chart or UI contract the task needs.",
+      "description": "Scope, constraints, required context and output contracts, and expected final result.",
       "type": "string",
       "x-agena-order": "000001",
       "x-agena-non-empty": true,
@@ -562,6 +563,11 @@ Agent communication and delegation.
       "format": "uint64",
       "minimum": 1,
       "x-agena-order": "000007"
+    },
+    "inherit_parent_context": {
+      "description": "Seed the subagent with the parent's completed turns as of creation.",
+      "type": "boolean",
+      "x-agena-order": "000008"
     }
   },
   "additionalProperties": false,
@@ -21919,11 +21925,98 @@ LSP read-only observability and navigation tools.
 
 ## agena.mcp
 
-**Version** `0.1.0` · **Tools** 26 · **Tags** `mcp` `network` · **Condition** `runtime:mcp-manager`
+**Version** `0.1.0` · **Tools** 30 · **Tags** `mcp` `network` · **Condition** `runtime:mcp-manager`
 
 MCP discovery and bridge tools.
 
 > Discover connected MCP servers and bridge their tools, resources and prompts. The shared MCP client manager owns connection lifecycle and operation routing.
+
+### apps.call
+
+`agena.mcp.apps.call` · **Summary**: Call a tool published by an open MCP App in this session.
+
+**Tags**: `execute` `mcp` `mutate`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `arguments` | `object` | — | `{}` |  |
+| `target` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "required": [
+    "target"
+  ],
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "target": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "arguments": {
+      "type": "object",
+      "additionalProperties": true,
+      "default": {},
+      "properties": {},
+      "x-agena-order": "000001"
+    }
+  },
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "target": {}
+          },
+          "required": [
+            "target"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "target": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "target"
+        ]
+      }
+    ]
+  }
+}
+```
 
 ### connections.auth.cancel
 
@@ -22786,6 +22879,149 @@ MCP discovery and bridge tools.
 }
 ```
 
+### resources.directory.list
+
+`agena.mcp.resources.directory.list` · **Summary**: List direct children of a resource directory on an MCP server with Skills directory support.
+
+**Tags**: `query` `mcp` `discovery` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `cursor` | `string / null` | — | `null` |  |
+| `server` | `string` | ✓ | — |  |
+| `uri` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "required": [
+    "server",
+    "uri"
+  ],
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "server": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "uri": {
+      "type": "string",
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "cursor": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000002"
+    }
+  },
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "server": {}
+          },
+          "required": [
+            "server"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "server": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "server"
+        ]
+      },
+      {
+        "anyOf": [
+          {
+            "not": {
+              "type": "object",
+              "properties": {
+                "uri": {}
+              },
+              "required": [
+                "uri"
+              ]
+            }
+          },
+          {
+            "type": "object",
+            "properties": {
+              "uri": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+                  },
+                  {
+                    "type": "array",
+                    "maxItems": 0
+                  },
+                  {
+                    "type": "object",
+                    "maxProperties": 0,
+                    "properties": {}
+                  }
+                ]
+              }
+            },
+            "required": [
+              "uri"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
 ### resources.list
 
 `agena.mcp.resources.list` · **Summary**: List MCP resources from one server.
@@ -23190,6 +23426,249 @@ MCP discovery and bridge tools.
 }
 ```
 
+### skills.list
+
+`agena.mcp.skills.list` · **Summary**: Discover Agent Skills published by one MCP server, without downloading their files.
+
+**Tags**: `query` `mcp` `discovery` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `cursor` | `string / null` | — | — |  |
+| `server` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "required": [
+    "server"
+  ],
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "server": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "cursor": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    }
+  },
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "server": {}
+          },
+          "required": [
+            "server"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "server": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "server"
+        ]
+      }
+    ]
+  }
+}
+```
+
+### skills.read
+
+`agena.mcp.skills.read` · **Summary**: Read an MCP skill document or supporting file after user approval, verifying metadata and any published digest.
+
+**Tags**: `query` `mcp` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `file_uri` | `string / null` | — | `null` | A supporting file URI under the skill's directory on this server. |
+| `server` | `string` | ✓ | — | The server identifier or plugin:<installed plugin ID>:<server name>. |
+| `uri` | `string` | ✓ | — | The URI of the skill's SKILL.md. |
+| `version` | `string / null` | — | `null` | For skills with a file manifest, use the version returned by the SKILL.md read. |
+
+**Input schema**:
+```json
+{
+  "required": [
+    "server",
+    "uri"
+  ],
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "server": {
+      "description": "The server identifier or plugin:<installed plugin ID>:<server name>.",
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "uri": {
+      "description": "The URI of the skill's SKILL.md.",
+      "type": "string",
+      "x-agena-order": "000001",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "file_uri": {
+      "description": "A supporting file URI under the skill's directory on this server.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000002"
+    },
+    "version": {
+      "description": "For skills with a file manifest, use the version returned by the SKILL.md read.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "default": null,
+      "x-agena-order": "000003"
+    }
+  },
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "server": {}
+          },
+          "required": [
+            "server"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "server": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "server"
+        ]
+      },
+      {
+        "anyOf": [
+          {
+            "not": {
+              "type": "object",
+              "properties": {
+                "uri": {}
+              },
+              "required": [
+                "uri"
+              ]
+            }
+          },
+          {
+            "type": "object",
+            "properties": {
+              "uri": {
+                "anyOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+                  },
+                  {
+                    "type": "array",
+                    "maxItems": 0
+                  },
+                  {
+                    "type": "object",
+                    "maxProperties": 0,
+                    "properties": {}
+                  }
+                ]
+              }
+            },
+            "required": [
+              "uri"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
 ### tools.call
 
 `agena.mcp.tools.call` · **Summary**: Call one discovered MCP tool.
@@ -23340,7 +23819,9 @@ MCP discovery and bridge tools.
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `catalog_offset` | `integer` | — | `0` | Offset within the matching on-demand catalog entries. |
 | `limit` | `integer` | — | `20` |  |
+| `on_demand_catalog` | `boolean` | — | `false` | List raw on-demand tool names with short descriptions for use with the<br>server's loader. |
 | `query` | `string` | — | `` |  |
 
 **Input schema**:
@@ -23360,6 +23841,20 @@ MCP discovery and bridge tools.
       "default": 20,
       "x-agena-order": "000001",
       "maximum": 100
+    },
+    "on_demand_catalog": {
+      "description": "List raw on-demand tool names with short descriptions for use with the\nserver's loader.",
+      "type": "boolean",
+      "default": false,
+      "x-agena-order": "000002"
+    },
+    "catalog_offset": {
+      "description": "Offset within the matching on-demand catalog entries.",
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0,
+      "default": 0,
+      "x-agena-order": "000003"
     }
   },
   "type": "object"
@@ -24015,11 +24510,173 @@ Persistent memory with searchable retrieval and write tools.
 
 ## agena.notebook
 
-**Version** `0.1.0` · **Tools** 1 · **Tags** `filesystem` `notebooks`
+**Version** `0.1.0` · **Tools** 3 · **Tags** `filesystem` `notebooks`
 
 Revision-safe Jupyter notebook cell editing.
 
-> Replace, insert or delete Jupyter notebook cells with revision checks. Code outputs are discarded by default and can be retained only through an explicit option.
+> Read notebook cells and saved outputs. Replace, insert or delete cells with revision checks. Code outputs are discarded by default when a cell is edited.
+
+### edit
+
+`agena.notebook.edit` · **Summary**: Replace, insert, or delete a Jupyter notebook cell by its ID.
+
+**Tags**: `mutate` `filesystem`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Compatible with Claude NotebookEdit. Replace is the default. Insert adds a cell after cell_id, or at the beginning when no target is supplied. Specify code or markdown for insert. Older notebooks can use cell_number. Supply expected_sha256 from notebook.read to require that revision.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `cell_id` | `string / null` | — | — | Target cell ID. Omit to insert at the beginning. |
+| `cell_number` | `integer / null` | — | — | Zero-based target for notebooks without cell IDs or older clients. |
+| `cell_type` | `NotebookCellType / null` | — | — |  |
+| `edit_mode` | `NotebookEditMode` | — | `replace` |  |
+| `expected_sha256` | `string / null` | — | — |  |
+| `folder` | `string / null` | — | — |  |
+| `new_source` | `string / null` | — | — |  |
+| `notebook_path` | `string` | ✓ | — |  |
+
+**Input schema**:
+```json
+{
+  "$defs": {
+    "NotebookEditMode": {
+      "type": "string",
+      "enum": [
+        "replace",
+        "insert",
+        "delete"
+      ],
+      "x-agena-order": "000004"
+    },
+    "NotebookCellType": {
+      "type": "string",
+      "enum": [
+        "code",
+        "markdown",
+        "raw"
+      ]
+    }
+  },
+  "required": [
+    "notebook_path"
+  ],
+  "type": "object",
+  "properties": {
+    "notebook_path": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "folder": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "cell_id": {
+      "description": "Target cell ID. Omit to insert at the beginning.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000002"
+    },
+    "cell_number": {
+      "description": "Zero-based target for notebooks without cell IDs or older clients.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint",
+      "minimum": 0,
+      "x-agena-order": "000003"
+    },
+    "edit_mode": {
+      "$ref": "#/$defs/NotebookEditMode",
+      "default": "replace"
+    },
+    "cell_type": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/NotebookCellType"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "x-agena-order": "000005"
+    },
+    "new_source": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000006"
+    },
+    "expected_sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000007"
+    }
+  },
+  "additionalProperties": false,
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "notebook_path": {}
+          },
+          "required": [
+            "notebook_path"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "notebook_path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "notebook_path"
+        ]
+      }
+    ]
+  }
+}
+```
 
 ### edit_cell
 
@@ -24216,6 +24873,117 @@ Revision-safe Jupyter notebook cell editing.
               "expected_sha256"
             ]
           }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### read
+
+`agena.notebook.read` · **Summary**: Read Jupyter notebook cells, saved text outputs, and embedded figures.
+
+**Tags**: `query` `filesystem` `read_only`
+
+**Runtime**: streaming `buffered`
+
+**Help**:
+> Use notebook_path and optional zero-based offset and limit to read an .ipynb file. The result includes cell IDs and a file SHA-256 for revision-checked edits. Use next_offset to continue a partial read.
+
+**Input parameters**:
+| Parameter | Type | Required | Default | Description |
+| --- | --- | --- | --- | --- |
+| `folder` | `string / null` | — | — | Absolute base folder for a relative path in a global session. |
+| `limit` | `integer / null` | — | — | Maximum cells to return. A large result can require additional pages. |
+| `notebook_path` | `string` | ✓ | — |  |
+| `offset` | `integer` | — | `0` | Zero-based index of the first cell. Defaults to 0. |
+
+**Input schema**:
+```json
+{
+  "required": [
+    "notebook_path"
+  ],
+  "additionalProperties": false,
+  "type": "object",
+  "properties": {
+    "notebook_path": {
+      "type": "string",
+      "x-agena-order": "000000",
+      "x-agena-non-empty": true,
+      "minLength": 1,
+      "not": {
+        "type": "string",
+        "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+      }
+    },
+    "folder": {
+      "description": "Absolute base folder for a relative path in a global session.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "x-agena-order": "000001"
+    },
+    "offset": {
+      "description": "Zero-based index of the first cell. Defaults to 0.",
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0,
+      "default": 0,
+      "x-agena-order": "000002"
+    },
+    "limit": {
+      "description": "Maximum cells to return. A large result can require additional pages.",
+      "type": [
+        "integer",
+        "null"
+      ],
+      "format": "uint",
+      "minimum": 0,
+      "x-agena-order": "000003"
+    }
+  },
+  "not": {
+    "anyOf": [
+      {
+        "not": {
+          "type": "object",
+          "properties": {
+            "notebook_path": {}
+          },
+          "required": [
+            "notebook_path"
+          ]
+        }
+      },
+      {
+        "type": "object",
+        "properties": {
+          "notebook_path": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^[\\u0009-\\u000D\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000]*$"
+              },
+              {
+                "type": "array",
+                "maxItems": 0
+              },
+              {
+                "type": "object",
+                "maxProperties": 0,
+                "properties": {}
+              }
+            ]
+          }
+        },
+        "required": [
+          "notebook_path"
         ]
       }
     ]
@@ -27768,11 +28536,12 @@ Discover, install, author, and manage complete Agent Skills packages.
 **Runtime**: streaming `buffered`
 
 **Help**:
-> Use an ID returned by list. Relative references resolve against the skill directory shown in path. Supporting resources are loaded separately with read_resource. Read-only plugin and compatibility packages can be installed into a managed scope for editing. allowed-tools is metadata and does not change existing tool permissions.
+> Use an ID returned by list. For an imported Claude skill, pass optional arguments to render its instructions. Its shell snippets use the session's shell permissions. Relative references resolve against the skill directory shown in path. Load supporting files with read_resource. allowed-tools is metadata and does not change existing tool permissions.
 
 **Input parameters**:
 | Parameter | Type | Required | Default | Description |
 | --- | --- | --- | --- | --- |
+| `arguments` | `string` | — | `` |  |
 | `id` | `string` | ✓ | — |  |
 
 **Input schema**:
@@ -27786,6 +28555,10 @@ Discover, install, author, and manage complete Agent Skills packages.
   "properties": {
     "id": {
       "type": "string"
+    },
+    "arguments": {
+      "type": "string",
+      "default": ""
     }
   }
 }

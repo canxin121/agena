@@ -61,11 +61,12 @@ pub struct Task {
     /// Time-to-live duration from creation in integer milliseconds; `None`
     /// (serialized as `null`) means unlimited. The server may discard the task
     /// after the TTL elapses. This value MAY change over the lifetime of a task.
+    #[serde(alias = "ttl")]
     pub ttl_ms: Option<u64>,
     /// Suggested polling interval in integer milliseconds. Clients SHOULD honor
     /// this value to avoid overwhelming the server. This value MAY change over
     /// the lifetime of a task.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(alias = "pollInterval", skip_serializing_if = "Option::is_none")]
     pub poll_interval_ms: Option<u64>,
 }
 

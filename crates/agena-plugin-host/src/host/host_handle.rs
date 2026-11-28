@@ -154,6 +154,8 @@ impl HostHandle {
                     .input
                     .default_value()
                     .unwrap_or(serde_json::Value::Null),
+                submits_prompt: false,
+                accepts_attachments: false,
                 command: command.clone(),
             };
             self.command_registry
@@ -416,6 +418,7 @@ impl HostHandle {
         };
         let privileged = context.session_id.is_some()
             || context.call_id.is_some()
+            || context.plugin_command.is_some()
             || context.workspace_root.is_some()
             || context.tool_name.is_some()
             || context.caller.is_some();
@@ -454,6 +457,9 @@ impl HostHandle {
         }
         if context.session_id != record.context.session_id
             || context.call_id != record.context.call_id
+            || context.plugin_command.as_ref().is_some_and(|command| {
+                Some(command) != record.context.plugin_command.as_ref()
+            })
             || context.workspace_root != record.context.workspace_root
             || context.tool_name != record.context.tool_name
             || context
@@ -1569,6 +1575,8 @@ impl HostHandle {
                 .input
                 .default_value()
                 .unwrap_or(serde_json::Value::Null),
+            submits_prompt: false,
+            accepts_attachments: false,
             command: definition.clone(),
         };
         self.command_registry

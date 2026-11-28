@@ -915,7 +915,7 @@ fn pick_version_for_req(index: &RegistryIndex, plugin_id: &str, req: &str) -> Op
     candidates.first().map(|v| v.version.clone())
 }
 
-fn extract_tar_gz(bytes: &[u8], dest: &Path) -> Result<(), String> {
+pub(crate) fn extract_tar_gz(bytes: &[u8], dest: &Path) -> Result<(), String> {
     // Registry artifact downloads have a compressed-size limit, which alone
     // cannot prevent decompression bombs, huge entry counts or external links.
     const MAX_ARCHIVE_ENTRIES: usize = 4096;

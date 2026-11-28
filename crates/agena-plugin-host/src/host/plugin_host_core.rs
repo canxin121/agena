@@ -30,7 +30,24 @@ fn compact_tool_call_name(canonical_name: &str) -> String {
 
 fn registered_tool_matches_name(tool: &RegisteredTool, name: &str) -> bool {
     let canonical_name = tool.canonical_name();
-    canonical_name == name || compact_tool_call_name(canonical_name.as_str()) == name
+    canonical_name == name
+        || tool.claude_mod_tool_name().map_or_else(
+            || compact_tool_call_name(canonical_name.as_str()) == name,
+            |alias| alias == name,
+        )
+}
+
+fn extend_hook_text(target: &mut Vec<String>, values: Vec<String>, available: &mut usize) {
+    for mut value in values.into_iter().filter(|value| !value.trim().is_empty()) {
+        if *available == 0 {
+            break;
+        }
+        value.truncate(value.floor_char_boundary(value.len().min(*available)));
+        *available = available.saturating_sub(value.len() + 1);
+        if !value.is_empty() {
+            target.push(value);
+        }
+    }
 }
 
 fn plugin_tool_registry_read<'a>(
@@ -47,6 +64,124 @@ fn plugin_tool_registry_read<'a>(
             );
             error.into_inner()
         }
+    }
+}
+
+struct PromptExpansionHooks {
+    package_name: String,
+    hooks: Vec<Arc<LoadedPlugin>>,
+    runs: Arc<std::sync::Mutex<Vec<HookRunRecord>>>,
+    timeout: Duration,
+}
+
+impl PromptExpansionHooks {
+    async fn apply(&self, host: &HostHandle, input: &mut CommandInvokeInput) -> Result<(), String> {
+        use crate::sdk::{UserPromptExpansionInput, UserPromptExpansionPatch};
+
+        let Some(session_id) = input.session_id else {
+            return Ok(());
+        };
+        let command_name = format!("{}:{}", self.package_name, input.command_id);
+        let args = input
+            .input
+            .get("args")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or(&input.raw);
+        let prompt = if args.is_empty() {
+            format!("/{command_name}")
+        } else {
+            format!("/{command_name} {args}")
+        };
+        let params = serde_json::json!(UserPromptExpansionInput {
+            session_id,
+            command_name,
+            command_args: args.to_owned(),
+            prompt,
+        });
+        let method = method::HOOK_USER_PROMPT_EXPANSION;
+        let event = "prompt.expand";
+        let mut runs = Vec::new();
+        let mut block = None;
+        for plugin in &self.hooks {
+            let id = plugin.key();
+            let response = host
+                .run_in_authorized_callback_context(
+                    &id,
+                    HostCallbackContext {
+                        session_id: Some(session_id),
+                        ..Default::default()
+                    },
+                    call_with_timeout(plugin, method, params.clone(), self.timeout),
+                )
+                .await;
+            let value = match response {
+                Ok(value) => value,
+                Err(error) => {
+                    runs.push(dispatcher::transport_failure_record(
+                        event,
+                        &id.to_string(),
+                        Some(session_id),
+                        &error,
+                    ));
+                    continue;
+                }
+            };
+            let patch = match serde_json::from_value::<Option<UserPromptExpansionPatch>>(value) {
+                Ok(Some(patch)) => patch,
+                Ok(None) => continue,
+                Err(error) => {
+                    runs.push(HookRunRecord::new(
+                        event,
+                        &id.to_string(),
+                        Some(session_id),
+                        HookRunStatus::Failed,
+                        "invalid prompt expansion patch",
+                        Some(error.to_string()),
+                    ));
+                    continue;
+                }
+            };
+            if let Some(reason) = patch
+                .block_reason
+                .filter(|reason| !reason.trim().is_empty())
+            {
+                let reason = reason.chars().take(8192).collect::<String>();
+                runs.push(HookRunRecord::new(
+                    event,
+                    &id.to_string(),
+                    Some(session_id),
+                    HookRunStatus::Applied,
+                    "prompt expansion blocked by hook",
+                    Some(reason.clone()),
+                ));
+                block = Some(reason);
+                break;
+            }
+            if let Some(context) = patch
+                .additional_context
+                .filter(|text| !text.trim().is_empty())
+            {
+                const MAX_CONTEXT_BYTES: usize = 16 * 1024;
+                let available = MAX_CONTEXT_BYTES.saturating_sub(input.prompt_context.len());
+                if available > 1 {
+                    if !input.prompt_context.is_empty() {
+                        input.prompt_context.push('\n');
+                    }
+                    let end = context.floor_char_boundary(context.len().min(available - 1));
+                    input.prompt_context.push_str(&context[..end]);
+                }
+                runs.push(HookRunRecord::new(
+                    event,
+                    &id.to_string(),
+                    Some(session_id),
+                    HookRunStatus::Applied,
+                    "prompt expansion hook added context",
+                    None,
+                ));
+            }
+        }
+        push_hook_runs_into(&self.runs, runs);
+        block.map_or(Ok(()), Err)
     }
 }
 
@@ -102,7 +237,7 @@ impl PluginHost {
     /// Only `dispatch`-style hooks use this. A one-way `notify` returns when
     /// the frame is written, so its callback authority would already be
     /// revoked before the handler ran.
-    async fn call_session_hook(
+    pub(super) async fn call_session_hook(
         &self,
         plugin: &LoadedPlugin,
         method: &str,
@@ -213,8 +348,83 @@ impl PluginHost {
         self.plugins.iter().any(|plugin| plugin.subscribes(hook))
     }
 
+    pub fn imported_subagent_type(&self, profile: &str) -> String {
+        for plugin in &self.plugins {
+            if let Some(package) = plugin.agent_plugin()
+                && let Some(role) = profile.strip_prefix(&format!("{}.", plugin.key()))
+                && package
+                    .roles
+                    .iter()
+                    .any(|definition| definition.name == role && !definition.output_style)
+            {
+                return format!("{}:{role}", package.name);
+            }
+        }
+        profile.to_owned()
+    }
+
     pub fn plugins(&self) -> &[Arc<LoadedPlugin>] {
         &self.plugins
+    }
+
+    pub fn agent_plugin_skill_dirs(&self) -> Vec<std::path::PathBuf> {
+        self.plugins
+            .iter()
+            .filter_map(|plugin| plugin.agent_plugin())
+            .flat_map(|package| package.skill_dirs.iter().cloned())
+            .collect()
+    }
+
+    pub async fn agent_plugin_provided_skills(
+        &self,
+        cwd: &std::path::Path,
+        session: Option<i64>,
+        is_enabled: impl Fn(&PluginKey) -> bool + Send,
+    ) -> Vec<crate::AgentPluginSkill> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        let mut skills = Vec::new();
+        for plugin in &self.plugins {
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+            let key = plugin.key();
+            let Some(package) = plugin.agent_plugin().filter(|_| is_enabled(&key)) else {
+                continue;
+            };
+            let effect = plugin.effect_scope();
+            let Ok(_lease) = effect.lease() else {
+                continue;
+            };
+            let stop = effect.cancellation_token();
+            let id = key.to_string();
+            let host = self
+                ._host_handle
+                .scoped_host_client_for_scope(id.clone(), effect);
+            let observed = tokio::select! {
+                biased;
+                _ = stop.cancelled() => continue,
+                observed = self._host_handle.run_in_authorized_callback_context(
+                    &key,
+                    HostCallbackContext {
+                        session_id: session,
+                        workspace_root: session.map(|_| cwd.to_string_lossy().into_owned()),
+                        ..Default::default()
+                    },
+                    package.provided_skills(cwd, deadline, session, host.as_ref()),
+                ) => observed,
+            };
+            skills.extend(
+                observed.into_iter()
+                    .map(|skill| skill.into_declared(&id, &plugin.manifest.version)),
+            );
+        }
+        skills
+    }
+
+    pub fn agent_plugin_bin_dirs(&self) -> impl Iterator<Item = &std::path::Path> {
+        self.plugins
+            .iter()
+            .filter_map(|plugin| plugin.agent_plugin()?.bin_dir.as_deref())
     }
 
     /// Host-only, explicitly pinned integration service call. It supplies no
@@ -501,7 +711,7 @@ impl PluginHost {
                     .unwrap_or_default(),
             });
 
-            dependencies.extend(configured.activation.requires.iter().cloned().map(
+            dependencies.extend(configured.activation.required_keys().cloned().map(
                 |provider_id| PluginDependencyEdge {
                     consumer_id: plugin_key.clone(),
                     provider_id,
@@ -623,11 +833,11 @@ impl PluginHost {
             PluginArchitecturePipeline {
                 definition: crate::event_pipeline::PluginEventDefinition {
                     id: "compaction.before".into(),
-                    mode: crate::event_pipeline::PluginEventMode::Guard,
+                    mode: crate::event_pipeline::PluginEventMode::TransformBail,
                     durable: false,
                     scoped: true,
                 },
-                failure_policy: None,
+                failure_policy: Some(crate::event_pipeline::PluginPipelineFailurePolicy::Abort),
                 handlers: self.lifecycle.compaction_before.inventory(),
             },
             PluginArchitecturePipeline {
@@ -725,7 +935,7 @@ impl PluginHost {
                             .collect(),
                     });
             PluginActivationInspect {
-                requires: configured.activation.requires.clone(),
+                requires: configured.activation.required_keys().cloned().collect(),
                 after: configured.activation.after.clone(),
                 blocked,
             }
@@ -897,12 +1107,15 @@ impl PluginHost {
         let call_id = input.call_id;
         let workspace_root = input.workspace_root.clone();
         let tool_name = registered_tool.tool_name().to_string();
+        let mcp_app =
+            host_api::mcp_app_request_binding(&registered_tool.plugin_full_name(), &input)?;
         let params =
             serde_json::to_value(&input).map_err(|e| PluginError::invalid_params_error(&e))?;
         let plugin_key = plugin.key();
         let invoke = Box::pin(self._host_handle.run_in_authorized_callback_context(
             &plugin_key,
             HostCallbackContext {
+                mcp_app,
                 caller: input.caller.clone(),
                 session_id: Some(session_id),
                 call_id: Some(call_id),
@@ -959,10 +1172,109 @@ impl PluginHost {
             .map_err(|error| PluginError::internal_error(&error))
     }
 
+    pub async fn invoke_imported_skill_fork(
+        &self,
+        source: &PluginKey,
+        mut input: CommandInvokeInput,
+        scope: crate::agent_plugin::SkillFork,
+        prompt: String,
+    ) -> Result<CommandResult, PluginError> {
+        use crate::agent_plugin::{AgentPluginFormat, FORKED_SKILL_COMMAND, ForkedSkillInvocation};
+
+        let plugin = self
+            .plugins_by_id
+            .get(source)
+            .filter(|plugin| {
+                plugin.agent_plugin().is_some_and(|package| {
+                    package.format == AgentPluginFormat::ClaudeCode
+                        && package.skill_dirs.contains(&scope.directory)
+                })
+            })
+            .ok_or_else(|| {
+                PluginError::invalid_params("Claude fork does not belong to an active package")
+            })?;
+        input.command_id = FORKED_SKILL_COMMAND.into();
+        input.input = serde_json::to_value(ForkedSkillInvocation { scope, prompt })
+            .map_err(|error| PluginError::invalid_params_error(&error))?;
+        let context = HostCallbackContext {
+            session_id: input.session_id,
+            call_id: input.call_id,
+            workspace_root: input.workspace_root.clone(),
+            ..Default::default()
+        };
+        let params = serde_json::to_value(input)
+            .map_err(|error| PluginError::invalid_params_error(&error))?;
+        let call = self._host_handle.run_in_authorized_callback_context(
+            source,
+            context,
+            call_with_timeout(
+                plugin,
+                method::COMMAND_INVOKE,
+                params,
+                Duration::from_secs(190),
+            ),
+        );
+        let value =
+            await_transport_with_cancellation(crate::sdk::current_cancellation_token(), call)
+                .await
+                .map_err(transport_to_plugin_error)?;
+        serde_json::from_value(value).map_err(|error| PluginError::invalid_params_error(&error))
+    }
+
     pub async fn invoke_plugin_command_async(
         &self,
         plugin_id: &str,
+        input: CommandInvokeInput,
+    ) -> Result<CommandResult, PluginError> {
+        self.invoke_command(plugin_id, input, None).await
+    }
+
+    pub fn imported_prompt_command_name(
+        &self,
+        plugin: &PluginKey,
+        command_id: &str,
+    ) -> Option<String> {
+        let package = self.plugins_by_id.get(plugin)?.agent_plugin()?;
+        package
+            .has_inline_prompt_command(command_id)
+            .then(|| format!("{}:{command_id}", package.name))
+    }
+
+    pub fn command_accepts_attachments(&self, plugin: &PluginKey, command_id: &str) -> bool {
+        self.plugins_by_id
+            .get(plugin)
+            .and_then(|plugin| plugin.agent_plugin())
+            .is_some_and(|package| package.command_accepts_attachments(command_id))
+    }
+
+    /// Render a prompt command from within the authorized user submission.
+    /// The submission owns the native and classic prompt guards.
+    pub async fn invoke_imported_prompt_command(
+        &self,
+        plugin: &PluginKey,
+        input: CommandInvokeInput,
+        enabled: impl Fn(&PluginKey) -> bool + Sync,
+    ) -> Result<CommandResult, PluginError> {
+        if input.session_id.is_none()
+            || input.call_id.is_some()
+            || self
+                .imported_prompt_command_name(plugin, &input.command_id)
+                .is_none()
+            || !enabled(plugin)
+        {
+            return Err(PluginError::invalid_params(
+                "The prompt command is unavailable in this session",
+            ));
+        }
+        self.invoke_command(&plugin.to_string(), input, Some(&enabled))
+            .await
+    }
+
+    async fn invoke_command(
+        &self,
+        plugin_id: &str,
         mut input: CommandInvokeInput,
+        submission_plugins: Option<&(dyn Fn(&PluginKey) -> bool + Sync)>,
     ) -> Result<CommandResult, PluginError> {
         let plugin_key: PluginKey = plugin_id
             .parse()
@@ -980,7 +1292,7 @@ impl PluginHost {
             ));
         }
         let definition = self
-            .resolve_command(plugin_id, input.command_id.as_str())
+            .resolve_command_for_session(input.session_id, plugin_id, input.command_id.as_str())
             .ok_or_else(|| {
                 PluginError::not_implemented(format!(
                     "plugin `{plugin_id}` does not declare command `{}`",
@@ -993,25 +1305,115 @@ impl PluginHost {
                 input.command_id
             )));
         }
-        let input_is_empty = input.input.is_null()
-            || input
-                .input
-                .as_object()
-                .is_some_and(serde_json::Map::is_empty);
-        input.input = if input_is_empty && !input.raw.trim().is_empty() {
-            definition.input.parse_shorthand(input.raw.as_str())
-        } else if input_is_empty {
-            definition.input.default_value()
-        } else {
-            definition
-                .input
-                .validate_value(&input.input)
-                .map(|()| input.input.clone())
+        if input.cordis_attachments.is_some()
+            && (input.session_id.is_none()
+                || input.call_id.is_some()
+                || !self.command_accepts_attachments(&plugin_key, &input.command_id))
+        {
+            return Err(PluginError::invalid_params(
+                "This command does not accept composer attachments in this invocation",
+            ));
         }
-        .map_err(|error| PluginError::invalid_params_error(&error))?;
+        input.input = super::decode_plugin_command_input(&definition, input.input, &input.raw)?;
 
         let timeout = self.timeouts.fast_or(Duration::from_secs(10));
+        let timeout = if plugin.agent_plugin().is_some()
+            && matches!(&definition.target, crate::sdk::CommandTarget::Method { handler }
+                if handler == crate::agent_plugin::DELEGATED_COMMAND_HANDLER)
+        {
+            timeout.max(Duration::from_secs(300))
+        } else if plugin.agent_plugin().is_some()
+            && matches!(&definition.target, crate::sdk::CommandTarget::Method { handler }
+                if handler == crate::agent_plugin::CORDIS_MCP_COMMAND_HANDLER)
+        {
+            timeout.max(Duration::from_secs(90))
+        } else {
+            timeout
+        };
         let contract = definition.input.clone();
+        input.prompt_context.clear();
+        let injections = plugin.agent_plugin().map_or(0, |package| {
+            package.command_shell_injection_count(&input.command_id)
+        });
+        let timeout =
+            timeout.saturating_add(Duration::from_secs(130).saturating_mul(injections as u32));
+        if submission_plugins.is_none()
+            && injections > 0
+            && input.call_id.is_none()
+            && let Some(session_id) = input.session_id
+            && self.has_subscription(HookSubscription::USER_PROMPT_SUBMIT)
+        {
+            let slash = definition.slash.as_deref().unwrap_or(&input.command_id);
+            let args = if !input.raw.is_empty()
+                && contract
+                    .parse_shorthand(&input.raw)
+                    .as_ref()
+                    .is_ok_and(|parsed| parsed == &input.input)
+            {
+                &input.raw
+            } else {
+                input.input["args"].as_str().unwrap_or_default()
+            };
+            let prompt = if args.is_empty() {
+                slash.to_owned()
+            } else {
+                format!("{slash} {args}")
+            };
+            let updated = match self
+                .dispatch_user_prompt_submit(UserPromptSubmitInput {
+                    session_id,
+                    prompt: prompt.clone(),
+                })
+                .await
+            {
+                Ok(updated) => updated.prompt,
+                Err(error) => {
+                    return Ok(CommandResult::failed("Prompt blocked by hook")
+                        .with_detail(error.failure.user.fallback));
+                }
+            };
+            if updated != prompt {
+                if let Some(context) = updated
+                    .strip_prefix(&prompt)
+                    .and_then(|text| text.strip_prefix('\n'))
+                {
+                    input.prompt_context = context.to_owned();
+                } else {
+                    return Ok(CommandResult::succeeded("Command prompt rewritten by hook")
+                        .with_effect(crate::sdk::CommandHostEffect::InsertPrompt {
+                            prompt: updated,
+                        }));
+                }
+            }
+        }
+        let expansion = if input.session_id.is_some()
+            && input.call_id.is_none()
+            && let Some(package) = plugin.agent_plugin()
+            && package.has_prompt_command(&input.command_id)
+            && self.has_subscription(HookSubscription::USER_PROMPT_EXPANSION)
+        {
+            Some(Arc::new(PromptExpansionHooks {
+                package_name: package.name.clone(),
+                hooks: self
+                    .plugins
+                    .iter()
+                    .filter(|plugin| plugin.subscribes(HookSubscription::USER_PROMPT_EXPANSION))
+                    .filter(|plugin| {
+                        submission_plugins.is_none_or(|enabled| enabled(&plugin.key()))
+                    })
+                    .cloned()
+                    .collect(),
+                runs: Arc::clone(&self.hook_runs),
+                timeout: self.timeouts.fast_or(Duration::from_secs(5)),
+            }))
+        } else {
+            None
+        };
+        let cordis_command = submission_plugins.is_none()
+            && plugin.agent_plugin().is_some()
+            && matches!(&definition.target, crate::sdk::CommandTarget::Method { handler }
+                if handler == crate::agent_plugin::CORDIS_COMMAND_HANDLER
+                    || handler == crate::agent_plugin::CORDIS_MCP_COMMAND_HANDLER);
         let dispatch = CommandDispatch::new(plugin_key.clone(), input);
         let host_handle = Arc::clone(&self._host_handle);
         let result = self
@@ -1020,16 +1422,29 @@ impl PluginHost {
                 let plugin = Arc::clone(&plugin);
                 let contract = contract.clone();
                 let host_handle = Arc::clone(&host_handle);
+                let expansion = expansion.clone();
                 async move {
                     let plugin_key = dispatch.plugin_id().clone();
                     let command_id = dispatch.command_id().to_string();
-                    let input = dispatch.into_input();
+                    let mut input = dispatch.into_input();
                     contract
                         .validate_value(&input.input)
                         .map_err(|error| PluginError::invalid_params_error(&error))?;
+                    if let Some(expansion) = expansion
+                        && let Err(reason) = expansion.apply(&host_handle, &mut input).await
+                    {
+                        return Ok(CommandResult::failed("Prompt expansion blocked by hook")
+                            .with_detail(reason));
+                    }
                     let session_id = input.session_id;
                     let call_id = input.call_id;
                     let workspace_root = input.workspace_root.clone();
+                    let plugin_command = (cordis_command && call_id.is_none()
+                        && session_id.is_some_and(|session| session > 0))
+                        .then(|| crate::sdk::host_api::PluginCommandInvocation {
+                            id: agena_domain::ExecutionId::new(),
+                            command_id: command_id.clone(),
+                        });
                     let params = serde_json::to_value(&input)
                         .map_err(|error| PluginError::invalid_params_error(&error))?;
                     let value = host_handle
@@ -1039,6 +1454,7 @@ impl PluginHost {
                                 session_id,
                                 call_id,
                                 workspace_root,
+                                plugin_command,
                                 tool_name: None,
                                 ..Default::default()
                             },
@@ -1189,15 +1605,7 @@ impl PluginHost {
         let stream_id = format!("emu-{}", uuid::Uuid::new_v4().simple());
         drop(tx);
         if end_tx
-            .send(Ok(ToolStreamEnd {
-                stream_id: stream_id.clone(),
-                title: result.title,
-                summary: result.summary,
-                output_text: result.output_text,
-                payload: result.payload,
-                metadata: result.metadata,
-                attachments: result.attachments,
-            }))
+            .send(Ok(ToolStreamEnd::from_output(stream_id.clone(), result)))
             .is_err()
         {
             tracing::debug!(
@@ -1210,6 +1618,102 @@ impl PluginHost {
             chunks: rx,
             end: end_rx,
         })
+    }
+
+    pub async fn dispatch_tool_batch_after(
+        &self,
+        input: crate::sdk::ToolBatchInput,
+        cancellation: tokio_util::sync::CancellationToken,
+        is_enabled: impl Fn(&PluginKey) -> bool,
+    ) -> Option<String> {
+        use crate::sdk::ToolBatchPatch;
+
+        let event = "tool.batch.after";
+        let session = Some(input.session_id);
+        let params = serde_json::json!(input);
+        let timeout = self.timeouts.chat_or(Duration::from_secs(30));
+        let mut blocked = None;
+        for plugin in &self.plugins {
+            let key = plugin.key();
+            if !plugin.subscribes(HookSubscription::TOOL_BATCH_AFTER) || !is_enabled(&key) {
+                continue;
+            }
+            let result = await_transport_with_cancellation(
+                Some(cancellation.clone()),
+                self._host_handle.run_in_authorized_callback_context(
+                    &key,
+                    HostCallbackContext {
+                        session_id: session,
+                        ..Default::default()
+                    },
+                    call_with_timeout(
+                        plugin,
+                        method::HOOK_TOOL_BATCH_AFTER,
+                        params.clone(),
+                        timeout,
+                    ),
+                ),
+            )
+            .await;
+            let raw = match result {
+                Ok(value) => value,
+                Err(_) if cancellation.is_cancelled() => break,
+                Err(error) => {
+                    self.push_hook_runs(vec![dispatcher::transport_failure_record(
+                        event,
+                        &key.to_string(),
+                        session,
+                        &error,
+                    )]);
+                    continue;
+                }
+            };
+            let patch = match serde_json::from_value::<Option<ToolBatchPatch>>(raw) {
+                Ok(Some(patch)) => patch,
+                Ok(None) => continue,
+                Err(error) => {
+                    self.push_hook_runs(vec![HookRunRecord::new(
+                        event,
+                        key.to_string(),
+                        session,
+                        HookRunStatus::Failed,
+                        "invalid tool batch patch",
+                        Some(error.to_string()),
+                    )]);
+                    continue;
+                }
+            };
+            let block = patch
+                .block_reason
+                .filter(|reason| !reason.trim().is_empty())
+                .map(|reason| reason.chars().take(8192).collect::<String>());
+            let context = patch
+                .additional_context
+                .filter(|text| !text.trim().is_empty())
+                .map(|text| text.chars().take(16384).collect::<String>());
+            if let Some(reason) = &block {
+                blocked.get_or_insert_with(|| reason.clone());
+            }
+            let summary = if block.is_some() {
+                "tool batch hook stopped the turn"
+            } else {
+                "tool batch hook added context"
+            };
+            if let Some(message) = block.or(context) {
+                self.push_hook_runs(vec![
+                    HookRunRecord::new(
+                        event,
+                        key.to_string(),
+                        session,
+                        HookRunStatus::Applied,
+                        summary,
+                        None,
+                    )
+                    .with_message(Some(message)),
+                ]);
+            }
+        }
+        blocked
     }
 
     pub async fn dispatch_shell_env(
@@ -1375,6 +1879,25 @@ impl PluginHost {
         &self,
         input: ChatSystemTransformInput,
     ) -> Result<ChatSystemTransformInput, PluginError> {
+        self.dispatch_chat_system_transform_for(input, |_| true).await
+    }
+
+    pub async fn dispatch_chat_system_transform_for(
+        &self,
+        input: ChatSystemTransformInput,
+        cordis_enabled: impl Fn(&PluginKey) -> bool,
+    ) -> Result<ChatSystemTransformInput, PluginError> {
+        let plugins = self
+            .plugins
+            .iter()
+            .filter(|plugin| {
+                plugin.agent_plugin().is_none_or(|package| {
+                    package.format != crate::agent_plugin::AgentPluginFormat::DeepSeekHarness
+                        || cordis_enabled(&plugin.key())
+                })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
         let timeout = self.timeouts.chat_or(Duration::from_secs(5));
         let session_id = Some(input.session_id);
         let mut runs = Vec::new();
@@ -1384,7 +1907,7 @@ impl PluginHost {
             _,
             _,
         >(
-            &self.plugins,
+            &plugins,
             method::HOOK_CHAT_SYSTEM_TRANSFORM,
             HookSubscription::CHAT_SYSTEM_TRANSFORM,
             timeout,
@@ -1416,11 +1939,68 @@ impl PluginHost {
         result.map_err(transport_to_plugin_error)
     }
 
+    pub fn has_imported_notification_hooks(&self) -> bool {
+        self.plugins.iter().any(|plugin| {
+            plugin.agent_plugin().is_some() && plugin.subscribes(HookSubscription::NOTIFICATION)
+        })
+    }
+
+    pub async fn broadcast_imported_notification(
+        &self,
+        input: NotificationInput,
+        is_enabled: impl Fn(&PluginKey) -> bool,
+    ) {
+        let Some(session) = input.session_id else {
+            return;
+        };
+        let params = serde_json::json!(input);
+        let notifications = self
+            .plugins
+            .iter()
+            .filter(|plugin| {
+                plugin.agent_plugin().is_some()
+                    && plugin.subscribes(HookSubscription::NOTIFICATION)
+                    && is_enabled(&plugin.key())
+            })
+            .map(|plugin| {
+                let params = params.clone();
+                async move {
+                    let key = plugin.key();
+                    let result = self
+                        ._host_handle
+                        .run_in_authorized_callback_context(
+                            &key,
+                            HostCallbackContext {
+                                session_id: Some(session),
+                                ..Default::default()
+                            },
+                            call_with_timeout(
+                                plugin,
+                                method::HOOK_NOTIFICATION,
+                                params,
+                                Duration::from_secs(5),
+                            ),
+                        )
+                        .await;
+                    if let Err(error) = result {
+                        self.push_hook_runs(vec![dispatcher::transport_failure_record(
+                            "notification",
+                            &key.to_string(),
+                            Some(session),
+                            &error,
+                        )]);
+                    }
+                }
+            });
+        futures_util::future::join_all(notifications).await;
+    }
+
     pub async fn broadcast_notification(&self, input: NotificationInput) {
         let timeout = Duration::from_secs(5);
         let mut notifications = Vec::new();
         for plugin in &self.plugins {
-            if !plugin.subscribes(HookSubscription::NOTIFICATION) {
+            if !plugin.subscribes(HookSubscription::NOTIFICATION) || plugin.agent_plugin().is_some()
+            {
                 continue;
             }
             let input = input.clone();
@@ -1719,22 +2299,30 @@ impl PluginHost {
         &self,
         input: SessionStartInput,
     ) -> Result<SessionStartPatch, PluginError> {
-        let timeout = self.timeouts.fast_or(Duration::from_secs(5));
+        use crate::sdk::SessionStartSource;
+
+        let imported_only = matches!(
+            input.source,
+            SessionStartSource::Compact | SessionStartSource::Fork | SessionStartSource::Resume
+        );
         let session_id = Some(input.session_id);
-        let mut additional_context: Option<String> = None;
-        let mut initial_user_message = None;
+        let params = serde_json::to_value(input)
+            .map_err(|error| PluginError::invalid_params_error(&error))?;
+        let mut merged = SessionStartPatch::default();
         for plugin in &self.plugins {
-            if !plugin.subscribes(HookSubscription::SESSION_START) {
+            let imported = plugin.agent_plugin().is_some();
+            if (imported_only && !imported) || !plugin.subscribes(HookSubscription::SESSION_START) {
                 continue;
             }
             let plugin_id = plugin.key().to_string();
-            let params =
-                serde_json::to_value(&input).map_err(|e| PluginError::invalid_params_error(&e))?;
+            let timeout =
+                self.timeouts
+                    .fast_or(Duration::from_secs(if imported { 601 } else { 5 }));
             let v = match self
                 .call_session_hook(
                     plugin,
                     method::HOOK_SESSION_START,
-                    params,
+                    params.clone(),
                     timeout,
                     session_id,
                 )
@@ -1748,6 +2336,9 @@ impl PluginHost {
                         session_id,
                         &err,
                     )]);
+                    if imported {
+                        continue;
+                    }
                     return Err(transport_to_plugin_error(err));
                 }
             };
@@ -1759,35 +2350,646 @@ impl PluginHost {
             let patch: Option<SessionStartPatch> =
                 serde_json::from_value(v).map_err(|e| PluginError::invalid_params_error(&e))?;
             if let Some(p) = patch {
+                let stop_reason = p.stop_reason.filter(|_| imported);
                 self.push_hook_runs(vec![HookRunRecord::new(
                     "session.start",
                     &plugin_id,
                     session_id,
                     HookRunStatus::Applied,
-                    "session.start hook ran",
-                    None,
+                    if stop_reason.is_some() {
+                        "session.start hook requested a stop"
+                    } else {
+                        "session.start hook ran"
+                    },
+                    stop_reason
+                        .as_deref()
+                        .map(|reason| agena_failure::diagnostic::scrubbed_preserve(reason, 512)),
                 )]);
                 if let Some(ctx) = p.additional_context {
-                    let existing = additional_context.get_or_insert_with(String::new);
+                    let existing = merged.additional_context.get_or_insert_with(String::new);
                     if !existing.is_empty() {
                         existing.push('\n');
                     }
                     existing.push_str(&ctx);
                 }
                 if p.initial_user_message.is_some() {
-                    initial_user_message = p.initial_user_message;
+                    merged.initial_user_message = p.initial_user_message;
+                }
+                if p.session_title.is_some() {
+                    merged.session_title = p.session_title;
+                }
+                merged.stop_reason = merged.stop_reason.or(stop_reason);
+                merged.reload_skills |= p.reload_skills;
+            }
+        }
+        Ok(merged)
+    }
+
+    pub fn imported_file_watch_filenames(&self) -> impl Iterator<Item = &std::path::PathBuf> {
+        self.imported_hook_observers(HookSubscription::SESSION_FILE_CHANGED)
+            .filter_map(LoadedPlugin::agent_plugin)
+            .flat_map(|package| package.watch_filenames())
+    }
+
+    pub(super) fn imported_hook_observers(
+        &self,
+        subscription: HookSubscription,
+    ) -> impl Iterator<Item = &LoadedPlugin> {
+        self.plugins.iter().map(Arc::as_ref).filter(move |plugin| {
+            plugin.agent_plugin().is_some()
+                && plugin.subscribes(subscription)
+                && !plugin.effect_scope().cancellation_token().is_cancelled()
+        })
+    }
+
+    pub async fn dispatch_imported_session_file_changed(
+        &self,
+        input: crate::sdk::SessionFileChangedInput,
+    ) -> Result<Option<Vec<std::path::PathBuf>>, PluginError> {
+        use crate::sdk::SessionFileChangedPatch;
+
+        let session_id = Some(input.session_id);
+        let params = serde_json::to_value(input)
+            .map_err(|error| PluginError::invalid_params_error(&error))?;
+        let calls = self.imported_hook_observers(HookSubscription::SESSION_FILE_CHANGED).map(|plugin| {
+            let params = params.clone();
+            async move {
+                let result = self.call_session_hook(
+                    plugin,
+                    method::HOOK_SESSION_FILE_CHANGED,
+                    params,
+                    self.timeouts.fast_or(Duration::from_secs(5)),
+                    session_id,
+                ).await;
+                match result {
+                    Ok(raw) => match serde_json::from_value::<Option<SessionFileChangedPatch>>(raw) {
+                        Ok(patch) => patch.map(|patch| patch.watch_paths),
+                        Err(error) => {
+                            tracing::warn!(plugin = %plugin.key(), %error, "invalid FileChanged result");
+                            None
+                        }
+                    },
+                    Err(error) => {
+                        self.push_hook_runs(vec![dispatcher::transport_failure_record(
+                            "session.file.changed", &plugin.key().to_string(), session_id, &error,
+                        )]);
+                        None
+                    }
+                }
+            }
+        });
+        Ok(futures_util::future::join_all(calls)
+            .await
+            .into_iter()
+            .flatten()
+            .last())
+    }
+
+    pub async fn dispatch_imported_turn_completed(
+        &self,
+        input: crate::sdk::ImportedTurnCompletedInput,
+        enabled: impl Fn(&PluginKey) -> bool + Send,
+    ) {
+        let session = Some(input.session_id);
+        let params = serde_json::json!(input);
+        let calls = self
+            .imported_hook_observers(HookSubscription::IMPORTED_TURN_COMPLETED)
+            .filter(|plugin| enabled(&plugin.key()))
+            .map(|plugin| {
+                let params = params.clone();
+                async move {
+                    if let Err(error) = self.call_session_hook(
+                        plugin,
+                        method::HOOK_IMPORTED_TURN_COMPLETED,
+                        params,
+                        self.timeouts.fast_or(Duration::from_secs(10)),
+                        session,
+                    ).await {
+                        tracing::warn!(plugin = %plugin.key(), %error, "imported turn completion hook failed");
+                    }
+                }
+            });
+        futures_util::future::join_all(calls).await;
+    }
+
+    pub async fn dispatch_imported_session_cwd_changed(
+        &self,
+        input: crate::sdk::SessionCwdChangedInput,
+    ) {
+        let session = Some(input.session_id);
+        let params = serde_json::json!(input);
+        for plugin in self.imported_hook_observers(HookSubscription::SESSION_CWD_CHANGED) {
+            if let Err(error) = self
+                .call_session_hook(
+                    plugin,
+                    method::HOOK_SESSION_CWD_CHANGED,
+                    params.clone(),
+                    self.timeouts.fast_or(Duration::from_secs(5)),
+                    session,
+                )
+                .await
+            {
+                self.push_hook_runs(vec![dispatcher::transport_failure_record(
+                    "session.cwd.changed",
+                    &plugin.key().to_string(),
+                    session,
+                    &error,
+                )]);
+            }
+        }
+    }
+
+    pub async fn dispatch_imported_session_setup(
+        &self,
+        input: crate::sdk::ImportedSessionSetupInput,
+        enabled: impl Fn(&PluginKey) -> bool + Send,
+    ) {
+        let session = Some(input.session_id);
+        let params = serde_json::json!(input);
+        for plugin in self.imported_hook_observers(HookSubscription::IMPORTED_SESSION_SETUP) {
+            if !enabled(&plugin.key()) {
+                continue;
+            }
+            if let Err(error) = self
+                .call_session_hook(
+                    plugin,
+                    method::HOOK_IMPORTED_SESSION_SETUP,
+                    params.clone(),
+                    self.timeouts.fast_or(Duration::from_secs(601)),
+                    session,
+                )
+                .await
+            {
+                self.push_hook_runs(vec![dispatcher::transport_failure_record(
+                    "session.setup",
+                    &plugin.key().to_string(),
+                    session,
+                    &error,
+                )]);
+            }
+        }
+    }
+
+    pub async fn broadcast_imported_instructions_loaded(
+        &self,
+        input: crate::sdk::ImportedInstructionsLoadedInput,
+        enabled: impl Fn(&PluginKey) -> bool + Send,
+    ) {
+        let session = Some(input.session_id);
+        let params = serde_json::json!(input);
+        let calls = self
+            .imported_hook_observers(HookSubscription::IMPORTED_INSTRUCTIONS_LOADED)
+            .filter(|plugin| enabled(&plugin.key()))
+            .map(|plugin| {
+                let params = params.clone();
+                async move {
+                    if let Err(error) = self
+                        .call_session_hook(
+                            plugin,
+                            method::HOOK_IMPORTED_INSTRUCTIONS_LOADED,
+                            params,
+                            self.timeouts.fast_or(Duration::from_secs(30)),
+                            session,
+                        )
+                        .await
+                    {
+                        self.push_hook_runs(vec![dispatcher::transport_failure_record(
+                            "instructions.loaded",
+                            &plugin.key().to_string(),
+                            session,
+                            &error,
+                        )]);
+                    }
+                }
+            });
+        futures_util::future::join_all(calls).await;
+    }
+
+    pub async fn dispatch_imported_task_before(
+        &self,
+        input: crate::sdk::ImportedTaskBeforeInput,
+    ) -> Result<(), PluginError> {
+        const EVENT: &str = "task.change.before";
+        let session = Some(input.session_id);
+        let params = serde_json::json!(input);
+        for plugin in self.imported_hook_observers(HookSubscription::IMPORTED_TASK_BEFORE) {
+            let method = method::HOOK_IMPORTED_TASK_BEFORE;
+            let timeout = self.timeouts.fast_or(Duration::from_secs(10));
+            let result = self
+                .call_session_hook(plugin, method, params.clone(), timeout, session)
+                .await;
+            match result {
+                Ok(result) => {
+                    if let Some(reason) = serde_json::from_value::<Option<String>>(result)
+                        .map_err(|error| PluginError::invalid_params_error(&error))?
+                    {
+                        self.push_hook_runs(vec![HookRunRecord::new(
+                            EVENT,
+                            plugin.key().to_string(),
+                            session,
+                            HookRunStatus::Applied,
+                            "imported hook rejected the task change",
+                            Some(reason.clone()),
+                        )]);
+                        return Err(PluginError::from_kind(
+                            crate::sdk::PluginErrorKind::PolicyDenied,
+                            reason,
+                        ));
+                    }
+                }
+                Err(error) => self.push_hook_runs(vec![dispatcher::transport_failure_record(
+                    EVENT,
+                    &plugin.key().to_string(),
+                    session,
+                    &error,
+                )]),
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn dispatch_imported_mcp_elicitation(
+        &self,
+        input: crate::sdk::ImportedMcpElicitationInput,
+        enabled: impl Fn(&PluginKey) -> bool + Send,
+    ) -> Option<crate::sdk::McpElicitationReply> {
+        use crate::sdk::McpElicitationReply;
+
+        let (subscription, method, event) = if input.reply.is_some() {
+            (
+                HookSubscription::IMPORTED_MCP_ELICITATION_RESULT,
+                method::HOOK_IMPORTED_MCP_ELICITATION_RESULT,
+                "mcp.elicitation.result",
+            )
+        } else {
+            (
+                HookSubscription::IMPORTED_MCP_ELICITATION,
+                method::HOOK_IMPORTED_MCP_ELICITATION,
+                "mcp.elicitation",
+            )
+        };
+        let session = Some(input.session_id);
+        let params = serde_json::json!(input);
+        let mut reply: Option<McpElicitationReply> = None;
+        for plugin in self
+            .imported_hook_observers(subscription)
+            .filter(|plugin| enabled(&plugin.key()))
+        {
+            let result = self
+                .call_session_hook(
+                    plugin,
+                    method,
+                    params.clone(),
+                    self.timeouts.fast_or(Duration::from_secs(10)),
+                    session,
+                )
+                .await;
+            match result {
+                Ok(raw) => match serde_json::from_value::<Option<McpElicitationReply>>(raw) {
+                    Ok(Some(next)) => match &mut reply {
+                        Some(previous) => previous.prefer(next),
+                        None => reply = Some(next),
+                    },
+                    Ok(None) => {}
+                    Err(error) => {
+                        tracing::warn!(plugin = %plugin.key(), %error, "invalid MCP elicitation hook result")
+                    }
+                },
+                Err(error) => self.push_hook_runs(vec![dispatcher::transport_failure_record(
+                    event,
+                    &plugin.key().to_string(),
+                    session,
+                    &error,
+                )]),
+            }
+        }
+        reply
+    }
+
+    pub async fn dispatch_imported_skill_shell_before(
+        &self,
+        input: crate::sdk::ImportedSkillShellHookInput,
+        enabled: impl Fn(&PluginKey) -> bool + Send,
+    ) -> Option<crate::sdk::ImportedSkillShellDecision> {
+        use crate::sdk::ImportedSkillShellDecision;
+        const EVENT: &str = "skill.shell.before";
+        let session = Some(input.session_id);
+        let params = serde_json::json!(input);
+        let mut skip = None;
+        for plugin in self
+            .imported_hook_observers(HookSubscription::IMPORTED_SKILL_SHELL_BEFORE)
+            .filter(|plugin| enabled(&plugin.key()))
+        {
+            let raw = match self
+                .call_session_hook(
+                    plugin,
+                    method::HOOK_IMPORTED_SKILL_SHELL_BEFORE,
+                    params.clone(),
+                    self.timeouts.fast_or(Duration::from_secs(10)),
+                    session,
+                )
+                .await
+            {
+                Ok(value) => value,
+                Err(error) => {
+                    self.push_hook_runs(vec![dispatcher::transport_failure_record(
+                        EVENT,
+                        &plugin.key().to_string(),
+                        session,
+                        &error,
+                    )]);
+                    continue;
+                }
+            };
+            let decision = match serde_json::from_value::<Option<ImportedSkillShellDecision>>(raw) {
+                Ok(Some(decision)) => decision,
+                Ok(None) => continue,
+                Err(error) => {
+                    tracing::warn!(plugin = %plugin.key(), %error, "invalid skill shell hook decision");
+                    continue;
+                }
+            };
+            let reason = match &decision {
+                ImportedSkillShellDecision::Skip(reason)
+                | ImportedSkillShellDecision::Stop(reason) => reason,
+            };
+            self.push_hook_runs(vec![HookRunRecord::new(
+                EVENT,
+                plugin.key().to_string(),
+                session,
+                HookRunStatus::Applied,
+                "imported hook blocked a skill shell command",
+                Some(reason.clone()),
+            )]);
+            match decision {
+                ImportedSkillShellDecision::Stop(_) => return Some(decision),
+                ImportedSkillShellDecision::Skip(_) => {
+                    skip.get_or_insert(decision);
                 }
             }
         }
-        Ok(SessionStartPatch {
-            additional_context,
-            initial_user_message,
-        })
+        skip
+    }
+
+    pub async fn dispatch_imported_model_attempt(
+        &self,
+        input: crate::sdk::ImportedModelAttemptInput,
+        enabled: impl Fn(&PluginKey) -> bool + Send,
+    ) -> crate::sdk::ImportedModelAttemptCharge {
+        use crate::sdk::ImportedModelAttemptCharge;
+
+        let before = input.outcome.is_none();
+        let (subscription, method, event) = if before {
+            (
+                HookSubscription::IMPORTED_MODEL_ATTEMPT_BEFORE,
+                method::HOOK_IMPORTED_MODEL_ATTEMPT_BEFORE,
+                "model.attempt.before",
+            )
+        } else {
+            (
+                HookSubscription::IMPORTED_MODEL_ATTEMPT_AFTER,
+                method::HOOK_IMPORTED_MODEL_ATTEMPT_AFTER,
+                "model.attempt.after",
+            )
+        };
+        let session = Some(input.session_id);
+        let params = serde_json::json!(input);
+        let mut combined = ImportedModelAttemptCharge::default();
+        for plugin in self
+            .imported_hook_observers(subscription)
+            .filter(|plugin| enabled(&plugin.key()))
+        {
+            let timeout = plugin
+                .agent_plugin()
+                .expect("imported hook observer")
+                .model_attempt_timeout(before);
+            let result = self
+                .call_session_hook(
+                    plugin,
+                    method,
+                    params.clone(),
+                    self.timeouts.fast_or(timeout),
+                    session,
+                )
+                .await;
+            match result {
+                Ok(_) if before => {}
+                Ok(value) => match serde_json::from_value::<ImportedModelAttemptCharge>(value) {
+                    Ok(charge) => {
+                        let units = charge.extra_codex_rollout_budget_units;
+                        let sum = combined.extra_codex_rollout_budget_units + units;
+                        if units >= 0.0 && sum.is_finite() {
+                            combined.extra_codex_rollout_budget_units = sum;
+                        } else {
+                            tracing::warn!(plugin = %plugin.key(), "invalid Codex model request hook charge");
+                        }
+                    }
+                    Err(_) => {
+                        tracing::warn!(plugin = %plugin.key(), "invalid Codex model request hook charge")
+                    }
+                },
+                Err(error) => self.push_hook_runs(vec![dispatcher::transport_failure_record(
+                    event,
+                    &plugin.key().to_string(),
+                    session,
+                    &error,
+                )]),
+            }
+        }
+        combined
+    }
+
+    pub async fn dispatch_imported_model_switch(
+        &self,
+        input: crate::sdk::ImportedModelSwitchInput,
+        before: bool,
+        enabled: impl Fn(&PluginKey) -> bool + Send,
+        cancellation: tokio_util::sync::CancellationToken,
+    ) -> crate::sdk::ImportedModelSwitchPatch {
+        use crate::sdk::{ImportedModelSwitchDecision, ImportedModelSwitchPatch};
+        let (subscription, method, event) = if before {
+            (
+                HookSubscription::IMPORTED_MODEL_SWITCH_BEFORE,
+                method::HOOK_IMPORTED_MODEL_SWITCH_BEFORE,
+                "model.switch.before",
+            )
+        } else {
+            (
+                HookSubscription::IMPORTED_MODEL_SWITCH_AFTER,
+                method::HOOK_IMPORTED_MODEL_SWITCH_AFTER,
+                "model.switch.after",
+            )
+        };
+        let session = Some(input.session_id);
+        let params = serde_json::json!(input);
+        let mut combined = ImportedModelSwitchPatch::default();
+        let mut context_budget = 16 * 1024;
+        let mut message_budget = 8 * 1024;
+        let mut runs = Vec::new();
+        for plugin in self
+            .imported_hook_observers(subscription)
+            .filter(|plugin| enabled(&plugin.key()))
+        {
+            let key = plugin.key().to_string();
+            let timeout = plugin
+                .agent_plugin()
+                .expect("imported hook observer")
+                .model_switch_timeout(before);
+            let result = await_transport_with_cancellation(
+                Some(cancellation.clone()),
+                self.call_session_hook(plugin, method, params.clone(), timeout, session),
+            )
+            .await;
+            let value = match result {
+                Ok(value) => value,
+                Err(TransportError::Cancelled) => break,
+                Err(error) => {
+                    if before && matches!(&error, TransportError::Timeout(_)) {
+                        combined.apply_decision(ImportedModelSwitchDecision::Deny(format!(
+                            "PreModelSwitch hook from {key} timed out"
+                        )));
+                    }
+                    runs.push(dispatcher::transport_failure_record(
+                        event, &key, session, &error,
+                    ));
+                    continue;
+                }
+            };
+            let patch: ImportedModelSwitchPatch = match serde_json::from_value(value) {
+                Ok(patch) => patch,
+                Err(error) => {
+                    runs.push(HookRunRecord::new(
+                        event,
+                        &key,
+                        session,
+                        HookRunStatus::Failed,
+                        "invalid model switch hook response",
+                        Some(error.to_string()),
+                    ));
+                    continue;
+                }
+            };
+            if patch.decision.is_none()
+                && patch.context.is_empty()
+                && patch.system_messages.is_empty()
+            {
+                continue;
+            }
+            let detail = if let Some(
+                ImportedModelSwitchDecision::Ask(reason)
+                | ImportedModelSwitchDecision::Deny(reason),
+            ) = &patch.decision
+            {
+                Some(reason.clone())
+            } else {
+                patch.system_messages.first().cloned()
+            };
+            runs.push(HookRunRecord::new(
+                event,
+                &key,
+                session,
+                HookRunStatus::Applied,
+                "imported model switch hook ran",
+                detail,
+            ));
+            if before {
+                if let Some(decision) = patch.decision {
+                    combined.apply_decision(decision);
+                }
+            } else {
+                extend_hook_text(&mut combined.context, patch.context, &mut context_budget);
+            }
+            extend_hook_text(
+                &mut combined.system_messages,
+                patch.system_messages,
+                &mut message_budget,
+            );
+        }
+        self.push_hook_runs(runs);
+        combined
+    }
+
+    /// Use the first applicable worktree provider in configured plugin order.
+    pub async fn dispatch_worktree_hook(
+        &self,
+        input: crate::sdk::WorktreeHookInput,
+        enabled: impl Fn(&PluginKey) -> bool + Send,
+    ) -> Result<Option<crate::sdk::WorktreeHookOutput>, PluginError> {
+        use crate::sdk::{WorktreeHookOutput, WorktreeOperation};
+
+        let create = matches!(&input.operation, WorktreeOperation::Create { .. });
+        let (subscription, method, event) = if create {
+            (HookSubscription::WORKTREE_CREATE, method::HOOK_WORKTREE_CREATE, "worktree.create")
+        } else {
+            (HookSubscription::WORKTREE_REMOVE, method::HOOK_WORKTREE_REMOVE, "worktree.remove")
+        };
+        let session = Some(input.session_id);
+        let params = serde_json::json!(input);
+        for plugin in self.plugins.iter().map(Arc::as_ref).filter(|plugin| {
+            plugin.subscribes(subscription)
+                && !plugin.effect_scope().cancellation_token().is_cancelled()
+                && enabled(&plugin.key())
+        }) {
+            let timeout = plugin.agent_plugin().map_or(Duration::from_secs(30), |package| {
+                package.worktree_timeout(create)
+            });
+            let dispatch = self.call_session_hook(
+                plugin, method, params.clone(), self.timeouts.fast_or(timeout), session,
+            );
+            let result = if create {
+                dispatch.await
+            } else {
+                super::SessionLifecycleScope::WorktreeRemoval(input.session_id).run(dispatch).await
+            };
+            let output = match result {
+                Ok(output) => output,
+                Err(error) => {
+                    self.push_hook_runs(vec![dispatcher::transport_failure_record(
+                        event, &plugin.key().to_string(), session, &error,
+                    )]);
+                    return Err(PluginError::internal(format!(
+                        "{event} from {} failed: {error}", plugin.key(),
+                    )));
+                }
+            };
+            let output = serde_json::from_value::<Option<WorktreeHookOutput>>(output)
+                .map_err(|error| PluginError::invalid_params_error(&error))?;
+            match output {
+                None => continue,
+                Some(ref result)
+                    if create == matches!(result, WorktreeHookOutput::Created { .. }) =>
+                {
+                    self.push_hook_runs(vec![HookRunRecord::new(
+                        event, plugin.key().to_string(), session, HookRunStatus::Applied,
+                        "worktree hook ran", None,
+                    )]);
+                    return Ok(output);
+                }
+                Some(_) => return Err(PluginError::invalid_params("invalid worktree hook reply")),
+            }
+        }
+        Ok(None)
     }
 
     // ── session.end ────────────────────────────────────────────────────────
 
+    pub async fn broadcast_shutdown_session_end(&self, input: SessionEndInput) {
+        super::SessionLifecycleScope::Shutdown(input.session_id)
+            .run(self.broadcast_session_end(input))
+            .await;
+    }
+
     pub async fn broadcast_session_end(&self, input: SessionEndInput) {
+        if matches!(input.reason, crate::sdk::SessionEndReason::UserExit) {
+            super::SessionLifecycleScope::Disposal(input.session_id)
+                .run(self.notify_session_end(input))
+                .await;
+        } else {
+            self.notify_session_end(input).await;
+        }
+    }
+
+    async fn notify_session_end(&self, input: SessionEndInput) {
         let timeout = Duration::from_secs(5);
         let mut notifications = Vec::new();
         for plugin in &self.plugins {
@@ -1825,24 +3027,29 @@ impl PluginHost {
                     ),
                 )
                 .await;
-                if notified.is_ok() {
-                    HookRunRecord::new(
+                match notified {
+                    Ok(Ok(())) => HookRunRecord::new(
                         "session.end",
                         plugin.key().to_string(),
                         Some(input.session_id),
                         HookRunStatus::Applied,
                         "session.end hook notified",
                         None,
-                    )
-                } else {
-                    HookRunRecord::new(
+                    ),
+                    Ok(Err(error)) => dispatcher::transport_failure_record(
+                        "session.end",
+                        &plugin.key().to_string(),
+                        Some(input.session_id),
+                        &error,
+                    ),
+                    Err(_) => HookRunRecord::new(
                         "session.end",
                         plugin.key().to_string(),
                         Some(input.session_id),
                         HookRunStatus::TimedOut,
                         "session.end hook timed out",
                         None,
-                    )
+                    ),
                 }
             });
         }
@@ -1868,11 +3075,39 @@ impl PluginHost {
         input: UserPromptSubmitInput,
         cancellation: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<UserPromptSubmitInput, PluginError> {
+        let session_id = input.session_id;
+        let output = self
+            .dispatch_prompt_submit_settings(input, cancellation, false, |_| true)
+            .await?;
+        Ok(UserPromptSubmitInput {
+            session_id,
+            prompt: output.prompt,
+        })
+    }
+
+    pub async fn dispatch_user_prompt_submit_with_context(
+        &self,
+        input: UserPromptSubmitInput,
+        cancellation: Option<tokio_util::sync::CancellationToken>,
+        enabled: impl Fn(&PluginKey) -> bool,
+    ) -> Result<super::UserPromptSubmitOutput, PluginError> {
+        self.dispatch_prompt_submit_settings(input, cancellation, true, enabled)
+            .await
+    }
+
+    async fn dispatch_prompt_submit_settings(
+        &self,
+        input: UserPromptSubmitInput,
+        cancellation: Option<tokio_util::sync::CancellationToken>,
+        separate_context: bool,
+        enabled: impl Fn(&PluginKey) -> bool,
+    ) -> Result<super::UserPromptSubmitOutput, PluginError> {
         let timeout = self.timeouts.fast_or(Duration::from_secs(5));
         let session_id = Some(input.session_id);
         let mut current = input;
+        let mut additional_context = Vec::new();
         for plugin in &self.plugins {
-            if !plugin.subscribes(HookSubscription::USER_PROMPT_SUBMIT) {
+            if !plugin.subscribes(HookSubscription::USER_PROMPT_SUBMIT) || !enabled(&plugin.key()) {
                 continue;
             }
             let plugin_id = plugin.key().to_string();
@@ -1918,7 +3153,12 @@ impl PluginHost {
                         format!("prompt.submit hook blocked prompt: {r}"),
                         Some(r.clone()),
                     )]);
-                    return Err(PluginError::internal(format!("prompt blocked: {r}")));
+                    let detail = agena_failure::diagnostic::scrubbed_preserve(&r, 220);
+                    return Err(PluginError::from_kind_with_public_detail(
+                        crate::sdk::PluginErrorKind::PolicyDenied,
+                        format_args!("prompt blocked: {r}"),
+                        detail,
+                    ));
                 }
                 self.push_hook_runs(vec![HookRunRecord::new(
                     "prompt.submit",
@@ -1932,25 +3172,43 @@ impl PluginHost {
                     current.prompt = text;
                 }
                 if let Some(ctx) = p.additional_context {
-                    current.prompt.push('\n');
-                    current.prompt.push_str(&ctx);
+                    if separate_context {
+                        additional_context.push(ctx);
+                    } else {
+                        current.prompt.push('\n');
+                        current.prompt.push_str(&ctx);
+                    }
                 }
             }
         }
-        Ok(current)
+        Ok(super::UserPromptSubmitOutput {
+            prompt: current.prompt,
+            additional_context,
+        })
     }
 
     // ── tool.failure ───────────────────────────────────────────────
 
-    pub async fn broadcast_tool_failure(&self, input: ToolFailureInput) {
+    pub async fn broadcast_tool_failure(
+        &self,
+        input: ToolFailureInput,
+        imported_is_enabled: impl Fn(&PluginKey) -> bool + Send,
+    ) {
         let timeout = Duration::from_secs(5);
         let mut notifications = Vec::new();
         for plugin in &self.plugins {
             if !plugin.subscribes(HookSubscription::TOOL_FAILURE) {
                 continue;
             }
+            if input.automatic_denial.is_some()
+                && plugin.agent_plugin().is_some()
+                && !imported_is_enabled(&plugin.key())
+            {
+                continue;
+            }
             let input = input.clone();
             let plugin = plugin.clone();
+            let host = Arc::clone(&self._host_handle);
             notifications.push(async move {
                 let plugin_id = plugin.key();
                 let params = match serde_json::to_value(&input) {
@@ -1968,11 +3226,26 @@ impl PluginHost {
                         return;
                     }
                 };
-                match tokio::time::timeout(
-                    timeout,
-                    plugin.transport.notify(method::HOOK_TOOL_FAILURE, params),
-                )
-                .await
+                let context = tool_hook_context(
+                    &plugin,
+                    input.tool_name(),
+                    Some(input.session_id),
+                    Some(input.call_id),
+                    Some(input.workspace_root.clone()),
+                );
+                let notified = if plugin.agent_plugin().is_some() {
+                    let timeout = plugin.agent_plugin()
+                        .and_then(|package| package.agent_hook_timeout(method::HOOK_TOOL_FAILURE))
+                        .map_or(timeout, |budget| timeout.max(budget + Duration::from_secs(1)));
+                    tokio::time::timeout(timeout, host.run_in_authorized_callback_context(
+                        &plugin.key(),
+                        context,
+                        plugin.transport.notify(method::HOOK_TOOL_FAILURE, params),
+                    )).await
+                } else {
+                    tokio::time::timeout(timeout, plugin.transport.notify(method::HOOK_TOOL_FAILURE, params)).await
+                };
+                match notified
                 {
                     Ok(Ok(())) => {}
                     Ok(Err(error)) => tracing::warn!(
@@ -1988,7 +3261,7 @@ impl PluginHost {
                         plugin_id = %plugin_id,
                         hook = method::HOOK_TOOL_FAILURE,
                         diagnostic = %agena_failure::diagnostic::format_error_chain_with_context(
-                            "plugin tool-failure hook timed out after 5 seconds",
+                            "plugin tool-failure hook timed out",
                             &error,
                         ),
                         "best-effort plugin tool-failure notification timed out"
@@ -2007,11 +3280,22 @@ impl PluginHost {
         session_id: Option<i64>,
         workspace_root: Option<String>,
     ) -> Result<ToolDefinitionInput, PluginError> {
+        self.dispatch_tool_definition_plugins(&self.plugins, input, session_id, workspace_root)
+            .await
+    }
+
+    async fn dispatch_tool_definition_plugins(
+        &self,
+        plugins: &[Arc<LoadedPlugin>],
+        input: ToolDefinitionInput,
+        session_id: Option<i64>,
+        workspace_root: Option<String>,
+    ) -> Result<ToolDefinitionInput, PluginError> {
         let timeout = self.timeouts.fast_or(Duration::from_secs(2));
         let mut runs = Vec::new();
-        let result =
+        let result = Box::pin(
             dispatcher::chain_patch_in_context::<ToolDefinitionInput, ToolDefinitionPatch, _, _>(
-                &self.plugins,
+                plugins,
                 method::HOOK_TOOL_DEFINITION,
                 HookSubscription::TOOL_DEFINITION,
                 timeout,
@@ -2026,6 +3310,9 @@ impl PluginHost {
                     if let Some(s) = patch.input_schema {
                         inp.input_schema = s;
                     }
+                    if let Some(hidden) = patch.hidden {
+                        inp.hidden = hidden;
+                    }
                 },
                 |plugin, input| {
                     Some(tool_hook_context(
@@ -2039,8 +3326,9 @@ impl PluginHost {
                 Some(&self._host_handle),
                 None,
                 &mut runs,
-            )
-            .await;
+            ),
+        )
+        .await;
         // tool.definition runs once per registered tool per tool-request
         // computation; recording them as transcript activity would flood the
         // session with thousands of "no change" parts every turn. The chain
@@ -2061,14 +3349,41 @@ impl PluginHost {
         session_id: Option<i64>,
         workspace_root: Option<String>,
     ) -> Vec<Result<ToolDefinitionInput, PluginError>> {
+        self.dispatch_tool_definitions_for_enabled(inputs, session_id, workspace_root, |_| true)
+            .await
+    }
+
+    pub async fn dispatch_tool_definitions_for_enabled(
+        &self,
+        inputs: Vec<ToolDefinitionInput>,
+        session_id: Option<i64>,
+        workspace_root: Option<String>,
+        enabled: impl Fn(&PluginKey) -> bool,
+    ) -> Vec<Result<ToolDefinitionInput, PluginError>> {
         const CATALOG_DEADLINE: Duration = Duration::from_secs(5);
+        let plugins: Vec<Arc<LoadedPlugin>> = self
+            .plugins
+            .iter()
+            .filter(|plugin| {
+                plugin.subscribes(HookSubscription::TOOL_DEFINITION) && enabled(&plugin.key())
+            })
+            .cloned()
+            .collect();
+        if plugins.is_empty() {
+            return inputs.into_iter().map(Ok).collect();
+        }
         let input_count = inputs.len();
         let dispatch = async {
             let mut outputs = Vec::with_capacity(input_count);
             for input in inputs {
                 outputs.push(
-                    self.dispatch_tool_definition(input, session_id, workspace_root.clone())
-                        .await,
+                    self.dispatch_tool_definition_plugins(
+                        &plugins,
+                        input,
+                        session_id,
+                        workspace_root.clone(),
+                    )
+                    .await,
                 );
             }
             outputs
@@ -2109,6 +3424,47 @@ impl PluginHost {
         input: AgentStopInput,
         cancellation: Option<tokio_util::sync::CancellationToken>,
     ) -> Result<AgentStopDispatch, PluginError> {
+        self.dispatch_agent_stop_hooks(
+            input,
+            cancellation,
+            method::HOOK_AGENT_STOP,
+            self.plugins.iter().map(Arc::as_ref),
+        ).await
+    }
+
+    fn imported_claude_stop_observers(&self) -> impl Iterator<Item = &LoadedPlugin> {
+        self.imported_hook_observers(HookSubscription::AGENT_STOP).filter(|plugin| {
+            plugin.agent_plugin().is_some_and(|package| package.has_claude_stop_hooks())
+        })
+    }
+
+    pub fn has_imported_claude_stop_hook(&self, enabled: impl Fn(&PluginKey) -> bool) -> bool {
+        self.imported_claude_stop_observers().any(|plugin| enabled(&plugin.key()))
+    }
+
+    /// Claude observes a finished response even when its session still owns
+    /// a running process or a scheduled wakeup.
+    pub async fn dispatch_imported_claude_stop(
+        &self,
+        input: AgentStopInput,
+        cancellation: Option<tokio_util::sync::CancellationToken>,
+        enabled: impl Fn(&PluginKey) -> bool + Send,
+    ) -> Result<AgentStopDispatch, PluginError> {
+        self.dispatch_agent_stop_hooks(
+            input,
+            cancellation,
+            method::HOOK_IMPORTED_CLAUDE_STOP,
+            self.imported_claude_stop_observers().filter(move |plugin| enabled(&plugin.key())),
+        ).await
+    }
+
+    async fn dispatch_agent_stop_hooks<'a>(
+        &'a self,
+        input: AgentStopInput,
+        cancellation: Option<tokio_util::sync::CancellationToken>,
+        rpc: &'static str,
+        subscribers: impl Iterator<Item = &'a LoadedPlugin> + Send,
+    ) -> Result<AgentStopDispatch, PluginError> {
         let timeout = self.timeouts.chat_or(Duration::from_secs(30));
         let mut continue_with_message = None;
         let mut reason = None;
@@ -2116,7 +3472,7 @@ impl PluginHost {
         // The notifications plugin observes the final stop decision to update
         // terminal activity. Run it after decision hooks so a continuation
         // cannot briefly project an idle title.
-        let mut stop_plugins = self.plugins.iter().collect::<Vec<_>>();
+        let mut stop_plugins = subscribers.collect::<Vec<_>>();
         stop_plugins.sort_by_key(|plugin| plugin.key().to_string() == "agena.notifications");
         for plugin in stop_plugins {
             if !plugin.subscribes(HookSubscription::AGENT_STOP) {
@@ -2134,7 +3490,7 @@ impl PluginHost {
                 self._host_handle.run_in_authorized_callback_context(
                     &plugin.key(),
                     context,
-                    call_with_timeout(plugin, method::HOOK_AGENT_STOP, params, timeout),
+                    call_with_timeout(plugin, rpc, params, timeout),
                 ),
             )
             .await
@@ -2548,22 +3904,34 @@ impl PluginHost {
     }
 
     pub fn command_catalog(&self) -> Vec<CommandCatalogItem> {
-        let mut commands = self
-            .command_registry
-            .visible(None)
-            .into_values()
-            .map(|entry| entry.value)
-            .collect::<Vec<_>>();
-        sort_command_catalog(&mut commands);
-        commands
+        self.command_catalog_for_session(None)
+    }
+
+    pub fn command_catalog_for_session(&self, session_id: Option<i64>) -> Vec<CommandCatalogItem> {
+        let scope = session_id.map(PluginScopeKey::session);
+        self.command_catalog_visible(scope.as_ref())
     }
 
     pub fn command_catalog_for_scope(&self, scope: &PluginScopeKey) -> Vec<CommandCatalogItem> {
+        self.command_catalog_visible(Some(scope))
+    }
+
+    fn command_catalog_visible(&self, scope: Option<&PluginScopeKey>) -> Vec<CommandCatalogItem> {
         let mut commands = self
             .command_registry
-            .visible(Some(scope))
+            .visible(scope)
             .into_values()
-            .map(|entry| entry.value)
+            .map(|entry| {
+                let mut item = entry.value;
+                item.submits_prompt = self
+                    .plugins_by_id
+                    .get(&item.plugin_id)
+                    .and_then(|plugin| plugin.agent_plugin())
+                    .is_some_and(|package| package.has_inline_prompt_command(&item.command.id));
+                item.accepts_attachments =
+                    self.command_accepts_attachments(&item.plugin_id, &item.command.id);
+                item
+            })
             .collect::<Vec<_>>();
         sort_command_catalog(&mut commands);
         commands
@@ -2596,12 +3964,16 @@ impl PluginHost {
     }
 
     pub fn surface_catalog(&self) -> PluginSurfaceCatalog {
+        self.surface_catalog_for_session(None)
+    }
+
+    pub fn surface_catalog_for_session(&self, session_id: Option<i64>) -> PluginSurfaceCatalog {
         let mut display_by_key = BTreeMap::<(PluginKey, String), HostDisplayContribution>::new();
         // Theme IDs are scoped by plugin in the manifest. Keep the owner in
         // the catalog key so two plugins cannot silently overwrite one
         // another while building the aggregate UI catalog.
         let mut themes_by_key = BTreeMap::<(PluginKey, String), HostThemePalette>::new();
-        let commands = self.command_catalog();
+        let commands = self.command_catalog_for_session(session_id);
 
         for plugin in &self.plugins {
             // Declarative manifest display contributions (Phase 6). Dynamic
@@ -2661,10 +4033,20 @@ impl PluginHost {
     }
 
     pub fn resolve_command(&self, plugin_id: &str, command_id: &str) -> Option<CommandDefinition> {
+        self.resolve_command_for_session(None, plugin_id, command_id)
+    }
+
+    pub fn resolve_command_for_session(
+        &self,
+        session_id: Option<i64>,
+        plugin_id: &str,
+        command_id: &str,
+    ) -> Option<CommandDefinition> {
         let plugin_key = parse_plugin_key_for_lookup(plugin_id, "resolve plugin command")?;
         let name = command_registry_name(&plugin_key, command_id);
+        let scope = session_id.map(PluginScopeKey::session);
         self.command_registry
-            .resolve(None, &name)
+            .resolve(scope.as_ref(), &name)
             .map(|entry| entry.value.command)
     }
 
@@ -2688,6 +4070,7 @@ impl PluginHost {
         &self,
         plugin_id: &str,
         tool_name: &str,
+        scope: Option<&PluginScopeKey>,
     ) -> Option<RegisteredTool> {
         let plugin_key: PluginKey = match plugin_id.parse() {
             Ok(plugin_key) => plugin_key,
@@ -2702,6 +4085,21 @@ impl PluginHost {
                 return None;
             }
         };
+        if let Some(scope) = scope {
+            let scoped = self._host_handle.scoped_tool_registry();
+            let direct = ToolKey::new(plugin_key.clone(), tool_name.to_owned()).ok();
+            let canonical = tool_name
+                .parse::<ToolKey>()
+                .ok()
+                .filter(|key| key.plugin() == &plugin_key);
+            if let Some(entry) = direct
+                .iter()
+                .chain(canonical.iter())
+                .find_map(|key| scoped.resolve(Some(scope), key))
+            {
+                return Some(entry.value);
+            }
+        }
         let registry = match self.tool_registry.read() {
             Ok(registry) => registry,
             Err(error) => {

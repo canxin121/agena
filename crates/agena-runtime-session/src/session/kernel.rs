@@ -8,4 +8,5 @@ mod replay;
 
 pub use input::{KernelPrompt, KernelPromptHydrator};
 pub use processor::{KernelRoundOutcome, KernelRoundRequest, KernelRoundRun, KernelToolApiCall};
+pub(crate) use processor::MessageDisplayHooks;
 pub use replay::{KernelProviderState, reference_replay_text};

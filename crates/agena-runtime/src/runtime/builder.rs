@@ -194,6 +194,8 @@ impl AgenaRuntime {
                 assistant_service: Default::default(),
                 session_api_backend: Default::default(),
                 application_activation: tokio::sync::Mutex::new(false),
+                blocked_config_paths: Default::default(),
+                deepseek_mcp_cleanup: Default::default(),
                 shutdown_completion: Default::default(),
             }),
         };
@@ -540,6 +542,41 @@ impl agena_runtime::PluginRuntimeService for AgenaRuntime {
         self.current_snapshot().plugin_manager().plugin_statuses()
     }
 
+    fn agent_plugin_skill_dirs(&self) -> Vec<std::path::PathBuf> {
+        self.current_snapshot()
+            .plugin_manager()
+            .agent_plugin_skill_dirs()
+    }
+
+    async fn agent_plugin_provided_skills(
+        &self,
+        cwd: &std::path::Path,
+    ) -> Vec<agena_plugin_host::AgentPluginSkill> {
+        self.current_snapshot()
+            .plugin_manager()
+            .agent_plugin_provided_skills(cwd, None, |_| true)
+            .await
+    }
+
+    async fn agent_plugin_session_skills(
+        &self,
+        session_id: i64,
+    ) -> Result<Option<(std::path::PathBuf, Vec<agena_plugin_host::AgentPluginSkill>)>, agena_failure::Failure> {
+        let snapshot = self.current_snapshot();
+        let sessions = snapshot.session_manager().ok_or_else(|| {
+            agena_runtime_session::AppError::Config("The session service is unavailable".into()).failure()
+        })?;
+        let executor = sessions
+            .host_resource_callback_executor(Some(session_id), None)
+            .await
+            .map_err(|error| error.failure())?;
+        if executor.is_global() {
+            return Ok(None);
+        }
+        let skills = executor.agent_plugin_provided_skills().await;
+        Ok(Some((executor.workspace_root().to_owned(), skills)))
+    }
+
     fn plugin_status(&self, plugin_id: &str) -> Option<agena_plugin_host::status::PluginStatus> {
         self.current_snapshot()
             .plugin_manager()
@@ -548,6 +585,15 @@ impl agena_runtime::PluginRuntimeService for AgenaRuntime {
 
     fn plugin_surface_catalog(&self) -> agena_plugin_host::PluginSurfaceCatalog {
         self.current_snapshot().plugin_manager().surface_catalog()
+    }
+
+    fn plugin_surface_catalog_for_session(
+        &self,
+        session_id: i64,
+    ) -> agena_plugin_host::PluginSurfaceCatalog {
+        self.current_snapshot()
+            .plugin_manager()
+            .surface_catalog_for_session(Some(session_id))
     }
 
     fn plugin_architecture_catalog(&self) -> agena_plugin_host::PluginArchitectureCatalog {
@@ -652,6 +698,28 @@ impl agena_runtime::PluginRuntimeService for AgenaRuntime {
         self.current_snapshot().plugin_manager().command_catalog()
     }
 
+    async fn prepare_session_plugin_commands(&self, session_id: i64) -> Result<(), String> {
+        let snapshot = self.current_snapshot();
+        if snapshot.plugin_manager().has_imported_mod_session_start()
+            && let Some(manager) = snapshot.session_manager()
+        {
+            manager
+                .prepare_imported_mod_commands(session_id)
+                .await
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+
+    fn command_catalog_for_session(
+        &self,
+        session_id: Option<i64>,
+    ) -> Vec<agena_plugin_host::CommandCatalogItem> {
+        self.current_snapshot()
+            .plugin_manager()
+            .command_catalog_for_session(session_id)
+    }
+
     fn tool_registry_generation(&self) -> u64 {
         self.current_snapshot()
             .plugin_manager()
@@ -693,21 +761,25 @@ impl agena_runtime::PluginRuntimeService for AgenaRuntime {
             .plugin_logs(plugin_id, after_seq, limit)
     }
 
-    fn resolve_plugin_tool(
+    async fn resolve_plugin_tool(
         &self,
         plugin_id: Option<&str>,
         tool_name: &str,
-    ) -> Option<agena_runtime::PluginToolDescriptor> {
-        let host = self.current_snapshot().plugin_manager();
-        let entry = match plugin_id {
-            Some(plugin_id) => host.resolve_registered_tool_for_plugin_tool(plugin_id, tool_name),
-            None => host.lookup_tool_for_name(tool_name),
-        }?;
-        Some(agena_runtime::PluginToolDescriptor {
+        session_id: i64,
+    ) -> Result<Option<agena_runtime::PluginToolDescriptor>, String> {
+        let snapshot = self.current_snapshot();
+        let manager = snapshot
+            .session_manager()
+            .ok_or("Session manager unavailable")?;
+        let entry = manager
+            .resolve_plugin_tool_for_session(session_id, plugin_id, tool_name)
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(entry.map(|entry| agena_runtime::PluginToolDescriptor {
             canonical_name: entry.canonical_name(),
             plugin_full_name: entry.plugin_full_name(),
             plugin_id: entry.plugin_key().clone(),
-        })
+        }))
     }
 
     async fn invoke_plugin_command(
@@ -1927,6 +1999,10 @@ pub(crate) struct AgenaRuntimeShared {
     assistant_service: std::sync::OnceLock<Arc<super::assistant::AssistantRuntime>>,
     session_api_backend: agena_session_api::bridge::SessionApiBackendSlot,
     application_activation: tokio::sync::Mutex<bool>,
+    // A blocked file is still on disk. Later watch events must recheck it
+    // before a candidate built from that same file can be published.
+    blocked_config_paths: std::sync::Mutex<std::collections::BTreeSet<std::path::PathBuf>>,
+    pub(super) deepseek_mcp_cleanup: Arc<super::host_client::DeepSeekMcpCleanupLedger>,
     shutdown_completion: crate::bootstrap_result::RuntimeShutdownCompletion,
 }
 
@@ -2120,9 +2196,9 @@ impl AgenaRuntime {
                 {
                     return Err(crate::RuntimeControlServiceError::from_error(&error));
                 }
-                if let Some(manager) = session_manager {
+                if let Some(manager) = &session_manager {
                     loop {
-                        match manager.shutdown().await {
+                        match manager.drain_for_shutdown().await {
                             Ok(()) => break,
                             Err(AppError::PersistenceBusy) => {
                                 tracing::warn!(
@@ -2141,6 +2217,9 @@ impl AgenaRuntime {
                 // can release per-session plugin resources.
                 if let Some(notification) = session_end {
                     notification.await;
+                }
+                if let Some(manager) = session_manager {
+                    manager.imported_shells().close();
                 }
                 // Retired generations share this coordinator. Normal reload
                 // keeps their live callers intact; process shutdown reaches
@@ -2198,6 +2277,66 @@ impl AgenaRuntime {
             guard = self.inner.control_state.reload_gate().acquire() => guard,
         };
         let previous = self.current_snapshot();
+        let claude_instruction_settings = tokio::select! {
+            biased;
+            _ = control.cancelled() => return Err(AppError::Cancelled),
+            result = RuntimeSnapshot::capture_claude_instruction_settings(self.workspace_root()) => result?,
+        };
+        if let RuntimeReloadCause::WatchedPathsChanged { paths } = &cause
+            && let Some(sessions) = previous.session_manager()
+        {
+            use agena_plugin_sdk::ImportedConfigChangeSource as Source;
+            let workspace = self.workspace_root();
+            let claude_sources = agena_runtime_tools::claude_project_settings_paths(workspace);
+            let mut paths = paths.clone();
+            paths.extend(
+                claude_instruction_settings.changed_paths(&previous.claude_instruction_settings),
+            );
+            paths.extend(self.blocked_config_paths.lock().unwrap().iter().cloned());
+            paths.sort();
+            paths.dedup();
+            let changes = paths
+                .into_iter()
+                .filter_map(|path| {
+                    let source = if path == previous.project_config_path() {
+                        Source::ProjectSettings
+                    } else if path == previous.config_path() {
+                        Source::UserSettings
+                    } else if let Some((source, _)) = claude_sources
+                        .iter()
+                        .find(|(_, settings)| settings == &path)
+                    {
+                        *source
+                    } else if path.starts_with(workspace)
+                        && path.file_name().is_some_and(|name| name == "SKILL.md")
+                    {
+                        Source::Skills
+                    } else {
+                        return None;
+                    };
+                    Some((source, path))
+                })
+                .collect::<Vec<_>>();
+            if !changes.is_empty() {
+                let checked = tokio::select! {
+                    biased;
+                    _ = control.cancelled() => return Err(AppError::Cancelled),
+                    result = sessions.validate_watched_claude_config(workspace, &changes) => result,
+                };
+                if let Err(error) = checked {
+                    self.blocked_config_paths.lock().unwrap().extend(
+                        changes.into_iter().filter_map(|(source, path)| {
+                            matches!(
+                                source,
+                                Source::ProjectSettings | Source::LocalSettings | Source::Skills
+                            )
+                            .then_some(path)
+                        }),
+                    );
+                    return Err(error);
+                }
+            }
+        }
         let next = Arc::new(tokio::select! {
             biased;
             _ = control.cancelled() => return Err(AppError::Cancelled),
@@ -2213,9 +2352,11 @@ impl AgenaRuntime {
                 previous.session_manager(),
                 Arc::clone(&previous),
                 self.activities.monitor.clone(),
+                claude_instruction_settings,
             ) => result?,
         });
         let report = self.publish_reload_candidate(previous, next, cause)?;
+        self.blocked_config_paths.lock().unwrap().clear();
         if self.session_api_backend.backend().is_some() {
             self.publish_application_ready().await.map_err(|error| {
                 AppError::Internal(format!(
@@ -2265,7 +2406,11 @@ impl AgenaRuntime {
             next.host_client.bind_runtime(self);
             next.global_host_client.bind_runtime(self);
             next.publish_session_configuration();
-            let _ = self.inner.control_state.swap_snapshot(next.clone());
+            let replaced = self.inner.control_state.swap_snapshot(next.clone());
+            replaced.replaced.cancel();
+            if let Some(manager) = next.session_manager() {
+                manager.imported_file_watches().refresh();
+            }
             self.start_scheduler_activity_bridge();
             let host_handle = next.plugin_manager().host_handle();
             super::host_client::install_plugin_host_event_publisher(host_handle, self);

@@ -16,6 +16,8 @@ pub struct SkillManagerSnapshot {
     pub workspace: PathBuf,
     pub global_root: PathBuf,
     pub roots: Vec<SkillRoot>,
+    #[serde(default)]
+    pub exact_skill_dirs: Vec<PathBuf>,
     pub declared: Vec<DeclaredSkill>,
     pub disabled_names: Vec<String>,
 }
@@ -167,6 +169,8 @@ mod tests {
                 description: "Sample".into(),
                 instructions: "Use the sample.".into(),
                 aliases: Vec::new(),
+                invocation: None,
+                resource_base: None,
             }]);
         let roots = manager.roots();
         let encoded = serde_json::to_vec(&manager.worker_snapshot()).unwrap();

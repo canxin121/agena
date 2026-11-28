@@ -64,6 +64,7 @@ impl ToolExecutor {
             reads: normalize(reads),
             writes: normalize(writes),
             network,
+            require_sandbox: input.require_sandbox,
         })
     }
 
@@ -113,6 +114,7 @@ impl ToolExecutor {
             reads,
             writes,
             network: crate::shell_sandbox::declared_network_targets(&input.network)?,
+            require_sandbox: input.require_sandbox,
         })
     }
 

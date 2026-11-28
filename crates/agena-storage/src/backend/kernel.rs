@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use agena_domain::{
-    ActivityId, BlobId, CommandId, ComposerDocument, ContentEpoch, ContentId, ExecutionId,
+    ActivityId, ActivityOutputChunk, BlobId, CommandId, ComposerDocument, ContentEpoch, ContentId, ExecutionId,
     KernelEpoch,
 };
 use async_trait::async_trait;
@@ -77,6 +77,12 @@ pub enum Command {
         title: String,
         configuration: SessionConfiguration,
     },
+    /// Create a delegated session with the parent's completed context frozen at this commit.
+    CreateSeededAgent {
+        parent: SessionId,
+        title: String,
+        configuration: SessionConfiguration,
+    },
     /// Resolve or create the one local root of this Bot in one transaction.
     EnsureLocalBotSession {
         bot: uuid::Uuid,
@@ -89,6 +95,12 @@ pub enum Command {
     Configure {
         session: SessionId,
         change: SessionConfigurationChange,
+    },
+    RegisterWorkingDirectory {
+        session: SessionId,
+        metadata_version: MetadataVersion,
+        workspace_root: std::path::PathBuf,
+        directory: std::path::PathBuf,
     },
     RecoverChannelAuthority {
         session: SessionId,
@@ -209,6 +221,8 @@ pub enum Command {
         author: Option<agena_domain::MessageAuthor>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         origin: Option<agena_domain::MessageOrigin>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        model_context: Vec<String>,
     },
     EditQueued {
         session: SessionId,
@@ -216,6 +230,8 @@ pub enum Command {
         expected_revision: EntryRevision,
         document: ComposerDocument,
         blobs: Vec<BlobLease>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        model_context: Vec<String>,
     },
     Claim {
         session: SessionId,
@@ -228,6 +244,12 @@ pub enum Command {
         epoch: KernelEpoch,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         expected_generation: Option<AttemptGeneration>,
+    },
+    CancelNext {
+        session: SessionId,
+        execution: ExecutionId,
+        expected_generation: AttemptGeneration,
+        notice: String,
     },
     Cancel {
         session: SessionId,
@@ -302,6 +324,8 @@ pub enum Command {
         tool: ToolId,
         result: ToolResult,
         blobs: Vec<BlobLease>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        activity_reads: Vec<ActivityOutputRead>,
     },
     Finish {
         scope: Scope,
@@ -315,10 +339,40 @@ pub enum Command {
         scope: Scope,
         tool: ToolId,
         activity: BackgroundActivityStart,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output_retention: Option<ActivityOutputRetention>,
+    },
+    BeginPluginCommandActivity {
+        scope: Scope,
+        origin: PluginCommandActivityOrigin,
+        activity: BackgroundActivityStart,
+        retention: ActivityOutputRetention,
     },
     EndActivity {
         scope: ActivityScope,
         outcome: BackgroundActivityOutcome,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        notice: Option<BackgroundActivityNotice>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output_terminal: Option<ActivityOutputTerminal>,
+    },
+    AppendActivityOutput {
+        scope: ActivityScope,
+        total: u64,
+        chunks: Vec<ActivityOutputChunk>,
+    },
+    SetActivityOutputSpillPaths {
+        scope: ActivityScope,
+        paths: Vec<String>,
+    },
+    AcknowledgeActivityOutput {
+        session: SessionId,
+        read: ActivityOutputRead,
+        expected: ActivityOutputPosition,
+    },
+    UnlistSettledActivity {
+        session: SessionId,
+        activity: ActivityId,
     },
     OpenActivityOutput {
         scope: ActivityScope,
@@ -329,6 +383,8 @@ pub enum Command {
         round: RoundId,
         tool: Option<ToolId>,
         reasoning: bool,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        display: bool,
     },
     OpenEvents {
         scope: Scope,
@@ -475,6 +531,7 @@ pub enum Mutation {
     PromptWindowStatus(PromptWindowStatus),
     InteractionView(Box<InteractionView>),
     Configuration(Box<SessionConfiguration>),
+    WorkingDirectoryRegistration(agena_domain::SessionWorkingDirectoryRegistration),
     Rewind(Box<RewindResult>),
     Delivery(DeliveryView),
     Session(Box<SessionMetadata>),
@@ -485,9 +542,17 @@ pub enum Mutation {
     Checkpoint(EntryId),
     Tool(ToolId),
     Activity(ActivityId),
+    PluginCommandActivity { anchor: EntryId, id: ActivityId },
+    ActivityOutput(ActivityOutputHead),
+    ActivityOutputAcknowledged(bool),
+    ActivityUnlisted(bool),
     Interaction(InteractionId),
     Decision(InteractionDecision),
     Content(ContentStreamView),
+    TextWithDisplay {
+        original: ContentStreamView,
+        display: ContentStreamView,
+    },
     BlobRecord(BlobRecord),
     BlobPin(Box<BlobPin>),
     BlobOffset(u64),
@@ -543,6 +608,25 @@ pub trait KernelBackend: Send + Sync {
         active_only: bool,
         limit: usize,
     ) -> Result<ReadView<Vec<BackgroundActivityView>>>;
+    async fn activity_output_position(
+        &self,
+        session: SessionId,
+        activity: ActivityId,
+    ) -> Result<ActivityOutputPosition>;
+    async fn activity_output(
+        &self,
+        session: SessionId,
+        activity: ActivityId,
+        from: Option<u64>,
+    ) -> Result<ReadView<Option<ActivityOutputPage>>>;
+
+    async fn session_activities_by_label(
+        &self,
+        session: SessionId,
+        prefix: &str,
+        limit: usize,
+    ) -> Result<ReadView<Vec<BackgroundActivityView>>>;
+
     async fn history_after(
         &self,
         session: SessionId,
@@ -554,6 +638,12 @@ pub trait KernelBackend: Send + Sync {
         parent: SessionId,
         agent_name: &str,
     ) -> Result<ReadView<Option<SessionId>>>;
+    async fn agent_catalog(
+        &self,
+        parent: SessionId,
+        limit: usize,
+    ) -> Result<ReadView<Vec<AgentCatalogMember>>>;
+    async fn active_agent_count(&self, root: SessionId) -> Result<ReadView<u64>>;
 
     async fn import_archive(
         &self,
@@ -581,6 +671,10 @@ pub trait KernelBackend: Send + Sync {
         &self,
         session: SessionId,
     ) -> Result<ReadView<Option<ProviderRoundView>>>;
+    async fn session_resume_facts(
+        &self,
+        session: SessionId,
+    ) -> Result<ReadView<Option<SessionResumeFacts>>>;
     /// Most recent visible failed round with provider state for an execution
     /// generation. Branches see the round state frozen in their history.
     async fn failed_round(
@@ -639,6 +733,11 @@ pub trait KernelBackend: Send + Sync {
         after: Option<CommandId>,
         limit: usize,
     ) -> Result<ReadView<Vec<DeliveryView>>>;
+    async fn notice_wakes_since_user_message(
+        &self,
+        session: SessionId,
+        source: &str,
+    ) -> Result<u64>;
     async fn export_jsonl(
         &self,
         lease: HistorySnapshotLease,
@@ -806,6 +905,7 @@ pub trait KernelBackend: Send + Sync {
         &self,
         session: SessionId,
         activity: ActivityId,
+        listed_only: bool,
     ) -> Result<ReadView<BackgroundActivityView>>;
     async fn active_activities(
         &self,

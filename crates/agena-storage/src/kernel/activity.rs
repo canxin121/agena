@@ -4,7 +4,7 @@
 use agena_domain::{ActivityId, ContentKind};
 
 use super::*;
-use crate::backend::kernel::{ActivityScope, OutputScope};
+use crate::backend::kernel::{ActivityScope, OutputScope, Scope};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -19,6 +19,51 @@ pub enum BackgroundActivityKind {
 pub struct BackgroundActivityStart {
     pub kind: BackgroundActivityKind,
     pub label: String,
+}
+
+/// A host-issued invocation identity, shared by every activity started by
+/// this command. Command arguments stay in the invocation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginCommandActivityOrigin {
+    pub invocation: ExecutionId,
+    pub plugin_id: String,
+    pub command_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackgroundActivityNotice {
+    pub text: String,
+    pub origin_message_id: EntryId,
+    pub wake: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wake_budget: Option<BackgroundActivityWakeBudget>,
+    /// An inline notice presents exactly this prefix and terminal result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_position: Option<ActivityOutputPosition>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackgroundActivityWakeBudget {
+    pub source: String,
+    pub limit: usize,
+}
+
+/// The prefix already presented to the activity's owning conversation. The
+/// transcript and retained output remain available independently of this cursor.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActivityOutputPosition {
+    pub cursor: Option<TextCursor>,
+    pub lost_bytes: u64,
+    pub outcome_read: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub packet_offset: Option<u64>,
+}
+
+/// A runtime tool advances a cursor only in its successful result transaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ActivityOutputRead {
+    pub activity: ActivityId,
+    pub position: ActivityOutputPosition,
 }
 
 /// The runtime records an observed outcome, including an uncertain/interrupted
@@ -74,8 +119,8 @@ pub struct ActiveActivityPage {
 /// or retry an attempt, execute inherited work, or open unrelated content.
 #[derive(Clone)]
 pub struct ActivityHandle {
-    inner: Arc<KernelInner>,
-    scope: ActivityScope,
+    pub(super) inner: Arc<KernelInner>,
+    pub(super) scope: ActivityScope,
 }
 
 impl ToolHandle {
@@ -86,6 +131,15 @@ impl ToolHandle {
         request: RequestId,
         activity: BackgroundActivityStart,
     ) -> Result<CommitReceipt<ActivityHandle>> {
+        self.begin_activity_with_output(request, activity, None).await
+    }
+
+    pub async fn begin_activity_with_output(
+        &self,
+        request: RequestId,
+        activity: BackgroundActivityStart,
+        output_retention: Option<ActivityOutputRetention>,
+    ) -> Result<CommitReceipt<ActivityHandle>> {
         let inner = &self.round.attempt.inner;
         let receipt = inner
             .command(
@@ -94,6 +148,7 @@ impl ToolHandle {
                     scope: self.round.attempt.scope,
                     tool: self.id,
                     activity,
+                    output_retention,
                 },
             )
             .await?;
@@ -126,6 +181,26 @@ impl ActivityHandle {
         request: RequestId,
         outcome: BackgroundActivityOutcome,
     ) -> Result<CommitReceipt<ActivityId>> {
+        self.end_with_notice(request, outcome, None).await
+    }
+
+    /// Settle the activity and enqueue its owner's notice in one commit.
+    pub async fn end_with_notice(
+        &self,
+        request: RequestId,
+        outcome: BackgroundActivityOutcome,
+        notice: Option<BackgroundActivityNotice>,
+    ) -> Result<CommitReceipt<ActivityId>> {
+        self.end_with_output(request, outcome, notice, None).await
+    }
+
+    pub async fn end_with_output(
+        &self,
+        request: RequestId,
+        outcome: BackgroundActivityOutcome,
+        notice: Option<BackgroundActivityNotice>,
+        output_terminal: Option<ActivityOutputTerminal>,
+    ) -> Result<CommitReceipt<ActivityId>> {
         let receipt = self
             .inner
             .command(
@@ -133,6 +208,8 @@ impl ActivityHandle {
                 Command::EndActivity {
                     scope: self.scope,
                     outcome,
+                    notice,
+                    output_terminal,
                 },
             )
             .await?;
@@ -175,12 +252,44 @@ impl ActivityHandle {
 }
 
 impl KernelReader {
+    pub async fn activity_output_position(
+        &self,
+        session: SessionId,
+        activity: ActivityId,
+    ) -> Result<ActivityOutputPosition> {
+        self.0
+            .backend
+            .activity_output_position(session, activity)
+            .await
+    }
+
+    /// Recent listed activities whose launch is still in the originating transcript.
+    pub async fn session_activities_by_label(
+        &self,
+        session: SessionId,
+        prefix: &str,
+        limit: usize,
+    ) -> Result<ReadView<Vec<BackgroundActivityView>>> {
+        self.0
+            .backend
+            .session_activities_by_label(session, prefix, limit)
+            .await
+    }
+
     pub async fn activity(
         &self,
         session: SessionId,
         activity: ActivityId,
     ) -> Result<ReadView<BackgroundActivityView>> {
-        self.0.backend.activity(session, activity).await
+        self.0.backend.activity(session, activity, false).await
+    }
+
+    pub async fn listed_activity(
+        &self,
+        session: SessionId,
+        activity: ActivityId,
+    ) -> Result<ReadView<BackgroundActivityView>> {
+        self.0.backend.activity(session, activity, true).await
     }
     /// Origin-owned activities only; inherited transcript references grant
     /// reads through activity(), never work scheduling or write capability.
@@ -194,5 +303,57 @@ impl KernelReader {
             .backend
             .active_activities(session, after, limit)
             .await
+    }
+}
+
+impl SessionCommands {
+    /// Commit a command's operation and an activity under the same request ID.
+    pub async fn begin_plugin_command_activity(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        origin: PluginCommandActivityOrigin,
+        activity: BackgroundActivityStart,
+        retention: ActivityOutputRetention,
+    ) -> Result<CommitReceipt<(EntryId, ActivityHandle)>> {
+        let receipt = self.0.command(request, Command::BeginPluginCommandActivity {
+            scope: Scope {
+                session,
+                execution: origin.invocation,
+                generation: AttemptGeneration::INITIAL,
+                epoch: self.0.epoch,
+            },
+            origin,
+            activity,
+            retention,
+        }).await?;
+        match receipt.value {
+            Mutation::PluginCommandActivity { anchor, id } => Ok(CommitReceipt {
+                position: receipt.position,
+                value: (anchor, ActivityHandle {
+                    inner: self.0.clone(),
+                    scope: ActivityScope { id, session, epoch: self.0.epoch },
+                }),
+            }),
+            _ => Err(unexpected()),
+        }
+    }
+
+    /// Remove a settled, origin-owned activity from the session registry.
+    pub async fn unlist_settled_activity(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        activity: ActivityId,
+    ) -> Result<CommitReceipt<bool>> {
+        let receipt = self.0.command(request, Command::UnlistSettledActivity { session, activity })
+            .await?;
+        match receipt.value {
+            Mutation::ActivityUnlisted(changed) => Ok(CommitReceipt {
+                position: receipt.position,
+                value: changed,
+            }),
+            _ => Err(unexpected()),
+        }
     }
 }

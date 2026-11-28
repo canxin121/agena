@@ -294,6 +294,7 @@ async fn registered_working_directories_compile_into_only_the_owning_sandbox() {
         .get();
     let request = RegisterSessionWorkingDirectory {
         path: extra.clone(),
+        access: agena_domain::SessionWorkingDirectoryAccess::Inherit,
     };
     let (left, right) = tokio::join!(
         manager.add_session_working_directory(fixture.session, request.clone()),
@@ -371,6 +372,155 @@ async fn registered_working_directories_compile_into_only_the_owning_sandbox() {
             PermissionDecision::Deny { .. }
         ));
     }
+    fixture.shutdown().await;
+}
+
+#[tokio::test]
+async fn working_directory_access_modes_update_and_removal_enforce_sandbox_boundaries() {
+    use agena_domain::{
+        AccessKind, RegisterSessionWorkingDirectory, RemoveSessionWorkingDirectory,
+        SessionWorkingDirectoryAccess,
+    };
+
+    let fixture = Fixture::new("allow").await;
+    let extra_ro = fixture.root.join("extra-readonly");
+    let extra_nested_rw = extra_ro.join("writable-sub");
+    tokio::fs::create_dir_all(&extra_nested_rw).await.unwrap();
+    let extra_ro = tokio::fs::canonicalize(&extra_ro).await.unwrap();
+    let extra_nested_rw = tokio::fs::canonicalize(&extra_nested_rw).await.unwrap();
+    let manager = &fixture.manager;
+
+    let reg = manager
+        .add_session_working_directory(
+            fixture.session,
+            RegisterSessionWorkingDirectory {
+                path: extra_ro.clone(),
+                access: SessionWorkingDirectoryAccess::ReadOnly,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(reg.added && !reg.updated);
+    assert_eq!(reg.access, SessionWorkingDirectoryAccess::ReadOnly);
+    assert_eq!(reg.entries.len(), 1);
+    assert_eq!(reg.entries[0].access, SessionWorkingDirectoryAccess::ReadOnly);
+
+    let executor = manager
+        .host_resource_callback_executor(Some(fixture.session), None)
+        .await
+        .unwrap();
+    let snapshot = executor.sandbox_permission_snapshot();
+    assert!(matches!(
+        snapshot.authorize_path_access(AccessKind::Read, &extra_ro),
+        PermissionDecision::Allow
+    ));
+    assert!(matches!(
+        snapshot.authorize_path_access(AccessKind::Write, &extra_ro),
+        PermissionDecision::Deny { .. }
+    ));
+    let fs_policy = snapshot.filesystem_policy().unwrap();
+    assert!(
+        fs_policy
+            .readonly_paths
+            .iter()
+            .any(|p| p.canonicalize().is_ok_and(|c| c == extra_ro))
+    );
+    assert!(
+        !fs_policy
+            .readwrite_paths
+            .iter()
+            .any(|p| p.canonicalize().is_ok_and(|c| c == extra_ro))
+    );
+
+    let nested = manager
+        .add_session_working_directory(
+            fixture.session,
+            RegisterSessionWorkingDirectory {
+                path: extra_nested_rw.clone(),
+                access: SessionWorkingDirectoryAccess::ReadWrite,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(nested.added && !nested.updated);
+    let executor = manager
+        .host_resource_callback_executor(Some(fixture.session), None)
+        .await
+        .unwrap();
+    let snapshot = executor.sandbox_permission_snapshot();
+    assert!(matches!(
+        snapshot.authorize_path_access(AccessKind::Write, &extra_ro),
+        PermissionDecision::Deny { .. }
+    ));
+    assert!(matches!(
+        snapshot.authorize_path_access(AccessKind::Write, &extra_nested_rw),
+        PermissionDecision::Allow
+    ));
+
+    let upgraded = manager
+        .add_session_working_directory(
+            fixture.session,
+            RegisterSessionWorkingDirectory {
+                path: extra_ro.clone(),
+                access: SessionWorkingDirectoryAccess::ReadWrite,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(!upgraded.added && upgraded.updated);
+    let executor = manager
+        .host_resource_callback_executor(Some(fixture.session), None)
+        .await
+        .unwrap();
+    let snapshot = executor.sandbox_permission_snapshot();
+    assert!(matches!(
+        snapshot.authorize_path_access(AccessKind::Write, &extra_ro),
+        PermissionDecision::Allow
+    ));
+
+    let rm1 = manager
+        .remove_session_working_directory(
+            fixture.session,
+            RemoveSessionWorkingDirectory {
+                path: extra_nested_rw.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(rm1.removed);
+    let rm2 = manager
+        .remove_session_working_directory(
+            fixture.session,
+            RemoveSessionWorkingDirectory {
+                path: extra_ro.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(rm2.removed);
+    assert!(rm2.entries.is_empty());
+
+    let rm_again = manager
+        .remove_session_working_directory(
+            fixture.session,
+            RemoveSessionWorkingDirectory {
+                path: extra_ro.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(!rm_again.removed);
+
+    let after = manager
+        .host_resource_callback_executor(Some(fixture.session), None)
+        .await
+        .unwrap();
+    assert!(matches!(
+        after
+            .sandbox_permission_snapshot()
+            .authorize_path_access(AccessKind::Read, &extra_ro),
+        PermissionDecision::Deny { .. }
+    ));
     fixture.shutdown().await;
 }
 

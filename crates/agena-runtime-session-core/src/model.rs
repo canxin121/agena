@@ -91,7 +91,7 @@ pub struct SessionExecutionContext {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub working_directory: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub additional_working_directories: Vec<PathBuf>,
+    pub additional_working_directories: Vec<agena_domain::SessionWorkingDirectory>,
 }
 impl agena_runtime_contracts::ToolSessionContext for SessionExecutionContext {
     fn is_global(&self) -> bool {
@@ -119,7 +119,7 @@ impl agena_runtime_contracts::ToolSessionContext for SessionExecutionContext {
     fn working_directory(&self) -> Option<&Path> {
         self.working_directory.as_deref()
     }
-    fn additional_working_directories(&self) -> &[PathBuf] {
+    fn additional_working_directories(&self) -> &[agena_domain::SessionWorkingDirectory] {
         &self.additional_working_directories
     }
     fn effective_permission(&self) -> &PermissionConfig {

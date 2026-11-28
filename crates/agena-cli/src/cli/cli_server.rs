@@ -1539,18 +1539,39 @@ impl AgenaCli {
                     })?;
                 render_serialized(args.format, &state)
             }
-            SessionsSubcommand::WorkingDirectories(args) => match args.add {
-                Some(path) => {
+            SessionsSubcommand::WorkingDirectories(args) => {
+                if let Some(path) = args.add {
                     let registration = server
                         .client
-                        .register_working_directory(args.session_id, path)
+                        .register_working_directory_with_access(
+                            args.session_id,
+                            path,
+                            args.access.into(),
+                        )
                         .await
                         .map_err(|error| {
                             client_error("failed to add session working directory", error)
                         })?;
                     render_serialized(OutputFormat::Json, &registration)
-                }
-                None => {
+                } else if let Some(path) = args.remove {
+                    let removal = server
+                        .client
+                        .remove_working_directory(args.session_id, path)
+                        .await
+                        .map_err(|error| {
+                            client_error("failed to remove session working directory", error)
+                        })?;
+                    render_serialized(OutputFormat::Json, &removal)
+                } else if args.detailed {
+                    let view = server
+                        .client
+                        .working_directories(args.session_id)
+                        .await
+                        .map_err(|error| {
+                            client_error("failed to list session working directories", error)
+                        })?;
+                    render_serialized(OutputFormat::Json, &view)
+                } else {
                     let directories = server
                         .client
                         .list_working_directories(args.session_id)
@@ -1560,7 +1581,7 @@ impl AgenaCli {
                         })?;
                     render_serialized(OutputFormat::Json, &directories)
                 }
-            },
+            }
             SessionsSubcommand::Channels(args) => {
                 use agena_domain::claude_channels::ClaudeChannelAction;
 

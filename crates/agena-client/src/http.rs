@@ -960,16 +960,53 @@ impl AgenaClient {
             .await
     }
 
+    pub async fn working_directories(
+        &self,
+        session: i64,
+    ) -> Result<agena_domain::SessionWorkingDirectoriesView, ClientError> {
+        self.get_json(&format!(
+            "/api/v1/sessions/{session}/working-directories?detailed=true"
+        ))
+        .await
+    }
+
     pub async fn register_working_directory(
         &self,
         session: i64,
         path: std::path::PathBuf,
     ) -> Result<agena_domain::SessionWorkingDirectoryRegistration, ClientError> {
-        self.post_json(
-            &format!("/api/v1/sessions/{session}/working-directories"),
-            agena_domain::RegisterSessionWorkingDirectory { path },
+        self.register_working_directory_with_access(
+            session,
+            path,
+            agena_domain::SessionWorkingDirectoryAccess::Inherit,
         )
         .await
+    }
+
+    pub async fn register_working_directory_with_access(
+        &self,
+        session: i64,
+        path: std::path::PathBuf,
+        access: agena_domain::SessionWorkingDirectoryAccess,
+    ) -> Result<agena_domain::SessionWorkingDirectoryRegistration, ClientError> {
+        self.post_json(
+            &format!("/api/v1/sessions/{session}/working-directories"),
+            agena_domain::RegisterSessionWorkingDirectory { path, access },
+        )
+        .await
+    }
+
+    pub async fn remove_working_directory(
+        &self,
+        session: i64,
+        path: std::path::PathBuf,
+    ) -> Result<agena_domain::SessionWorkingDirectoryRemoval, ClientError> {
+        let endpoint = self.endpoint(&format!("/api/v1/sessions/{session}/working-directories"));
+        let body = serde_json::to_value(agena_domain::RemoveSessionWorkingDirectory { path })?;
+        let response = self
+            .send_request(reqwest::Method::DELETE, endpoint, Some(&body), None)
+            .await?;
+        self.parse_json(response).await
     }
 
     pub async fn claude_channels(

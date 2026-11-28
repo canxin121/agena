@@ -22,6 +22,7 @@ pub(super) async fn apply(
         | Command::DetachGlobal { .. }
         | Command::Configure { .. }
         | Command::RegisterWorkingDirectory { .. }
+        | Command::RemoveWorkingDirectory { .. }
         | Command::RecoverChannelAuthority { .. }
         | Command::FinishAgent { .. }
         | Command::Fork { .. }

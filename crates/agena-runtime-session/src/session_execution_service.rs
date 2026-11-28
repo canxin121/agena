@@ -146,6 +146,12 @@ pub trait SessionExecutionCommandService: Send + Sync {
         request: agena_domain::RegisterSessionWorkingDirectory,
     ) -> Result<agena_domain::SessionWorkingDirectoryRegistration, SessionExecutionCommandError>;
 
+    async fn remove_working_directory(
+        &self,
+        session: i64,
+        request: agena_domain::RemoveSessionWorkingDirectory,
+    ) -> Result<agena_domain::SessionWorkingDirectoryRemoval, SessionExecutionCommandError>;
+
     /// Delete through the runtime when it owns the session lifecycle.
     async fn delete_runtime_session(&self, _session: i64) -> Result<bool, SessionExecutionCommandError> {
         Ok(false)

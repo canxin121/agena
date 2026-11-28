@@ -145,13 +145,23 @@ Claude 的 `FileChanged` 使用操作系统的文件监听。插件的 `matcher`
 #### 额外工作目录
 
 ```bash
-agena sessions working-directories 42 --add ../shared
+agena sessions working-directories 42 --add ../shared --access readonly
+agena sessions working-directories 42 --add ../shared --access readwrite
+agena sessions working-directories 42 --remove ../shared
+agena sessions working-directories 42 --detailed
 agena sessions working-directories 42
 ```
 
-相对路径从当前会话的项目根目录解析。Agena 验证目录存在并将规范路径保存在这个可写项目会话中，服务重启后可继续使用。文件工具和后续启动的沙盒进程按该会话的工作区默认权限访问这些目录，同时执行显式路径规则、宿主保护和权限上限。MCP 的 `roots/list` 公布会话当前可读的附加目录。
+每个项目会话保留单一主工作区归属，并可按需挂载多个额外工作目录，为每个目录独立指定访问级别（`inherit` 继承会话工作区默认策略、`readonly` 仅允许读取、`readwrite` 允许读写；支持别名 `ro`、`rw`）。相对路径从当前会话的项目根目录解析。Agena 验证目录存在并将规范路径与权限级别保存在该可写项目会话中，服务重启后继续生效。
 
-REST 客户端可以向 `/api/v1/sessions/{id}/working-directories` 提交 `POST` 请求，正文形如 `{"path":"../shared"}`。返回值包含 `added`、规范路径 `directory` 和注册列表 `directories`。已经由项目根目录或已注册目录覆盖的路径返回 `added: false`。同一路由的 `GET` 读取注册列表。
+文件工具和后续启动的沙盒进程按最具体匹配目录计算默认权限，同时持续执行显式 `path.rules`、宿主与 `.git` 保护规则以及权限上限；在可写目录内挂载嵌套的 `readonly` 子目录时，沙盒与文件工具都会对该子目录执行只读限制。移除额外目录后会立即撤销对应的路径与沙盒访问权限，并刷新文件监听。MCP 的 `roots/list` 公布会话当前可读的附加目录。
+
+REST 客户端可在 `/api/v1/sessions/{id}/working-directories` 上管理目录：
+- `GET` 默认返回已注册目录路径数组（兼容旧客户端），传入 `?detailed=true` 返回包含主工作区 `primary`、路径列表 `directories` 与带权限明细 `entries` 的视图。
+- `POST` 接受 `{"path":"../shared","access":"readonly"}`（`access` 省略时默认 `inherit`），返回 `added`、`updated`、`directory`、`access`、`directories` 与 `entries`；对已挂载目录提交不同权限会原地更新并返回 `updated: true`，已被同权限上级目录或主工作区覆盖的路径返回 `added: false, updated: false`。
+- `DELETE` 接受 JSON 正文 `{"path":"../shared"}` 或查询参数 `?path=...`，返回 `removed`、`directory`、`directories` 与 `entries`。
+
+在 TUI 与 Web 界面中，项目会话支持 `/dirs`（别名 `/add-dir`、`/working-dirs`）查看、添加（`/dirs add <path> [readonly|readwrite|inherit]` 或简写 `/dirs <path> [ro|rw]`）及移除（`/dirs remove <path>`）额外目录；Web 聊天输入框底部工具栏也提供工作目录弹出面板，可直接查看主工作区、切换各额外目录的只读/读写/继承权限以及增删目录。
 
 Agena 提交新增目录并刷新文件监听后，向已启用的 Claude 插件派发 `DirectoryAdded`。事件包含当前 shell 工作目录 `cwd`、新增的 `directory` 和 `source: register_repo_root`。hook 可以按提交后的会话权限工作。返回的诊断消息和命令错误写入插件日志。[Claude Code DirectoryAdded](https://code.claude.com/docs/en/hooks#directoryadded)
 

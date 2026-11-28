@@ -247,7 +247,9 @@ pub use session_state::{
 };
 pub use session_summary::{SessionListRequest, SessionSummary};
 pub use session_working_directories::{
-    RegisterSessionWorkingDirectory, SessionWorkingDirectoryRegistration,
+    RegisterSessionWorkingDirectory, RemoveSessionWorkingDirectory, SessionWorkingDirectoriesView,
+    SessionWorkingDirectory, SessionWorkingDirectoryAccess, SessionWorkingDirectoryRegistration,
+    SessionWorkingDirectoryRemoval,
 };
 pub use session_usage::{SessionUsage, SessionUsageLimitBasis};
 pub use stream_error::StreamErrorEvent;

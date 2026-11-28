@@ -428,6 +428,7 @@ async fn register_working_directory(
     expected: MetadataVersion,
     workspace_root: &std::path::Path,
     directory: &std::path::Path,
+    access: agena_domain::SessionWorkingDirectoryAccess,
 ) -> Result<Mutation> {
     let metadata = reads::metadata(connection, session).await?;
     if metadata.metadata_version != expected {
@@ -460,25 +461,111 @@ async fn register_working_directory(
             "working directory registration requires canonical absolute paths",
         ));
     }
-    let added = !std::iter::once(workspace_root)
-        .chain(
-            configuration
+    let mut added = false;
+    let mut updated = false;
+    if let Some(existing) = configuration
+        .additional_working_directories
+        .iter_mut()
+        .find(|entry| entry.path == directory)
+    {
+        if existing.access != access {
+            existing.access = access;
+            updated = true;
+            write_configuration(connection, session, &configuration).await?;
+        }
+    } else {
+        let covered = directory == workspace_root
+            || (access == agena_domain::SessionWorkingDirectoryAccess::Inherit
+                && directory.starts_with(workspace_root))
+            || configuration
                 .additional_working_directories
                 .iter()
-                .map(std::path::PathBuf::as_path),
-        )
-        .any(|root| directory.starts_with(root));
-    if added {
-        configuration
-            .additional_working_directories
-            .push(directory.to_owned());
-        write_configuration(connection, session, &configuration).await?;
+                .filter(|entry| directory.starts_with(&entry.path))
+                .max_by_key(|entry| entry.path.components().count())
+                .is_some_and(|parent| parent.access == access);
+        if !covered {
+            configuration
+                .additional_working_directories
+                .push(agena_domain::SessionWorkingDirectory::new(
+                    directory.to_owned(),
+                    access,
+                ));
+            added = true;
+            write_configuration(connection, session, &configuration).await?;
+        }
     }
+    let directories = configuration
+        .additional_working_directories
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect();
     Ok(Mutation::WorkingDirectoryRegistration(
         agena_domain::SessionWorkingDirectoryRegistration {
             added,
+            updated,
             directory: directory.to_owned(),
-            directories: configuration.additional_working_directories,
+            access,
+            directories,
+            entries: configuration.additional_working_directories,
+        },
+    ))
+}
+
+async fn remove_working_directory(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+    expected: MetadataVersion,
+    directory: &std::path::Path,
+) -> Result<Mutation> {
+    let metadata = reads::metadata(connection, session).await?;
+    if metadata.metadata_version != expected {
+        return Err(KernelError::Conflict(
+            "session configuration changed during directory removal".into(),
+        ));
+    }
+    let mut configuration = configuration(connection, session).await?;
+    if metadata.workspace_id.is_none()
+        || configuration.owner.is_some()
+        || configuration.channel_authority.is_some()
+        || configuration.relation_kind.is_subagent()
+        || configuration
+            .conversation
+            .as_ref()
+            .is_some_and(|view| view.is_read_only())
+    {
+        return Err(invalid(
+            "working directories can only be removed in a writable project session",
+        ));
+    }
+    if !directory.is_absolute()
+        || directory.to_str().is_none()
+        || directory
+            .components()
+            .any(|part| part == std::path::Component::ParentDir)
+    {
+        return Err(invalid(
+            "working directory removal requires canonical absolute paths",
+        ));
+    }
+    let before = configuration.additional_working_directories.len();
+    configuration
+        .additional_working_directories
+        .retain(|entry| entry.path != directory);
+    let removed = configuration.additional_working_directories.len() != before;
+    if removed {
+        write_configuration(connection, session, &configuration).await?;
+    }
+    let directories = configuration
+        .additional_working_directories
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect();
+    Ok(Mutation::WorkingDirectoryRemoval(
+        agena_domain::SessionWorkingDirectoryRemoval {
+            removed,
+            directory: directory.to_owned(),
+            directories,
+            entries: configuration.additional_working_directories,
         },
     ))
 }
@@ -1809,6 +1896,7 @@ pub(super) async fn apply(
             metadata_version,
             workspace_root,
             directory,
+            access,
         } => {
             register_working_directory(
                 connection,
@@ -1816,9 +1904,15 @@ pub(super) async fn apply(
                 *metadata_version,
                 workspace_root,
                 directory,
+                *access,
             )
             .await?
         }
+        Command::RemoveWorkingDirectory {
+            session,
+            metadata_version,
+            directory,
+        } => remove_working_directory(connection, *session, *metadata_version, directory).await?,
         Command::RecoverChannelAuthority { session, recovery } => {
             recover_channel_authority(connection, *session, recovery).await?
         }

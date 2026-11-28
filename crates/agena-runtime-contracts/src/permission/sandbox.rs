@@ -70,7 +70,7 @@ pub struct SandboxPathPolicy {
     pub external_read_default: PermissionMode,
     pub external_write_default: PermissionMode,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub additional_working_directories: Vec<PathBuf>,
+    pub additional_working_directories: Vec<agena_domain::SessionWorkingDirectory>,
     /// Preserves the configuration's last-matching-rule-wins ordering.
     pub rules: Vec<SandboxPathRule>,
 }
@@ -248,13 +248,13 @@ impl SandboxPermissionSnapshot {
             .first()
             .into_iter()
             .flat_map(|layer| &layer.additional_working_directories)
-            .filter(|directory| {
+            .filter(|entry| {
                 matches!(
-                    self.authorize_path_access(AccessKind::Read, directory),
+                    self.authorize_path_access(AccessKind::Read, &entry.path),
                     PermissionDecision::Allow
                 )
             })
-            .cloned()
+            .map(|entry| entry.path.clone())
             .collect()
     }
 
@@ -606,22 +606,47 @@ impl SandboxPermissionSnapshot {
                     }
                 }
             }
-            // A grant outside a workspace can contain that workspace, whose
-            // more restrictive class defaults must still be enforced.
-            if layer.workspace_read_default != PermissionMode::Allow {
-                for root in layer.working_directories(&self.workspace_root) {
-                    if all_reads
+            // A grant outside a workspace can contain that workspace (or a stricter
+            // read-only working directory), whose class defaults must still be enforced.
+            for (root, dir_access) in layer.working_directories(&self.workspace_root) {
+                let read_mode = super::working_directory_class_mode(
+                    AccessKind::Read,
+                    dir_access,
+                    layer.workspace_read_default,
+                    layer.workspace_write_default,
+                );
+                if read_mode != PermissionMode::Allow
+                    && all_reads
                         .iter()
                         .any(|grant| !path_identity::equal(root, grant) && within(root, grant))
+                {
+                    self.add_read_boundary(
+                        &mut restrictions,
+                        read_mode,
+                        root,
+                        true,
+                        &all_reads,
+                        false,
+                    )?;
+                }
+                let write_mode = super::working_directory_class_mode(
+                    AccessKind::Write,
+                    dir_access,
+                    layer.workspace_read_default,
+                    layer.workspace_write_default,
+                );
+                if write_mode != PermissionMode::Allow
+                    && writes
+                        .iter()
+                        .any(|grant| !path_identity::equal(root, grant) && within(root, grant))
+                {
+                    let normalized_root = PathBuf::from(normalize_path_string(root));
+                    if !restrictions
+                        .readonly_paths
+                        .iter()
+                        .any(|existing| path_identity::equal(existing, &normalized_root))
                     {
-                        self.add_read_boundary(
-                            &mut restrictions,
-                            layer.workspace_read_default,
-                            root,
-                            true,
-                            &all_reads,
-                            false,
-                        )?;
+                        restrictions.readonly_paths.push(normalized_root);
                     }
                 }
             }
@@ -735,21 +760,28 @@ impl SandboxPermissionSnapshot {
 }
 
 impl SandboxPathPolicy {
-    fn working_directories<'a>(&'a self, workspace: &'a Path) -> impl Iterator<Item = &'a Path> {
+    fn working_directories<'a>(
+        &'a self,
+        workspace: &'a Path,
+    ) -> impl Iterator<Item = (&'a Path, agena_domain::SessionWorkingDirectoryAccess)> {
         (!workspace.as_os_str().is_empty())
-            .then_some(workspace)
+            .then_some((workspace, agena_domain::SessionWorkingDirectoryAccess::Inherit))
             .into_iter()
             .chain(
                 self.additional_working_directories
                     .iter()
-                    .map(PathBuf::as_path),
+                    .map(|entry| (entry.path.as_path(), entry.access)),
             )
     }
 
-    fn containing_workspace<'a>(&'a self, workspace: &'a Path, target: &Path) -> Option<&'a Path> {
+    fn containing_workspace<'a>(
+        &'a self,
+        workspace: &'a Path,
+        target: &Path,
+    ) -> Option<(&'a Path, agena_domain::SessionWorkingDirectoryAccess)> {
         self.working_directories(workspace)
-            .filter(|root| within(target, root))
-            .max_by_key(|root| root.components().count())
+            .filter(|(root, _)| within(target, root))
+            .max_by_key(|(root, _)| root.components().count())
     }
 
     fn subtree_default(
@@ -767,12 +799,17 @@ impl SandboxPathPolicy {
         }) {
             return rule.mode;
         }
-        let in_workspace = self.containing_workspace(workspace_root, target).is_some();
-        match (access, in_workspace) {
-            (AccessKind::Read, true) => self.workspace_read_default,
-            (AccessKind::Write, true) => self.workspace_write_default,
-            (AccessKind::Read, false) => self.external_read_default,
-            (AccessKind::Write, false) => self.external_write_default,
+        match self.containing_workspace(workspace_root, target) {
+            Some((_, dir_access)) => super::working_directory_class_mode(
+                access,
+                dir_access,
+                self.workspace_read_default,
+                self.workspace_write_default,
+            ),
+            None => match access {
+                AccessKind::Read => self.external_read_default,
+                AccessKind::Write => self.external_write_default,
+            },
         }
     }
 
@@ -789,12 +826,17 @@ impl SandboxPathPolicy {
                 return decide_from_mode(rule.mode, "matched sandbox path rule");
             }
         }
-        let in_workspace = self.containing_workspace(workspace_root, target).is_some();
-        let mode = match (access, in_workspace) {
-            (AccessKind::Read, true) => self.workspace_read_default,
-            (AccessKind::Write, true) => self.workspace_write_default,
-            (AccessKind::Read, false) => self.external_read_default,
-            (AccessKind::Write, false) => self.external_write_default,
+        let mode = match self.containing_workspace(workspace_root, target) {
+            Some((_, dir_access)) => super::working_directory_class_mode(
+                access,
+                dir_access,
+                self.workspace_read_default,
+                self.workspace_write_default,
+            ),
+            None => match access {
+                AccessKind::Read => self.external_read_default,
+                AccessKind::Write => self.external_write_default,
+            },
         };
         decide_from_mode(mode, "matched sandbox path class default")
     }

@@ -1527,6 +1527,16 @@ impl SessionExecutionCommandService for SessionManager {
             .map_err(command_error)
     }
 
+    async fn remove_working_directory(
+        &self,
+        session: i64,
+        request: agena_domain::RemoveSessionWorkingDirectory,
+    ) -> Result<agena_domain::SessionWorkingDirectoryRemoval, SessionExecutionCommandError> {
+        self.remove_session_working_directory(session, request)
+            .await
+            .map_err(command_error)
+    }
+
     async fn prepare_session_profile(
         &self,
         workspace_id: Option<i64>,

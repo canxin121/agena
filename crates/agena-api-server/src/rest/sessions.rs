@@ -1,12 +1,33 @@
 use agena_application::dto::SessionPermissionUpdateRequest;
 
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct WorkingDirectoriesQuery {
+    #[serde(default)]
+    pub detailed: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct RemoveWorkingDirectoryQuery {
+    #[serde(default)]
+    pub path: Option<std::path::PathBuf>,
+}
+
 pub async fn list_working_directories(
     State(state): State<AppState>,
     Path(session_id): Path<i64>,
-) -> Result<impl IntoResponse, ServerError> {
-    Ok(Json(
-        state.service().list_working_directories(session_id).await?,
-    ))
+    AxumQuery(query): AxumQuery<WorkingDirectoriesQuery>,
+) -> Result<axum::response::Response, ServerError> {
+    if query.detailed {
+        Ok(Json(
+            state
+                .service()
+                .list_working_directories_view(session_id)
+                .await?,
+        )
+        .into_response())
+    } else {
+        Ok(Json(state.service().list_working_directories(session_id).await?).into_response())
+    }
 }
 
 pub async fn register_working_directory(
@@ -18,6 +39,27 @@ pub async fn register_working_directory(
         state
             .service()
             .register_working_directory(session_id, request)
+            .await?,
+    ))
+}
+
+pub async fn remove_working_directory(
+    State(state): State<AppState>,
+    Path(session_id): Path<i64>,
+    AxumQuery(query): AxumQuery<RemoveWorkingDirectoryQuery>,
+    body: Option<Json<agena_domain::RemoveSessionWorkingDirectory>>,
+) -> Result<impl IntoResponse, ServerError> {
+    let request = match (body, query.path) {
+        (Some(Json(req)), _) => req,
+        (None, Some(path)) => agena_domain::RemoveSessionWorkingDirectory { path },
+        (None, None) => agena_domain::RemoveSessionWorkingDirectory {
+            path: std::path::PathBuf::new(),
+        },
+    };
+    Ok(Json(
+        state
+            .service()
+            .remove_working_directory(session_id, request)
             .await?,
     ))
 }

@@ -48,7 +48,7 @@ impl ProtectedPaths {
             for root in std::iter::once(workspace).chain(
                 base.into_iter()
                     .flat_map(|policy| &policy.additional_working_directories)
-                    .map(PathBuf::as_path),
+                    .map(|entry| entry.path.as_path()),
             ) {
                 let (paths, directories) = git_protections(root);
                 git_paths.extend(paths);

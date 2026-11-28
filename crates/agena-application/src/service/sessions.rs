@@ -14,13 +14,52 @@ impl ApplicationService {
         &self,
         session_id: i64,
     ) -> ApplicationResult<Vec<std::path::PathBuf>> {
+        let view = self.list_working_directories_view(session_id).await?;
+        Ok(view.directories)
+    }
+
+    pub async fn list_working_directories_view(
+        &self,
+        session_id: i64,
+    ) -> ApplicationResult<agena_domain::SessionWorkingDirectoriesView> {
+        let id = crate::kernel_session_id(session_id)?;
         let configuration = self
             .session_kernel
             .reader
-            .configuration(crate::kernel_session_id(session_id)?)
+            .configuration(id)
             .await
             .map_err(crate::kernel_error)?;
-        Ok(configuration.additional_working_directories.clone())
+        let primary = match configuration.effective_workspace_root.clone() {
+            Some(path) => Some(path),
+            None => {
+                let metadata = self
+                    .session_kernel
+                    .reader
+                    .metadata(id)
+                    .await
+                    .map_err(crate::kernel_error)?;
+                match metadata.workspace_id {
+                    Some(workspace_id) => self
+                        .workspace_repository
+                        .path_by_id(workspace_id)
+                        .await
+                        .map_err(|error| ApplicationError::internal_error(&error))?
+                        .map(std::path::PathBuf::from),
+                    None => None,
+                }
+            }
+        };
+        let primary = match primary {
+            Some(path) => Some(tokio::fs::canonicalize(&path).await.unwrap_or(path)),
+            None => None,
+        };
+        let entries = configuration.additional_working_directories.clone();
+        let directories = entries.iter().map(|entry| entry.path.clone()).collect();
+        Ok(agena_domain::SessionWorkingDirectoriesView {
+            primary,
+            directories,
+            entries,
+        })
     }
 
     pub async fn register_working_directory(
@@ -34,6 +73,21 @@ impl ApplicationService {
         })?;
         commands
             .register_working_directory(session_id, request)
+            .await
+            .map_err(|error| ApplicationError::from_failure(error.failure))
+    }
+
+    pub async fn remove_working_directory(
+        &self,
+        session_id: i64,
+        request: agena_domain::RemoveSessionWorkingDirectory,
+    ) -> ApplicationResult<agena_domain::SessionWorkingDirectoryRemoval> {
+        self.ensure_session_exists(session_id).await?;
+        let commands = self.session_commands.as_ref().ok_or_else(|| {
+            ApplicationError::internal("Working directories require the session runtime")
+        })?;
+        commands
+            .remove_working_directory(session_id, request)
             .await
             .map_err(|error| ApplicationError::from_failure(error.failure))
     }

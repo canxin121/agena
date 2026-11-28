@@ -2444,6 +2444,7 @@ fn previous_list_session(command: &Command) -> Option<SessionId> {
         | Command::DetachGlobal { session, .. }
         | Command::Configure { session, .. }
         | Command::RegisterWorkingDirectory { session, .. }
+        | Command::RemoveWorkingDirectory { session, .. }
         | Command::RecoverChannelAuthority { session, .. }
         | Command::FinishAgent { session, .. }
         | Command::Withdraw { session, .. }
@@ -2580,6 +2581,7 @@ fn change_target(command: &Command, mutation: &Mutation) -> (SessionId, ChangeKi
         },
         Command::Configure { session, .. }
         | Command::RegisterWorkingDirectory { session, .. }
+        | Command::RemoveWorkingDirectory { session, .. }
         | Command::RecoverChannelAuthority { session, .. }
         | Command::DetachGlobal { session, .. }
         | Command::FinishAgent { session, .. } => (*session, ChangeKind::Metadata),

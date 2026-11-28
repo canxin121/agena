@@ -64,7 +64,7 @@ pub trait ToolSessionContext {
     fn working_directory(&self) -> Option<&std::path::Path> {
         None
     }
-    fn additional_working_directories(&self) -> &[std::path::PathBuf] {
+    fn additional_working_directories(&self) -> &[agena_domain::SessionWorkingDirectory] {
         &[]
     }
     fn effective_permission(&self) -> &authorization::PermissionConfig;

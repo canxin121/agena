@@ -19,9 +19,12 @@ impl SandboxPermissionSnapshot {
             candidates.push(self.workspace_root.clone());
         }
         candidates.extend(
-            self.path_layers
-                .iter()
-                .flat_map(|layer| layer.additional_working_directories.iter().cloned()),
+            self.path_layers.iter().flat_map(|layer| {
+                layer
+                    .additional_working_directories
+                    .iter()
+                    .map(|entry| entry.path.clone())
+            }),
         );
         for layer in &self.path_layers {
             for rule in &layer.rules {
@@ -164,11 +167,15 @@ impl SandboxPathPolicy {
                 .find(|rule| rule.access.matches(access) && rule.patterns.iter().any(covers));
             let working_directory = self.containing_workspace(workspace, path);
             let mode = rule.map_or_else(
-                || match (access, working_directory.is_some()) {
-                    (AccessKind::Read, true) => self.workspace_read_default,
-                    (AccessKind::Write, true) => self.workspace_write_default,
-                    (AccessKind::Read, false) => self.external_read_default,
-                    (AccessKind::Write, false) => self.external_write_default,
+                || match (access, working_directory) {
+                    (access, Some((_, dir_access))) => working_directory_class_mode(
+                        access,
+                        dir_access,
+                        self.workspace_read_default,
+                        self.workspace_write_default,
+                    ),
+                    (AccessKind::Read, None) => self.external_read_default,
+                    (AccessKind::Write, None) => self.external_write_default,
                 },
                 |rule| rule.mode,
             );
@@ -188,9 +195,10 @@ impl SandboxPathPolicy {
                 }
                 approved
             } else {
-                grants
-                    .iter()
-                    .any(|grant| within(path, grant) && working_directory.is_none_or(|root| within(grant, root)))
+                grants.iter().any(|grant| {
+                    within(path, grant)
+                        && working_directory.is_none_or(|(root, _)| within(grant, root))
+                })
             };
             if !approved {
                 return Ok(false);

@@ -695,14 +695,40 @@ pub enum PermissionConfigError {
     UnsupportedSandbox { field: String, reason: String },
 }
 
-#[derive(Debug, Clone)]
+pub(crate) fn working_directory_class_mode(
+    access: AccessKind,
+    dir_access: agena_domain::SessionWorkingDirectoryAccess,
+    workspace_read_default: PermissionMode,
+    workspace_write_default: PermissionMode,
+) -> PermissionMode {
+    match (access, dir_access) {
+        (AccessKind::Read, _) => workspace_read_default,
+        (AccessKind::Write, agena_domain::SessionWorkingDirectoryAccess::Inherit) => {
+            workspace_write_default
+        }
+        (AccessKind::Write, agena_domain::SessionWorkingDirectoryAccess::ReadOnly) => {
+            PermissionMode::Deny
+        }
+        (AccessKind::Write, agena_domain::SessionWorkingDirectoryAccess::ReadWrite) => {
+            if workspace_read_default == PermissionMode::Allow
+                && workspace_write_default == PermissionMode::Deny
+            {
+                PermissionMode::Allow
+            } else {
+                workspace_write_default
+            }
+        }
+    }
+}
+
 /// Permission policy for workspace and external paths.
+#[derive(Debug, Clone)]
 pub struct PermissionPolicy {
     pub(crate) workspace_read_default: PermissionMode,
     pub(crate) workspace_write_default: PermissionMode,
     pub(crate) external_read_default: PermissionMode,
     pub(crate) external_write_default: PermissionMode,
-    pub(crate) additional_working_directories: Vec<PathBuf>,
+    pub(crate) additional_working_directories: Vec<agena_domain::SessionWorkingDirectory>,
     pub(crate) rules: Vec<PermissionRule>,
 }
 
@@ -724,13 +750,16 @@ impl PermissionPolicy {
 
     /// The session selects the additional roots for its base path policy.
     /// Independent policy ceilings keep their original workspace boundary.
-    pub fn set_additional_working_directories(&mut self, directories: &[PathBuf]) {
+    pub fn set_additional_working_directories(
+        &mut self,
+        directories: &[agena_domain::SessionWorkingDirectory],
+    ) {
         self.additional_working_directories = directories
             .iter()
-            .filter(|directory| {
-                directory.is_absolute()
-                    && std::fs::canonicalize(directory).is_ok_and(|resolved| {
-                        path_identity::equal(&resolved, directory) && resolved.is_dir()
+            .filter(|entry| {
+                entry.path.is_absolute()
+                    && std::fs::canonicalize(&entry.path).is_ok_and(|resolved| {
+                        path_identity::equal(&resolved, &entry.path) && resolved.is_dir()
                     })
             })
             .cloned()
@@ -784,30 +813,54 @@ impl PermissionPolicy {
             }
         }
 
-        let in_workspace = context.in_workspace
-            || self.additional_working_directories.iter().any(|root| {
-                path_identity::within(
-                    Path::new(&context.absolute_norm),
-                    Path::new(&normalize_path_string(root)),
-                )
-            });
-        match (access, in_workspace) {
-            (AccessKind::Read, true) => decide_from_mode(
-                self.workspace_read_default,
-                "matched workspace default read permission",
-            ),
-            (AccessKind::Write, true) => decide_from_mode(
-                self.workspace_write_default,
-                "matched workspace default write permission",
-            ),
-            (AccessKind::Read, false) => decide_from_mode(
-                self.external_read_default,
-                "matched external default read permission",
-            ),
-            (AccessKind::Write, false) => decide_from_mode(
-                self.external_write_default,
-                "matched external default write permission",
-            ),
+        let mut best_match: Option<(usize, agena_domain::SessionWorkingDirectoryAccess)> =
+            context.in_workspace.then_some((
+                context.workspace_depth,
+                agena_domain::SessionWorkingDirectoryAccess::Inherit,
+            ));
+        let target = Path::new(&context.absolute_norm);
+        for entry in &self.additional_working_directories {
+            let norm = normalize_path_string(&entry.path);
+            let root = Path::new(&norm);
+            if path_identity::within(target, root) {
+                let depth = root.components().count();
+                if best_match.is_none_or(|(best_depth, _)| depth >= best_depth) {
+                    best_match = Some((depth, entry.access));
+                }
+            }
+        }
+        match best_match {
+            Some((_, dir_access)) => {
+                let mode = working_directory_class_mode(
+                    access,
+                    dir_access,
+                    self.workspace_read_default,
+                    self.workspace_write_default,
+                );
+                let reason = match (access, dir_access) {
+                    (AccessKind::Read, _) => "matched workspace default read permission",
+                    (AccessKind::Write, agena_domain::SessionWorkingDirectoryAccess::ReadOnly) => {
+                        "matched read-only working directory restriction"
+                    }
+                    (AccessKind::Write, agena_domain::SessionWorkingDirectoryAccess::ReadWrite) => {
+                        "matched read-write working directory permission"
+                    }
+                    (AccessKind::Write, agena_domain::SessionWorkingDirectoryAccess::Inherit) => {
+                        "matched workspace default write permission"
+                    }
+                };
+                decide_from_mode(mode, reason)
+            }
+            None => match access {
+                AccessKind::Read => decide_from_mode(
+                    self.external_read_default,
+                    "matched external default read permission",
+                ),
+                AccessKind::Write => decide_from_mode(
+                    self.external_write_default,
+                    "matched external default write permission",
+                ),
+            },
         }
     }
 }
@@ -1055,6 +1108,7 @@ struct MatchContext {
     workspace_relative_norm: Option<String>,
     managed_relative_norm: Option<String>,
     in_workspace: bool,
+    workspace_depth: usize,
 }
 
 impl MatchContext {
@@ -1065,6 +1119,7 @@ impl MatchContext {
                 workspace_relative_norm: None,
                 managed_relative_norm: None,
                 in_workspace: false,
+                workspace_depth: 0,
             };
         }
         let root_absolute = if workspace_root.is_absolute() {
@@ -1102,11 +1157,13 @@ impl MatchContext {
         let managed_norm = normalize_path_string(&managed_root);
         let managed_relative_norm =
             relative_path_norm(Path::new(&absolute_norm), Path::new(&managed_norm));
+        let workspace_depth = Path::new(&root_norm).components().count();
         Self {
             absolute_norm,
             managed_relative_norm,
             workspace_relative_norm,
             in_workspace,
+            workspace_depth,
         }
     }
 }

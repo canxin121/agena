@@ -70,7 +70,9 @@ pub(super) fn routes() -> Router<AppState> {
         )
         .route(
             "/api/v1/sessions/{session_id}/working-directories",
-            get(rest::list_working_directories).post(rest::register_working_directory),
+            get(rest::list_working_directories)
+                .post(rest::register_working_directory)
+                .delete(rest::remove_working_directory),
         )
         .route(
             "/api/v1/sessions/{session_id}/claude-channels",

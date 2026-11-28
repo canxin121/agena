@@ -5,6 +5,20 @@ use agena_plugin_host::sdk::{HookSubscription, ImportedDirectoryAddedInput};
 use super::*;
 
 impl SessionManager {
+    /// Refresh file watches when working directory access changes or a directory is removed.
+    pub fn refresh_working_directory_state(&self, session: i64) {
+        if self.shutdown.is_cancelled() {
+            return;
+        }
+        let manager = self.clone();
+        self.control_tasks.spawn(async move {
+            manager
+                .imported_file_watches
+                .refresh_session_and_wait(session)
+                .await;
+        });
+    }
+
     /// Queue the observer after an additional working directory is committed.
     pub fn dispatch_imported_directory_added(&self, session: i64, directory: &Path) {
         let Ok(id) = session_id(session) else {
@@ -35,7 +49,10 @@ impl SessionManager {
                     || context.owner.is_some()
                     || context.channel_authority.is_some()
                     || context.relation_kind.is_subagent()
-                    || !context.additional_working_directories.contains(&directory)
+                    || !context
+                        .additional_working_directories
+                        .iter()
+                        .any(|entry| entry.path == directory)
                     || context
                         .conversation
                         .as_ref()

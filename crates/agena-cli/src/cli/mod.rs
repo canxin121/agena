@@ -1154,7 +1154,7 @@ pub enum SessionsSubcommand {
     Update(SessionUpdateArgs),
     /// List or activate Claude MCP channels for one project session.
     Channels(SessionChannelsArgs),
-    /// List or add working directories for one project session.
+    /// List, add, update, or remove working directories for one project session.
     WorkingDirectories(SessionWorkingDirectoriesArgs),
     /// Export a session to a JSONL bundle (stdout). Pipe to a file to keep.
     Export(SessionExportArgs),
@@ -1168,9 +1168,37 @@ pub enum SessionsSubcommand {
 #[derive(Debug, Clone, Args)]
 pub struct SessionWorkingDirectoriesArgs {
     pub session_id: i64,
-    /// Add a directory. Relative paths are resolved from the session's project root.
-    #[arg(long, value_name = "PATH")]
+    /// Add or update a directory. Relative paths are resolved from the session's project root.
+    #[arg(long, value_name = "PATH", conflicts_with = "remove")]
     pub add: Option<PathBuf>,
+    /// Access policy for the added/updated directory (inherit, readonly, or readwrite).
+    #[arg(long, value_enum, default_value_t = WorkingDirectoryAccessArg::Inherit, requires = "add")]
+    pub access: WorkingDirectoryAccessArg,
+    /// Remove a previously added directory from this session.
+    #[arg(long, value_name = "PATH", conflicts_with = "add")]
+    pub remove: Option<PathBuf>,
+    /// Include the primary workspace root and per-directory access levels when listing.
+    #[arg(long, conflicts_with_all = ["add", "remove"])]
+    pub detailed: bool,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum WorkingDirectoryAccessArg {
+    Inherit,
+    #[value(alias = "ro")]
+    Readonly,
+    #[value(alias = "rw")]
+    Readwrite,
+}
+
+impl From<WorkingDirectoryAccessArg> for agena_domain::SessionWorkingDirectoryAccess {
+    fn from(value: WorkingDirectoryAccessArg) -> Self {
+        match value {
+            WorkingDirectoryAccessArg::Inherit => Self::Inherit,
+            WorkingDirectoryAccessArg::Readonly => Self::ReadOnly,
+            WorkingDirectoryAccessArg::Readwrite => Self::ReadWrite,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Args)]

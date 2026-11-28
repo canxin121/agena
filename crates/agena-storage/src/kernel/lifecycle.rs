@@ -54,7 +54,7 @@ pub struct SessionConfiguration {
     pub working_directory: Option<PathBuf>,
     /// Absolute directories explicitly registered for this session on this host.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub additional_working_directories: Vec<PathBuf>,
+    pub additional_working_directories: Vec<agena_domain::SessionWorkingDirectory>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worktree: Option<SessionWorktree>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -687,6 +687,7 @@ impl SessionCommands {
         metadata_version: MetadataVersion,
         workspace_root: PathBuf,
         directory: PathBuf,
+        access: agena_domain::SessionWorkingDirectoryAccess,
     ) -> Result<CommitReceipt<agena_domain::SessionWorkingDirectoryRegistration>> {
         let receipt = self
             .0
@@ -697,11 +698,39 @@ impl SessionCommands {
                     metadata_version,
                     workspace_root,
                     directory,
+                    access,
                 },
             )
             .await?;
         match receipt.value {
             Mutation::WorkingDirectoryRegistration(value) => Ok(CommitReceipt {
+                position: receipt.position,
+                value,
+            }),
+            _ => Err(unexpected()),
+        }
+    }
+
+    pub async fn remove_working_directory(
+        &self,
+        request: RequestId,
+        session: SessionId,
+        metadata_version: MetadataVersion,
+        directory: PathBuf,
+    ) -> Result<CommitReceipt<agena_domain::SessionWorkingDirectoryRemoval>> {
+        let receipt = self
+            .0
+            .command(
+                request,
+                Command::RemoveWorkingDirectory {
+                    session,
+                    metadata_version,
+                    directory,
+                },
+            )
+            .await?;
+        match receipt.value {
+            Mutation::WorkingDirectoryRemoval(value) => Ok(CommitReceipt {
                 position: receipt.position,
                 value,
             }),

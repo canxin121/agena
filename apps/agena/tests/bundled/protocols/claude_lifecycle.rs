@@ -482,6 +482,231 @@ export function register(on) {
         .await
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn session_working_directories_support_per_directory_access_update_and_removal() -> TestResult {
+    super::super::fixture_without_memory()
+        .env("AGENA_SANDBOX", "disabled")
+        .configure_global(|config| {
+            config["permission"]["path"]["workspace"] = json!("readwrite");
+            config["permission"]["tools"]["names"]["agena.fs.read"] = json!("allow");
+            config["permission"]["tools"]["names"]["agena.fs.write"] = json!("allow");
+        })
+        .before_start(|case| async move {
+            let parent = case.workspace().parent().context("workspace parent")?;
+            let ro_dir = parent.join("extra-ro");
+            let rw_dir = parent.join("extra-rw");
+            let nested_ro = rw_dir.join("locked");
+            tokio::fs::create_dir_all(&ro_dir).await?;
+            tokio::fs::create_dir_all(&nested_ro).await?;
+            tokio::fs::write(ro_dir.join("notes.txt"), "readonly source").await?;
+            tokio::fs::write(rw_dir.join("data.txt"), "initial").await?;
+            tokio::fs::write(nested_ro.join("locked.txt"), "frozen").await?;
+            Ok(())
+        })
+        .run(|case| async move {
+            let user = case.user().new_session().await?;
+            let owner_id = user.id().to_string();
+            let canonical_workspace = tokio::fs::canonicalize(case.workspace()).await?;
+            let parent = canonical_workspace.parent().context("workspace parent")?;
+            let ro_dir = tokio::fs::canonicalize(parent.join("extra-ro")).await?;
+            let rw_dir = tokio::fs::canonicalize(parent.join("extra-rw")).await?;
+            let nested_ro = tokio::fs::canonicalize(rw_dir.join("locked")).await?;
+            let ro_file = ro_dir.join("notes.txt");
+            let ro_write_file = ro_dir.join("created.txt");
+            let rw_file = rw_dir.join("data.txt");
+            let rw_write_file = rw_dir.join("created.txt");
+            let locked_file = nested_ro.join("locked.txt");
+            let locked_write_file = nested_ro.join("created.txt");
+
+            user.call_tool("agena.fs.read", json!({"file_path": ro_file, "mode": "text"}))
+                .await?
+                .assert_failure_kind(agena_failure::ModelFeedbackKind::PermissionDenied)?;
+
+            // Mount read-only directory via CLI.
+            let cli = case
+                .run_cli([
+                    "sessions",
+                    "working-directories",
+                    &owner_id,
+                    "--add",
+                    "../extra-ro",
+                    "--access",
+                    "readonly",
+                ])
+                .await?;
+            let added_ro: Value = serde_json::from_str(&cli.require_success()?.stdout)?;
+            ensure!(
+                added_ro["added"] == true
+                    && added_ro["updated"] == false
+                    && added_ro["access"] == "readonly"
+                    && added_ro["directory"] == json!(ro_dir)
+                    && added_ro["entries"] == json!([{"path": ro_dir, "access": "readonly"}]),
+                "{added_ro}"
+            );
+
+            user.call_tool("agena.fs.read", json!({"file_path": ro_file, "mode": "text"}))
+                .await?
+                .assert_text_contains("readonly source")?;
+            user.call_tool(
+                "agena.fs.write",
+                json!({"path": ro_write_file, "content": "blocked write"}),
+            )
+            .await?
+            .assert_failure_kind(agena_failure::ModelFeedbackKind::PermissionDenied)?;
+
+            // Mount read-write directory and a nested read-only override via REST.
+            let route = format!("/api/v1/sessions/{}/working-directories", user.id());
+            let http = case.http().await;
+            let added_rw: Value = http
+                .send_json(
+                    reqwest::Method::POST,
+                    &route,
+                    &json!({"path": "../extra-rw", "access": "readwrite"}),
+                )
+                .await?
+                .require_success()?
+                .json()?;
+            ensure!(
+                added_rw["added"] == true && added_rw["access"] == "readwrite",
+                "{added_rw}"
+            );
+            let added_nested: Value = http
+                .send_json(
+                    reqwest::Method::POST,
+                    &route,
+                    &json!({"path": nested_ro, "access": "readonly"}),
+                )
+                .await?
+                .require_success()?
+                .json()?;
+            ensure!(
+                added_nested["added"] == true && added_nested["access"] == "readonly",
+                "{added_nested}"
+            );
+
+            user.call_tool(
+                "agena.fs.write",
+                json!({"path": rw_write_file, "content": "updated data"}),
+            )
+            .await?
+            .assert_succeeded()?;
+            ensure!(tokio::fs::read_to_string(&rw_write_file).await? == "updated data");
+            user.call_tool(
+                "agena.fs.read",
+                json!({"file_path": locked_file, "mode": "text"}),
+            )
+            .await?
+            .assert_text_contains("frozen")?;
+            user.call_tool(
+                "agena.fs.write",
+                json!({"path": locked_write_file, "content": "must fail"}),
+            )
+            .await?
+            .assert_failure_kind(agena_failure::ModelFeedbackKind::PermissionDenied)?;
+
+            // Verify both legacy list and detailed views (CLI + REST).
+            let detailed_cli = case
+                .run_cli([
+                    "sessions",
+                    "working-directories",
+                    &owner_id,
+                    "--detailed",
+                ])
+                .await?;
+            let detailed: Value = serde_json::from_str(&detailed_cli.require_success()?.stdout)?;
+            ensure!(
+                detailed["primary"] == json!(canonical_workspace)
+                    && detailed["directories"] == json!([ro_dir, rw_dir, nested_ro])
+                    && detailed["entries"]
+                        == json!([
+                            {"path": ro_dir, "access": "readonly"},
+                            {"path": rw_dir, "access": "readwrite"},
+                            {"path": nested_ro, "access": "readonly"},
+                        ]),
+                "{detailed}"
+            );
+            let legacy_get: Value = http.get(&route).await?.require_success()?.json()?;
+            ensure!(legacy_get == json!([ro_dir, rw_dir, nested_ro]), "{legacy_get}");
+
+            // Upgrade read-only directory to read-write in place.
+            let upgraded: Value = http
+                .send_json(
+                    reqwest::Method::POST,
+                    &route,
+                    &json!({"path": ro_dir, "access": "readwrite"}),
+                )
+                .await?
+                .require_success()?
+                .json()?;
+            ensure!(
+                upgraded["added"] == false
+                    && upgraded["updated"] == true
+                    && upgraded["access"] == "readwrite",
+                "{upgraded}"
+            );
+            user.call_tool(
+                "agena.fs.write",
+                json!({"path": ro_write_file, "content": "now writable"}),
+            )
+            .await?
+            .assert_succeeded()?;
+            ensure!(tokio::fs::read_to_string(&ro_write_file).await? == "now writable");
+
+            // Persistence across restart.
+            let session_id = user.id();
+            case.restart().await?;
+            let restored = case.user().attach_session(session_id).await?;
+            let view = restored.client().working_directories(session_id).await?;
+            ensure!(
+                view.primary.as_deref() == Some(canonical_workspace.as_path())
+                    && view.entries.len() == 3
+                    && view.entries[0].path == ro_dir
+                    && view.entries[0].access == agena_domain::SessionWorkingDirectoryAccess::ReadWrite,
+                "{view:?}"
+            );
+
+            // Remove directory via CLI and verify immediate revocation + idempotent DELETE.
+            let removed_cli = case
+                .run_cli([
+                    "sessions",
+                    "working-directories",
+                    &owner_id,
+                    "--remove",
+                    ro_dir.to_str().context("ro_dir path")?,
+                ])
+                .await?;
+            let removed: Value = serde_json::from_str(&removed_cli.require_success()?.stdout)?;
+            ensure!(
+                removed["removed"] == true
+                    && removed["directory"] == json!(ro_dir)
+                    && removed["directories"] == json!([rw_dir, nested_ro]),
+                "{removed}"
+            );
+            restored
+                .call_tool("agena.fs.read", json!({"file_path": ro_file, "mode": "text"}))
+                .await?
+                .assert_failure_kind(agena_failure::ModelFeedbackKind::PermissionDenied)?;
+            restored
+                .call_tool("agena.fs.read", json!({"file_path": rw_file, "mode": "text"}))
+                .await?
+                .assert_text_contains("initial")?;
+
+            let http = case.http().await;
+            let removed_again: Value = http
+                .send_json(reqwest::Method::DELETE, &route, &json!({"path": ro_dir}))
+                .await?
+                .require_success()?
+                .json()?;
+            ensure!(
+                removed_again["removed"] == false
+                    && removed_again["directories"] == json!([rw_dir, nested_ro]),
+                "{removed_again}"
+            );
+            Ok(())
+        })
+        .await
+}
+
 async fn wait_for_failed_reload(case: &TestCase, expected: usize) -> TestResult {
     let client = case.client().await;
     tokio::time::timeout(Duration::from_secs(20), async {

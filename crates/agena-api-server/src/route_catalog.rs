@@ -266,7 +266,7 @@
 //! | POST | `/api/v1/sessions/{session_id}/assistant/reminders/{reminder_id}` | `control_assistant_reminder()` |
 //! | POST | `/api/v1/sessions/{session_id}/assistant/memory` | `edit_assistant_memory()` |
 //! | GET,POST | `/api/v1/sessions/{session_id}/integrations` | `list_integrations()`, `create_integration()` |
-//! | GET,POST | `/api/v1/sessions/{session_id}/working-directories` | `list_working_directories()`, `register_working_directory()` |
+//! | GET,POST,DELETE | `/api/v1/sessions/{session_id}/working-directories` | `list_working_directories()`, `register_working_directory()`, `remove_working_directory()` |
 //! | GET | `/api/v1/sessions/{session_id}/integrations/{binding_id}` | `integration_detail()` |
 //! | POST | `/api/v1/sessions/{session_id}/integrations/{binding_id}/control` | `control_integration()` |
 //! | PUT | `/api/v1/sessions/{session_id}/integrations/{binding_id}/access` | `update_channel_access()` |

@@ -101,6 +101,13 @@ pub enum Command {
         metadata_version: MetadataVersion,
         workspace_root: std::path::PathBuf,
         directory: std::path::PathBuf,
+        #[serde(default)]
+        access: agena_domain::SessionWorkingDirectoryAccess,
+    },
+    RemoveWorkingDirectory {
+        session: SessionId,
+        metadata_version: MetadataVersion,
+        directory: std::path::PathBuf,
     },
     RecoverChannelAuthority {
         session: SessionId,
@@ -532,6 +539,7 @@ pub enum Mutation {
     InteractionView(Box<InteractionView>),
     Configuration(Box<SessionConfiguration>),
     WorkingDirectoryRegistration(agena_domain::SessionWorkingDirectoryRegistration),
+    WorkingDirectoryRemoval(agena_domain::SessionWorkingDirectoryRemoval),
     Rewind(Box<RewindResult>),
     Delivery(DeliveryView),
     Session(Box<SessionMetadata>),

@@ -25,7 +25,7 @@ impl SandboxPermissionSnapshot {
         candidates.extend(
             self.path_layers
                 .iter()
-                .flat_map(|layer| layer.additional_working_directories.iter().cloned()),
+                .flat_map(|layer| layer.additional_working_directories.iter().map(|entry| entry.path.clone())),
         );
         candidates.extend(self.protected_paths.native_readonly_paths().cloned());
         candidates.extend(self.protected_paths.git_directories().cloned());

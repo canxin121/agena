@@ -2,7 +2,8 @@ use std::collections::{BTreeMap, HashSet};
 
 use agena_domain::{ExternalAgentProvider, ExternalAgentProviderTarget, ExternalAgentProviders};
 use axum::http::{HeaderName, HeaderValue};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tokio::io::AsyncReadExt;
 use url::Url;
 
@@ -13,7 +14,7 @@ const MAX_CONFIG_BYTES: usize = 256 * 1024;
 
 type Config = BTreeMap<ExternalAgent, Vec<Route>>;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(
     tag = "action",
     rename_all = "snake_case",
@@ -35,11 +36,19 @@ enum Route {
     },
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(untagged, deny_unknown_fields)]
 enum HeaderSource {
     Value(String),
     Environment { env: String },
+}
+
+fn routes_digest(routes: &[Route]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    if let Ok(bytes) = serde_json::to_vec(routes) {
+        hasher.update(bytes);
+    }
+    hasher.finalize().into()
 }
 
 #[derive(Deserialize)]
@@ -68,10 +77,11 @@ impl AcpClient {
         &mut self,
         cancel: &CancellationToken,
     ) -> Result<(), AppError> {
-        if self.providers_prepared {
+        let routes = read_routes(&self.agent, cancel).await?;
+        let digest = routes_digest(&routes);
+        if self.providers_digest == Some(digest) {
             return Ok(());
         }
-        let routes = read_routes(&self.agent, cancel).await?;
         if !routes.is_empty() {
             if !self.supports_provider_routes(cancel).await? {
                 return Err(AppError::Config(format!(
@@ -103,7 +113,7 @@ impl AcpClient {
                 self.call(method, params, cancel).await?;
             }
         }
-        self.providers_prepared = true;
+        self.providers_digest = Some(digest);
         Ok(())
     }
 

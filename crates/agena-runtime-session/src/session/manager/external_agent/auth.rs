@@ -84,6 +84,16 @@ impl SessionManager {
             .await?;
         let executor = state.executor.for_session_context_async(&context).await;
         let cwd = super::lifecycle::canonical_directory(executor.workspace_root()).await?;
+        let cancel = self.shutdown.child_token();
+        if matches!(action, ExternalAgentAuthAction::Inspect { terminal: false })
+            && agent != ExternalAgent::ClaudeCode
+        {
+            return self
+                .external_control_plane
+                .inspect_auth(&spec, &cwd, &self.control_tasks, &self.shutdown, &cancel)
+                .await;
+        }
+        self.prepare_exclusive_external_agent_spawn(&spec).await;
         let mut client = self.spawn_external_agent(spec.clone(), &cwd)?;
         let is_mutation = !matches!(action, ExternalAgentAuthAction::Inspect { .. });
         let terminal = matches!(action, ExternalAgentAuthAction::Inspect { terminal: true });
@@ -92,8 +102,10 @@ impl SessionManager {
         if terminal || agent == ExternalAgent::ClaudeCode {
             client.enable_terminal_auth();
         }
-        let cancel = self.shutdown.child_token();
         let result = async {
+            if matches!(action, ExternalAgentAuthAction::Inspect { .. }) {
+                return inspect_auth_on_client(&mut client, &spec, &cwd, terminal, &cancel).await;
+            }
             let initialization = client.initialization(&cancel).await?.clone();
             let methods: Vec<_> = initialization["authMethods"]
                 .as_array()
@@ -196,6 +208,66 @@ impl SessionManager {
         }
         result
     }
+}
+
+pub(super) async fn inspect_auth_on_client(
+    client: &mut acp::AcpClient,
+    spec: &agena_domain::ResolvedExternalAgent,
+    cwd: &std::path::Path,
+    terminal: bool,
+    cancel: &CancellationToken,
+) -> Result<ExternalAgentAuth, AppError> {
+    let initialization = client.initialization(cancel).await?.clone();
+    let methods: Vec<_> = initialization["authMethods"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| parse_method(entry, terminal))
+        .take(32)
+        .collect();
+    let auth = &initialization[if client.uses_v2() {
+        "capabilities"
+    } else {
+        "agentCapabilities"
+    }]["auth"];
+    let status_supported = client.supports_auth_status();
+    let logout_supported = if client.uses_v2() {
+        if let Some(explicit) = auth.get("logout") {
+            supports(explicit)
+        } else {
+            initialization["authMethods"]
+                .as_array()
+                .is_some_and(|methods| !methods.is_empty())
+        }
+    } else {
+        supports(&auth["logout"])
+    };
+    let status = if status_supported {
+        match client.call("auth/status", json!({}), cancel).await {
+            Ok(status) => parse_status(&status),
+            Err(AppError::Cancelled) => return Err(AppError::Cancelled),
+            Err(error) => {
+                tracing::debug!(%error, "external agent did not report sign-in status");
+                None
+            }
+        }
+    } else {
+        None
+    }
+    .or_else(|| client.reported_auth_status().cloned());
+    let (state, accounts) = status.map_or((None, Vec::new()), |status| {
+        (Some(status.state), status.accounts)
+    });
+    Ok(ExternalAgentAuth {
+        agent: spec.id.clone(),
+        cwd: cwd.to_owned(),
+        command: Some(spec.command.clone()),
+        base_args: spec.args.clone(),
+        methods,
+        logout_supported,
+        state,
+        accounts,
+    })
 }
 
 fn supports(value: &Value) -> bool {

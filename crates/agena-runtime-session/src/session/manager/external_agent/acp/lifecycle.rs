@@ -213,16 +213,6 @@ impl AcpClient {
         Ok(self.initialize(cancel).await?.lifecycle.archive)
     }
 
-    pub(in crate::session::manager::external_agent) async fn list_workspace_native(
-        &mut self,
-        cwd: &Path,
-        cursor: Option<&str>,
-        filter: ExternalAgentArchiveFilter,
-        cancel: &CancellationToken,
-    ) -> Result<NativePage, AppError> {
-        self.list_native(cwd, cursor, filter, cancel).await
-    }
-
     pub(in crate::session::manager::external_agent) async fn find_workspace_native(
         &mut self,
         cwd: &Path,

@@ -153,6 +153,12 @@ async fn abandoned_steering(requests: &mut HashMap<u64, steering::Request>) -> u
     .await
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum IdleExit {
+    Cancelled,
+    Ended,
+}
+
 pub(super) struct AcpClient {
     agent: ExternalAgent,
     spec: ResolvedExternalAgent,
@@ -172,7 +178,7 @@ pub(super) struct AcpClient {
     air_index: bool,
     plain_delete: bool,
     preferred_version: Option<Version>,
-    providers_prepared: bool,
+    providers_digest: Option<[u8; 32]>,
     capabilities: Option<Capabilities>,
     initialization: Option<Value>,
     mcp: Option<mcp::AcpEndpoint>,
@@ -728,7 +734,7 @@ impl AcpClient {
             air_index: false,
             plain_delete: false,
             preferred_version: None,
-            providers_prepared: false,
+            providers_digest: None,
             capabilities: None,
             initialization: None,
             mcp: None,
@@ -829,7 +835,12 @@ impl AcpClient {
                         replacement.terminal_auth = self.terminal_auth;
                         replacement.plain_delete = self.plain_delete;
                         replacement.live_auth = self.live_auth.take();
-                        std::mem::replace(self, replacement).close().await;
+                        let old = std::mem::replace(self, replacement);
+                        if self.agent == ExternalAgent::Antigravity && !had_isolation {
+                            tokio::spawn(async move { old.close().await });
+                        } else {
+                            old.close().await;
+                        }
                         preferred_v1 = false;
                         self.preferred_version = None;
                         requested = Version::V2;
@@ -863,7 +874,12 @@ impl AcpClient {
                         replacement.terminal_auth = self.terminal_auth;
                         replacement.plain_delete = self.plain_delete;
                         replacement.live_auth = self.live_auth.take();
-                        std::mem::replace(self, replacement).close().await;
+                        let old = std::mem::replace(self, replacement);
+                        if self.agent == ExternalAgent::Antigravity && !had_isolation {
+                            tokio::spawn(async move { old.close().await });
+                        } else {
+                            old.close().await;
+                        }
                         requested = Version::V1;
                         continue;
                     }
@@ -2712,18 +2728,34 @@ impl AcpClient {
         host: &input_requests::Host,
         idle_timeout: Option<Duration>,
         cancel: &CancellationToken,
-    ) -> Result<(), AppError> {
+    ) -> Result<IdleExit, AppError> {
         self.mcp = None;
         self.mcp_activity = None;
         let mut replies = JoinSet::new();
         let result = self
             .read_idle(kernel, resume, state, host, idle_timeout, &mut replies, cancel)
             .await;
+        let had_interactions = !self.pending.is_empty()
+            || !self.url_elicitations.is_empty()
+            || !replies.is_empty();
         self.native_work = None;
         self.live_auth = None;
         self.withdraw_interactions();
         while replies.join_next().await.is_some() {}
-        result
+        match result {
+            Ok(IdleExit::Cancelled) if !had_interactions && self.can_reclaim_after_idle() => {
+                Ok(IdleExit::Cancelled)
+            }
+            Ok(_) => Ok(IdleExit::Ended),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub(super) fn can_reclaim_after_idle(&self) -> bool {
+        !self.incomplete_write
+            && self.active_request.is_none()
+            && self.pending.is_empty()
+            && self.url_elicitations.is_empty()
     }
 
     async fn read_idle(
@@ -2735,7 +2767,7 @@ impl AcpClient {
         idle_timeout: Option<Duration>,
         replies: &mut PeerReplies,
         cancel: &CancellationToken,
-    ) -> Result<(), AppError> {
+    ) -> Result<IdleExit, AppError> {
         let still_owned = || async {
             let current = kernel
                 .reader
@@ -2764,7 +2796,7 @@ impl AcpClient {
                 && !has_active_subagents;
             let next = tokio::select! {
                 biased;
-                _ = cancel.cancelled() => return Ok(()),
+                _ = cancel.cancelled() => return Ok(IdleExit::Cancelled),
                 Some(reply) = replies.join_next(), if !replies.is_empty() => {
                     self.reply_to_interaction(reply, cancel).await?;
                     idle_deadline = idle_timeout.map(|timeout| Instant::now() + timeout);
@@ -2772,7 +2804,7 @@ impl AcpClient {
                 }
                 _ = ownership.tick() => {
                     if !still_owned().await? {
-                        return Ok(());
+                        return Ok(IdleExit::Ended);
                     }
                     continue;
                 }
@@ -2781,7 +2813,7 @@ impl AcpClient {
                         if let cancellation::Event::Cancel(request) = event {
                             let _ = request.answer.send(Err(cancellation::unavailable()));
                         }
-                        return Ok(());
+                        return Ok(IdleExit::Ended);
                     }
                     self.handle_work_event(event, cancel).await;
                     idle_deadline = idle_timeout.map(|timeout| Instant::now() + timeout);
@@ -2795,13 +2827,13 @@ impl AcpClient {
                         agent = self.agent.id(),
                         "closing idle external agent peer after inactivity timeout"
                     );
-                    return Ok(());
+                    return Ok(IdleExit::Ended);
                 }
                 next = self.output.next() => next,
             };
             idle_deadline = idle_timeout.map(|timeout| Instant::now() + timeout);
             let Some(line) = next else {
-                return Ok(());
+                return Ok(IdleExit::Ended);
             };
             let line = line
                 .map_err(|error| AppError::Internal(format!("invalid idle ACP frame: {error}")))?;
@@ -2929,7 +2961,7 @@ impl AcpClient {
                     {
                         let applied = tokio::select! {
                             biased;
-                            _ = cancel.cancelled() => return Ok(()),
+                            _ = cancel.cancelled() => return Ok(IdleExit::Cancelled),
                             result = messages.apply(MessageTarget::Parked(kernel, resume, self.agent.clone()), message, false) => result?,
                         };
                         if applied {

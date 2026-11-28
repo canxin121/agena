@@ -26,7 +26,7 @@ def record_exception(*error):
 sys.excepthook = record_exception
 
 if PROGRAM == "agy":
-    assert sys.argv[1:] == ["acp", "--process-per-session"], sys.argv
+    assert sys.argv[1:] in (["acp", "--process-per-session"], ["acp"]), sys.argv
 else:
     assert sys.argv[1:] == []
 
@@ -217,6 +217,8 @@ for line in sys.stdin:
                     log.write(session + "\n")
                 send(id=identifier, result={"sessionId": session, "configOptions": config_options()})
             continue
+        if PROGRAM == "agy":
+            assert sys.argv[1:] == ["acp", "--process-per-session"], sys.argv
         assert len(params["mcpServers"]) == 1
         bridge = params["mcpServers"][0]
         assert (bridge["type"], bridge["name"]) == ("http", "agena")

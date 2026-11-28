@@ -220,12 +220,10 @@ impl Transcript {
                 self.flush_messages(turn).await?;
                 self.finish_text().await?;
             }
-            let name = update["name"].as_str().or_else(|| {
-                update
-                    .pointer("/_meta/claudeCode/toolName")
-                    .and_then(Value::as_str)
-            });
-            if name.is_some_and(|name| name.starts_with("mcp__agena__")) {
+            let name = extract_acp_tool_name(update);
+            if name.is_some_and(|name| {
+                name.starts_with("mcp__agena__") || is_injected_agena_mcp_tool_name(name)
+            }) {
                 self.tools.insert(key, None);
                 return Ok(());
             }

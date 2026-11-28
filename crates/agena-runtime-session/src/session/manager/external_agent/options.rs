@@ -81,147 +81,190 @@ impl SessionManager {
             self.close_idle_external_agent(session).await;
         }
         let cancel = self.shutdown.child_token();
-        let mut client = self.spawn_external_agent_with_directories(
-            spec.clone(),
-            &cwd,
-            &additional_directories,
-        )?;
-        let outcome = async {
-            client.prepare_provider_routes(&cancel).await?;
-            if preview || previous.is_none() || (change.is_none() && selection.is_empty()) {
-                match client
-                    .session_options(&cwd, previous, &additional_directories, &cancel)
-                    .await
-                {
-                    Ok(Some(response)) => {
-                        let mut advertised = config_options(&response);
-                        if preview {
-                            let commands = if !native_linked && client.uses_v2() {
-                                super::state::available_commands(&response["availableCommands"])
-                                    .unwrap_or_default()
-                            } else {
-                                Vec::new()
-                            };
-                            return Ok((advertised, commands, None));
-                        }
-                        if change.is_none() && selection.is_empty() {
-                            return Ok((advertised, Vec::new(), None));
-                        }
-                        if previous.is_none() {
-                            if model_changed
-                                && let Some(thought) = selection.get(&Kind::ThoughtLevel)
-                                && !option_offers(&advertised, &Kind::ThoughtLevel, thought)
-                                && selection.get(&Kind::Model).is_none_or(|model| {
-                                    option_offers(&advertised, &Kind::Model, model)
-                                })
-                            {
-                                selection.remove(&Kind::ThoughtLevel);
-                            }
-                            let missing = selection
-                                .iter()
-                                .find(|(kind, value)| !option_offers(&advertised, kind, value));
-                            if let Some((missing_kind, _)) = missing {
-                                let parent_changed = selection.iter().any(|(kind, value)| {
-                                    kind != missing_kind
-                                        && advertised.iter().any(|option| {
-                                            &option.kind == kind && option.current_value != *value
-                                        })
-                                });
-                                if !parent_changed {
-                                    return Err(AppError::Config(format!(
-                                        "{} no longer offers the selected {}. Open its options and choose an available value.",
-                                        agent.label(),
-                                        missing_kind.label(),
-                                    )));
-                                }
-                            } else {
-                                for (kind, value) in &selection {
-                                    if let Some(option) =
-                                        advertised.iter_mut().find(|option| &option.kind == kind)
-                                    {
-                                        option.current_value = value.clone();
-                                    }
-                                }
-                                return Ok((advertised, Vec::new(), None));
-                            }
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(AppError::Cancelled) => return Err(AppError::Cancelled),
-                    Err(error) if preview => return Err(error),
-                    Err(error) => tracing::debug!(
-                        %error,
-                        "could not inspect ACP options without opening a session"
-                    ),
-                }
-            }
-            if preview {
-                return Ok((Vec::new(), Vec::new(), None));
-            }
-            let session_context = super::lifecycle::session_context(
-                agent.clone(),
-                session,
-                &executor,
-                &state,
-                &context,
-                additional_directories,
-                None,
-            )
-            .await;
-            let mut opened = client
-                .start_with_context(
-                    &cwd,
-                    None,
-                    previous.map(|id| (id, &configuration.external_agent_state)),
-                    false,
-                    acp::OpenPurpose::Prompt,
-                    &session_context,
+        let (options, preview_commands, new_link) = if additional_directories.is_empty() {
+            let session_context = if preview {
+                None
+            } else {
+                Some(
+                    super::lifecycle::session_context(
+                        agent.clone(),
+                        session,
+                        &executor,
+                        &state,
+                        &context,
+                        additional_directories,
+                        None,
+                    )
+                    .await,
+                )
+            };
+            let outcome = self
+                .external_control_plane
+                .inspect_options(
+                    &spec,
+                    super::control_plane::ControlOptionsRequest {
+                        agent: &agent,
+                        cwd: &cwd,
+                        previous,
+                        previous_state: &configuration.external_agent_state,
+                        selection: selection.clone(),
+                        change: change.as_ref(),
+                        model_changed,
+                        preview,
+                        native_linked,
+                        session_context,
+                    },
+                    &self.control_tasks,
+                    &self.shutdown,
                     &cancel,
                 )
                 .await?;
-            let result = async {
-                for (kind, value) in selection.clone() {
-                    if !opened.offers(&kind, &value) {
-                        if change.is_none() {
-                            continue;
+            selection = outcome.selection;
+            (outcome.options, outcome.preview_commands, outcome.new_link)
+        } else {
+            self.prepare_exclusive_external_agent_spawn(&spec).await;
+            let mut client = self.spawn_external_agent_with_directories(
+                spec.clone(),
+                &cwd,
+                &additional_directories,
+            )?;
+            let outcome = async {
+                client.prepare_provider_routes(&cancel).await?;
+                if preview || previous.is_none() || (change.is_none() && selection.is_empty()) {
+                    match client
+                        .session_options(&cwd, previous, &additional_directories, &cancel)
+                        .await
+                    {
+                        Ok(Some(response)) => {
+                            let mut advertised = config_options(&response);
+                            if preview {
+                                let commands = if !native_linked && client.uses_v2() {
+                                    super::state::available_commands(&response["availableCommands"])
+                                        .unwrap_or_default()
+                                } else {
+                                    Vec::new()
+                                };
+                                return Ok((advertised, commands, None));
+                            }
+                            if change.is_none() && selection.is_empty() {
+                                return Ok((advertised, Vec::new(), None));
+                            }
+                            if previous.is_none() {
+                                if model_changed
+                                    && let Some(thought) = selection.get(&Kind::ThoughtLevel)
+                                    && !option_offers(&advertised, &Kind::ThoughtLevel, thought)
+                                    && selection.get(&Kind::Model).is_none_or(|model| {
+                                        option_offers(&advertised, &Kind::Model, model)
+                                    })
+                                {
+                                    selection.remove(&Kind::ThoughtLevel);
+                                }
+                                let missing = selection
+                                    .iter()
+                                    .find(|(kind, value)| !option_offers(&advertised, kind, value));
+                                if let Some((missing_kind, _)) = missing {
+                                    let parent_changed = selection.iter().any(|(kind, value)| {
+                                        kind != missing_kind
+                                            && advertised.iter().any(|option| {
+                                                &option.kind == kind && option.current_value != *value
+                                            })
+                                    });
+                                    if !parent_changed {
+                                        return Err(AppError::Config(format!(
+                                            "{} no longer offers the selected {}. Open its options and choose an available value.",
+                                            agent.label(),
+                                            missing_kind.label(),
+                                        )));
+                                    }
+                                } else {
+                                    for (kind, value) in &selection {
+                                        if let Some(option) =
+                                            advertised.iter_mut().find(|option| &option.kind == kind)
+                                        {
+                                            option.current_value = value.clone();
+                                        }
+                                    }
+                                    return Ok((advertised, Vec::new(), None));
+                                }
+                            }
                         }
-                        if kind == Kind::ThoughtLevel && model_changed {
-                            selection.remove(&kind);
-                            continue;
-                        }
+                        Ok(None) => {}
+                        Err(AppError::Cancelled) => return Err(AppError::Cancelled),
+                        Err(error) if preview => return Err(error),
+                        Err(error) => tracing::debug!(
+                            %error,
+                            "could not inspect ACP options without opening a session"
+                        ),
                     }
-                    client
-                        .set_option(&mut opened, &kind, &value, &cancel)
-                        .await?;
                 }
-                Ok::<_, AppError>(())
+                if preview {
+                    return Ok((Vec::new(), Vec::new(), None));
+                }
+                let session_context = super::lifecycle::session_context(
+                    agent.clone(),
+                    session,
+                    &executor,
+                    &state,
+                    &context,
+                    additional_directories,
+                    None,
+                )
+                .await;
+                let mut opened = client
+                    .start_with_context(
+                        &cwd,
+                        None,
+                        previous.map(|id| (id, &configuration.external_agent_state)),
+                        false,
+                        acp::OpenPurpose::Prompt,
+                        &session_context,
+                        &cancel,
+                    )
+                    .await?;
+                let result = async {
+                    for (kind, value) in selection.clone() {
+                        if !opened.offers(&kind, &value) {
+                            if change.is_none() {
+                                continue;
+                            }
+                            if kind == Kind::ThoughtLevel && model_changed {
+                                selection.remove(&kind);
+                                continue;
+                            }
+                        }
+                        client
+                            .set_option(&mut opened, &kind, &value, &cancel)
+                            .await?;
+                    }
+                    Ok::<_, AppError>(())
+                }
+                .await;
+                let mut new_link = None;
+                if opened.resumed {
+                    client.close_native_session_if_supported(&opened.id).await;
+                } else if result.is_ok() && client.can_reopen_session() && previous.is_none() {
+                    client.close_native_session_if_supported(&opened.id).await;
+                    new_link = Some(ExternalAgentLink {
+                        native_id: opened.id.clone(),
+                        cwd: cwd.clone(),
+                        incarnation: None,
+                        resume_at: Some(agena_storage::kernel::ExternalAgentHistoryAnchor {
+                            tail: None,
+                        }),
+                    });
+                } else {
+                    client.close_ephemeral(&opened, &cancel).await;
+                }
+                result?;
+                Ok::<_, AppError>((opened.options, Vec::new(), new_link))
             }
             .await;
-            let mut new_link = None;
-            if opened.resumed {
-                client.close_native_session_if_supported(&opened.id).await;
-            } else if result.is_ok() && client.can_reopen_session() && previous.is_none() {
-                client.close_native_session_if_supported(&opened.id).await;
-                new_link = Some(ExternalAgentLink {
-                    native_id: opened.id.clone(),
-                    cwd: cwd.clone(),
-                    incarnation: None,
-                    resume_at: Some(agena_storage::kernel::ExternalAgentHistoryAnchor {
-                        tail: None,
-                    }),
-                });
-            } else {
-                client.close_ephemeral(&opened, &cancel).await;
-            }
-            result?;
-            Ok::<_, AppError>((opened.options, Vec::new(), new_link))
-        }
-        .await;
-        self.record_external_agent_memo(&spec, &client);
-        self.retire_external_agent_client(client).await;
-        let (options, preview_commands, new_link) = outcome?;
+            self.record_external_agent_memo(&spec, &client);
+            self.retire_external_agent_client(client).await;
+            outcome?
+        };
         if new_link.is_some() {
-            self.invalidate_external_agent_control_plane(&agent, true)
+            self.invalidate_external_agent_control_plane(&agent, false)
                 .await;
         }
 
@@ -256,7 +299,7 @@ impl SessionManager {
     }
 }
 
-fn option_offers(options: &[ExternalAgentOption], kind: &Kind, value: &str) -> bool {
+pub(super) fn option_offers(options: &[ExternalAgentOption], kind: &Kind, value: &str) -> bool {
     options
         .iter()
         .any(|option| &option.kind == kind && option.choices.iter().any(|choice| choice.value == value))

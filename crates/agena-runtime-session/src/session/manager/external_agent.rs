@@ -139,6 +139,7 @@ impl SessionManager {
         {
             Ok(caps)
         } else {
+            self.prepare_exclusive_external_agent_spawn(&spec).await;
             let mut client = self.spawn_external_agent(spec.clone(), &cwd)?;
             let caps = client
                 .lifecycle_capabilities(&self.shutdown.child_token())
@@ -187,6 +188,13 @@ impl SessionManager {
         let executor = state.executor.for_session_context_async(&context).await;
         let cwd = lifecycle::canonical_directory(executor.workspace_root()).await?;
         let cancel = self.shutdown.child_token();
+        if control_plane::supports_concurrent_control_plane(&spec) {
+            return self
+                .external_control_plane
+                .inspect_providers(&spec, &cwd, &self.control_tasks, &self.shutdown, &cancel)
+                .await;
+        }
+        self.prepare_exclusive_external_agent_spawn(&spec).await;
         let mut client = self.spawn_external_agent(spec.clone(), &cwd)?;
         let result = client.provider_catalog(&cancel).await;
         self.record_external_agent_memo(&spec, &client);
@@ -203,7 +211,6 @@ impl SessionManager {
         state: Arc<ExecutionState>,
         system: Option<&str>,
     ) -> Result<(), AppError> {
-        self.close_idle_external_agent(control.session).await;
         control.phase(agena_domain::ExecutionPhase::PreparingModel);
         let context = self
             .execution_context_for_execution(control.session, &state, Some(control.execution))
@@ -287,18 +294,60 @@ impl SessionManager {
                     .map(|link| link.native_id.as_str())
             });
         if keyed_retry.is_some() && native_resume.is_none() {
+            self.close_idle_external_agent(control.session).await;
             return Err(AppError::ExternalAgentPromptUncertain);
         }
         let spec = self.resolve_external_agent(&agent)?;
-        let mut client = self.spawn_external_agent_with_directories(
-            spec.clone(),
-            &cwd,
-            &session_context.additional_directories,
-        )?;
+        let mut reclaimed = false;
+        let mut client = if control_plane::supports_concurrent_control_plane(&spec)
+            && let Some(warm) = self
+                .take_idle_external_agent(
+                    control.session,
+                    &spec,
+                    &cwd,
+                    &session_context.additional_directories,
+                )
+                .await
+        {
+            reclaimed = true;
+            warm
+        } else {
+            self.close_idle_external_agent(control.session).await;
+            self.prepare_exclusive_external_agent_spawn(&spec).await;
+            self.spawn_external_agent_with_directories(
+                spec.clone(),
+                &cwd,
+                &session_context.additional_directories,
+            )?
+        };
         client.track_auth_status(auth::LiveStatus::register(self, control.session));
-        let capabilities = client.prompt_capabilities(&control.cancel).await?;
+        let mut capabilities = match client.prompt_capabilities(&control.cancel).await {
+            Ok(caps) => caps,
+            Err(error) if reclaimed && !matches!(error, AppError::Cancelled) => {
+                tracing::debug!(
+                    agent = agent.id(),
+                    %error,
+                    "reclaimed idle ACP peer failed preflight; respawning fresh connection"
+                );
+                client.close().await;
+                reclaimed = false;
+                self.prepare_exclusive_external_agent_spawn(&spec).await;
+                client = self.spawn_external_agent_with_directories(
+                    spec.clone(),
+                    &cwd,
+                    &session_context.additional_directories,
+                )?;
+                client.track_auth_status(auth::LiveStatus::register(self, control.session));
+                client.prompt_capabilities(&control.cancel).await?
+            }
+            Err(error) => {
+                client.close().await;
+                return Err(error);
+            }
+        };
         self.record_external_agent_memo(&spec, &client);
         if keyed_retry.is_some() && !client.uses_v2() {
+            client.close().await;
             return Err(AppError::ExternalAgentPromptUncertain);
         }
         let (mut blocks, media_leases) = input
@@ -339,28 +388,93 @@ impl SessionManager {
             executor,
             round: round.clone(),
             agent: agent.clone(),
+            agena_mcp_injected: std::sync::atomic::AtomicBool::new(false),
             transcript: Default::default(),
             terminals: Default::default(),
         });
-        let bridge = client.bridge(turn.clone()).await?;
+        let mut bridge = client.bridge(turn.clone()).await?;
+        if bridge.is_some() {
+            turn.agena_mcp_injected
+                .store(true, std::sync::atomic::Ordering::Release);
+        }
+        let open_purpose = if keyed_retry.is_some() {
+            acp::OpenPurpose::RetryPrompt
+        } else {
+            acp::OpenPurpose::Prompt
+        };
         let mut native = None;
         let mut created_new_native = false;
+        let mut client = Some(client);
         let outcome = async {
-            let mut session = client
+            let mut session = match client
+                .as_mut()
+                .expect("ACP turn client present")
                 .start_with_context(
                     &cwd,
                     bridge.as_ref().map(mcp::Bridge::descriptor),
                     native_resume.map(|id| (id, &opened.state)),
                     has_images,
-                    if keyed_retry.is_some() {
-                        acp::OpenPurpose::RetryPrompt
-                    } else {
-                        acp::OpenPurpose::Prompt
-                    },
+                    open_purpose,
                     &session_context,
                     &control.cancel,
                 )
-                .await?;
+                .await
+            {
+                Ok(session) => session,
+                Err(error)
+                    if reclaimed
+                        && !matches!(
+                            error,
+                            AppError::Cancelled
+                                | AppError::ExternalAgentResumeUnavailable
+                                | AppError::ProviderClassified {
+                                    kind: agena_provider::ProviderErrorKind::Authentication,
+                                    ..
+                                }
+                        ) =>
+                {
+                    tracing::debug!(
+                        agent = agent.id(),
+                        %error,
+                        "reclaimed idle ACP peer could not resume; retrying on a fresh connection"
+                    );
+                    if let Some(old_bridge) = bridge.take() {
+                        old_bridge.close().await;
+                    }
+                    if let Some(old_client) = client.take() {
+                        old_client.close().await;
+                    }
+                    reclaimed = false;
+                    self.prepare_exclusive_external_agent_spawn(&spec).await;
+                    let mut fresh = self.spawn_external_agent_with_directories(
+                        spec.clone(),
+                        &cwd,
+                        &session_context.additional_directories,
+                    )?;
+                    fresh.track_auth_status(auth::LiveStatus::register(self, control.session));
+                    capabilities = fresh.prompt_capabilities(&control.cancel).await?;
+                    self.record_external_agent_memo(&spec, &fresh);
+                    bridge = fresh.bridge(turn.clone()).await?;
+                    turn.agena_mcp_injected
+                        .store(bridge.is_some(), std::sync::atomic::Ordering::Release);
+                    let opened_session = fresh
+                        .start_with_context(
+                            &cwd,
+                            bridge.as_ref().map(mcp::Bridge::descriptor),
+                            native_resume.map(|id| (id, &opened.state)),
+                            has_images,
+                            open_purpose,
+                            &session_context,
+                            &control.cancel,
+                        )
+                        .await;
+                    client = Some(fresh);
+                    opened_session?
+                }
+                Err(error) => return Err(error),
+            };
+            let _ = reclaimed;
+            let client_ref = client.as_mut().expect("ACP turn client present");
             created_new_native = !session.resumed;
             let incarnation = opened
                 .link
@@ -380,13 +494,13 @@ impl SessionManager {
                 .await
                 .map_err(kernel_error)?;
             for (kind, value) in &opened.selection {
-                client
+                client_ref
                     .set_option(&mut session, kind, value, &control.cancel)
                     .await?;
             }
             let routed_command =
                 prompt::route_command(&mut blocks, &session.state.commands, capabilities)?;
-            let delivery = if client.uses_v2() && !routed_command {
+            let delivery = if client_ref.uses_v2() && !routed_command {
                 let prompt = Sha256::digest(serde_json::to_vec(&blocks)?).into();
                 if keyed_retry.is_some_and(|previous| prompt != previous) {
                     return Err(AppError::ExternalAgentPromptUncertain);
@@ -436,7 +550,7 @@ impl SessionManager {
             }
             control.phase(agena_domain::ExecutionPhase::StreamingModel);
             turn.record_prompt_delivery(delivery).await?;
-            client
+            client_ref
                 .prompt(&link.native_id, blocks, activity, replayed_users, &turn)
                 .await
         }
@@ -452,7 +566,9 @@ impl SessionManager {
             outcome => {
                 let cancelled =
                     control.cancel.is_cancelled() || matches!(outcome, Err(AppError::Cancelled));
-                client.close().await;
+                if let Some(client) = client {
+                    client.close().await;
+                }
                 return if cancelled {
                     Err(AppError::Cancelled)
                 } else {
@@ -529,7 +645,17 @@ impl SessionManager {
         let state = turn.transcript.lock().await.snapshot_state();
         self.invalidate_external_agent_control_plane(&agent, created_new_native)
             .await;
-        self.park_external_agent(client, resume, state).await;
+        if let Some(client) = client {
+            self.park_external_agent(
+                client,
+                &spec,
+                &cwd,
+                &session_context.additional_directories,
+                resume,
+                state,
+            )
+            .await;
+        }
         Ok(())
     }
 }
@@ -541,6 +667,7 @@ struct ExternalTurn {
     executor: ToolExecutor,
     round: RoundHandle,
     agent: ExternalAgent,
+    agena_mcp_injected: std::sync::atomic::AtomicBool,
     transcript: tokio::sync::Mutex<transcript::Transcript>,
     terminals: client_tools::Terminals,
 }
@@ -616,6 +743,22 @@ impl ExternalTurn {
         let cancelled = || json!({"outcome": {"outcome": "cancelled"}});
         if withdrawal.is_cancelled() {
             return Ok(cancelled());
+        }
+        // Injected Agena MCP gateway tools (`plugins_list`, `tools_list`,
+        // `tools_help`, `tools_call`) already enforce Agena's own permission
+        // rules inside the MCP bridge. Auto-approve the external agent's outer
+        // permission gate per-call (`allow_once`) to avoid double-prompting.
+        if self
+            .agena_mcp_injected
+            .load(std::sync::atomic::Ordering::Acquire)
+            && let Some(option_id) = auto_approve_agena_mcp_permission(params)
+        {
+            tracing::debug!(
+                agent = self.agent.id(),
+                option_id,
+                "auto-approved injected Agena MCP tool permission"
+            );
+            return Ok(json!({"outcome": {"outcome": "selected", "optionId": option_id}}));
         }
         let label = self.interaction_agent_label(params).await;
         let Some(PermissionInput {
@@ -797,4 +940,109 @@ fn permission_choices(options: &[Value]) -> Vec<PermissionChoice<'_>> {
         });
     }
     choices
+}
+
+pub(super) fn extract_acp_tool_name(tool_call: &Value) -> Option<&str> {
+    tool_call["name"].as_str().or_else(|| {
+        tool_call
+            .pointer("/_meta/claudeCode/toolName")
+            .and_then(Value::as_str)
+    })
+}
+
+pub(super) fn is_injected_agena_mcp_tool_name(name: &str) -> bool {
+    let suffix = name
+        .strip_prefix("mcp__agena__")
+        .or_else(|| name.strip_prefix("mcp_agena_"));
+    suffix.is_some_and(|tool| agena_domain::ToolApiFunction::from_function_name(tool).is_some())
+}
+
+fn auto_approve_agena_mcp_permission(params: &Value) -> Option<&str> {
+    let name = extract_acp_tool_name(&params["toolCall"])?;
+    if !is_injected_agena_mcp_tool_name(name) {
+        return None;
+    }
+    let choices = permission_choices(params["options"].as_array()?);
+    choices
+        .iter()
+        .find(|choice| choice.kind == "allow_once")
+        .or_else(|| choices.iter().find(|choice| choice.kind == "allow_always"))
+        .map(|choice| choice.id)
+}
+
+#[cfg(test)]
+mod permission_tests {
+    use super::*;
+
+    #[test]
+    fn recognizes_only_exact_injected_agena_mcp_tool_names() {
+        for valid in [
+            "mcp_agena_plugins_list",
+            "mcp_agena_tools_list",
+            "mcp_agena_tools_help",
+            "mcp_agena_tools_call",
+            "mcp__agena__plugins_list",
+            "mcp__agena__tools_list",
+            "mcp__agena__tools_help",
+            "mcp__agena__tools_call",
+        ] {
+            assert!(is_injected_agena_mcp_tool_name(valid), "expected {valid}");
+        }
+        for invalid in [
+            "mcp_agena_exec_shell",
+            "mcp__agena__custom",
+            "mcp_github_plugins_list",
+            "plugins_list",
+            "run_command",
+            "",
+        ] {
+            assert!(
+                !is_injected_agena_mcp_tool_name(invalid),
+                "unexpected match for {invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn auto_approve_prefers_allow_once_for_agena_mcp_and_ignores_native_tools() {
+        let agy_payload = json!({
+            "sessionId": "s1",
+            "toolCall": {
+                "toolCallId": "call_1",
+                "name": "mcp_agena_plugins_list",
+                "title": "Run mcp_agena_plugins_list",
+                "kind": "other"
+            },
+            "options": [
+                {"optionId": "always", "name": "Always allow", "kind": "allow_always"},
+                {"optionId": "allow", "name": "Allow", "kind": "allow_once"},
+                {"optionId": "deny", "name": "Deny", "kind": "reject_once"}
+            ]
+        });
+        assert_eq!(auto_approve_agena_mcp_permission(&agy_payload), Some("allow"));
+
+        let fallback_always = json!({
+            "toolCall": {"_meta": {"claudeCode": {"toolName": "mcp__agena__tools_call"}}},
+            "options": [
+                {"optionId": "always", "name": "Always allow", "kind": "allow_always"},
+                {"optionId": "deny", "name": "Deny", "kind": "reject_once"}
+            ]
+        });
+        assert_eq!(
+            auto_approve_agena_mcp_permission(&fallback_always),
+            Some("always")
+        );
+
+        let native_tool = json!({
+            "toolCall": {"name": "run_command", "title": "Run shell command"},
+            "options": [{"optionId": "allow", "name": "Allow", "kind": "allow_once"}]
+        });
+        assert_eq!(auto_approve_agena_mcp_permission(&native_tool), None);
+
+        let third_party_mcp = json!({
+            "toolCall": {"name": "mcp_github_create_issue", "title": "Run mcp_github_create_issue"},
+            "options": [{"optionId": "allow", "name": "Allow", "kind": "allow_once"}]
+        });
+        assert_eq!(auto_approve_agena_mcp_permission(&third_party_mcp), None);
+    }
 }

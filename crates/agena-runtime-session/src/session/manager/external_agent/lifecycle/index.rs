@@ -204,13 +204,24 @@ impl SessionManager {
                 }
                 Err(error) => return Err(error),
             }
-            let opened = match acp::AcpClient::open_index(spec.clone(), &cwd, &cancel).await {
-                Ok(opened) => opened,
-                Err(error) if fallback && !matches!(error, AppError::Cancelled) => {
-                    tracing::debug!(%error, "could not negotiate optional Claude session index");
-                    None
+            let air_index_known_absent =
+                self.external_control_plane.cached_air_index(&spec) == Some(false);
+            let opened = if air_index_known_absent {
+                None
+            } else {
+                self.prepare_exclusive_external_agent_spawn(&spec).await;
+                match acp::AcpClient::open_index(spec.clone(), &cwd, &cancel).await {
+                    Ok(opened) => {
+                        self.external_control_plane
+                            .record_air_index(&spec, opened.is_some());
+                        opened
+                    }
+                    Err(error) if fallback && !matches!(error, AppError::Cancelled) => {
+                        tracing::debug!(%error, "could not negotiate optional Claude session index");
+                        None
+                    }
+                    Err(error) => return Err(error),
                 }
-                Err(error) => return Err(error),
             };
             let Some((mut client, capabilities)) = opened else {
                 if let Some(error) = negotiation_error {
@@ -265,52 +276,67 @@ impl SessionManager {
             return outcome;
         }
         let is_archive_mutation = matches!(action, Action::SetArchived { .. });
-        let mut standard = match &action {
-            Action::SetArchived { .. } => Some(self.spawn_external_agent(spec.clone(), &cwd)?),
-            _ => None,
-        };
+        let mut negotiation_error = None;
+        if let Action::SetArchived {
+            native_id,
+            archived,
+            ..
+        } = &action
+        {
+            match self
+                .external_control_plane
+                .set_native_archived(
+                    &spec,
+                    &cwd,
+                    native_id,
+                    *archived,
+                    &self.control_tasks,
+                    &self.shutdown,
+                    &cancel,
+                )
+                .await
+            {
+                Ok(true) => {
+                    return Ok(ExternalAgentWorkspaceResult::Archive {
+                        native_id: native_id.clone(),
+                        archived: *archived,
+                    });
+                }
+                Ok(false) => {
+                    // Peer does not advertise standard ACP archive; fall through to Claude AIR index.
+                }
+                Err(error)
+                    if agent == ExternalAgent::ClaudeCode
+                        && !matches!(error, AppError::Cancelled) =>
+                {
+                    negotiation_error = Some(error);
+                }
+                Err(error) => return Err(error),
+            }
+        }
         let outcome = async {
-            let mut negotiation_error = None;
-            if let Some(client) = standard.as_mut() {
-                match client.supports_native_archive(&cancel).await {
-                    Ok(true) => {
-                        self.record_external_agent_memo(&spec, client);
-                        return standard_history(client, &cwd, action, &cancel).await;
+            let air_index_known_absent =
+                self.external_control_plane.cached_air_index(&spec) == Some(false);
+            let opened = if air_index_known_absent {
+                None
+            } else {
+                self.prepare_exclusive_external_agent_spawn(&spec).await;
+                match acp::AcpClient::open_index(spec.clone(), &cwd, &cancel).await {
+                    Ok(opened) => {
+                        self.external_control_plane
+                            .record_air_index(&spec, opened.is_some());
+                        opened
                     }
-                    Ok(false) => {
-                        self.record_external_agent_memo(&spec, client);
-                        if !fallback
-                            && let Some(client) = standard.take()
-                        {
-                            self.retire_external_agent_client(client).await;
-                        }
-                    }
-                    Err(error)
-                        if agent == ExternalAgent::ClaudeCode
-                            && !matches!(error, AppError::Cancelled) =>
-                    {
-                        negotiation_error = Some(error);
-                        if let Some(client) = standard.take() {
-                            self.retire_external_agent_client(client).await;
-                        }
+                    Err(error) if fallback && !matches!(error, AppError::Cancelled) => {
+                        tracing::debug!(%error, "could not negotiate optional Claude session index");
+                        None
                     }
                     Err(error) => return Err(error),
                 }
-            }
-            let opened = match acp::AcpClient::open_index(spec.clone(), &cwd, &cancel).await {
-                Ok(opened) => opened,
-                Err(error) if fallback && !matches!(error, AppError::Cancelled) => {
-                    tracing::debug!(%error, "could not negotiate optional Claude session index");
-                    None
-                }
-                Err(error) => return Err(error),
             };
             let Some((mut client, capabilities)) = opened else {
                 if let Some(error) = negotiation_error {
                     return Err(error);
-                }
-                if fallback && let Some(client) = standard.as_mut() {
-                    return standard_history(client, &cwd, action, &cancel).await;
                 }
                 return Err(unsupported_index());
             };
@@ -346,11 +372,9 @@ impl SessionManager {
             outcome
         }
         .await;
-        if let Some(client) = standard {
-            self.retire_external_agent_client(client).await;
-        }
         if is_archive_mutation && outcome.is_ok() {
-            self.invalidate_external_agent_control_plane(&agent, true)
+            let evict_process = !control_plane::supports_concurrent_control_plane(&spec);
+            self.invalidate_external_agent_control_plane(&agent, evict_process)
                 .await;
         }
         outcome
@@ -397,7 +421,9 @@ impl SessionManager {
         wait: Duration,
     ) -> Result<ExternalAgentWorkspaceResult, AppError> {
         let spec = self.resolve_external_agent(&agent)?;
-        if agent != ExternalAgent::ClaudeCode {
+        if agent != ExternalAgent::ClaudeCode
+            || self.external_control_plane.cached_air_index(&spec) == Some(false)
+        {
             return Ok(ExternalAgentWorkspaceResult::Watch {
                 supported: false,
                 changed: false,
@@ -493,6 +519,78 @@ impl SessionManager {
         } else {
             None
         };
+        let use_pooled = !matches!(mutation, WorkspaceNativeMutation::Delete)
+            || agent != ExternalAgent::ClaudeCode;
+        if use_pooled {
+            return match mutation {
+                WorkspaceNativeMutation::SetTitle(title) => {
+                    let saved = self
+                        .external_control_plane
+                        .set_native_title(
+                            &spec,
+                            &cwd,
+                            &native_id,
+                            &title,
+                            &self.control_tasks,
+                            &self.shutdown,
+                            &cancel,
+                        )
+                        .await?;
+                    if let Some(id) = open_view {
+                        let request = RequestId::new();
+                        persist(|| {
+                            self.kernel().sessions.update_metadata(
+                                request,
+                                id,
+                                MetadataChange {
+                                    title: Some(saved.clone()),
+                                    sync_external_agent_title: true,
+                                    ..Default::default()
+                                },
+                            )
+                        })
+                        .await
+                        .map_err(kernel_error)?;
+                    }
+                    Ok(ExternalAgentWorkspaceResult::Title {
+                        native_id,
+                        title: saved,
+                    })
+                }
+                WorkspaceNativeMutation::Delete => {
+                    self.external_control_plane
+                        .release_native(
+                            &spec,
+                            &cwd,
+                            &native_id,
+                            true,
+                            &self.control_tasks,
+                            &self.shutdown,
+                            &cancel,
+                        )
+                        .await?;
+                    if let Some(id) = open_view {
+                        let stored_link = self
+                            .kernel()
+                            .reader
+                            .configuration(id)
+                            .await
+                            .ok()
+                            .and_then(|config| config.native_session_link())
+                            .unwrap_or(lookup);
+                        let request = RequestId::new();
+                        let _ = persist(|| {
+                            self.kernel()
+                                .sessions
+                                .detach_external_agent(request, id, stored_link.clone())
+                        })
+                        .await;
+                    }
+                    Ok(ExternalAgentWorkspaceResult::Deleted { native_id })
+                }
+            };
+        }
+        self.prepare_exclusive_external_agent_spawn(&spec).await;
         let mut client = self.spawn_external_agent(spec.clone(), &cwd)?;
         if matches!(mutation, WorkspaceNativeMutation::Delete) {
             // Claude v1 maps Delete to Archive on legacy AIR connections.
@@ -550,7 +648,8 @@ impl SessionManager {
         self.record_external_agent_memo(&spec, &client);
         self.retire_external_agent_client(client).await;
         if outcome.is_ok() {
-            self.invalidate_external_agent_control_plane(&agent, true)
+            let evict_process = !control_plane::supports_concurrent_control_plane(&spec);
+            self.invalidate_external_agent_control_plane(&agent, evict_process)
                 .await;
         }
         outcome
@@ -560,50 +659,6 @@ impl SessionManager {
 enum WorkspaceNativeMutation {
     SetTitle(String),
     Delete,
-}
-
-async fn standard_history(
-    client: &mut acp::AcpClient,
-    cwd: &Path,
-    action: ExternalAgentWorkspaceAction,
-    cancel: &CancellationToken,
-) -> Result<ExternalAgentWorkspaceResult, AppError> {
-    match action {
-        ExternalAgentWorkspaceAction::IndexList {
-            cursor, archived, ..
-        } => {
-            let caps = client.lifecycle_capabilities(cancel).await?;
-            let archive = client.supports_native_archive(cancel).await?;
-            let page = client
-                .list_workspace_native(cwd, cursor.as_deref(), archived, cancel)
-                .await?;
-            Ok(ExternalAgentWorkspaceResult::IndexPage {
-                sessions: page.sessions,
-                next_cursor: page.next_cursor,
-                capabilities: agena_domain::ExternalAgentIndexCapabilities {
-                    archive,
-                    title: caps.title,
-                    delete: caps.delete,
-                    fork: caps.fork,
-                    ..Default::default()
-                },
-            })
-        }
-        ExternalAgentWorkspaceAction::SetArchived {
-            native_id,
-            archived,
-            ..
-        } => {
-            client
-                .set_native_archived(cwd, &native_id, archived, cancel)
-                .await?;
-            Ok(ExternalAgentWorkspaceResult::Archive {
-                native_id,
-                archived,
-            })
-        }
-        _ => unreachable!("operation without a standard ACP history equivalent"),
-    }
 }
 
 fn unsupported_index() -> AppError {

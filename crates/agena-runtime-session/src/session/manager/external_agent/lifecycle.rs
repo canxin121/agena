@@ -295,13 +295,119 @@ impl SessionManager {
         } else {
             acp::SessionContext::default()
         };
+        let (native_id, access) = native.expect("list handled above");
+        if replay_context.additional_directories.is_empty() {
+            if let Some((id, _, _, _)) = &held {
+                // Browsing needs the connection slot. A session/close would
+                // also stop the native session's independent background work.
+                self.close_idle_external_agent(*id).await;
+            }
+            let mode = match access {
+                HistoryAccess::Preview(before_turn) => {
+                    control_plane::ControlReplayMode::Preview(before_turn)
+                }
+                HistoryAccess::Open | HistoryAccess::Import => {
+                    control_plane::ControlReplayMode::Replay
+                }
+            };
+            let first = self
+                .external_control_plane
+                .replay_or_preview_native(
+                    &spec,
+                    &cwd,
+                    &native_id,
+                    None,
+                    &replay_context,
+                    mode,
+                    &self.control_tasks,
+                    &self.shutdown,
+                    &cancel,
+                )
+                .await?;
+            let resolved = match first {
+                control_plane::ControlReplayOutcome::NeedsIndexFallback(prior_error) => {
+                    let record = match self
+                        .index_import_record(&spec, &cwd, &native_id, &cancel)
+                        .await
+                    {
+                        Ok(row) => row,
+                        Err(index_error) => return Err(prior_error.unwrap_or(index_error)),
+                    };
+                    self.external_control_plane
+                        .replay_or_preview_native(
+                            &spec,
+                            &cwd,
+                            &native_id,
+                            Some(&record),
+                            &replay_context,
+                            mode,
+                            &self.control_tasks,
+                            &self.shutdown,
+                            &cancel,
+                        )
+                        .await?
+                }
+                other => other,
+            };
+            return match resolved {
+                control_plane::ControlReplayOutcome::Previewed { preview } => {
+                    Ok(ExternalAgentWorkspaceResult::HistoryPreview { preview })
+                }
+                control_plane::ControlReplayOutcome::Replayed {
+                    record,
+                    turns,
+                    mut state,
+                } => {
+                    let title = state
+                        .metadata
+                        .title
+                        .clone()
+                        .or_else(|| record.title.clone())
+                        .unwrap_or_else(|| format!("{} conversation", spec.name));
+                    state.metadata.title = state.metadata.title.or(record.title);
+                    state.metadata.updated_at = state.metadata.updated_at.or(record.updated_at);
+                    let link = ExternalAgentLink {
+                        native_id,
+                        cwd: cwd.clone(),
+                        incarnation: None,
+                        resume_at: None,
+                    };
+                    let request = RequestId::new();
+                    let import = ExternalAgentImport {
+                        workspace_id,
+                        agent,
+                        title,
+                        link,
+                        turns: turns.into(),
+                        state,
+                        replace_view: held.as_ref().map(|(id, _, _, _)| *id),
+                    };
+                    let created = persist(|| {
+                        self.kernel()
+                            .sessions
+                            .import_external_agent(request, import.clone())
+                    })
+                    .await
+                    .map_err(kernel_error)?;
+                    let session_id = created.value.id.get();
+                    Ok(if access == HistoryAccess::Open {
+                        ExternalAgentWorkspaceResult::Opened { session_id }
+                    } else {
+                        ExternalAgentWorkspaceResult::Imported { session_id }
+                    })
+                }
+                control_plane::ControlReplayOutcome::NeedsIndexFallback(_) => Err(AppError::Config(
+                    "That native conversation is not listed in this workspace.".into(),
+                )),
+            };
+        }
+        self.prepare_exclusive_external_agent_spawn(&spec).await;
         let mut client = self.spawn_external_agent_with_directories(
             spec.clone(),
             &cwd,
             &replay_context.additional_directories,
         )?;
         let outcome = async {
-            let (native_id, access) = native.expect("list handled above");
             let filter = if client.supports_native_archive(&cancel).await? {
                 ExternalAgentArchiveFilter::All
             } else {
@@ -516,7 +622,288 @@ impl SessionManager {
         } else {
             Vec::new()
         };
+        if let ExternalAgentSessionAction::SetDirectories { directories } = &action {
+            let resolved = directories_for_agent(&executor, &cwd, directories).await?;
+            let can_skip_spawn = if resolved.is_empty() {
+                true
+            } else if let Some(capabilities) = self.external_control_plane.cached_capabilities(&spec)
+            {
+                if !capabilities.additional_directories {
+                    return Err(AppError::Config(
+                        "The installed agent does not support additional workspace directories over ACP."
+                            .into(),
+                    ));
+                }
+                true
+            } else {
+                false
+            };
+            if can_skip_spawn {
+                self.close_idle_external_agent(session).await;
+                let request = RequestId::new();
+                persist(|| {
+                    self.kernel().sessions.configure(
+                        request,
+                        session,
+                        SessionConfigurationChange {
+                            external_agent_directories: Some(resolved.clone()),
+                            ..Default::default()
+                        },
+                    )
+                })
+                .await
+                .map_err(kernel_error)?;
+                return Ok(ExternalAgentSessionResult::Directories {
+                    directories: resolved,
+                });
+            }
+        }
+        if matches!(
+            &action,
+            ExternalAgentSessionAction::Close
+                | ExternalAgentSessionAction::SetTitle { .. }
+                | ExternalAgentSessionAction::Delete
+                | ExternalAgentSessionAction::Fork { .. }
+        ) && native_directories.is_empty()
+            && !(matches!(action, ExternalAgentSessionAction::Delete)
+                && agent == ExternalAgent::ClaudeCode)
+        {
+            let link = link.filter(|link| link.cwd == cwd).ok_or_else(|| {
+                AppError::Config(
+                    "This session has no native conversation in its current workspace.".into(),
+                )
+            })?;
+            match action {
+                ExternalAgentSessionAction::Close => {
+                    self.close_idle_external_agent_for_management(session).await;
+                    self.external_control_plane
+                        .release_native(
+                            &spec,
+                            &cwd,
+                            &link.native_id,
+                            false,
+                            &self.control_tasks,
+                            &self.shutdown,
+                            &cancel,
+                        )
+                        .await?;
+                    return Ok(ExternalAgentSessionResult::Closed);
+                }
+                ExternalAgentSessionAction::Delete => {
+                    self.close_idle_external_agent(session).await;
+                    self.external_control_plane
+                        .release_native(
+                            &spec,
+                            &cwd,
+                            &link.native_id,
+                            true,
+                            &self.control_tasks,
+                            &self.shutdown,
+                            &cancel,
+                        )
+                        .await?;
+                    let request = RequestId::new();
+                    persist(|| {
+                        self.kernel()
+                            .sessions
+                            .detach_external_agent(request, session, link.clone())
+                    })
+                    .await
+                    .map_err(kernel_error)?;
+                    return Ok(ExternalAgentSessionResult::Deleted);
+                }
+                ExternalAgentSessionAction::SetTitle { title } => {
+                    let title = validated_title(title)?;
+                    self.close_idle_external_agent(session).await;
+                    let saved = self
+                        .external_control_plane
+                        .set_native_title(
+                            &spec,
+                            &cwd,
+                            &link.native_id,
+                            &title,
+                            &self.control_tasks,
+                            &self.shutdown,
+                            &cancel,
+                        )
+                        .await?;
+                    let request = RequestId::new();
+                    persist(|| {
+                        self.kernel().sessions.update_metadata(
+                            request,
+                            session,
+                            MetadataChange {
+                                title: Some(saved.clone()),
+                                sync_external_agent_title: true,
+                                ..Default::default()
+                            },
+                        )
+                    })
+                    .await
+                    .map_err(kernel_error)?;
+                    return Ok(ExternalAgentSessionResult::Title { title: saved });
+                }
+                ExternalAgentSessionAction::Fork {
+                    title,
+                    before_message_id,
+                } => {
+                    let title = title.map(validated_title).transpose()?;
+                    let history = self
+                        .kernel()
+                        .reader
+                        .history(session, None, 1)
+                        .await
+                        .map_err(kernel_error)?;
+                    let head = history.entries.first().map(|entry| entry.id).ok_or_else(|| {
+                        AppError::Config("Cannot fork a session without history.".into())
+                    })?;
+                    let before = if let Some(message_id) = before_message_id {
+                        let status = self
+                            .external_control_plane
+                            .query_status(
+                                &spec,
+                                &cwd,
+                                None,
+                                false,
+                                &self.control_tasks,
+                                &self.shutdown,
+                                &cancel,
+                            )
+                            .await?;
+                        if !status.capabilities.fork_before_message {
+                            return Err(AppError::Config(
+                                "The installed agent does not support forking before a message over ACP."
+                                    .into(),
+                            ));
+                        }
+                        let message = entry_id(message_id)?;
+                        let (cursor, _) = self
+                            .kernel()
+                            .reader
+                            .external_agent_fork_points(session, &link, Some(message))
+                            .await
+                            .map_err(kernel_error)?
+                            .into_iter()
+                            .find(|(cursor, _)| cursor.fork)
+                            .ok_or_else(|| {
+                                AppError::Config(
+                                    "That message has no native fork point in this conversation. See native session status for available messages."
+                                        .into(),
+                                )
+                            })?;
+                        Some(cursor)
+                    } else {
+                        if configuration.external_agent_resume.is_none()
+                            && link
+                                .resume_at
+                                .as_ref()
+                                .is_none_or(|anchor| anchor.tail != Some(head))
+                        {
+                            return Err(AppError::Config(
+                                "The current transcript is not aligned with a retained native continuation."
+                                    .into(),
+                            ));
+                        }
+                        None
+                    };
+                    let mut fork_ctx = session_context(
+                        agent.clone(),
+                        session,
+                        &executor,
+                        &state,
+                        &context,
+                        native_directories,
+                        None,
+                    )
+                    .await;
+                    fork_ctx
+                        .selected_options
+                        .clone_from(&configuration.external_agent_selection);
+                    self.close_idle_external_agent(session).await;
+                    let (new_id, capabilities) = self
+                        .external_control_plane
+                        .fork_native(
+                            &spec,
+                            &cwd,
+                            &link.native_id,
+                            before
+                                .as_ref()
+                                .and_then(|cursor| cursor.cursor_id.as_deref()),
+                            &fork_ctx,
+                            &self.control_tasks,
+                            &self.shutdown,
+                            &cancel,
+                        )
+                        .await?;
+                    let request = RequestId::new();
+                    let through = before.as_ref().map_or(head, |cursor| cursor.message_id);
+                    let fork = ExternalAgentFork {
+                        expected_membership: snapshot.metadata.membership_generation,
+                        expected_head: head,
+                        expected_agent: agent.clone(),
+                        expected_native: link,
+                        before,
+                        new_native_id: new_id.clone(),
+                        title,
+                    };
+                    let result = persist(|| {
+                        self.kernel()
+                            .sessions
+                            .fork_external_agent(request, session, through, fork.clone())
+                    })
+                    .await
+                    .map_err(kernel_error);
+                    if result.is_err() {
+                        if capabilities.delete && agent != ExternalAgent::ClaudeCode {
+                            let _ = self
+                                .external_control_plane
+                                .release_native(
+                                    &spec,
+                                    &cwd,
+                                    &new_id,
+                                    true,
+                                    &self.control_tasks,
+                                    &self.shutdown,
+                                    &cancel,
+                                )
+                                .await;
+                        } else if capabilities.close {
+                            let _ = self
+                                .external_control_plane
+                                .release_native(
+                                    &spec,
+                                    &cwd,
+                                    &new_id,
+                                    false,
+                                    &self.control_tasks,
+                                    &self.shutdown,
+                                    &cancel,
+                                )
+                                .await;
+                        }
+                    } else if capabilities.close {
+                        let _ = self
+                            .external_control_plane
+                            .release_native(
+                                &spec,
+                                &cwd,
+                                &new_id,
+                                false,
+                                &self.control_tasks,
+                                &self.shutdown,
+                                &cancel,
+                            )
+                            .await;
+                    }
+                    return Ok(ExternalAgentSessionResult::Forked {
+                        session_id: result?.value.id.get(),
+                    });
+                }
+                _ => unreachable!(),
+            }
+        }
         let invalidates_control_plane = !matches!(action, ExternalAgentSessionAction::SetDirectories { .. });
+        self.prepare_exclusive_external_agent_spawn(&spec).await;
         let mut client = self.spawn_external_agent_with_directories(
             spec.clone(),
             &cwd,
@@ -663,7 +1050,8 @@ impl SessionManager {
         self.record_external_agent_memo(&spec, &client);
         self.retire_external_agent_client(client).await;
         if invalidates_control_plane && outcome.is_ok() {
-            self.invalidate_external_agent_control_plane(&agent, true)
+            let evict_process = !control_plane::supports_concurrent_control_plane(&spec);
+            self.invalidate_external_agent_control_plane(&agent, evict_process)
                 .await;
         }
         outcome

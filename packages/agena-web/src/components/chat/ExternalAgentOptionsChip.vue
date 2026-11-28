@@ -2,10 +2,13 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
+  RiAddLine,
   RiArrowDownSLine,
   RiArrowRightSLine,
   RiCheckLine,
+  RiCloseLine,
   RiFileCopyLine,
+  RiFolder6Line,
   RiLoader4Line,
   RiRefreshLine,
   RiRouteLine,
@@ -30,6 +33,10 @@ import { inferAcpAgentIdFromError, isMissingAcpCommandError } from '@/lib/acpIns
 import { sessionApiPath } from '@/lib/acpSession'
 import { apiJson } from '@/lib/api'
 import { copyTextToClipboard } from '@/lib/clipboard'
+import {
+  MAX_ACP_ADDITIONAL_DIRECTORIES,
+  normalizeAdditionalDirectories,
+} from '@/pages/chat/acpSessionControls'
 import { useToastsStore } from '@/stores/toasts'
 import type { ExternalAgent, ExternalAgentAuthStatus, ExternalAgentOptions } from '@/types/chat'
 
@@ -38,7 +45,12 @@ const props = defineProps<{
   label: string
   agent?: ExternalAgent
   liveOptions?: ExternalAgentOptions
+  supportsDirectories?: boolean
+  additionalDirectories?: readonly string[]
+  directoriesSaving?: boolean
+  updateDirectories?: (directories: string[]) => Promise<string[]>
 }>()
+const emit = defineEmits<{ (event: 'refreshStatus'): void }>()
 const { t } = useI18n()
 const toasts = useToastsStore()
 const catalog = useExternalAgentCatalog()
@@ -62,8 +74,46 @@ const providersOpen = ref(false)
 const providersBusy = ref(false)
 const providersError = ref('')
 const providers = ref<ExternalAgentProviders | null>(null)
+const directoriesOpen = ref(false)
+const directoryDraft = ref('')
+const directoriesError = ref('')
 const copiedCommand = ref('')
 let copyTimer: number | undefined
+
+const directoriesList = computed(() => props.additionalDirectories ?? [])
+const canAddMoreDirectories = computed(
+  () => directoriesList.value.length < MAX_ACP_ADDITIONAL_DIRECTORIES,
+)
+
+async function addAdditionalDirectory() {
+  const path = directoryDraft.value.trim()
+  if (!path || !props.updateDirectories || props.directoriesSaving) return
+  directoriesError.value = ''
+  const next = normalizeAdditionalDirectories([...directoriesList.value, path])
+  if (next.length === directoriesList.value.length && directoriesList.value.includes(path)) {
+    directoryDraft.value = ''
+    return
+  }
+  try {
+    await props.updateDirectories(next)
+    directoryDraft.value = ''
+    toasts.push('success', String(t('chat.nativeAgent.directoriesSavedToast')))
+  } catch (reason) {
+    directoriesError.value = reason instanceof Error ? reason.message : String(reason)
+  }
+}
+
+async function removeAdditionalDirectory(directory: string) {
+  if (!props.updateDirectories || props.directoriesSaving) return
+  directoriesError.value = ''
+  const next = directoriesList.value.filter((item) => item !== directory)
+  try {
+    await props.updateDirectories(next)
+    toasts.push('success', String(t('chat.nativeAgent.directoriesSavedToast')))
+  } catch (reason) {
+    directoriesError.value = reason instanceof Error ? reason.message : String(reason)
+  }
+}
 
 const resolvedAgentId = computed(
   () => props.agent || inferAcpAgentIdFromError(error.value || authError.value) || 'custom',
@@ -296,7 +346,7 @@ watch([open, authOpen], ([panel, account], _previous, onCleanup) => {
         :tooltip="t('common.refresh')"
         size="sm"
         :disabled="loading"
-        @click="load()"
+        @click="() => { void load(); emit('refreshStatus') }"
       >
         <RiRefreshLine class="h-3.5 w-3.5" :class="loading ? 'animate-spin' : ''" />
       </IconButton>
@@ -384,6 +434,95 @@ watch([open, authOpen], ([panel, account], _previous, onCleanup) => {
         <p class="text-[11px] text-muted-foreground">{{ t('chat.composer.picker.agentOptionNextTurn') }}</p>
       </div>
 
+      <!-- Additional workspace directories disclosure (standard ACP additionalDirectories) -->
+      <section v-if="supportsDirectories && updateDirectories" class="border-t border-border/70 pt-2.5">
+        <div class="flex items-center justify-between gap-2">
+          <button
+            type="button"
+            class="flex min-w-0 flex-1 items-center gap-1.5 rounded px-1 py-1 text-left font-medium text-foreground hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            :aria-expanded="directoriesOpen"
+            @click="directoriesOpen = !directoriesOpen"
+          >
+            <component
+              :is="directoriesOpen ? RiArrowDownSLine : RiArrowRightSLine"
+              class="h-4 w-4 shrink-0 text-muted-foreground"
+            />
+            <RiFolder6Line class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span class="truncate">{{ t('chat.nativeAgent.directories') }}</span>
+            <span
+              v-if="directoriesList.length > 0"
+              class="rounded-full bg-muted/70 px-1.5 py-0.2 text-[10px] font-medium tabular-nums text-muted-foreground"
+            >
+              {{ directoriesList.length }}
+            </span>
+          </button>
+        </div>
+
+        <div v-if="directoriesOpen" class="mt-2 grid gap-2 pl-1" :aria-busy="directoriesSaving">
+          <p
+            v-if="directoriesError"
+            role="alert"
+            class="whitespace-pre-wrap break-words rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-2 text-destructive"
+          >
+            {{ directoriesError }}
+          </p>
+
+          <ul v-if="directoriesList.length" class="grid gap-1">
+            <li
+              v-for="dir in directoriesList"
+              :key="dir"
+              class="flex items-center gap-1.5 rounded-md border border-border/70 bg-muted/20 px-2 py-1"
+            >
+              <span class="min-w-0 flex-1 break-all font-mono text-[11px] text-foreground">{{ dir }}</span>
+              <IconButton
+                size="sm"
+                variant="ghost"
+                class="h-5 w-5 shrink-0 text-muted-foreground hover:text-destructive"
+                :disabled="directoriesSaving"
+                :tooltip="t('chat.nativeAgent.removeDirectoryAction')"
+                :aria-label="t('chat.nativeAgent.removeDirectoryAction')"
+                @click="removeAdditionalDirectory(dir)"
+              >
+                <RiCloseLine class="h-3.5 w-3.5" />
+              </IconButton>
+            </li>
+          </ul>
+          <p v-else class="text-[11px] text-muted-foreground">
+            {{ t('chat.nativeAgent.noAdditionalDirectories') }}
+          </p>
+
+          <form
+            v-if="canAddMoreDirectories"
+            class="flex items-center gap-1.5"
+            @submit.prevent="addAdditionalDirectory"
+          >
+            <input
+              v-model="directoryDraft"
+              type="text"
+              class="h-7 min-w-0 flex-1 rounded-md border border-border/70 bg-background px-2 font-mono text-[11px] text-foreground outline-none focus-visible:border-ring focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-60"
+              :placeholder="t('chat.nativeAgent.addDirectoryPlaceholder')"
+              :aria-label="t('chat.nativeAgent.directories')"
+              :disabled="directoriesSaving"
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <Button
+              type="submit"
+              size="sm"
+              variant="outline"
+              class="h-7 shrink-0 px-2 text-[11px]"
+              :disabled="directoriesSaving || !directoryDraft.trim()"
+            >
+              <RiLoader4Line v-if="directoriesSaving" class="mr-1 h-3 w-3 animate-spin" />
+              <RiAddLine v-else class="mr-0.5 h-3 w-3" />
+              {{ t('chat.nativeAgent.addDirectoryAction') }}
+            </Button>
+          </form>
+
+          <p class="text-[11px] text-muted-foreground">{{ t('chat.nativeAgent.directoriesHint') }}</p>
+        </div>
+      </section>
+
       <!-- Account disclosure -->
       <section class="border-t border-border/70 pt-2.5">
         <div class="flex items-center justify-between gap-2">
@@ -451,8 +590,14 @@ watch([open, authOpen], ([panel, account], _previous, onCleanup) => {
               <span>{{ t(`chat.composer.picker.${authStateKey}`) }}</span>
             </p>
             <div v-for="(account, index) in displayedAuth.accounts" :key="index" class="break-words text-[11px] text-muted-foreground">
-              <p class="text-foreground">
-                {{ [account.label, account.name, account.email, account.organization].filter(Boolean).join(' · ') }}
+              <p class="flex flex-wrap items-center gap-1.5 text-foreground">
+                <span>{{ [account.label, account.name, account.email, account.organization].filter(Boolean).join(' · ') }}</span>
+                <span
+                  v-if="account.active"
+                  class="rounded-full border border-emerald-500/30 bg-emerald-500/15 px-1.5 py-0.2 text-[10px] font-medium text-emerald-700 dark:text-emerald-300"
+                >
+                  {{ t('chat.composer.picker.agentAccountActive') }}
+                </span>
               </p>
               <p v-if="account.description">{{ account.description }}</p>
             </div>

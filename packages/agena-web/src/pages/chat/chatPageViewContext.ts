@@ -54,6 +54,20 @@ export type ChatPageViewContext = {
   fillBotSuggestion: (text: string) => void
   canFillExternalAgentSuggestion: ComputedRef<boolean>
   fillExternalAgentSuggestion: (suggestion: ExternalAgentSuggestion) => void
+  externalAgentSuggestions: ComputedRef<ExternalAgentSuggestion[]>
+  acpIsReadOnly: ComputedRef<boolean>
+  acpCanForkSession: ComputedRef<boolean>
+  acpForkBusy: Ref<boolean>
+  forkAcpSession: () => Promise<void>
+  acpSupportsDirectories: ComputedRef<boolean>
+  acpAdditionalDirectories: ComputedRef<string[]>
+  acpDirectoriesSaving: Ref<boolean>
+  updateAcpDirectories: (directories: string[]) => Promise<string[]>
+  refreshAcpStatus: () => Promise<unknown>
+  acpSupportsSystemPrompt: ComputedRef<boolean>
+  canForkMessage: (messageId: string) => boolean
+  canRevertMessage: (messageId: string) => boolean
+  revertInPlaceOnly: ComputedRef<boolean>
   pageRef: Ref<HTMLElement | null>
   scrollEl: Ref<HTMLElement | null>
   contentEl: Ref<HTMLElement | null>

@@ -33,6 +33,8 @@ export const localStorageKeys = {
     locale: namespacedKey('ui.locale'),
     botSidebarPage: namespacedKey('ui.bot-sidebar.page'),
     botSidebarTree: namespacedKey('ui.bot-sidebar.tree'),
+    acpSidebarAgent: namespacedKey('ui.acp-sidebar.agent'),
+    acpSidebarExpandedDirs: namespacedKey('ui.acp-sidebar.expanded-dirs'),
   },
   directory: {
     currentDirectoryByWindow: namespacedKey('directory.current-directory-by-window'),

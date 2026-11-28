@@ -13,11 +13,24 @@ import { useI18n } from 'vue-i18n'
 import SessionChip from './SessionChip.vue'
 import ExternalAgentWorkList from './ExternalAgentWorkList.vue'
 import IconButton from '@/components/ui/IconButton.vue'
+import { sessionApiPath } from '@/lib/acpSession'
+import { apiJson } from '@/lib/api'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { useToastsStore } from '@/stores/toasts'
-import type { ExternalAgentDetails, ExternalAgentMessage, ExternalAgentSuggestion } from '@/types/chat'
+import type {
+  ExternalAgentDetails,
+  ExternalAgentMessage,
+  ExternalAgentSuggestion,
+  ExternalAgentWorkItem,
+} from '@/types/chat'
 
-const props = defineProps<{ sessionId: string; label: string; details?: ExternalAgentDetails; suggestionEnabled: boolean }>()
+const props = defineProps<{
+  sessionId: string
+  label: string
+  details?: ExternalAgentDetails
+  suggestionEnabled: boolean
+  busy?: boolean
+}>()
 const emit = defineEmits<{ suggestion: [suggestion: ExternalAgentSuggestion] }>()
 const { locale, t } = useI18n()
 const toasts = useToastsStore()
@@ -33,12 +46,57 @@ const amount = computed(() => {
   return cost ? `${new Intl.NumberFormat(locale.value, { maximumSignificantDigits: 10 }).format(cost.amount)} ${cost.currency}` : ''
 })
 
-const runningCount = computed(() => {
+const runningDetailsCount = computed(() => {
   const runningSubagents = children.value.filter(([, child]) => child.state === 'running' || child.state === 'in_progress').length
   const runningCompactions = (details.value.compactions ?? []).filter((item) => item.status === 'running' || item.status === 'in_progress').length
   const runningTerminals = (details.value.terminals ?? []).filter((term) => !term.exited).length
-  return runningSubagents + runningCompactions + runningTerminals + liveWorkCount.value
+  return runningSubagents + runningCompactions + runningTerminals
 })
+const runningCount = computed(() => runningDetailsCount.value + liveWorkCount.value)
+const shouldPollClosedWork = computed(() => !open.value && (Boolean(props.busy) || runningDetailsCount.value > 0))
+
+watch(
+  [() => props.sessionId, shouldPollClosedWork, open],
+  ([sessionId, poll, isOpen], [prevSessionId], onCleanup) => {
+    if (sessionId !== prevSessionId) {
+      liveWorkCount.value = 0
+    }
+    if (isOpen) return
+    if (!sessionId || !poll) {
+      liveWorkCount.value = 0
+      return
+    }
+    const controller = new AbortController()
+    const path = `${sessionApiPath(sessionId)}/agent-work`
+    let inFlight = false
+    async function refreshWorkCount() {
+      if (inFlight || controller.signal.aborted || document.hidden) return
+      inFlight = true
+      try {
+        const items = await apiJson<ExternalAgentWorkItem[]>(path, { signal: controller.signal })
+        if (!controller.signal.aborted) {
+          liveWorkCount.value = Array.isArray(items) ? items.length : 0
+        }
+      } catch {
+        if (!controller.signal.aborted) liveWorkCount.value = 0
+      } finally {
+        inFlight = false
+      }
+    }
+    void refreshWorkCount()
+    const timer = window.setInterval(refreshWorkCount, 2500)
+    const onVisibility = () => {
+      if (!document.hidden) void refreshWorkCount()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+    onCleanup(() => {
+      controller.abort()
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisibility)
+    })
+  },
+  { immediate: true },
+)
 const hasErrorNotice = computed(() => (details.value.notices ?? []).some((notice) => notice.severity === 'error'))
 const badgeCount = computed(
   () =>

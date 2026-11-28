@@ -44,6 +44,9 @@ export type NativeIndexCapabilities = {
   archive: boolean
   batch_get: boolean
   watch: boolean
+  title?: boolean
+  delete?: boolean
+  fork?: boolean
 }
 
 export type NativeIndexedSession = NativeAgentSession & {
@@ -117,6 +120,28 @@ export function setNativeAgentArchived(workspace: number, agent: ExternalAgent, 
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ action: 'set_archived', agent, native_id: nativeId, archived }),
+    },
+  )
+}
+
+export function renameNativeAgentSession(workspace: number, agent: ExternalAgent, nativeId: string, title: string) {
+  return apiJson<{ kind: 'title'; native_id: string; title: string }>(
+    `/api/v1/acp/workspaces/${workspace}/sessions`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'set_title', agent, native_id: nativeId, title }),
+    },
+  )
+}
+
+export function deleteNativeAgentSession(workspace: number, agent: ExternalAgent, nativeId: string) {
+  return apiJson<{ kind: 'deleted'; native_id: string }>(
+    `/api/v1/acp/workspaces/${workspace}/sessions`,
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'delete', agent, native_id: nativeId }),
     },
   )
 }
@@ -210,7 +235,9 @@ export async function manageNativeAgentSession(id: string, action: NativeSession
     signal,
   })
   if (action.action !== 'status') {
-    invalidateResources(['session:' + id + ':state'])
+    const keys = ['session:' + id + ':state']
+    if (action.action === 'rewind') keys.push('session:' + id + ':parts')
+    invalidateResources(keys)
   }
   return result
 }

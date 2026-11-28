@@ -6,6 +6,7 @@ import { useI18n } from 'vue-i18n'
 
 import { patchSessionIdInQuery } from '@/app/navigation/sessionQuery'
 import { isEmbeddedWorkspacePaneContext } from '@/app/windowScope'
+import { isAcpSessionId } from '@/lib/acpSession'
 import type { JsonValue } from '@/types/json'
 import type { MessageEntry, Session } from '@/types/chat'
 import { attachmentLabel, attachmentLabelFromUrl } from '../../lib/attachmentLabels'
@@ -37,6 +38,7 @@ type MessageLike = {
 
 type ChatLike = {
   selectedSessionId: string | null
+  messages?: MessageEntry[]
   selectSession: (sessionId: string) => Promise<void>
   forkSession: (sessionId: string, opts?: { at_message_id?: number }) => Promise<JsonValue | null>
   revertToMessage: (
@@ -70,6 +72,8 @@ export function useChatMessageActions(opts: {
   getTextParts: (parts: MessagePartLike[]) => Array<{ text?: string }>
   copyToClipboard: (text: string) => Promise<void>
   scrollToBottom: (behavior: 'auto' | 'smooth') => void
+  onAcpForkFromMessage?: (sessionId: string, beforeMessageId: number) => Promise<string | null>
+  onAcpRewindFromMessage?: (sessionId: string, beforeMessageId: number) => Promise<void>
 }) {
   const { t } = useI18n()
 
@@ -85,6 +89,8 @@ export function useChatMessageActions(opts: {
     getTextParts,
     copyToClipboard,
     scrollToBottom,
+    onAcpForkFromMessage,
+    onAcpRewindFromMessage,
   } = opts
 
   const copiedMessageId = ref('')
@@ -133,12 +139,56 @@ export function useChatMessageActions(opts: {
 
   async function openBranch(newId: string) {
     const isEmbeddedWorkspacePane = isEmbeddedWorkspacePaneContext(route.query)
-    if (isEmbeddedWorkspacePane) {
+    const isAcpBranch = isAcpSessionId(newId) || route.path === '/acp'
+    if (isAcpBranch) {
+      await router.replace({
+        path: '/acp',
+        query: isEmbeddedWorkspacePane ? patchSessionIdInQuery(route.query, newId) : { sessionId: newId },
+      })
+    } else if (isEmbeddedWorkspacePane) {
       await router.replace({ path: '/chat', query: patchSessionIdInQuery(route.query, newId) })
     } else {
       await router.replace({ path: '/chat' })
     }
     await chat.selectSession(newId)
+  }
+
+  async function restoreMessageIntoComposer(sessionId: string, message: MessageEntry | undefined) {
+    if (!message) return
+    const segments: ComposerSegment[] = []
+    const files: AttachedFile[] = []
+    for (const part of message.parts) {
+      if (part.type === 'text' && (!part.synthetic || part.agenaKind === 'paste_ref')) {
+        segments.push({ type: 'text', text: part.text || '' })
+        continue
+      }
+      if (part.type !== 'file') continue
+      const content = part.agenaContent && typeof part.agenaContent === 'object' ? part.agenaContent : {}
+      const dataUrl = typeof part.url === 'string' && part.url.startsWith('data:') ? part.url : ''
+      const path = typeof part.serverPath === 'string' ? part.serverPath : ''
+      if (!dataUrl && !path) continue
+      const id = `rewind-${sessionId}-${part.id}`
+      files.push({
+        id,
+        filename: filePartLabel(part),
+        size: 0,
+        mime: part.mime || 'application/octet-stream',
+        ...(dataUrl ? { url: dataUrl } : {}),
+        ...(path ? { serverPath: path } : {}),
+        delivery: content.delivery === 'model_input' ? 'model_input' : 'reference',
+        state: 'ready',
+      })
+      segments.push({ type: 'attachment', id })
+    }
+    draft.value = segments
+      .filter((segment): segment is Extract<ComposerSegment, { type: 'text' }> => segment.type === 'text')
+      .map((segment) => segment.text)
+      .join('')
+    clearAttachments()
+    attachedFiles.value = files
+    await nextTick()
+    composerRef.value?.restoreSegments?.(segments)
+    getComposerInput(composerRef.value)?.focus()
   }
 
   async function handleForkFromMessage(messageId: string) {
@@ -149,6 +199,15 @@ export function useChatMessageActions(opts: {
       const atMessageId = Number(messageId)
       if (!Number.isSafeInteger(atMessageId) || atMessageId <= 0)
         throw new Error(i18n.global.t('chat.errors.messageIdRequired'))
+      if (isAcpSessionId(sid) && onAcpForkFromMessage) {
+        const newId = await onAcpForkFromMessage(sid, atMessageId)
+        if (!newId) throw new Error(i18n.global.t('chat.errors.forkedSessionMissing'))
+        await openBranch(newId)
+        await nextTick()
+        scrollToBottom('auto')
+        toasts.push('success', t('chat.nativeAgent.forkedToast'))
+        return
+      }
       const created = await chat.forkSession(sid, { at_message_id: atMessageId })
       const newId = typeof created?.id === 'string' ? created.id.trim() : ''
       if (!newId) throw new Error(i18n.global.t('chat.errors.forkedSessionMissing'))
@@ -171,45 +230,24 @@ export function useChatMessageActions(opts: {
     historyActionBusy.value = true
     revertBusyMessageId.value = messageId
     try {
+      if (isAcpSessionId(sid) && onAcpRewindFromMessage) {
+        const atMessageId = Number(messageId)
+        if (!Number.isSafeInteger(atMessageId) || atMessageId <= 0)
+          throw new Error(i18n.global.t('chat.errors.messageIdRequired'))
+        const retracted = chat.messages?.find((entry) => String(entry.info.id) === String(atMessageId))
+        await onAcpRewindFromMessage(sid, atMessageId)
+        if (chat.selectedSessionId !== sid || route.fullPath !== sourceRoute) return
+        await restoreMessageIntoComposer(sid, retracted)
+        scrollToBottom('auto')
+        toasts.push('success', t('chat.nativeAgent.rewoundToast'))
+        return
+      }
       const rewound = await chat.revertToMessage(sid, messageId, mode)
       if (!rewound || chat.selectedSessionId !== sid || route.fullPath !== sourceRoute) return
 
       const { session, message } = rewound
       if (mode === 'fork') await openBranch(session.id)
-      const segments: ComposerSegment[] = []
-      const files: AttachedFile[] = []
-      for (const part of message.parts) {
-        if (part.type === 'text' && (!part.synthetic || part.agenaKind === 'paste_ref')) {
-          segments.push({ type: 'text', text: part.text || '' })
-          continue
-        }
-        if (part.type !== 'file') continue
-        const content = part.agenaContent && typeof part.agenaContent === 'object' ? part.agenaContent : {}
-        const dataUrl = typeof part.url === 'string' && part.url.startsWith('data:') ? part.url : ''
-        const path = typeof part.serverPath === 'string' ? part.serverPath : ''
-        if (!dataUrl && !path) continue
-        const id = `rewind-${session.id}-${part.id}`
-        files.push({
-          id,
-          filename: filePartLabel(part),
-          size: 0,
-          mime: part.mime || 'application/octet-stream',
-          ...(dataUrl ? { url: dataUrl } : {}),
-          ...(path ? { serverPath: path } : {}),
-          delivery: content.delivery === 'model_input' ? 'model_input' : 'reference',
-          state: 'ready',
-        })
-        segments.push({ type: 'attachment', id })
-      }
-      draft.value = segments
-        .filter((segment): segment is Extract<ComposerSegment, { type: 'text' }> => segment.type === 'text')
-        .map((segment) => segment.text)
-        .join('')
-      clearAttachments()
-      attachedFiles.value = files
-      await nextTick()
-      composerRef.value?.restoreSegments?.(segments)
-      getComposerInput(composerRef.value)?.focus()
+      await restoreMessageIntoComposer(session.id, message)
       scrollToBottom('auto')
     } catch (err) {
       toasts.push('error', err instanceof Error ? err.message : String(err))

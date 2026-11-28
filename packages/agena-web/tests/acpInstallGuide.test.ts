@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'bun:test'
+import { createI18n } from 'vue-i18n'
 
+import enUS from '../src/i18n/messages/en-US'
+import zhCN from '../src/i18n/messages/zh-CN'
+import esES from '../src/i18n/messages/es-ES'
+import frFR from '../src/i18n/messages/fr-FR'
+import ptBR from '../src/i18n/messages/pt-BR'
+import arSA from '../src/i18n/messages/ar-SA'
+import hiIN from '../src/i18n/messages/hi-IN'
 import {
   CLAUDE_CODE_NPX_PRESET,
   getAcpInstallGuide,
@@ -61,5 +69,35 @@ describe('acpInstallGuide', () => {
     expect(custom.kind).toBe('custom')
     expect(custom.expectedCommand).toBe('codex-acp')
     expect(custom.commands[0]?.command).toBe('which codex-acp')
+  })
+
+  it('compiles all installGuide i18n messages cleanly without vue-i18n syntax errors across all 7 locales', () => {
+    const locales = {
+      'en-US': enUS,
+      'zh-CN': zhCN,
+      'es-ES': esES,
+      'fr-FR': frFR,
+      'pt-BR': ptBR,
+      'ar-SA': arSA,
+      'hi-IN': hiIN,
+    }
+    const i18n = createI18n({
+      legacy: false,
+      locale: 'en-US',
+      messages: locales,
+      onWarn: (msg) => {
+        throw new Error(`Unexpected vue-i18n warning: ${msg}`)
+      },
+    })
+    for (const locale of Object.keys(locales) as Array<keyof typeof locales>) {
+      i18n.global.locale.value = locale
+      const tip = i18n.global.t('chat.nativeAgent.installGuide.claudeNpxTip', {
+        pkg: '@agentclientprotocol/claude-agent-acp',
+      })
+      expect(tip).toContain('@agentclientprotocol/claude-agent-acp')
+      expect(
+        i18n.global.t('chat.nativeAgent.installGuide.title', { agent: 'Claude Code' }),
+      ).toContain('Claude Code')
+    }
   })
 })

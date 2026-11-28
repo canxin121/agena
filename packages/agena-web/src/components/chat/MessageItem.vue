@@ -58,6 +58,9 @@ const props = defineProps<{
   isNodeSelected?: (key: string) => boolean
   isNodeSearchMatch?: (key: string) => boolean
   sessionId?: string | null
+  canForkMessage?: (messageId: string) => boolean
+  canRevertMessage?: (messageId: string) => boolean
+  revertInPlaceOnly?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -95,6 +98,12 @@ const role = computed(() => String(props.message.info.role || 'assistant'))
 const senderLabel = computed(() => messageSenderLabel(props.message.info))
 const senderDetails = computed(() => messageSenderDetails(props.message.info))
 const messageId = computed(() => String(props.message.info.id || ''))
+const showForkAction = computed(
+  () => role.value === 'user' && (props.canForkMessage ? props.canForkMessage(messageId.value) : true),
+)
+const showRevertAction = computed(
+  () => role.value === 'user' && (props.canRevertMessage ? props.canRevertMessage(messageId.value) : true),
+)
 const messageNodeKey = computed(() => `message:${messageId.value}`)
 const runStatus = computed(() =>
   partStatusPresentation(String(props.message.info.runState || props.message.info.finish || '')),
@@ -402,7 +411,7 @@ function handlePartControlsKeydown(event: KeyboardEvent) {
       >
         <template v-if="actionsMounted">
           <ConfirmPopover
-            v-if="role === 'user'"
+            v-if="showForkAction"
             :title="t('chat.messageItem.fork.confirmTitle')"
             :description="t('chat.messageItem.fork.confirmDescription')"
             :confirm-text="t('chat.messageItem.fork.confirmAction')"
@@ -421,7 +430,29 @@ function handlePartControlsKeydown(event: KeyboardEvent) {
           </ConfirmPopover>
 
           <ConfirmPopover
-            v-if="role === 'user'"
+            v-if="showRevertAction && revertInPlaceOnly"
+            :title="t('chat.nativeAgent.rewindBeforeMessage')"
+            :description="t('chat.nativeAgent.nativeRewindDescription')"
+            :confirm-text="t('chat.messageItem.revert.confirmAction')"
+            :cancel-text="t('common.cancel')"
+            variant="destructive"
+            :anchor-to-cursor="false"
+            @confirm="chooseRevert('in_place')"
+          >
+            <IconButton
+              variant="ghost"
+              class="h-6 w-6"
+              :tooltip="t('chat.messageItem.revert.actionTitle')"
+              :aria-label="t('chat.messageItem.revert.actionTitle')"
+              :disabled="revertBusyMessageId === messageId"
+            >
+              <RiLoader4Line v-if="revertBusyMessageId === messageId" class="h-3.5 w-3.5 animate-spin" />
+              <RiArrowGoBackLine v-else class="h-3.5 w-3.5" />
+            </IconButton>
+          </ConfirmPopover>
+
+          <ConfirmPopover
+            v-else-if="showRevertAction"
             :open="revertOpen"
             :title="t('chat.messageItem.revert.confirmTitle')"
             :description="t('chat.messageItem.revert.confirmDescription')"

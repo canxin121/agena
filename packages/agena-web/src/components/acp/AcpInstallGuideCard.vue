@@ -150,7 +150,7 @@ onBeforeUnmount(() => {
     </div>
 
     <p v-if="guide.npxPreset && !showUseNpx" class="text-[11px] leading-relaxed text-muted-foreground">
-      {{ t('chat.nativeAgent.installGuide.claudeNpxTip') }}
+      {{ t('chat.nativeAgent.installGuide.claudeNpxTip', { pkg: guide.npxPreset.args[1] ?? '@agentclientprotocol/claude-agent-acp' }) }}
     </p>
 
     <p class="text-[11px] leading-relaxed text-muted-foreground">

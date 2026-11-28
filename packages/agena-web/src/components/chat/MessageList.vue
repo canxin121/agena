@@ -42,6 +42,9 @@ const props = defineProps<{
   isNodeSearchMatch?: (key: string) => boolean
   pendingAttention?: AttentionEvent | null
   openMobileSidebar?: () => void | Promise<void>
+  canForkMessage?: (messageId: string) => boolean
+  canRevertMessage?: (messageId: string) => boolean
+  revertInPlaceOnly?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -158,6 +161,9 @@ function forwardFoldExpand(fold: MessageFold, all: boolean) {
           :is-node-selected="isNodeSelected"
           :is-node-search-match="isNodeSearchMatch"
           :session-id="selectedSessionId"
+          :can-fork-message="canForkMessage"
+          :can-revert-message="canRevertMessage"
+          :revert-in-place-only="revertInPlaceOnly"
           @fork="$emit('fork', $event)"
           @revert="(messageId: string, mode: 'fork' | 'in_place') => $emit('revert', messageId, mode)"
           @copy="$emit('copy', $event)"

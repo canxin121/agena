@@ -18,15 +18,15 @@ import {
   RiCloseLine,
   RiCommandLine,
   RiCornerDownRightLine,
-  RiEqualizerLine,
   RiBookOpenLine,
+  RiErrorWarningLine,
   RiGitBranchLine,
   RiGlobalLine,
+  RiSparklingLine,
 } from '@remixicon/vue'
 
 import BotWelcome from './BotWelcome.vue'
 import BotAvatar from '@/features/bots/BotAvatar.vue'
-import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import { readServerAuthTokenVersion, subscribeServerAuthTokenVersion } from '@/lib/serverAuthToken'
 import { openBrowserKey } from '@/features/browser/api'
@@ -52,6 +52,7 @@ import ExternalAgentOptionsChip from '@/components/chat/ExternalAgentOptionsChip
 import ExternalAgentDetailsChip from '@/components/chat/ExternalAgentDetailsChip.vue'
 import AgentProfileChip from '@/components/settings/AgentProfileChip.vue'
 import type { ChatPageViewContext } from './chatPageViewContext'
+import { externalAgentSuggestionLabel } from './acpSessionControls'
 import type { OptionMenuItem } from '@/components/ui/optionMenu.types'
 import { resolveComposerToolbarLayout } from './composerToolbarLayout'
 import { useBtwStore } from '@/stores/btw'
@@ -65,21 +66,7 @@ const WorkspaceChangesSection = defineAsyncComponent(() => import('@/components/
 const BtwSection = defineAsyncComponent(() => import('@/components/chat/BtwSection.vue'))
 const PlanSection = defineAsyncComponent(() => import('@/components/chat/PlanSection.vue'))
 const SessionBrowser = defineAsyncComponent(() => import('@/features/browser/SessionBrowser.vue'))
-const ExternalAgentSessionDialog = defineAsyncComponent(
-  () => import('@/layout/chatSidebar/components/ExternalAgentSessionDialog.vue'),
-)
 const btw = useBtwStore()
-const nativeManageOpen = ref(false)
-const workspaceNavigation = useWorkspaceNavigation()
-
-function openAcpSessionFromDialog(sessionId?: number) {
-  nativeManageOpen.value = false
-  void workspaceNavigation.openMainTab('acp', {
-    path: '/acp',
-    query: sessionId ? { sessionId: String(sessionId) } : {},
-    replace: true,
-  })
-}
 
 // This view is template-only: it takes a context bag from ChatPage.
 // Keep it "dumb" so we can aggressively split ChatPage logic into composables.
@@ -681,6 +668,9 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                     :is-node-search-match="isTranscriptNodeSearchMatch"
                     :pending-attention="chat.selectedAttention"
                     :open-mobile-sidebar="openMobileSidebar"
+                    :can-fork-message="ctx.canForkMessage"
+                    :can-revert-message="ctx.canRevertMessage"
+                    :revert-in-place-only="ctx.revertInPlaceOnly.value"
                     @fork="handleForkFromMessage"
                     @revert="handleRevertFromMessage"
                     @copy="handleCopyMessage"
@@ -757,6 +747,50 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
           </div>
           <div class="shrink-0" :style="{ paddingInlineEnd: `${scrollbarGutter}px` }">
             <div class="chat-column">
+              <div
+                v-if="externalAgentLabel && ctx.acpIsReadOnly.value"
+                role="status"
+                class="mb-1.5 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-500/35 bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-200"
+              >
+                <span class="flex min-w-0 items-center gap-1.5">
+                  <RiErrorWarningLine class="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  <span class="break-words">{{ t('chat.nativeAgent.readOnlyHistory') }}</span>
+                </span>
+                <Button
+                  v-if="ctx.acpCanForkSession.value"
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  class="h-7 shrink-0 border-amber-500/40 bg-background/80 px-2.5 text-xs text-foreground hover:bg-background"
+                  :disabled="ctx.acpForkBusy.value"
+                  @click="ctx.forkAcpSession()"
+                >
+                  <RiLoader4Line v-if="ctx.acpForkBusy.value" class="mr-1 h-3.5 w-3.5 animate-spin" />
+                  <RiGitBranchLine v-else class="mr-1 h-3.5 w-3.5" />
+                  {{ t('chat.nativeAgent.forkToContinue') }}
+                </Button>
+              </div>
+              <div
+                v-if="
+                  externalAgentLabel &&
+                  ctx.canFillExternalAgentSuggestion.value &&
+                  ctx.externalAgentSuggestions.value.length > 0
+                "
+                class="mb-1.5 flex flex-wrap items-center gap-1.5"
+                :aria-label="t('chat.externalAgentDetails.suggestions')"
+              >
+                <RiSparklingLine class="h-3.5 w-3.5 shrink-0 text-primary/80" aria-hidden="true" />
+                <button
+                  v-for="(suggestion, index) in ctx.externalAgentSuggestions.value.slice(0, 4)"
+                  :key="index"
+                  type="button"
+                  class="max-w-full truncate rounded-full border border-border/75 bg-muted/25 px-2.5 py-1 text-xs text-foreground/90 transition-colors hover:border-primary/40 hover:bg-primary/10 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  :title="externalAgentSuggestionLabel(suggestion)"
+                  @click="ctx.fillExternalAgentSuggestion(suggestion)"
+                >
+                  {{ externalAgentSuggestionLabel(suggestion) }}
+                </button>
+              </div>
               <QueuedMessages
                 :messages="queuedMessages"
                 :session-id="chat.selectedSessionId"
@@ -856,6 +890,11 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                       :label="externalAgentLabel"
                       :agent="chat.selectedSession?.external_agent"
                       :live-options="chat.selectedSessionExecution?.external_agent_options"
+                      :supports-directories="ctx.acpSupportsDirectories.value"
+                      :additional-directories="ctx.acpAdditionalDirectories.value"
+                      :directories-saving="ctx.acpDirectoriesSaving.value"
+                      :update-directories="ctx.updateAcpDirectories"
+                      @refresh-status="ctx.refreshAcpStatus()"
                     />
                     <button
                       v-else
@@ -882,22 +921,14 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                       :label="externalAgentLabel"
                       :details="chat.selectedSessionExecution?.external_agent_details"
                       :suggestion-enabled="ctx.canFillExternalAgentSuggestion.value"
+                      :busy="currentPhase !== 'idle'"
                       @suggestion="ctx.fillExternalAgentSuggestion"
                     />
-                    <button
-                      v-if="externalAgentLabel && chat.selectedSessionId"
-                      type="button"
-                      data-oc-keyboard-tap="blur"
-                      class="pointer-events-auto flex min-h-7 shrink-0 touch-manipulation items-center gap-1 rounded px-1 py-0.5 text-muted-foreground hover:bg-secondary/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      :title="t('chat.nativeAgent.manage')"
-                      :aria-label="t('chat.nativeAgent.manage')"
-                      @mousedown.prevent
-                      @click.stop="nativeManageOpen = true"
+                    <span
+                      v-if="(!externalAgentLabel || ctx.acpSupportsSystemPrompt.value) && chat.selectedSessionId"
+                      ref="profileTriggerRef"
+                      class="inline-flex"
                     >
-                      <RiEqualizerLine class="h-3 w-3 shrink-0" />
-                      <span class="hidden sm:inline font-mono text-[11px] font-medium">{{ t('chat.nativeAgent.manageShort') }}</span>
-                    </button>
-                    <span v-if="!externalAgentLabel && chat.selectedSessionId" ref="profileTriggerRef" class="inline-flex">
                       <AgentProfileChip
                         :profile="chat.selectedSessionExecution?.profile"
                         :profile-is-default="chat.selectedSessionExecution?.profile_is_default"
@@ -1234,15 +1265,6 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
     :attached-count="attachedFiles.length"
     @update:open="(v) => (attachProjectDialogOpen = v)"
     @add="addProjectAttachment"
-  />
-
-  <ExternalAgentSessionDialog
-    v-if="nativeManageOpen && externalAgentLabel && chat.selectedSessionId"
-    :session="chat.selectedSessionId"
-    :agent="chat.selectedSession?.external_agent"
-    @close="nativeManageOpen = false"
-    @deleted="openAcpSessionFromDialog()"
-    @forked="openAcpSessionFromDialog"
   />
 
   <SessionBrowser

@@ -153,6 +153,7 @@ export function useChatRunUi(opts: {
   // External-agent sessions bypass the Agena model selection entirely, so the
   // composer must not require a provider/model just to enable Send.
   isExternalAgent?: ComputedRef<boolean>
+  readOnly?: ComputedRef<boolean>
 }) {
   const {
     chat,
@@ -170,6 +171,7 @@ export function useChatRunUi(opts: {
     activityAutoCollapseOnIdle,
     compacting,
     isExternalAgent,
+    readOnly,
   } = opts
 
   void _directorySessions
@@ -351,7 +353,7 @@ export function useChatRunUi(opts: {
 
   const canSend = computed(() => {
     if (!chat.selectedSessionId) return false
-    if (sending.value) return false
+    if (sending.value || readOnly?.value) return false
     if (!isExternalAgent?.value) {
       if (!String(modelSelection.selectedProviderId.value || '').trim()) return false
       if (!String(modelSelection.selectedModelId.value || '').trim()) return false

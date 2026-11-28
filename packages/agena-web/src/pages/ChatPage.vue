@@ -18,7 +18,8 @@ import { copyTextToClipboard } from '@/lib/clipboard'
 import { apiJson } from '@/lib/api'
 import { createSkillsClient } from '@/lib/skillsApi'
 import { promptForText } from '@/lib/appTextPrompt'
-import { readSessionIdFromFullPath, readSessionIdFromQuery } from '@/app/navigation/sessionQuery'
+import { patchSessionIdInQuery, readSessionIdFromFullPath, readSessionIdFromQuery } from '@/app/navigation/sessionQuery'
+import { isEmbeddedWorkspacePaneContext } from '@/app/windowScope'
 import { useChatStore } from '@/stores/chat'
 import { useBtwStore } from '@/stores/btw'
 import * as chatApi from '@/stores/chat/api'
@@ -73,14 +74,19 @@ import { queuedMessagePreviews } from './chat/queuedMessages'
 import { restoredComposerText, restoredComposerFiles } from './chat/queuedComposer'
 import { queuedEditorState } from './chat/queuedEditor'
 import { useChatMessageActions } from './chat/useChatMessageActions'
+import { useAcpSessionStatus } from './chat/useAcpSessionStatus'
 import { activityInitiallyExpandedForPart as resolveActivityInitiallyExpanded } from './chat/transcriptExpansion'
 import { isAssistantMessageStreaming } from '@/lib/chatRunState'
 import { deriveSendRunConfig } from './chat/modelSendDefaults'
 import { useWorkspacePaneContext } from '@/app/workspace/workspacePaneContext'
 import type { OptionMenuGroup, OptionMenuItem } from '@/components/ui/optionMenu.types'
 import type { TranscriptDisplayPart } from '@/components/chat/messageList.types'
-import { listExternalAgents, useExternalAgentCatalog } from '@/features/sessions/api/nativeAgentSessions'
-import { formatExternalAgentLabel, type ExternalAgentCommand, type ExternalAgentOptions, type ExternalAgentSuggestion, type MessageFold } from '@/types/chat'
+import {
+  listExternalAgents,
+  manageNativeAgentSession,
+  useExternalAgentCatalog,
+} from '@/features/sessions/api/nativeAgentSessions'
+import { formatExternalAgentLabel, sessionStateIsBusy, type ExternalAgentCommand, type ExternalAgentOptions, type ExternalAgentSuggestion, type MessageFold } from '@/types/chat'
 import { isAcpSessionId, sessionApiPath } from '@/lib/acpSession'
 import type { JsonObject, JsonValue } from '@/types/json'
 import type { PluginCommandResult } from '@/lib/pluginOperations'
@@ -654,7 +660,7 @@ modelSelection = useChatModelSelection({
 const profilePicker = useChatProfilePicker({
   chat,
   open: composerPickerOpen,
-  directory: () => directoryStore.currentDirectory,
+  directory: () => sessionDirectory.value || directoryStore.currentDirectory,
   locallyBusy: () => sending.value || compactingSessionId.value === chat.selectedSessionId,
   close: closeComposerPickerMenu,
   openDefaults: (scope, targetSessionId) => {
@@ -1345,6 +1351,55 @@ async function copyToClipboard(text: string | Promise<string>) {
   if (!ok) throw new Error(t('common.copyFailed'))
 }
 
+const acpSessionStatus = useAcpSessionStatus({
+  sessionId: computed(() => chat.selectedSessionId),
+  externalAgent: computed(() => chat.selectedSession?.external_agent),
+  isBusy: computed(
+    () =>
+      sending.value ||
+      chat.selectedSessionState.kind === 'creating' ||
+      chat.selectedSessionState.kind === 'awaiting_interaction' ||
+      sessionStateIsBusy(chat.selectedSessionState),
+  ),
+})
+
+const acpForkBusy = ref(false)
+async function forkAcpSession() {
+  const sid = chat.selectedSessionId
+  if (!sid || !isAcpSessionId(sid) || acpForkBusy.value) return
+  acpForkBusy.value = true
+  try {
+    const result = await manageNativeAgentSession(sid, { action: 'fork' })
+    if (result.kind !== 'forked') return
+    const newId = String(result.session_id)
+    const isEmbeddedWorkspacePane = isEmbeddedWorkspacePaneContext(route.query)
+    await router.replace({
+      path: '/acp',
+      query: isEmbeddedWorkspacePane ? patchSessionIdInQuery(route.query, newId) : { sessionId: newId },
+    })
+    await chat.selectSession(newId)
+    await nextTick()
+    scrollToBottom('auto')
+    toasts.push('success', String(t('chat.nativeAgent.forkedToast')))
+  } catch (error) {
+    toasts.push('error', error instanceof Error ? error.message : String(error))
+  } finally {
+    acpForkBusy.value = false
+  }
+}
+
+function canForkMessage(messageId: string): boolean {
+  if (!externalAgentLabel.value) return true
+  return acpSessionStatus.forkPointIds.value.has(messageId)
+}
+
+function canRevertMessage(messageId: string): boolean {
+  if (!externalAgentLabel.value) return true
+  return acpSessionStatus.rewindPointIds.value.has(messageId)
+}
+
+const revertInPlaceOnly = computed(() => Boolean(externalAgentLabel.value))
+
 const messageActions = useChatMessageActions({
   chat,
   toasts,
@@ -1358,6 +1413,21 @@ const messageActions = useChatMessageActions({
   getTextParts,
   copyToClipboard,
   scrollToBottom,
+  onAcpForkFromMessage: async (sid, beforeMessageId) => {
+    const result = await manageNativeAgentSession(sid, {
+      action: 'fork',
+      before_message_id: beforeMessageId,
+    })
+    return result.kind === 'forked' ? String(result.session_id) : null
+  },
+  onAcpRewindFromMessage: async (sid, beforeMessageId) => {
+    await manageNativeAgentSession(sid, {
+      action: 'rewind',
+      before_message_id: beforeMessageId,
+    })
+    await chat.refreshMessages(sid, { replace: true, silent: true })
+    await Promise.allSettled([chat.refreshExecutionStatus(sid, true), acpSessionStatus.refresh()])
+  },
 })
 
 const { copiedMessageId, revertBusyMessageId, handleCopyMessage, handleForkFromMessage, handleRevertFromMessage } =
@@ -1413,6 +1483,7 @@ const runUi = useChatRunUi({
   activityAutoCollapseOnIdle,
   compacting: computed(() => compactingSessionId.value === chat.selectedSessionId),
   isExternalAgent: computed(() => Boolean(externalAgentLabel.value)),
+  readOnly: acpSessionStatus.isReadOnly,
 })
 
 const queueBusy = ref(false)
@@ -1475,8 +1546,12 @@ const canSteerExternalAgent = computed(() => Boolean(externalAgentLabel.value)
   && showComposerStopAction.value && Boolean(draft.value.trim())
   && attachedFiles.value.length === 0 && pendingAttachments.value.length === 0 && !sending.value)
 
+const externalAgentSuggestions = computed(
+  () => chat.selectedSessionExecution?.external_agent_details?.suggestions ?? [],
+)
+
 const canFillExternalAgentSuggestion = computed(() =>
-  Boolean(externalAgentLabel.value) && bot.ownsConversation() && !sending.value
+  Boolean(externalAgentLabel.value) && !acpSessionStatus.isReadOnly.value && bot.ownsConversation() && !sending.value
   && !draft.value && attachedFiles.value.length === 0 && pendingAttachments.value.length === 0,
 )
 
@@ -1637,7 +1712,8 @@ function handleSessionActionRequest(actionId: string) {
       openRenameDialog()
       break
     case 'fork':
-      void handleForkSession()
+      if (externalAgentLabel.value) void forkAcpSession()
+      else void handleForkSession()
       break
     case 'copy-transcript':
       void copyTranscript()
@@ -2206,6 +2282,10 @@ async function handleCommandSelected(command: Exclude<Command, { kind: 'external
 
 async function send() {
   if (!bot.canSendConversation()) return
+  if (acpSessionStatus.isReadOnly.value) {
+    toasts.push('info', String(t('chat.nativeAgent.readOnlyHistory')))
+    return
+  }
   if (failedDraftSlot.peek()) {
     toasts.push('info', String(t('chat.attachments.recoverBeforeSend')))
     return
@@ -2660,6 +2740,20 @@ const viewCtx = {
   },
   canFillExternalAgentSuggestion,
   fillExternalAgentSuggestion,
+  externalAgentSuggestions,
+  acpIsReadOnly: acpSessionStatus.isReadOnly,
+  acpCanForkSession: acpSessionStatus.canFork,
+  acpForkBusy,
+  forkAcpSession,
+  acpSupportsDirectories: acpSessionStatus.supportsDirectories,
+  acpAdditionalDirectories: acpSessionStatus.additionalDirectories,
+  acpDirectoriesSaving: acpSessionStatus.directoriesSaving,
+  updateAcpDirectories: acpSessionStatus.updateDirectories,
+  refreshAcpStatus: acpSessionStatus.refresh,
+  acpSupportsSystemPrompt: acpSessionStatus.supportsSystemPrompt,
+  canForkMessage,
+  canRevertMessage,
+  revertInPlaceOnly,
   sessionEnded,
   canAbort,
   abortRun,

@@ -202,7 +202,6 @@ const SETTINGS_SUBPAGE_SOURCES: Record<SettingsTab, readonly SettingsSubpageSour
         '外部智能体',
         '自定义',
       ],
-      fillsViewport: true,
     },
     {
       id: 'client-versions',

@@ -70,6 +70,7 @@ failure. Supporting files can use arbitrary directories; `scripts/`,
 | Compatible workspace roots | `.agents/skills`, `.claude/skills`, `.codex/skills` | Discovered read-only; install an editable copy to manage it through Agena. |
 | Compatible user roots | The same three directories under the user's home directory | Discovered read-only. |
 | Additional configured roots | `agena.commands` settings `additional_roots` | Discovered read-only, relative to the selected workspace. |
+| Imported agent plugins | Skill directories from [supported plugin packages](plugin-compatibility.md) | Discovered read-only, including supporting files. |
 | Loaded plugin declarations | Skills contributed by plugin manifests | Read-only instructions; create an editable document copy to customize them. |
 
 The default Agena data directory is `$HOME/agena`, or `%USERPROFILE%/agena`.
@@ -98,11 +99,13 @@ setting wins. Plugin declarations have no writable package state and continue
 to use that name-based policy.
 
 Plain Markdown files under configured command roots are available through the
-command palette. The Skills attachment picker lists enabled, valid packages for
-the selected workspace and omits shadowed copies. Selecting a managed skill
-attaches its opaque ID and revision; its instructions are fetched on demand
-through the `agena.skills` plugin's `get` tool. A plugin command reference uses
-the command name, source, and content hash because it has no managed package ID.
+command palette. The Skills attachment picker lists enabled, valid,
+user-invocable entries in the current session or workspace and omits shadowed
+copies. Managed filesystem skill references carry an opaque ID and revision.
+The model can fetch their instructions through `agena.skills.get`. For an
+explicitly selected Cordis skill, Agena resolves the exact revision in the
+session and saves its instructions with the message. Plugin command
+references carry the command name, source, and content hash.
 
 ## Web settings
 
@@ -247,9 +250,10 @@ The older `agena.commands` tools and composer references remain compatible. Use
 
 ## REST API
 
-All paths below are under `/api/v1`. Supply `workspace_id` as a query parameter to
-select the intended registered workspace; omitting it uses the application's
-default workspace.
+All paths below are under `/api/v1`. Supply `workspace_id` to select a registered
+workspace. The application uses its default workspace when the parameter is
+omitted. Supply `session_id` to `GET /skills` to read the catalog
+using the session's workspace and active Cordis providers.
 
 | Method | Path | Operation |
 | --- | --- | --- |

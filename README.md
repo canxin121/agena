@@ -15,6 +15,7 @@ cargo doc --workspace --no-deps --open
 Deployment guides:
 
 - [Installation and upgrades](docs/installation.md)
+- [Install Codex, Claude Code, and DeepSeek Harness plugins](docs/plugin-compatibility.md)
 
 Engineering guides:
 

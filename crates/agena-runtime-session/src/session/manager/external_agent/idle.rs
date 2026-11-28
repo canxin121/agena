@@ -5,7 +5,8 @@ use std::{
 
 use super::*;
 
-const MAX_IDLE_AGENTS: usize = 32;
+const MAX_IDLE_AGENTS: usize = 4;
+const IDLE_PEER_TIMEOUT: Duration = Duration::from_secs(300);
 
 pub(in crate::session::manager) type IdlePeers =
     Arc<tokio::sync::Mutex<VecDeque<(SessionId, IdlePeer)>>>;
@@ -78,7 +79,14 @@ impl SessionManager {
         );
         let task = self.control_tasks.spawn(async move {
             if let Err(error) = client
-                .watch_idle(&kernel, &resume, state, &input, &monitor_stop)
+                .watch_idle(
+                    &kernel,
+                    &resume,
+                    state,
+                    &input,
+                    Some(IDLE_PEER_TIMEOUT),
+                    &monitor_stop,
+                )
                 .await
             {
                 tracing::debug!(session_id = session.get(), %error, "ACP idle stream ended");

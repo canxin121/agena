@@ -36,6 +36,10 @@ impl Isolation {
     }
 }
 
+pub(in crate::session::manager::external_agent) fn is_configured(agent: &ExternalAgent) -> bool {
+    configured(agent).ok().flatten().is_some()
+}
+
 fn configured(agent: &ExternalAgent) -> Result<Option<AgentConfig>, AppError> {
     let Some(path) = std::env::var_os(CONFIG_ENV).filter(|path| !path.is_empty()) else {
         return Ok(None);

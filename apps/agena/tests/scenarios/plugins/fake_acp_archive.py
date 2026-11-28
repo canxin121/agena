@@ -33,7 +33,7 @@ def check_native_store(store):
 
 
 if antigravity_native:
-    assert sys.argv[1:] == ["acp", "--process-per-session"], sys.argv
+    assert sys.argv[1:] in (["acp", "--process-per-session"], ["acp"]), sys.argv
 
 
 for line in sys.stdin:
@@ -100,6 +100,7 @@ for line in sys.stdin:
         state_file.write_text(json.dumps(sessions))
         result = {}
     elif method == "session/new" and antigravity_native:
+        assert sys.argv[1:] == ["acp", "--process-per-session"], sys.argv
         meta = params["_meta"]["antigravity"]
         assert meta["eagerMcpServers"] == ["agena"]
         instruction = meta["systemPrompt"]["append"]
@@ -109,6 +110,7 @@ for line in sys.stdin:
         state_file.write_text(json.dumps(sessions))
         result = {"sessionId": "managed-run"}
     elif method in {"session/load", "session/resume"} and antigravity_native and params["mcpServers"]:
+        assert sys.argv[1:] == ["acp", "--process-per-session"], sys.argv
         if native_id not in sessions:
             send(id=request["id"], error={"code": -32002, "message": "Session not found"})
             continue

@@ -12,7 +12,7 @@ const MAX_PENDING_USER_IDS: usize = 64;
 const FOREGROUND_FOLLOWUP_GRACE: Duration = Duration::from_millis(250);
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Version {
+pub(in crate::session::manager::external_agent) enum Version {
     V1,
     V2,
 }

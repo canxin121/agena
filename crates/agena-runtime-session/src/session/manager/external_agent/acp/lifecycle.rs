@@ -100,27 +100,26 @@ pub(in crate::session::manager::external_agent) struct NativePage {
     pub next_cursor: Option<String>,
 }
 
+pub(in crate::session::manager::external_agent) struct RawNativePage {
+    pub sessions: Vec<ExternalAgentIndexedSession>,
+    pub all_sessions: Vec<ExternalAgentIndexedSession>,
+    pub next_cursor: Option<String>,
+    pub cross_workspace: bool,
+}
+
 impl AcpClient {
     pub(in crate::session::manager::external_agent) async fn lifecycle_capabilities(
         &mut self,
         cancel: &CancellationToken,
     ) -> Result<ExternalAgentSessionCapabilities, AppError> {
         let caps = self.initialize(cancel).await?;
-        Ok(ExternalAgentSessionCapabilities {
-            status: caps.lifecycle.status,
-            title: caps.lifecycle.title,
-            close: caps.close,
-            delete: caps.delete,
-            fork: caps.lifecycle.fork,
-            fork_before_message: caps.lifecycle.fork,
-            rewind_before_message: caps.air_rewind,
-            additional_directories: caps.lifecycle.additional_directories,
-            system_prompt: !matches!(
-                caps.lifecycle.system_prompt,
-                SystemPromptSupport::Unsupported
-            ),
-            continue_conversation: true,
-        })
+        Ok(session_capabilities_from_caps(caps))
+    }
+
+    pub(in crate::session::manager::external_agent) fn cached_lifecycle_capabilities(
+        &self,
+    ) -> Option<ExternalAgentSessionCapabilities> {
+        self.capabilities.map(session_capabilities_from_caps)
     }
 
     pub(in crate::session::manager::external_agent) async fn list_native(
@@ -130,6 +129,20 @@ impl AcpClient {
         filter: ExternalAgentArchiveFilter,
         cancel: &CancellationToken,
     ) -> Result<NativePage, AppError> {
+        let raw = self.list_native_raw(cwd, cursor, filter, cancel).await?;
+        Ok(NativePage {
+            sessions: raw.sessions,
+            next_cursor: raw.next_cursor,
+        })
+    }
+
+    pub(in crate::session::manager::external_agent) async fn list_native_raw(
+        &mut self,
+        cwd: &Path,
+        cursor: Option<&str>,
+        filter: ExternalAgentArchiveFilter,
+        cancel: &CancellationToken,
+    ) -> Result<RawNativePage, AppError> {
         let caps = self.initialize(cancel).await?.lifecycle;
         if !caps.list && !self.uses_v2() {
             return Err(self.unsupported_lifecycle("listing conversations"));
@@ -151,18 +164,28 @@ impl AcpClient {
             .lifecycle_request("session/list", params, SessionUpdates::Ignore, cancel)
             .await?;
         let mut sessions = Vec::new();
+        let mut all_sessions = Vec::new();
+        let mut cross_workspace = false;
         for row in session_rows(&response)? {
-            let Some(session) = workspace_row(row, cwd) else {
+            let Some(session) = any_workspace_row(row) else {
                 continue;
             };
+            let matches_cwd = session.cwd == cwd;
+            if !matches_cwd {
+                cross_workspace = true;
+            }
             let mut listed = ExternalAgentIndexedSession::from(session);
             if caps.archive {
-                let archived = row["archived"].as_bool().ok_or_else(|| {
-                    AppError::Internal(
-                        "The external agent omitted the archive state of a listed conversation."
-                            .into(),
-                    )
-                })?;
+                let archived = match row["archived"].as_bool() {
+                    Some(archived) => archived,
+                    None if matches_cwd => {
+                        return Err(AppError::Internal(
+                            "The external agent omitted the archive state of a listed conversation."
+                                .into(),
+                        ));
+                    }
+                    None => continue,
+                };
                 if matches!(filter, ExternalAgentArchiveFilter::Archived) && !archived
                     || matches!(filter, ExternalAgentArchiveFilter::Unarchived) && archived
                 {
@@ -170,11 +193,16 @@ impl AcpClient {
                 }
                 listed.archived = Some(archived);
             }
-            sessions.push(listed);
+            if matches_cwd {
+                sessions.push(listed.clone());
+            }
+            all_sessions.push(listed);
         }
-        Ok(NativePage {
+        Ok(RawNativePage {
             sessions,
+            all_sessions,
             next_cursor: next_cursor(&response),
+            cross_workspace,
         })
     }
 
@@ -571,18 +599,41 @@ pub(super) fn session_rows(response: &Value) -> Result<&[Value], AppError> {
     Ok(rows)
 }
 
-pub(super) fn workspace_row(row: &Value, cwd: &Path) -> Option<ExternalAgentSessionInfo> {
-    let path = PathBuf::from(bounded_string(&row["cwd"], 8192)?);
-    // Never allow a peer to redirect a native operation to its claimed CWD.
-    if path != cwd {
-        return None;
+fn session_capabilities_from_caps(caps: Capabilities) -> ExternalAgentSessionCapabilities {
+    ExternalAgentSessionCapabilities {
+        status: caps.lifecycle.status,
+        title: caps.lifecycle.title,
+        close: caps.close,
+        delete: caps.delete,
+        fork: caps.lifecycle.fork,
+        fork_before_message: caps.lifecycle.fork,
+        rewind_before_message: caps.air_rewind,
+        additional_directories: caps.lifecycle.additional_directories,
+        system_prompt: !matches!(
+            caps.lifecycle.system_prompt,
+            SystemPromptSupport::Unsupported
+        ),
+        continue_conversation: true,
     }
+}
+
+pub(super) fn any_workspace_row(row: &Value) -> Option<ExternalAgentSessionInfo> {
+    let path = PathBuf::from(bounded_string(&row["cwd"], 8192)?);
     Some(ExternalAgentSessionInfo {
         native_id: bounded_string(&row["sessionId"], 4096)?,
         cwd: path,
         title: bounded_title(&row["title"]),
         updated_at: bounded_string(&row["updatedAt"], 128),
     })
+}
+
+pub(super) fn workspace_row(row: &Value, cwd: &Path) -> Option<ExternalAgentSessionInfo> {
+    let session = any_workspace_row(row)?;
+    // Never allow a peer to redirect a native operation to its claimed CWD.
+    if session.cwd != cwd {
+        return None;
+    }
+    Some(session)
 }
 
 pub(super) fn next_cursor(response: &Value) -> Option<String> {

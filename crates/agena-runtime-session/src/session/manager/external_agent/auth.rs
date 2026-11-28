@@ -84,7 +84,8 @@ impl SessionManager {
             .await?;
         let executor = state.executor.for_session_context_async(&context).await;
         let cwd = super::lifecycle::canonical_directory(executor.workspace_root()).await?;
-        let mut client = acp::AcpClient::spawn(spec.clone(), &cwd)?;
+        let mut client = self.spawn_external_agent(spec.clone(), &cwd)?;
+        let is_mutation = !matches!(action, ExternalAgentAuthAction::Inspect { .. });
         let terminal = matches!(action, ExternalAgentAuthAction::Inspect { terminal: true });
         // Claude advertises its native methods when the client can reproduce
         // the invocation in a terminal. Web only receives methods it can run.
@@ -187,7 +188,12 @@ impl SessionManager {
             })
         }
         .await;
-        client.close().await;
+        self.record_external_agent_memo(&spec, &client);
+        self.retire_external_agent_client(client).await;
+        if is_mutation && result.is_ok() {
+            self.invalidate_external_agent_control_plane(&agent, true)
+                .await;
+        }
         result
     }
 }

@@ -81,8 +81,11 @@ impl SessionManager {
             self.close_idle_external_agent(session).await;
         }
         let cancel = self.shutdown.child_token();
-        let mut client =
-            acp::AcpClient::spawn_with_directories(spec.clone(), &cwd, &additional_directories)?;
+        let mut client = self.spawn_external_agent_with_directories(
+            spec.clone(),
+            &cwd,
+            &additional_directories,
+        )?;
         let outcome = async {
             client.prepare_provider_routes(&cancel).await?;
             if preview || previous.is_none() || (change.is_none() && selection.is_empty()) {
@@ -214,8 +217,13 @@ impl SessionManager {
             Ok::<_, AppError>((opened.options, Vec::new(), new_link))
         }
         .await;
-        client.close().await;
+        self.record_external_agent_memo(&spec, &client);
+        self.retire_external_agent_client(client).await;
         let (options, preview_commands, new_link) = outcome?;
+        if new_link.is_some() {
+            self.invalidate_external_agent_control_plane(&agent, true)
+                .await;
+        }
 
         if !preview
             && (change.is_some()

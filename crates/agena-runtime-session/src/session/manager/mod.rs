@@ -191,6 +191,7 @@ pub struct SessionManager {
     /// Locks exist only while queued/running executions retain them.
     sessions: Arc<StdMutex<HashMap<SessionId, std::sync::Weak<SessionDispatch>>>>,
     external_idle_peers: external_agent::idle::IdlePeers,
+    external_control_plane: external_agent::control_plane::ControlPlane,
     external_agent_inputs: external_agent::input_requests::Inputs,
     tools: Arc<StdMutex<ActiveToolMap>>,
     operator_calls: Arc<StdMutex<OperatorInvocationMap>>,
@@ -244,6 +245,7 @@ impl SessionManager {
             attempt_controls: Default::default(),
             sessions: Default::default(),
             external_idle_peers: Default::default(),
+            external_control_plane: Default::default(),
             external_agent_inputs: Default::default(),
             tools: Default::default(),
             operator_calls: Default::default(),
@@ -306,6 +308,7 @@ impl SessionManager {
         config: RuntimeSessionManagerConfig,
     ) {
         let project = self.state.load_full();
+        let acp_changed = self.global_state.load().config.acp != config.acp;
         self.global_state.store(Arc::new(ExecutionState {
             providers,
             governor: project.governor.clone(),
@@ -314,6 +317,9 @@ impl SessionManager {
             tools: Arc::new(Semaphore::new(config.max_concurrent_tools.max(1))),
             config,
         }));
+        if acp_changed {
+            self.invalidate_all_external_agent_control_planes();
+        }
     }
 
     async fn state_for_session(&self, session: SessionId) -> Result<Arc<ExecutionState>, AppError> {
@@ -394,6 +400,7 @@ impl SessionManager {
                 scope.state = self.state.clone();
                 scope.global_state = self.global_state.clone();
                 scope.configuration_lock = self.configuration_lock.clone();
+                scope.external_control_plane = self.external_control_plane.clone();
                 scope.acp_workspace_source = Some(self.kernel_runtime.clone());
                 scope.shutdown = self.shutdown.child_token();
                 Ok::<_, AppError>(Arc::new(scope))
@@ -597,6 +604,7 @@ impl SessionManager {
         // Preparation owns an execution permit before it can commit input;
         // agent settlement has a separate permit after the provider exits.
         let drain = async {
+            self.external_control_plane.shutdown_all().await;
             self.control_tasks.wait().await;
             let _executions = self
                 .admission

@@ -53,7 +53,8 @@ mod startup_options;
 use inactivity::PromptIdle;
 pub(super) use index::MAX_BATCH_IDS;
 pub(super) use lifecycle::{SessionContext, bounded_string, bounded_title};
-use protocol::{ActivitySnapshot, PromptLifecycle, Version};
+pub(super) use protocol::Version;
+use protocol::{ActivitySnapshot, PromptLifecycle};
 
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
 const CANCELLATION_GRACE: Duration = Duration::from_millis(500);
@@ -170,6 +171,7 @@ pub(super) struct AcpClient {
     reported_auth: Option<ExternalAgentAuthStatus>,
     air_index: bool,
     plain_delete: bool,
+    preferred_version: Option<Version>,
     providers_prepared: bool,
     capabilities: Option<Capabilities>,
     initialization: Option<Value>,
@@ -621,6 +623,15 @@ pub(super) fn is_agent_available(spec: &ResolvedExternalAgent) -> bool {
     find_agent_program(&spec.command, effective_path.as_deref()).is_some()
 }
 
+pub(super) fn resolved_program_path(spec: &ResolvedExternalAgent) -> PathBuf {
+    let effective_path = effective_agent_path(spec);
+    resolve_agent_program(&spec.command, effective_path.as_deref())
+}
+
+pub(super) fn is_isolated(agent: &ExternalAgent) -> bool {
+    isolation::is_configured(agent)
+}
+
 fn agent_environment(command: &mut Command, effective_path: Option<&OsStr>) {
     // Inherit the user's native environment and strip only Agena's own variables.
     command.env_clear().envs(
@@ -716,6 +727,7 @@ impl AcpClient {
             reported_auth: None,
             air_index: false,
             plain_delete: false,
+            preferred_version: None,
             providers_prepared: false,
             capabilities: None,
             initialization: None,
@@ -733,12 +745,22 @@ impl AcpClient {
         self.plain_delete = true;
     }
 
+    pub(super) fn set_preferred_version(&mut self, version: Option<Version>) {
+        self.preferred_version = version;
+    }
+
+    pub(super) fn negotiated_version(&self) -> Option<Version> {
+        self.capabilities.map(|caps| caps.version)
+    }
+
     async fn initialize(&mut self, cancel: &CancellationToken) -> Result<Capabilities, AppError> {
         if let Some(capabilities) = self.capabilities {
             return Ok(capabilities);
         }
-        let mut requested = if self.air_index {
-            // Claude exposes the AIR session index extension on v1 only.
+        let mut preferred_v1 = !self.air_index && self.preferred_version == Some(Version::V1);
+        let mut requested = if self.air_index || preferred_v1 {
+            // Claude exposes the AIR session index extension on v1 only;
+            // memoized v1 peers also skip the wasted v2 probe process.
             Version::V1
         } else {
             Version::V2
@@ -781,6 +803,40 @@ impl AcpClient {
                         self.agent_label(),
                     )))
                 });
+            if preferred_v1 {
+                match &response {
+                    Ok(value) if requested.negotiated(value) == Some(Version::V1) => {}
+                    Err(AppError::Cancelled) => return Err(AppError::Cancelled),
+                    _ => {
+                        // A memoized v1 peer may have been upgraded to v2-only.
+                        // Fall back cleanly to full v2 negotiation on a fresh process.
+                        if cancel.is_cancelled() {
+                            return Err(AppError::Cancelled);
+                        }
+                        let had_isolation = self.isolation.is_some();
+                        let mut replacement = Self::spawn_with_directories(
+                            self.spec.clone(),
+                            &self.cwd,
+                            &self.additional_directories,
+                        )?;
+                        if had_isolation && replacement.isolation.is_none() {
+                            replacement.close().await;
+                            return Err(AppError::Config(format!(
+                                "{} ACP process isolation became unavailable during protocol fallback.",
+                                self.agent_label()
+                            )));
+                        }
+                        replacement.terminal_auth = self.terminal_auth;
+                        replacement.plain_delete = self.plain_delete;
+                        replacement.live_auth = self.live_auth.take();
+                        std::mem::replace(self, replacement).close().await;
+                        preferred_v1 = false;
+                        self.preferred_version = None;
+                        requested = Version::V2;
+                        continue;
+                    }
+                }
+            }
             if requested == Version::V2 {
                 match &response {
                     Ok(value) if requested.negotiated(value) == Some(Version::V2) => {}
@@ -2654,13 +2710,14 @@ impl AcpClient {
         resume: &agena_storage::kernel::ExternalAgentResume,
         state: ExternalAgentState,
         host: &input_requests::Host,
+        idle_timeout: Option<Duration>,
         cancel: &CancellationToken,
     ) -> Result<(), AppError> {
         self.mcp = None;
         self.mcp_activity = None;
         let mut replies = JoinSet::new();
         let result = self
-            .read_idle(kernel, resume, state, host, &mut replies, cancel)
+            .read_idle(kernel, resume, state, host, idle_timeout, &mut replies, cancel)
             .await;
         self.native_work = None;
         self.live_auth = None;
@@ -2675,6 +2732,7 @@ impl AcpClient {
         resume: &agena_storage::kernel::ExternalAgentResume,
         mut state: ExternalAgentState,
         host: &input_requests::Host,
+        idle_timeout: Option<Duration>,
         replies: &mut PeerReplies,
         cancel: &CancellationToken,
     ) -> Result<(), AppError> {
@@ -2691,13 +2749,25 @@ impl AcpClient {
             Duration::from_secs(15),
         );
         ownership.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut idle_deadline = idle_timeout.map(|timeout| Instant::now() + timeout);
         let mut messages = NativeMessages::default();
         loop {
+            let has_active_subagents = state
+                .details
+                .subagents
+                .values()
+                .any(|child| matches!(child.state.as_deref(), Some("running" | "requires_action")));
+            let can_idle_expire = idle_deadline.is_some()
+                && self.pending.is_empty()
+                && replies.is_empty()
+                && self.url_elicitations.is_empty()
+                && !has_active_subagents;
             let next = tokio::select! {
                 biased;
                 _ = cancel.cancelled() => return Ok(()),
                 Some(reply) = replies.join_next(), if !replies.is_empty() => {
                     self.reply_to_interaction(reply, cancel).await?;
+                    idle_deadline = idle_timeout.map(|timeout| Instant::now() + timeout);
                     continue;
                 }
                 _ = ownership.tick() => {
@@ -2714,10 +2784,22 @@ impl AcpClient {
                         return Ok(());
                     }
                     self.handle_work_event(event, cancel).await;
+                    idle_deadline = idle_timeout.map(|timeout| Instant::now() + timeout);
                     continue;
+                }
+                _ = async {
+                    tokio::time::sleep_until(idle_deadline.expect("idle deadline")).await;
+                }, if can_idle_expire => {
+                    tracing::debug!(
+                        session_id = resume.session.get(),
+                        agent = self.agent.id(),
+                        "closing idle external agent peer after inactivity timeout"
+                    );
+                    return Ok(());
                 }
                 next = self.output.next() => next,
             };
+            idle_deadline = idle_timeout.map(|timeout| Instant::now() + timeout);
             let Some(line) = next else {
                 return Ok(());
             };

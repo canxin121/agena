@@ -71,15 +71,14 @@ async fn run_provider_scenario(version: &'static str) -> TestResult {
             ensure!(wire.lines().any(|line| line == "session/resume"), "{wire}");
 
             // Discovery rejects the complete invalid set before emitting a mutation.
+            // Protocol version is already memoized from earlier requests on this peer.
             tokio::fs::write(&routes, b"{\"claude-code\":[{\"action\":\"disable\",\"providerId\":\"optional\"},{\"action\":\"disable\",\"providerId\":\"main\"}]}").await?;
             ensure!(user.client().external_agent_providers(session.id).await.is_err());
             let updated = tokio::fs::read_to_string(&wire_path).await?;
-            let expected = if version == "1" {
-                "initialize\ninitialize\nproviders/list\n"
-            } else {
-                "initialize\nproviders/list\n"
-            };
-            ensure!(updated.strip_prefix(&wire) == Some(expected), "{updated}");
+            ensure!(
+                updated.strip_prefix(&wire) == Some("initialize\nproviders/list\n"),
+                "{updated}"
+            );
 
             tokio::fs::write(case.workspace().join(".providers-unsupported"), "").await?;
             let unsupported = user.client().external_agent_providers(session.id).await?;

@@ -14,6 +14,7 @@ mod acp;
 pub(super) mod auth;
 pub(super) mod cancellation;
 mod client_tools;
+pub(super) mod control_plane;
 mod elicitation;
 pub(super) mod idle;
 pub(super) mod input_requests;
@@ -134,11 +135,18 @@ impl SessionManager {
         let executor = state.executor.for_session_context_async(&context).await;
         let cwd = lifecycle::canonical_directory(executor.workspace_root()).await?;
         let spec = self.resolve_external_agent(&agent)?;
-        let mut client = acp::AcpClient::spawn(spec.clone(), &cwd)?;
-        let supports_prompt = client
-            .lifecycle_capabilities(&self.shutdown.child_token())
-            .await;
-        client.close().await;
+        let supports_prompt = if let Some(caps) = self.external_control_plane.cached_capabilities(&spec)
+        {
+            Ok(caps)
+        } else {
+            let mut client = self.spawn_external_agent(spec.clone(), &cwd)?;
+            let caps = client
+                .lifecycle_capabilities(&self.shutdown.child_token())
+                .await;
+            self.record_external_agent_memo(&spec, &client);
+            self.retire_external_agent_client(client).await;
+            caps
+        };
         if !supports_prompt?.system_prompt {
             return Ok(PromptResolution::from_fragments(
                 Vec::new(),
@@ -179,9 +187,10 @@ impl SessionManager {
         let executor = state.executor.for_session_context_async(&context).await;
         let cwd = lifecycle::canonical_directory(executor.workspace_root()).await?;
         let cancel = self.shutdown.child_token();
-        let mut client = acp::AcpClient::spawn(spec, &cwd)?;
+        let mut client = self.spawn_external_agent(spec.clone(), &cwd)?;
         let result = client.provider_catalog(&cancel).await;
-        client.close().await;
+        self.record_external_agent_memo(&spec, &client);
+        self.retire_external_agent_client(client).await;
         result
     }
 
@@ -281,13 +290,14 @@ impl SessionManager {
             return Err(AppError::ExternalAgentPromptUncertain);
         }
         let spec = self.resolve_external_agent(&agent)?;
-        let mut client = acp::AcpClient::spawn_with_directories(
+        let mut client = self.spawn_external_agent_with_directories(
             spec.clone(),
             &cwd,
             &session_context.additional_directories,
         )?;
         client.track_auth_status(auth::LiveStatus::register(self, control.session));
         let capabilities = client.prompt_capabilities(&control.cancel).await?;
+        self.record_external_agent_memo(&spec, &client);
         if keyed_retry.is_some() && !client.uses_v2() {
             return Err(AppError::ExternalAgentPromptUncertain);
         }
@@ -334,6 +344,7 @@ impl SessionManager {
         });
         let bridge = client.bridge(turn.clone()).await?;
         let mut native = None;
+        let mut created_new_native = false;
         let outcome = async {
             let mut session = client
                 .start_with_context(
@@ -350,6 +361,7 @@ impl SessionManager {
                     &control.cancel,
                 )
                 .await?;
+            created_new_native = !session.resumed;
             let incarnation = opened
                 .link
                 .as_ref()
@@ -515,6 +527,8 @@ impl SessionManager {
             }
         }
         let state = turn.transcript.lock().await.snapshot_state();
+        self.invalidate_external_agent_control_plane(&agent, created_new_native)
+            .await;
         self.park_external_agent(client, resume, state).await;
         Ok(())
     }

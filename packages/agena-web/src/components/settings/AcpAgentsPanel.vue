@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRoute } from 'vue-router'
 import {
   RiAddLine,
   RiDeleteBinLine,
@@ -10,6 +11,7 @@ import {
   RiTerminalBoxLine,
 } from '@remixicon/vue'
 
+import AcpInstallGuideCard from '@/components/acp/AcpInstallGuideCard.vue'
 import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
 import Input from '@/components/ui/Input.vue'
@@ -39,7 +41,7 @@ import {
   type AcpAgentValidationError,
   type AcpConfigDocument,
 } from '@/lib/acpAgentsConfig'
-import { listExternalAgents } from '@/features/sessions/api/nativeAgentSessions'
+import { listExternalAgents, useExternalAgentCatalog } from '@/features/sessions/api/nativeAgentSessions'
 import { confirmAction } from '@/lib/appConfirm'
 import {
   deleteRuntimeSetting,
@@ -49,7 +51,9 @@ import {
 import { useToastsStore } from '@/stores/toasts'
 
 const { t } = useI18n()
+const route = useRoute()
 const toasts = useToastsStore()
+const liveCatalog = useExternalAgentCatalog()
 
 const doc = ref<AcpConfigDocument>({ agents: {} })
 const revision = ref<string | undefined>()
@@ -61,11 +65,24 @@ const draft = ref<AcpAgentDraft | null>(null)
 const savedSnapshot = ref('')
 const search = ref('')
 const loading = ref(false)
+const checkingAvailability = ref(false)
 const saving = ref(false)
 const error = ref('')
 const saveError = ref('')
 let generation = 0
 let disposed = false
+
+function availabilityFor(id: string | null): boolean | undefined {
+  if (!id) return undefined
+  return liveCatalog.value.find((entry) => entry.id === id)?.available
+}
+
+const selectedSummary = computed(() =>
+  selectedId.value ? resolveAcpAgentSummary(selectedId.value, activeEntry.value) : null,
+)
+const selectedAvailability = computed(() =>
+  !creating.value && selectedId.value && !draft.value?.disabled ? availabilityFor(selectedId.value) : undefined,
+)
 
 const allIds = computed(() => listAcpAgentIds(doc.value))
 const summaries = computed(() =>
@@ -277,20 +294,54 @@ async function deleteCustomAgent() {
   await persistDocument(nextDoc, null, 'settings.acpAgents.deletedToast')
 }
 
+function applyNpxPreset(preset: { command: string; args: readonly string[] }) {
+  if (!draft.value || saving.value) return
+  draft.value.command = preset.command
+  draft.value.argsText = preset.args.join('\n')
+}
+
+async function recheckAvailability() {
+  if (checkingAvailability.value) return
+  checkingAvailability.value = true
+  try {
+    await listExternalAgents()
+  } catch {
+    // Keep existing catalog state when refresh fails.
+  } finally {
+    if (!disposed) checkingAvailability.value = false
+  }
+}
+
+function queryAgentId(): string | null {
+  const raw = route.query.acpAgent
+  const value = Array.isArray(raw) ? raw[0] : raw
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
 async function load() {
   const token = ++generation
   loading.value = true
   error.value = ''
   try {
-    const response = await getRuntimeSettingLayer('global', 'acp')
+    const [response] = await Promise.all([
+      getRuntimeSettingLayer('global', 'acp'),
+      listExternalAgents().catch(() => null),
+    ])
     if (disposed || token !== generation) return
     doc.value = parseAcpConfigDocument(response.value)
     revision.value = response.revision
     configPath.value = response.config_path || ''
     const ids = listAcpAgentIds(doc.value)
     if (!creating.value) {
-      const nextId = selectedId.value && ids.includes(selectedId.value) ? selectedId.value : ids[0] ?? null
+      const requested = queryAgentId()
+      const nextId =
+        requested && ids.includes(requested)
+          ? requested
+          : selectedId.value && ids.includes(selectedId.value)
+            ? selectedId.value
+            : ids[0] ?? null
       openExisting(nextId)
+      if (requested && nextId === requested) detailOpen.value = true
     }
   } catch (reason) {
     if (!disposed && token === generation) {
@@ -307,6 +358,18 @@ async function refresh() {
 }
 
 defineExpose({ refresh, dirty, saving })
+
+watch(
+  () => route.query.acpAgent,
+  () => {
+    const requested = queryAgentId()
+    if (!requested || loading.value || creating.value || dirty.value) return
+    if (allIds.value.includes(requested) && selectedId.value !== requested) {
+      openExisting(requested)
+      detailOpen.value = true
+    }
+  },
+)
 
 onMounted(() => void load())
 onBeforeUnmount(() => {
@@ -399,6 +462,12 @@ onBeforeUnmount(() => {
         <div class="min-w-0 flex-1">
           <div class="flex items-center gap-1.5">
             <span
+              v-if="!entry.disabled && availabilityFor(entry.id) !== undefined"
+              class="h-2 w-2 shrink-0 rounded-full"
+              :class="availabilityFor(entry.id) ? 'bg-emerald-500' : 'bg-amber-500'"
+              :title="t(availabilityFor(entry.id) ? 'settings.acpAgents.availability.ready' : 'settings.acpAgents.availability.notFound')"
+            />
+            <span
               class="min-w-0 flex-1 truncate text-sm font-medium"
               :class="entry.disabled ? 'text-muted-foreground line-through' : ''"
             >
@@ -444,6 +513,22 @@ onBeforeUnmount(() => {
               >
                 {{ statusLabel(selectedId ? resolveAcpAgentSummary(selectedId, activeEntry).status : 'custom') }}
               </span>
+              <span
+                v-if="selectedAvailability !== undefined"
+                class="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium"
+                :class="
+                  selectedAvailability
+                    ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                    : 'border-amber-500/35 bg-amber-500/10 text-amber-700 dark:text-amber-300'
+                "
+              >
+                <span
+                  class="h-1.5 w-1.5 rounded-full"
+                  :class="selectedAvailability ? 'bg-emerald-500' : 'bg-amber-500'"
+                  aria-hidden="true"
+                />
+                {{ t(selectedAvailability ? 'settings.acpAgents.availability.ready' : 'settings.acpAgents.availability.notFound') }}
+              </span>
             </div>
             <p class="mt-0.5 truncate font-mono text-xs text-muted-foreground">
               {{ creating ? t('settings.acpAgents.newAgentSubtitle') : draft.id }}
@@ -476,6 +561,19 @@ onBeforeUnmount(() => {
               <p v-if="configPath" class="break-all font-mono text-[11px] opacity-80">{{ configPath }}</p>
             </div>
           </div>
+
+          <AcpInstallGuideCard
+            v-if="selectedAvailability === false && selectedId && selectedSummary"
+            :agent-id="selectedId"
+            :agent-name="selectedSummary.name"
+            :command="selectedSummary.command"
+            :show-configure="false"
+            :show-retry="true"
+            :show-use-npx="selectedId === 'claude-code'"
+            :retrying="checkingAvailability"
+            @retry="recheckAvailability"
+            @use-npx="applyNpxPreset"
+          />
 
           <div class="space-y-3 rounded-lg border border-border/70 bg-card/40 p-3.5">
             <SettingsRow

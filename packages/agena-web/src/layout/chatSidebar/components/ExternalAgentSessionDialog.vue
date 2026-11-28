@@ -9,6 +9,7 @@ import {
   RiRefreshLine,
 } from '@remixicon/vue'
 
+import AcpInstallGuideCard from '@/components/acp/AcpInstallGuideCard.vue'
 import Button from '@/components/ui/Button.vue'
 import ConfirmPopover from '@/components/ui/ConfirmPopover.vue'
 import FormDialog from '@/components/ui/FormDialog.vue'
@@ -17,14 +18,19 @@ import Input from '@/components/ui/Input.vue'
 import OptionPicker from '@/components/ui/OptionPicker.vue'
 import type { PickerOption } from '@/components/ui/pickerOption.types'
 import {
+  listExternalAgents,
   manageNativeAgentSession,
+  useExternalAgentCatalog,
   type NativeSessionAction,
   type NativeSessionStatus,
 } from '@/features/sessions/api/nativeAgentSessions'
+import { inferAcpAgentIdFromError, isMissingAcpCommandError } from '@/lib/acpInstallGuide'
 import { copyTextToClipboard } from '@/lib/clipboard'
+import { useChatStoreUnscoped } from '@/stores/chat'
 import { useToastsStore } from '@/stores/toasts'
+import type { ExternalAgent } from '@/types/chat'
 
-const props = defineProps<{ session: string }>()
+const props = defineProps<{ session: string; agent?: ExternalAgent }>()
 const emit = defineEmits<{
   (event: 'close'): void
   (event: 'changed'): void
@@ -32,6 +38,8 @@ const emit = defineEmits<{
   (event: 'forked', session: number): void
 }>()
 const { t } = useI18n()
+const chat = useChatStoreUnscoped()
+const catalog = useExternalAgentCatalog()
 const toasts = useToastsStore()
 const state = ref<NativeSessionStatus | null>(null)
 const loading = ref(false)
@@ -44,6 +52,21 @@ const error = ref('')
 const copiedId = ref(false)
 let copyTimer: number | undefined
 let read: AbortController | undefined
+
+const resolvedAgentId = computed(
+  () =>
+    props.agent ||
+    chat.getSessionById(props.session)?.external_agent ||
+    inferAcpAgentIdFromError(error.value) ||
+    'custom',
+)
+const resolvedAgentEntry = computed(() => catalog.value.find((entry) => entry.id === resolvedAgentId.value))
+const showInstallGuide = computed(() => Boolean(error.value) && isMissingAcpCommandError(error.value))
+
+async function retryRefresh() {
+  void listExternalAgents().catch(() => {})
+  await refresh()
+}
 
 const forkPointOptions = computed<PickerOption[]>(() =>
   (state.value?.fork_points ?? []).map((point) => ({
@@ -186,8 +209,20 @@ onBeforeUnmount(() => {
     @update:open="(value) => { if (!value && mutation === null) emit('close') }"
   >
     <div class="space-y-4">
+      <AcpInstallGuideCard
+        v-if="showInstallGuide"
+        compact
+        :agent-id="resolvedAgentId"
+        :agent-name="resolvedAgentEntry?.name"
+        :command="resolvedAgentEntry?.command"
+        :raw-error="error"
+        :show-retry="true"
+        :retrying="loading"
+        @configure="emit('close')"
+        @retry="retryRefresh"
+      />
       <p
-        v-if="error"
+        v-else-if="error"
         class="break-words rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
         role="alert"
       >

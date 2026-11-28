@@ -72,13 +72,19 @@ const projectOptions = computed<PickerOption[]>(() =>
 )
 
 const agentOptions = computed<PickerOption[]>(() =>
-  agents.value.map((entry) => ({
-    value: entry.id,
-    label: entry.name,
-    description: formatAcpCommandPreview(entry.command, entry.args ?? []) || entry.id,
-    group: String(t(entry.builtin ? 'settings.acpAgents.status.builtin' : 'settings.acpAgents.status.custom')),
-    keywords: `${entry.id} ${entry.name} ${entry.command}`,
-  })),
+  agents.value.map((entry) => {
+    const commandPreview = formatAcpCommandPreview(entry.command, entry.args ?? []) || entry.id
+    return {
+      value: entry.id,
+      label: entry.name,
+      description:
+        entry.available === false
+          ? `${t('chat.nativeAgent.installGuide.notInstalledBadge')} · ${commandPreview}`
+          : commandPreview,
+      group: String(t(entry.builtin ? 'settings.acpAgents.status.builtin' : 'settings.acpAgents.status.custom')),
+      keywords: `${entry.id} ${entry.name} ${entry.command}`,
+    }
+  }),
 )
 
 const showAgentPills = computed(() => agents.value.length > 0 && agents.value.length <= 4)
@@ -255,7 +261,11 @@ onBeforeUnmount(() => {
             type="button"
             role="radio"
             :aria-checked="agent === entry.id"
-            :title="formatAcpCommandPreview(entry.command, entry.args ?? []) || entry.id"
+            :title="
+              entry.available === false
+                ? `${t('chat.nativeAgent.installGuide.notInstalledBadge')} · ${formatAcpCommandPreview(entry.command, entry.args ?? []) || entry.id}`
+                : formatAcpCommandPreview(entry.command, entry.args ?? []) || entry.id
+            "
             :disabled="creating"
             class="flex min-w-0 flex-1 basis-[calc(50%-0.125rem)] items-center justify-center gap-1.5 rounded px-2 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
             :class="
@@ -266,7 +276,12 @@ onBeforeUnmount(() => {
             @click="agent = entry.id"
           >
             <span
-              v-if="!entry.builtin"
+              v-if="entry.available === false"
+              class="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500"
+              aria-hidden="true"
+            />
+            <span
+              v-else-if="!entry.builtin"
               class="h-1.5 w-1.5 shrink-0 rounded-full bg-primary"
               aria-hidden="true"
             />
@@ -402,6 +417,7 @@ onBeforeUnmount(() => {
     <ExternalAgentSessionDialog
       v-if="managed"
       :session="managed"
+      :agent="current?.external_agent"
       @close="managed = ''"
       @changed="historyRevision++"
       @deleted="void openView()"

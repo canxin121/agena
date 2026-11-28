@@ -28,14 +28,19 @@ export function movedSettingsPage(
   return undefined
 }
 
-export function acpAgentsSettingsDestination(query: LocationQuery = {}) {
+export function acpAgentsSettingsDestination(query: LocationQuery = {}, agentId?: string) {
+  const nextQuery = settingsQueryForDestination(
+    { section: 'runtime-session', view: 'acp-agents', scope: 'global' },
+    'runtime-session',
+    query,
+  )
+  const trimmed = agentId?.trim()
+  if (trimmed) {
+    nextQuery.acpAgent = trimmed
+  }
   return {
     path: '/settings/runtime-session',
-    query: settingsQueryForDestination(
-      { section: 'runtime-session', view: 'acp-agents', scope: 'global' },
-      'runtime-session',
-      query,
-    ),
+    query: nextQuery,
   }
 }
 
@@ -62,6 +67,7 @@ export function settingsQueryForDestination(
     view: _view,
     scope: _scope,
     sessionId: _sessionId,
+    acpAgent: _acpAgent,
     plugin,
     pluginTab: _pluginTab,
     ...restQuery

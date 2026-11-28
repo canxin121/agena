@@ -69,6 +69,10 @@
       "invalidEnvValue": "El valor de la variable de entorno «{key}» no es válido o supera los 16384 bytes.",
       "invalidWritablePath": "La ruta escribible «{path}» debe ser absoluta.",
       "tooManyWritablePaths": "Se pueden configurar como máximo 16 rutas escribibles."
+    },
+    "availability": {
+      "ready": "Listo",
+      "notFound": "No instalado"
     }
   },
   "appearance": {

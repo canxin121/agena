@@ -11,6 +11,7 @@ import {
   RiRefreshLine,
 } from '@remixicon/vue'
 
+import AcpInstallGuideCard from '@/components/acp/AcpInstallGuideCard.vue'
 import Button from '@/components/ui/Button.vue'
 import Dialog from '@/components/ui/Dialog.vue'
 import IconButton from '@/components/ui/IconButton.vue'
@@ -18,16 +19,19 @@ import SearchInput from '@/components/ui/SearchInput.vue'
 import SegmentedButton from '@/components/ui/SegmentedButton.vue'
 import SegmentedControl from '@/components/ui/SegmentedControl.vue'
 import {
+  listExternalAgents,
   listNativeAgentSessions,
   openNativeAgentSession,
   previewNativeAgentHistory,
   setNativeAgentArchived,
+  useExternalAgentCatalog,
   watchNativeAgentSessions,
   type NativeArchiveFilter,
   type NativeHistoryPreview,
   type NativeIndexedSession,
   type NativeIndexCapabilities,
 } from '@/features/sessions/api/nativeAgentSessions'
+import { isMissingAcpCommandError } from '@/lib/acpInstallGuide'
 import { useUiStore } from '@/stores/ui'
 import { formatExternalAgentLabel, type ExternalAgent } from '@/types/chat'
 
@@ -37,6 +41,8 @@ const emit = defineEmits<{
 }>()
 const { locale, t } = useI18n()
 const ui = useUiStore()
+const catalog = useExternalAgentCatalog()
+const agentEntry = computed(() => catalog.value.find((entry) => entry.id === props.agent))
 const sessions = ref<NativeIndexedSession[]>([])
 const cursor = ref<string | null>(null)
 const capabilities = ref<NativeIndexCapabilities | null>(null)
@@ -46,6 +52,9 @@ const loading = ref(false)
 const mutation = ref<{ id: string; action: 'open' | 'archive' } | null>(null)
 const loaded = ref(false)
 const error = ref('')
+const showInstallGuide = computed(
+  () => agentEntry.value?.available === false || isMissingAcpCommandError(error.value),
+)
 const preview = ref<{
   session: NativeIndexedSession
   page: NativeHistoryPreview | null
@@ -249,6 +258,21 @@ function stateBadgeClass(state: string | null) {
   return 'bg-muted/70 text-muted-foreground'
 }
 
+async function recheckAndLoad() {
+  loading.value = true
+  error.value = ''
+  try {
+    await listExternalAgents()
+  } catch {
+    // Still attempt history load below to surface the latest error.
+  }
+  if (agentEntry.value?.available === false) {
+    loading.value = false
+    return
+  }
+  await load(false)
+}
+
 watch(
   () => [props.workspace, props.agent],
   () => {
@@ -261,9 +285,24 @@ watch(
     sessions.value = []
     cursor.value = null
     loaded.value = false
+    error.value = ''
+    if (agentEntry.value?.available === false) {
+      read?.abort()
+      loading.value = false
+      return
+    }
     void load(false)
   },
   { immediate: true },
+)
+
+watch(
+  () => agentEntry.value?.available,
+  (next, previous) => {
+    if (next === true && previous === false && !loaded.value && !loading.value) {
+      void load(false)
+    }
+  },
 )
 onBeforeUnmount(() => {
   refreshPending = false
@@ -326,8 +365,19 @@ onBeforeUnmount(() => {
       :show-search-button="false"
     />
 
+    <AcpInstallGuideCard
+      v-if="showInstallGuide"
+      compact
+      :agent-id="agent"
+      :agent-name="agentLabel || agentEntry?.name"
+      :command="agentEntry?.command"
+      :raw-error="error || undefined"
+      :show-retry="true"
+      :retrying="loading"
+      @retry="recheckAndLoad"
+    />
     <p
-      v-if="error"
+      v-else-if="error"
       role="alert"
       class="break-words rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-2 text-xs text-destructive"
     >

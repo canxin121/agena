@@ -69,6 +69,10 @@
       "invalidEnvValue": "O valor da variável de ambiente \"{key}\" é inválido ou excede 16384 bytes.",
       "invalidWritablePath": "O caminho gravável \"{path}\" deve ser absoluto.",
       "tooManyWritablePaths": "No máximo 16 caminhos graváveis podem ser configurados."
+    },
+    "availability": {
+      "ready": "Pronto",
+      "notFound": "Não instalado"
     }
   },
   "appearance": {

@@ -69,6 +69,10 @@
       "invalidEnvValue": "La valeur de la variable « {key} » est invalide ou dépasse 16384 octets.",
       "invalidWritablePath": "Le chemin inscriptible « {path} » doit être absolu.",
       "tooManyWritablePaths": "16 chemins inscriptibles maximum peuvent être configurés."
+    },
+    "availability": {
+      "ready": "Prêt",
+      "notFound": "Non installé"
     }
   },
   "appearance": {

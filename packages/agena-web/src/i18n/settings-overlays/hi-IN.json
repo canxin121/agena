@@ -69,6 +69,10 @@
       "invalidEnvValue": "पर्यावरण चर \"{key}\" का मान अमान्य है या 16384 बाइट से अधिक है।",
       "invalidWritablePath": "लेखन योग्य पथ \"{path}\" एक पूर्ण पथ होना चाहिए।",
       "tooManyWritablePaths": "अधिकतम 16 लेखन योग्य पथ कॉन्फ़िगर किए जा सकते हैं।"
+    },
+    "availability": {
+      "ready": "तैयार",
+      "notFound": "इंस्टॉल नहीं है"
     }
   },
   "appearance": {

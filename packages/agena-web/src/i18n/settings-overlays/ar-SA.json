@@ -69,6 +69,10 @@
       "invalidEnvValue": "قيمة متغير البيئة «{key}» غير صالحة أو تتجاوز 16384 بايت.",
       "invalidWritablePath": "المسار القابل للكتابة «{path}» يجب أن يكون مساراً مطلقاً.",
       "tooManyWritablePaths": "يمكن إعداد 16 مساراً قابلاً للكتابة كحد أقصى."
+    },
+    "availability": {
+      "ready": "جاهز",
+      "notFound": "غير مثبت"
     }
   },
   "appearance": {

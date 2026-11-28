@@ -187,6 +187,7 @@ export type ExternalAgentCatalogEntry = {
   builtin: boolean
   command: string
   args?: string[]
+  available?: boolean
 }
 
 export const externalAgentLabels: Record<string, string> = {

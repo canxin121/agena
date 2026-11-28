@@ -854,6 +854,7 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                       :key="`${authVersion}:${chat.selectedSessionId}`"
                       :session-id="chat.selectedSessionId"
                       :label="externalAgentLabel"
+                      :agent="chat.selectedSession?.external_agent"
                       :live-options="chat.selectedSessionExecution?.external_agent_options"
                     />
                     <button
@@ -1238,6 +1239,7 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
   <ExternalAgentSessionDialog
     v-if="nativeManageOpen && externalAgentLabel && chat.selectedSessionId"
     :session="chat.selectedSessionId"
+    :agent="chat.selectedSession?.external_agent"
     @close="nativeManageOpen = false"
     @deleted="openAcpSessionFromDialog()"
     @forked="openAcpSessionFromDialog"

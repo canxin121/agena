@@ -14,6 +14,7 @@ import {
 } from '@remixicon/vue'
 
 import SessionChip from './SessionChip.vue'
+import AcpInstallGuideCard from '@/components/acp/AcpInstallGuideCard.vue'
 import SettingsToggle from '@/components/settings/SettingsToggle.vue'
 import Button from '@/components/ui/Button.vue'
 import IconButton from '@/components/ui/IconButton.vue'
@@ -21,17 +22,26 @@ import OptionPicker from '@/components/ui/OptionPicker.vue'
 import type { PickerOption } from '@/components/ui/pickerOption.types'
 import {
   getExternalAgentProviders,
+  listExternalAgents,
+  useExternalAgentCatalog,
   type ExternalAgentProviders,
 } from '@/features/sessions/api/nativeAgentSessions'
+import { inferAcpAgentIdFromError, isMissingAcpCommandError } from '@/lib/acpInstallGuide'
 import { sessionApiPath } from '@/lib/acpSession'
 import { apiJson } from '@/lib/api'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { useToastsStore } from '@/stores/toasts'
-import type { ExternalAgentAuthStatus, ExternalAgentOptions } from '@/types/chat'
+import type { ExternalAgent, ExternalAgentAuthStatus, ExternalAgentOptions } from '@/types/chat'
 
-const props = defineProps<{ sessionId: string; label: string; liveOptions?: ExternalAgentOptions }>()
+const props = defineProps<{
+  sessionId: string
+  label: string
+  agent?: ExternalAgent
+  liveOptions?: ExternalAgentOptions
+}>()
 const { t } = useI18n()
 const toasts = useToastsStore()
+const catalog = useExternalAgentCatalog()
 const open = ref(false)
 const loading = ref(false)
 const error = ref('')
@@ -54,6 +64,13 @@ const providersError = ref('')
 const providers = ref<ExternalAgentProviders | null>(null)
 const copiedCommand = ref('')
 let copyTimer: number | undefined
+
+const resolvedAgentId = computed(
+  () => props.agent || inferAcpAgentIdFromError(error.value || authError.value) || 'custom',
+)
+const resolvedAgentEntry = computed(() => catalog.value.find((entry) => entry.id === resolvedAgentId.value))
+const showOptionsInstallGuide = computed(() => Boolean(error.value) && isMissingAcpCommandError(error.value))
+const showAuthInstallGuide = computed(() => Boolean(authError.value) && isMissingAcpCommandError(authError.value))
 
 const displayedAuth = computed(() => liveAuth.value ?? auth.value)
 const authPath = computed(() => `${sessionApiPath(props.sessionId)}/agent-auth`)
@@ -286,8 +303,20 @@ watch([open, authOpen], ([panel, account], _previous, onCleanup) => {
     </template>
 
     <div class="grid gap-3 py-1 text-xs" :aria-busy="loading">
+      <AcpInstallGuideCard
+        v-if="showOptionsInstallGuide"
+        compact
+        :agent-id="resolvedAgentId"
+        :agent-name="resolvedAgentEntry?.name || label"
+        :command="resolvedAgentEntry?.command"
+        :raw-error="error"
+        :show-retry="true"
+        :retrying="loading"
+        @configure="open = false"
+        @retry="() => { void listExternalAgents().catch(() => {}); void load() }"
+      />
       <p
-        v-if="error"
+        v-else-if="error"
         role="alert"
         class="whitespace-pre-wrap break-words rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-2 text-destructive"
       >
@@ -389,8 +418,20 @@ watch([open, authOpen], ([panel, account], _previous, onCleanup) => {
         </div>
 
         <div v-if="authOpen" class="mt-2 grid gap-2 pl-1" :aria-busy="authBusy">
+          <AcpInstallGuideCard
+            v-if="showAuthInstallGuide"
+            compact
+            :agent-id="resolvedAgentId"
+            :agent-name="resolvedAgentEntry?.name || label"
+            :command="resolvedAgentEntry?.command"
+            :raw-error="authError"
+            :show-retry="true"
+            :retrying="authBusy"
+            @configure="open = false"
+            @retry="() => { void listExternalAgents().catch(() => {}); void runAuth() }"
+          />
           <p
-            v-if="authError"
+            v-else-if="authError"
             role="alert"
             class="whitespace-pre-wrap break-words rounded-md border border-destructive/30 bg-destructive/10 px-2.5 py-2 text-destructive"
           >

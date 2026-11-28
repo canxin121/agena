@@ -62,7 +62,6 @@ export function useChatProfilePicker(options: {
     loadedContext.value === contextKey() ? (summary.value ?? chat.selectedSession) : chat.selectedSession,
   )
   const subagent = computed(() => session.value?.relation_kind === 'subagent')
-  const fallback = computed(() => (subagent.value ? 'worker' : 'main'))
   const useSnapshot = computed(
     () =>
       options.open.value === 'profile' &&
@@ -75,14 +74,7 @@ export function useChatProfilePicker(options: {
   const state = computed(() =>
     useSnapshot.value ? (snapshotState.value ?? chat.selectedSessionState) : chat.selectedSessionState,
   )
-  const isDefault = computed(() => execution.value?.profile_is_default || !execution.value?.profile)
-  const defaultLabel = computed(() => {
-    const name = isDefault.value ? execution.value?.profile : ''
-    return [st('Restore default role'), name || (session.value?.owner_bot_id ? '' : fallback.value)]
-      .filter(Boolean)
-      .join(' · ')
-  })
-  const selected = computed(() => (isDefault.value ? '' : execution.value?.profile || ''))
+  const activeProfile = computed(() => execution.value?.profile || '')
   const busy = computed(
     () =>
       options.locallyBusy() ||
@@ -93,6 +85,7 @@ export function useChatProfilePicker(options: {
       (execution.value?.queued_messages?.length || 0) > 0,
   )
   const compatible = computed(() => selectableAgentProfiles(catalog.value, subagent.value))
+  const searchable = computed(() => Object.keys(compatible.value).length > 6)
   const entries = computed(() => {
     const needle = query.value.trim().toLocaleLowerCase()
     return Object.entries(compatible.value)
@@ -111,48 +104,22 @@ export function useChatProfilePicker(options: {
     if (saving.value) return st('Saving…')
     if (busy.value) return st('Finish or stop the current run and clear queued messages before changing profiles.')
     if (query.value.trim() && !entries.value.length && !loading.value) return st('No compatible profiles found.')
-    return st('Choose the agent profile for the current session.')
+    return ''
   })
   const groups = computed<OptionMenuGroup[]>(() => {
     const disabled = saving.value || busy.value || loading.value || loadedContext.value !== contextKey()
-    const result: OptionMenuGroup[] = []
-    if (loadedContext.value === contextKey()) {
-      result.push({
-        id: 'profile-default-role',
-        items: [
-          {
-            id: 'profile:restore',
-            label: defaultLabel.value,
-            checked: isDefault.value,
-            disabled,
-          },
-        ],
-      })
-      result.push({
+    if (loadedContext.value !== contextKey()) return []
+    return [
+      {
         id: 'profile-roles',
-        title: st('Agent profiles'),
         items: entries.value.map((entry) => ({
           id: `profile:select:${entry.id}`,
           label: entry.label,
-          description: [entry.label === entry.id ? '' : entry.id, entry.description].filter(Boolean).join(' · '),
-          checked: selected.value === entry.id,
+          checked: activeProfile.value === entry.id,
           disabled,
         })),
-      })
-    }
-    result.push({
-      id: 'profile-settings',
-      items: [
-        {
-          id: 'profile:settings',
-          label: st('Default profile settings'),
-          description:
-            session.value?.workspace_id == null ? st('Global default profiles') : st('Workspace default profiles'),
-          disabled: saving.value,
-        },
-      ],
-    })
-    return result
+      },
+    ]
   })
 
   async function load() {
@@ -270,5 +237,5 @@ export function useChatProfilePicker(options: {
     unsubscribe()
   })
 
-  return { query, loading, saving, helperText, groups, load, select }
+  return { query, loading, saving, searchable, helperText, groups, load, select }
 }

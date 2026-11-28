@@ -792,6 +792,7 @@ const composerPickerTitle = computed(() => {
 })
 
 const composerPickerSearchable = computed(() => {
+  if (composerPickerOpen.value === 'profile') return profilePicker.searchable.value
   return Boolean(composerPickerOpen.value)
 })
 
@@ -1469,9 +1470,9 @@ async function copyToClipboard(text: string | Promise<string>) {
 const acpSessionStatus = useAcpSessionStatus({
   sessionId: computed(() => chat.selectedSessionId),
   externalAgent: computed(() => chat.selectedSession?.external_agent),
-  isBusy: computed(
   workspaceId: computed(() => chat.selectedSession?.workspace_id),
   title: computed(() => chat.selectedSession?.title),
+  isBusy: computed(
     () =>
       sending.value ||
       chat.selectedSessionState.kind === 'creating' ||
@@ -3009,9 +3010,9 @@ const viewCtx = {
 } satisfies ChatPageViewContext
 
 onBeforeUnmount(() => {
-  // Transcript data is owned by the application-level chat store, not by a
   acpRecoveryController?.abort()
   acpRecoveryController = null
+  // Transcript data is owned by the application-level chat store, not by a
   // single pane.  A workspace split can unmount/recreate one ChatPage while
   // the other pane is still alive; clearing the shared cache here would make
   // the next focus change fetch the same transcript again and discard data

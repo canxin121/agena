@@ -20,9 +20,7 @@ defineEmits<{ (event: 'select'): void }>()
     @click.stop="$emit('select')"
   >
     <RiUserSettingsLine class="h-3 w-3 shrink-0" />
-    <span class="truncate"
-      >{{ profile || $st('Agent profiles') }}{{ profileIsDefault ? ` · ${$st('Default role')}` : '' }}</span
-    >
+    <span class="truncate">{{ profile || $st('Agent profiles') }}</span>
     <RiArrowDownSLine class="h-3 w-3 shrink-0" />
   </button>
 </template>

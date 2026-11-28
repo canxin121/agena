@@ -248,13 +248,17 @@ test('global sessions use global and built-in profiles, excluding workspace repl
   expect(f.roles().map((item) => item.id)).not.toContain('profile:select:explore')
 })
 
-test('workspace profiles replace whole global entries and inherit built-in role metadata', async () => {
+test('workspace profiles replace whole global entries and show only profile names', async () => {
   const f = fixture()
   await f.show()
   expect(f.item('profile:select:project')?.label).toBe('Project work')
   expect(f.item('profile:select:shared')?.label).toBe('Workspace shared')
-  expect(f.item('profile:select:shared')?.description).not.toContain('Global instructions')
+  expect(f.item('profile:select:shared')?.description).toBeUndefined()
   expect(f.item('profile:select:main')?.label).toBe('Main')
+  expect(f.item('profile:select:main')?.description).toBeUndefined()
+  expect(f.item('profile:restore')).toBeUndefined()
+  expect(f.item('profile:settings')).toBeUndefined()
+  expect(f.picker.helperText.value).toBe('')
 })
 
 test('subagents discover compatible inherited modes and allow manual hidden-profile selection', async () => {
@@ -301,28 +305,15 @@ test('saving writes the captured profile, forces full refresh, and closes after 
   expect(f.closes()).toBe(1)
 })
 
-for (const subagent of [false, true]) {
-  test('restore default sends an empty profile for ' + (subagent ? 'subagents' : 'primary sessions'), async () => {
-    const f = fixture({ subagent, profile: 'reviewer' })
-    await f.show()
-    const fallback = subagent ? 'worker' : 'main'
-    expect(f.item('profile:restore')?.label).toContain(fallback)
-    expect(f.item('profile:restore')?.checked).toBe(false)
-    await f.picker.select('profile:restore')
-    expect(f.writes).toEqual([{ id: '9', profile: '', backend: 1 }])
-    expect(f.chat.selectedSessionExecution).toMatchObject({ profile: fallback, profile_is_default: true })
-  })
-}
-
-test('explicit main and automatic main have distinct checked states', async () => {
+test('both explicit main and default main mark the active profile directly without a separate restore item', async () => {
   const explicit = fixture({ profile: 'main' })
   const automatic = fixture({ profile: null })
   await explicit.show()
   await automatic.show()
-  expect(explicit.item('profile:restore')?.checked).toBe(false)
+  expect(explicit.item('profile:restore')).toBeUndefined()
   expect(explicit.item('profile:select:main')?.checked).toBe(true)
-  expect(automatic.item('profile:restore')?.checked).toBe(true)
-  expect(automatic.item('profile:select:main')?.checked).toBe(false)
+  expect(automatic.item('profile:restore')).toBeUndefined()
+  expect(automatic.item('profile:select:main')?.checked).toBe(true)
 })
 
 for (const kind of ['creating', 'running', 'awaiting_interaction'] as const) {
@@ -349,13 +340,13 @@ test('local sends and queued messages disable changes, while a failed idle sessi
     ...f.chat.selectedSessionExecution!,
     queued_messages: [{ execution_id: 'queued', message_id: 1 }],
   }
-  expect(f.item('profile:restore')?.disabled).toBe(true)
-  await f.picker.select('profile:restore')
+  expect(f.item('profile:select:reviewer')?.disabled).toBe(true)
+  await f.picker.select('profile:select:reviewer')
   expect(f.writes).toHaveLength(0)
   f.chat.selectedSessionExecution = { ...f.chat.selectedSessionExecution!, queued_messages: [] }
   f.chat.selectedSessionState = { kind: 'failed', data: { failure: 'previous run failed' } }
-  expect(f.item('profile:restore')?.disabled).toBe(false)
-  await f.picker.select('profile:restore')
+  expect(f.item('profile:select:reviewer')?.disabled).toBe(false)
+  await f.picker.select('profile:select:reviewer')
   expect(f.writes).toHaveLength(1)
 })
 
@@ -503,18 +494,13 @@ test('disposing a picker prevents post-save refresh and removes settings subscri
   expect(f.listenerCount()).toBe(0)
 })
 
-for (const global of [false, true]) {
-  test(
-    'default settings open the ' + (global ? 'global' : 'workspace') + ' layer for the current pane session',
-    async () => {
-      const f = fixture({ global })
-      await f.show()
-      f.locallyBusy.value = true
-      expect(f.item('profile:settings')?.disabled).toBe(false)
-      await f.picker.select('profile:settings')
-      expect(f.defaults).toEqual([{ scope: global ? 'global' : 'workspace', id: '9' }])
-      expect(f.open.value).toBeNull()
-      expect(f.writes).toHaveLength(0)
-    },
-  )
-}
+test('search box stays hidden for small profile catalogs and appears above 6 profiles', async () => {
+  const f = fixture()
+  await f.show()
+  expect(f.picker.searchable.value).toBe(false)
+  for (let i = 1; i <= 5; i++) {
+    f.documents.workspace[`extra${i}`] = { title: `Extra ${i}`, mode: 'primary' }
+  }
+  await f.picker.load()
+  expect(f.picker.searchable.value).toBe(true)
+})

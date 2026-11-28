@@ -227,17 +227,83 @@ export function getExternalAgentProviders(id: string, signal?: AbortSignal) {
   return apiJson<ExternalAgentProviders>(`${sessionApiPath(id)}/agent-providers`, { signal })
 }
 
+const STATUS_SHORT_CACHE_MS = 2000
+const statusInFlight = new Map<string, Promise<NativeSessionResult>>()
+const statusShortCache = new Map<string, { value: NativeSessionResult; cachedAt: number }>()
+
+function abortError(): Error {
+  const err = new Error('The operation was aborted.')
+  err.name = 'AbortError'
+  return err
+}
+
+function raceWithSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise
+  if (signal.aborted) return Promise.reject(abortError())
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abortError())
+    signal.addEventListener('abort', onAbort, { once: true })
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort)
+        resolve(value)
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort)
+        reject(error)
+      },
+    )
+  })
+}
+
+export function invalidateNativeSessionStatusCache(id?: string) {
+  if (id) {
+    statusShortCache.delete(id)
+    statusInFlight.delete(id)
+  } else {
+    statusShortCache.clear()
+    statusInFlight.clear()
+  }
+}
+
 export async function manageNativeAgentSession(id: string, action: NativeSessionAction, signal?: AbortSignal) {
+  if (action.action === 'status') {
+    if (signal?.aborted) throw abortError()
+    const cached = statusShortCache.get(id)
+    if (cached && Date.now() - cached.cachedAt < STATUS_SHORT_CACHE_MS) {
+      return cached.value
+    }
+    let pending = statusInFlight.get(id)
+    if (!pending) {
+      const request = apiJson<NativeSessionResult>(`${sessionApiPath(id)}/agent-session`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(action),
+      }).then((result) => {
+        if (result.kind === 'status') {
+          statusShortCache.set(id, { value: result, cachedAt: Date.now() })
+        }
+        return result
+      })
+      pending = request.finally(() => {
+        if (statusInFlight.get(id) === pending) {
+          statusInFlight.delete(id)
+        }
+      })
+      statusInFlight.set(id, pending)
+    }
+    return raceWithSignal(pending, signal)
+  }
+
+  invalidateNativeSessionStatusCache(id)
   const result = await apiJson<NativeSessionResult>(`${sessionApiPath(id)}/agent-session`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(action),
     signal,
   })
-  if (action.action !== 'status') {
-    const keys = ['session:' + id + ':state']
-    if (action.action === 'rewind') keys.push('session:' + id + ':parts')
-    invalidateResources(keys)
-  }
+  const keys = ['session:' + id + ':state']
+  if (action.action === 'rewind') keys.push('session:' + id + ':parts')
+  invalidateResources(keys)
   return result
 }

@@ -96,6 +96,9 @@ export const sessionStorageKeys = {
   broadcast: {
     senderId: namespacedKey('broadcast.sender-id'),
   },
+  acp: {
+    sidebarListCache: namespacedKey('acp.sidebar-list-cache'),
+  },
   terminal: {
     handoffKeyPrefix: namespacedKey('terminal.handoff:'),
   },

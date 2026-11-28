@@ -56,6 +56,11 @@ import AcpConversationRow from './acpSidebar/AcpConversationRow.vue'
 import AcpProjectRow from './acpSidebar/AcpProjectRow.vue'
 import AcpSidebarHeader from './acpSidebar/AcpSidebarHeader.vue'
 import {
+  invalidateCachedAcpProject,
+  readCachedAcpProject,
+  writeCachedAcpProject,
+} from './acpSidebar/acpSidebarCache'
+import {
   acpDirectoryActivityState,
   filterAcpDirectories,
   mergeProjectConversations,
@@ -155,6 +160,20 @@ function ensureProjectState(workspaceId: string): ProjectState {
     }
   }
   return projectStates[workspaceId]
+}
+
+function hydrateProjectFromCache(workspaceId: string): boolean {
+  if (!agent.value || isAgentUnavailable.value) return false
+  const st = ensureProjectState(workspaceId)
+  if (st.loaded) return true
+  const cached = readCachedAcpProject(agent.value, workspaceId)
+  if (!cached) return false
+  st.sessions = cached.sessions
+  st.cursor = cached.cursor
+  st.capabilities = cached.capabilities
+  st.showArchived = cached.showArchived
+  st.loaded = true
+  return true
 }
 
 function isDirectoryExpanded(directoryId: string): boolean {
@@ -304,6 +323,7 @@ function followProject(workspaceId: string) {
 
 async function loadProject(workspaceId: string, append = false) {
   if (!agent.value || isAgentUnavailable.value) return
+  if (!append) hydrateProjectFromCache(workspaceId)
   const st = ensureProjectState(workspaceId)
   readControllers.get(workspaceId)?.abort()
   const controller = new AbortController()
@@ -332,6 +352,12 @@ async function loadProject(workspaceId: string, append = false) {
     st.cursor = page.next_cursor
     st.capabilities = page.capabilities
     st.loaded = true
+    writeCachedAcpProject(targetAgent, workspaceId, {
+      sessions: st.sessions,
+      cursor: st.cursor,
+      capabilities: st.capabilities,
+      showArchived: st.showArchived,
+    })
     if (page.capabilities.watch) followProject(workspaceId)
     else {
       watchControllers.get(workspaceId)?.abort()
@@ -399,7 +425,8 @@ async function recheckActiveAgent() {
   }
 }
 
-async function loadProjects() {
+async function loadProjects(options: { loadExpanded?: boolean } = {}) {
+  const shouldLoadExpanded = options.loadExpanded ?? true
   projectsError.value = ''
   projectsLoading.value = true
   try {
@@ -426,7 +453,7 @@ async function loadProjects() {
     }
     expandedDirectoryIds.value = pruned
 
-    if (!isAgentUnavailable.value) {
+    if (shouldLoadExpanded && !isAgentUnavailable.value) {
       for (const id of expandedDirectoryIds.value) {
         if (!projectStates[id]?.loaded && !projectStates[id]?.loading) {
           void loadProject(id, false)
@@ -443,7 +470,7 @@ async function loadProjects() {
 }
 
 async function refreshAll() {
-  await Promise.all([loadAgents(), loadProjects()])
+  await Promise.all([loadAgents(), loadProjects({ loadExpanded: false })])
   if (!isAgentUnavailable.value) {
     for (const dir of projects.value) {
       if (isDirectoryExpanded(dir.id)) {
@@ -911,7 +938,12 @@ watch(
             updatedAtMs: Date.now(),
           })
         } else if (status?.session && workspaceId != null && isDirectoryExpanded(String(workspaceId))) {
-          void loadProject(String(workspaceId), false)
+          const wid = String(workspaceId)
+          const st = projectStates[wid]
+          const alreadyListed = st?.sessions.some((item) => item.native_id === status.session?.native_id)
+          if (!st?.loading && !alreadyListed) {
+            void loadProject(wid, false)
+          }
         }
       })
     }
@@ -939,6 +971,7 @@ watch(
 
 const unsubscribeAuth = subscribeServerAuthTokenVersion(() => {
   if (!lifetime.signal.aborted) {
+    invalidateCachedAcpProject()
     void refreshAll()
   }
 })
@@ -1034,7 +1067,7 @@ onBeforeUnmount(() => {
             >
               {{ projectsError }}
             </p>
-            <SidebarTextButton class="w-full justify-center" @click="loadProjects">
+            <SidebarTextButton class="w-full justify-center" @click="() => loadProjects()">
               {{ t('common.retry') }}
             </SidebarTextButton>
           </div>

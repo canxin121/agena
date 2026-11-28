@@ -451,21 +451,17 @@ pub(super) async fn apply(
             take_external_agent_resume,
         } => {
             let execution = check_scope(connection, *scope, true).await?;
-            let window = super::input_window::select(
-                connection,
-                scope.session,
-                execution.message_id,
-                10000,
-                false,
-            )
-            .await?;
-            let round = begin_round(connection, *scope, &window.entries).await?;
             if !take_external_agent_resume {
-                return Ok(round);
+                let window = super::input_window::select(
+                    connection,
+                    scope.session,
+                    execution.message_id,
+                    10000,
+                    false,
+                )
+                .await?;
+                return begin_round(connection, *scope, &window.entries).await;
             }
-            let Mutation::Round(round) = round else {
-                unreachable!("begin-round result")
-            };
             let config = lifecycle::configuration(connection, scope.session).await?;
             if config.external_agent.is_none() {
                 return Err(invalid(
@@ -473,6 +469,9 @@ pub(super) async fn apply(
                 ));
             }
             let link = config.native_session_link();
+            let previous = config
+                .external_agent_resume
+                .filter(|resume| resume.session == scope.session);
             let mut pending = config.external_agent_pending_turn;
             if let Some(prior) = pending.as_mut().filter(|prior| {
                 prior.message == execution.message_id
@@ -491,15 +490,26 @@ pub(super) async fn apply(
                     prior.delivery = ExternalAgentPromptDelivery::Unconfirmed;
                 }
             }
+            let scanned = external_agent::scan_round_continuity(
+                connection,
+                scope.session,
+                execution.message_id,
+                previous.as_ref(),
+                pending.as_ref(),
+            )
+            .await?;
+            let round = begin_round(connection, *scope, &scanned.round_inputs).await?;
+            let Mutation::Round(round) = round else {
+                unreachable!("begin-round result")
+            };
             Ok(Mutation::ExternalAgentRound {
                 round,
-                previous: config
-                    .external_agent_resume
-                    .filter(|resume| resume.session == scope.session),
+                previous,
                 link,
                 pending,
                 selection: config.external_agent_selection,
                 state: Box::new(config.external_agent_state),
+                continuity: Some(scanned.continuity),
             })
         }
         Command::RecordExternalAgentState {

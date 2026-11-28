@@ -152,6 +152,20 @@ pub struct ExternalAgentHistoryAnchor {
     pub tail: Option<EntryId>,
 }
 
+/// Compact history continuity facts computed during `begin_external_agent_round`
+/// without copying historical tool/content payloads into `agena_round_inputs`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExternalAgentRoundContinuity {
+    pub has_prior_turns: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_anchor: Option<ExternalAgentHistoryAnchor>,
+    pub can_resume_previous: bool,
+    pub can_resume_pending: bool,
+    pub resume_signature_unstructured: [u8; 32],
+    pub resume_signature_structured: [u8; 32],
+    pub pending_signature: [u8; 32],
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExternalAgentHistoryTurn {

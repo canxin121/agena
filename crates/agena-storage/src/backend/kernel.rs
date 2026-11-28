@@ -588,6 +588,8 @@ pub enum Mutation {
         selection: agena_domain::ExternalAgentSelection,
         #[serde(default, skip_serializing_if = "ExternalAgentState::is_empty")]
         state: Box<ExternalAgentState>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        continuity: Option<ExternalAgentRoundContinuity>,
     },
     Checkpoint(EntryId),
     Tool(ToolId),

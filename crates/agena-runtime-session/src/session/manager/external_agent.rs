@@ -254,7 +254,7 @@ impl SessionManager {
         let facts =
             read_with_busy_retry(control.session, "external_agent_prompt", || round.prompt())
                 .await?;
-        let input = prompt::TurnInput::new(&facts, execution)?;
+        let input = prompt::TurnInput::new(&facts, execution, opened.continuity)?;
         let retry = opened
             .pending
             .as_ref()

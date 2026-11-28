@@ -624,6 +624,7 @@ pub struct ExternalAgentRoundStart {
     pub pending: Option<ExternalAgentPendingTurn>,
     pub selection: agena_domain::ExternalAgentSelection,
     pub state: ExternalAgentState,
+    pub continuity: Option<ExternalAgentRoundContinuity>,
 }
 
 #[derive(Clone)]
@@ -1123,6 +1124,7 @@ impl AttemptHandle {
                 pending,
                 selection,
                 state,
+                continuity,
             } => Ok(CommitReceipt {
                 position: receipt.position,
                 value: ExternalAgentRoundStart {
@@ -1135,6 +1137,7 @@ impl AttemptHandle {
                     pending,
                     selection,
                     state: *state,
+                    continuity,
                 },
             }),
             _ => Err(unexpected()),

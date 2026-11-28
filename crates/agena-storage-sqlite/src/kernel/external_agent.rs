@@ -625,3 +625,460 @@ pub(super) async fn detach(
     }
     lifecycle::delete(connection, session).await
 }
+
+pub(super) struct ScannedRoundContinuity {
+    pub round_inputs: Vec<EntryId>,
+    pub continuity: ExternalAgentRoundContinuity,
+}
+
+const CONTINUITY_SELECT_COLS: &str = "e.id,e.kind,e.generation,e.round_id,
+    COALESCE(f.revision,e.revision) AS revision,
+    COALESCE(e.message_id,e.id) AS message_id,
+    COALESCE((SELECT p.purpose FROM agena_execution_purposes p WHERE p.execution_id=e.execution_id),'message') AS execution_purpose,
+    COALESCE(f.execution_phase,CASE WHEN e.kind='user' THEN latest.phase END,orig_a.phase) AS execution_phase,
+    CASE WHEN f.entry_id IS NOT NULL THEN f.execution_started
+         ELSE EXISTS(SELECT 1 FROM agena_attempts prior WHERE prior.execution_id=e.execution_id AND prior.started_at_ms IS NOT NULL)
+    END AS ever_started,
+    COALESCE(br.phase,r.phase) AS round_phase,
+    cr.round_id AS compaction_round,
+    e.content_id,e.tool_id,e.interaction_id,
+    CASE WHEN e.kind IN ('user','compaction') THEN e.body_json ELSE NULL END AS body_json,
+    CASE WHEN cs.kind='structured' AND (f.entry_id IS NULL OR bs.source_key IS NOT NULL) THEN 1 ELSE 0 END AS is_structured";
+
+const CONTINUITY_JOINS: &str = "
+    LEFT JOIN agena_rounds r ON r.id=e.round_id
+    LEFT JOIN agena_compaction_rounds cr ON cr.round_id=e.round_id
+    LEFT JOIN agena_attempts orig_a ON orig_a.execution_id=e.execution_id AND orig_a.generation=e.generation
+    LEFT JOIN agena_executions x ON e.kind='user' AND x.id=e.execution_id
+    LEFT JOIN agena_attempts latest ON latest.execution_id=x.id AND latest.generation=x.current_generation
+    LEFT JOIN agena_branch_entries f ON f.session_id=?1 AND f.entry_id=e.id
+    LEFT JOIN agena_branch_rounds br ON br.session_id=f.session_id AND br.round_id=e.round_id
+    LEFT JOIN agena_content_streams cs ON cs.id=e.content_id
+    LEFT JOIN agena_branch_sources bs ON bs.session_id=?1 AND bs.source_key=cs.source_key";
+
+/// Streams lightweight history metadata for an external ACP agent round in O(1)
+/// memory without touching `agena_tool_calls`, `agena_interactions`, or
+/// `agena_content_blocks`. External ACP peers own their native context window,
+/// so capturing only the current turn's user message (plus any unobserved
+/// delivery entries) avoids the 8 MiB native LLM provider input limit on large
+/// imported or long-running ACP conversations while preserving exact resume,
+/// pending-retry, branch, and anchor invariants.
+pub(super) async fn scan_round_continuity(
+    connection: &mut SqliteConnection,
+    session: SessionId,
+    message: EntryId,
+    previous: Option<&ExternalAgentResume>,
+    pending: Option<&ExternalAgentPendingTurn>,
+) -> Result<ScannedRoundContinuity> {
+    let window_state = sqlx::query("SELECT checkpoint_entry_id,through_sequence,through_ordinal FROM agena_prompt_windows WHERE session_id=?")
+        .bind(session.get())
+        .fetch_optional(&mut *connection)
+        .await
+        .map_err(sql_error)?
+        .ok_or_else(|| KernelError::NotFound("prompt window".into()))?;
+    let checkpoint: Option<i64> = window_state
+        .try_get("checkpoint_entry_id")
+        .map_err(storage)?;
+    let through_sequence: Option<i64> = window_state.try_get("through_sequence").map_err(storage)?;
+    let through_ordinal: Option<i64> = window_state.try_get("through_ordinal").map_err(storage)?;
+
+    let unobserved_deliveries: std::collections::HashSet<i64> = sqlx::query_scalar(
+        "SELECT DISTINCT result_entry_id FROM agena_deliveries
+         WHERE session_id=?1 AND state='consumed' AND observed_round_id IS NULL
+           AND result_entry_id IS NOT NULL",
+    )
+    .bind(session.get())
+    .fetch_all(&mut *connection)
+    .await
+    .map_err(sql_error)?
+    .into_iter()
+    .collect();
+
+    struct ScanState<'a> {
+        message: EntryId,
+        previous: Option<&'a ExternalAgentResume>,
+        pending: Option<&'a ExternalAgentPendingTurn>,
+        unobserved_deliveries: std::collections::HashSet<i64>,
+        round_inputs: Vec<EntryId>,
+        saw_message: bool,
+        after_msg_only_own_notices: bool,
+        failed_users_before_msg: std::collections::HashSet<EntryId>,
+        anchor_tail: Option<EntryId>,
+        has_prior_turns: bool,
+        last_non_notice_id: Option<EntryId>,
+        hash_unstructured: Sha256,
+        hash_structured: Sha256,
+        hash_pending_current: Sha256,
+        hash_pending_prior: Option<Sha256>,
+        prev_seen: bool,
+        prev_phase_ok: bool,
+        prev_sig_ok: bool,
+        prev_after_ok: bool,
+        pend_seen: bool,
+        pend_sig_ok: bool,
+        pend_after_ok: bool,
+    }
+
+    impl<'a> ScanState<'a> {
+        fn update_hash(
+            hash: &mut Sha256,
+            id: EntryId,
+            generation: Option<AttemptGeneration>,
+            round_id: Option<RoundId>,
+            revision: Option<EntryRevision>,
+            payload: &EntryPayload,
+        ) -> Result<()> {
+            let bytes =
+                serde_json::to_vec(&(id, generation, round_id, revision, payload)).map_err(storage)?;
+            hash.update(bytes.len().to_le_bytes());
+            hash.update(bytes);
+            Ok(())
+        }
+
+        fn process_row(&mut self, row: &sea_orm::sqlx::sqlite::SqliteRow, is_checkpoint: bool) -> Result<()> {
+            let id_raw: i64 = row.try_get("id").map_err(storage)?;
+            let kind: &str = row.try_get("kind").map_err(storage)?;
+            let msg_id_raw: i64 = row.try_get("message_id").map_err(storage)?;
+            let execution_phase_str: &str = row.try_get("execution_phase").map_err(storage)?;
+
+            if !is_checkpoint {
+                let execution_purpose: &str = row.try_get("execution_purpose").map_err(storage)?;
+                if kind == "notice" && id_raw == msg_id_raw && execution_purpose == "compaction" {
+                    return Ok(());
+                }
+                if msg_id_raw > self.message.get() {
+                    return Ok(());
+                }
+                let ever_started: bool = row.try_get("ever_started").map_err(storage)?;
+                if kind == "user" && execution_phase_str == "cancelled" && !ever_started {
+                    return Ok(());
+                }
+                let round_phase: Option<&str> = row.try_get("round_phase").map_err(storage)?;
+                let compaction_round: Option<i64> =
+                    row.try_get("compaction_round").map_err(storage)?;
+                if kind == "compaction"
+                    || (kind != "notice"
+                        && (compaction_round.is_some()
+                            || matches!(round_phase, Some("failed" | "interrupted"))))
+                {
+                    return Ok(());
+                }
+            }
+
+            let id = EntryId::try_from(id_raw).map_err(storage)?;
+            let msg_id = EntryId::try_from(msg_id_raw).map_err(storage)?;
+            let execution_phase: ExecutionPhase = decode(&encode(&execution_phase_str)?)?;
+
+            if id == self.message || self.unobserved_deliveries.contains(&id_raw) {
+                self.round_inputs.push(id);
+            }
+
+            // Track anchor tail and post-message notices identically to TurnInput::new.
+            if id == self.message {
+                self.saw_message = true;
+            } else if self.saw_message {
+                if !(kind == "notice" && msg_id == self.message) {
+                    self.after_msg_only_own_notices = false;
+                }
+            } else if kind == "user"
+                && matches!(
+                    execution_phase,
+                    ExecutionPhase::Failed | ExecutionPhase::Cancelled
+                )
+            {
+                self.failed_users_before_msg.insert(id);
+            } else if !(kind == "notice" && self.failed_users_before_msg.contains(&msg_id)) {
+                self.anchor_tail = Some(id);
+            }
+
+            if kind == "notice" {
+                return Ok(());
+            }
+
+            self.last_non_notice_id = Some(id);
+            if kind == "user" && id != self.message {
+                self.has_prior_turns = true;
+            }
+
+            let generation = AttemptGeneration::try_from(
+                row.try_get::<i64, _>("generation").map_err(storage)?,
+            )
+            .map_err(storage)?;
+            let round_id = row
+                .try_get::<Option<i64>, _>("round_id")
+                .map_err(storage)?
+                .map(RoundId::try_from)
+                .transpose()
+                .map_err(storage)?;
+            let revision = EntryRevision::try_from(
+                row.try_get::<i64, _>("revision").map_err(storage)?,
+            )
+            .map_err(storage)?;
+            let is_structured: bool = row.try_get::<i64, _>("is_structured").map_err(storage)? != 0;
+
+            let payload = match kind {
+                "user" => {
+                    let body: &str = row
+                        .try_get::<Option<&str>, _>("body_json")
+                        .map_err(storage)?
+                        .ok_or_else(|| storage("user entry has no document"))?;
+                    let body = decode_user_body(body)?;
+                    EntryPayload::User {
+                        document: body.document,
+                        author: body.author,
+                        origin: body.origin,
+                    }
+                }
+                "text" | "reasoning" => {
+                    let content_id: agena_domain::ContentId = row
+                        .try_get::<String, _>("content_id")
+                        .map_err(storage)?
+                        .parse()
+                        .map_err(storage)?;
+                    if kind == "text" {
+                        EntryPayload::Text { content_id }
+                    } else {
+                        EntryPayload::Reasoning { content_id }
+                    }
+                }
+                "tool" => EntryPayload::Tool {
+                    tool_id: ToolId::try_from(row.try_get::<i64, _>("tool_id").map_err(storage)?)
+                        .map_err(storage)?,
+                },
+                "interaction" => EntryPayload::Interaction {
+                    interaction_id: InteractionId::try_from(
+                        row.try_get::<i64, _>("interaction_id").map_err(storage)?,
+                    )
+                    .map_err(storage)?,
+                },
+                "compaction" => {
+                    let body: &str = row
+                        .try_get::<Option<&str>, _>("body_json")
+                        .map_err(storage)?
+                        .ok_or_else(|| storage("compaction entry has no body"))?;
+                    decode(body)?
+                }
+                _ => return Err(storage("unknown entry kind")),
+            };
+
+            let rev_unstructured = match payload {
+                EntryPayload::User { .. } => None,
+                _ => Some(revision),
+            };
+            let rev_structured = match payload {
+                EntryPayload::User { .. } => None,
+                EntryPayload::Text { .. } | EntryPayload::Reasoning { .. } if is_structured => None,
+                _ => Some(revision),
+            };
+            Self::update_hash(
+                &mut self.hash_unstructured,
+                id,
+                Some(generation),
+                round_id,
+                rev_unstructured,
+                &payload,
+            )?;
+            Self::update_hash(
+                &mut self.hash_structured,
+                id,
+                Some(generation),
+                round_id,
+                rev_structured,
+                &payload,
+            )?;
+            Self::update_hash(
+                &mut self.hash_pending_current,
+                id,
+                (id != self.message).then_some(generation),
+                round_id,
+                rev_structured,
+                &payload,
+            )?;
+            if let (Some(prior), Some(hash)) = (self.pending, self.hash_pending_prior.as_mut()) {
+                Self::update_hash(
+                    hash,
+                    id,
+                    (id != prior.message).then_some(generation),
+                    round_id,
+                    rev_structured,
+                    &payload,
+                )?;
+            }
+
+            if let Some(prior) = self.previous
+                && prior.message != self.message
+            {
+                if id == prior.message {
+                    self.prev_seen = true;
+                    self.prev_phase_ok = execution_phase == ExecutionPhase::Succeeded;
+                    let sig: [u8; 32] = if prior.incarnation.is_some() {
+                        self.hash_structured.clone().finalize().into()
+                    } else {
+                        self.hash_unstructured.clone().finalize().into()
+                    };
+                    self.prev_sig_ok = sig == prior.input;
+                } else if self.prev_seen && id != self.message {
+                    let follows = round_id == Some(prior.round)
+                        || (kind == "user"
+                            && matches!(
+                                execution_phase,
+                                ExecutionPhase::Failed | ExecutionPhase::Cancelled
+                            ));
+                    if !follows {
+                        self.prev_after_ok = false;
+                    }
+                }
+            }
+
+            if let Some(prior) = self.pending
+                && prior.message != self.message
+            {
+                if id == prior.message {
+                    self.pend_seen = true;
+                    if let Some(hash) = self.hash_pending_prior.as_ref() {
+                        let sig: [u8; 32] = hash.clone().finalize().into();
+                        self.pend_sig_ok = sig == prior.input;
+                    }
+                } else if self.pend_seen && id != self.message {
+                    let follows = round_id == Some(prior.round)
+                        || (kind == "user"
+                            && matches!(
+                                execution_phase,
+                                ExecutionPhase::Failed | ExecutionPhase::Cancelled
+                            ));
+                    if !follows {
+                        self.pend_after_ok = false;
+                    }
+                }
+            }
+
+            Ok(())
+        }
+    }
+
+    let mut state = ScanState {
+        message,
+        previous,
+        pending,
+        unobserved_deliveries,
+        round_inputs: Vec::new(),
+        saw_message: false,
+        after_msg_only_own_notices: true,
+        failed_users_before_msg: std::collections::HashSet::new(),
+        anchor_tail: None,
+        has_prior_turns: false,
+        last_non_notice_id: None,
+        hash_unstructured: Sha256::new(),
+        hash_structured: Sha256::new(),
+        hash_pending_current: Sha256::new(),
+        hash_pending_prior: pending
+            .filter(|prior| prior.message != message)
+            .map(|_| Sha256::new()),
+        prev_seen: false,
+        prev_phase_ok: false,
+        prev_sig_ok: false,
+        prev_after_ok: true,
+        pend_seen: false,
+        pend_sig_ok: false,
+        pend_after_ok: true,
+    };
+
+    if let Some(checkpoint_id) = checkpoint {
+        let sql = format!("SELECT {CONTINUITY_SELECT_COLS} FROM agena_entries e {CONTINUITY_JOINS} WHERE e.id=?2");
+        if let Some(row) = sqlx::query(&sql)
+            .bind(session.get())
+            .bind(checkpoint_id)
+            .fetch_optional(&mut *connection)
+            .await
+            .map_err(sql_error)?
+        {
+            state.process_row(&row, true)?;
+        }
+    }
+
+    let segment_sql = format!(
+        "SELECT {CONTINUITY_SELECT_COLS}
+         FROM agena_segment_entries m
+         JOIN agena_entries e ON e.id=m.entry_id
+         {CONTINUITY_JOINS}
+         WHERE m.segment_id=?2 AND m.ordinal>=?3 AND m.ordinal<?4
+         ORDER BY m.ordinal"
+    );
+    let mut after = through_sequence.unwrap_or(0);
+    loop {
+        let segments = sqlx::query(
+            "SELECT sequence,segment_id,first_ordinal,end_ordinal FROM agena_session_segments WHERE session_id=? AND sequence>=? ORDER BY sequence LIMIT 64",
+        )
+        .bind(session.get())
+        .bind(after)
+        .fetch_all(&mut *connection)
+        .await
+        .map_err(sql_error)?;
+        if segments.is_empty() {
+            break;
+        }
+        for segment in segments {
+            let sequence: i64 = segment.try_get("sequence").map_err(storage)?;
+            let mut first: i64 = segment.try_get("first_ordinal").map_err(storage)?;
+            if Some(sequence) == through_sequence {
+                first = first.max(through_ordinal.unwrap_or(-1) + 1);
+            }
+            let end: i64 = segment.try_get("end_ordinal").map_err(storage)?;
+            if first < end {
+                let rows = sqlx::query(&segment_sql)
+                    .bind(session.get())
+                    .bind(segment.try_get::<i64, _>("segment_id").map_err(storage)?)
+                    .bind(first)
+                    .bind(end)
+                    .fetch_all(&mut *connection)
+                    .await
+                    .map_err(sql_error)?;
+                for row in &rows {
+                    state.process_row(row, false)?;
+                }
+            }
+            after = sequence
+                .checked_add(1)
+                .ok_or_else(|| storage("prompt sequence overflow"))?;
+        }
+    }
+
+    let resume_signature_unstructured: [u8; 32] = state.hash_unstructured.finalize().into();
+    let resume_signature_structured: [u8; 32] = state.hash_structured.finalize().into();
+    let pending_signature: [u8; 32] = state.hash_pending_current.finalize().into();
+    let is_last = state.last_non_notice_id == Some(message);
+    let can_resume_previous = is_last
+        && state.previous.is_some_and(|prior| {
+            prior.message != message
+                && state.prev_seen
+                && state.prev_phase_ok
+                && state.prev_sig_ok
+                && state.prev_after_ok
+        });
+    let can_resume_pending = is_last
+        && state.pending.is_some_and(|prior| {
+            if prior.message == message {
+                pending_signature == prior.input
+            } else {
+                state.pend_seen && state.pend_sig_ok && state.pend_after_ok
+            }
+        });
+    let resume_anchor = (state.saw_message && state.after_msg_only_own_notices).then_some(
+        ExternalAgentHistoryAnchor {
+            tail: state.anchor_tail,
+        },
+    );
+
+    Ok(ScannedRoundContinuity {
+        round_inputs: state.round_inputs,
+        continuity: ExternalAgentRoundContinuity {
+            has_prior_turns: state.has_prior_turns,
+            resume_anchor,
+            can_resume_previous,
+            can_resume_pending,
+            resume_signature_unstructured,
+            resume_signature_structured,
+            pending_signature,
+        },
+    })
+}

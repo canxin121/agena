@@ -13,6 +13,7 @@ pub(super) struct TurnInput<'a> {
     entries: Vec<&'a PromptEntry>,
     structured: BTreeSet<ContentId>,
     resume_anchor: Option<ExternalAgentHistoryAnchor>,
+    continuity: Option<agena_storage::kernel::ExternalAgentRoundContinuity>,
     message: EntryId,
     document: &'a ComposerDocument,
 }
@@ -27,7 +28,11 @@ pub(super) struct PromptCapabilities {
 }
 
 impl<'a> TurnInput<'a> {
-    pub(super) fn new(facts: &'a PromptView, execution: &ExecutionView) -> Result<Self, AppError> {
+    pub(super) fn new(
+        facts: &'a PromptView,
+        execution: &ExecutionView,
+        continuity: Option<agena_storage::kernel::ExternalAgentRoundContinuity>,
+    ) -> Result<Self, AppError> {
         let message_index = facts
             .entries
             .iter()
@@ -44,39 +49,43 @@ impl<'a> TurnInput<'a> {
         };
         require_direct_user(author.as_ref(), origin.as_ref())?;
         validate_document(document)?;
-        let resume_anchor = message_index.and_then(|index| {
-            // Failure notices attached after this same input are outside the
-            // native context. Preserve the original cut when retrying it, and
-            // skip any earlier failed/cancelled user messages that never
-            // committed a native round.
-            facts.entries[index + 1..]
-                .iter()
-                .all(|entry| {
-                    entry.entry.message_id == execution.message_id
-                        && matches!(entry.entry.payload, EntryPayload::Notice { .. })
-                })
-                .then(|| {
-                    let mut failed_users = BTreeSet::new();
-                    let tail = facts.entries[..index].iter().rev().find_map(|entry| {
-                        if matches!(entry.entry.payload, EntryPayload::Notice { .. })
-                            && failed_users.contains(&entry.entry.message_id)
-                        {
-                            return None;
-                        }
-                        if matches!(entry.entry.payload, EntryPayload::User { .. })
-                            && matches!(
-                                entry.entry.execution_phase,
-                                ExecutionPhase::Failed | ExecutionPhase::Cancelled
-                            )
-                        {
-                            failed_users.insert(entry.entry.id);
-                            return None;
-                        }
-                        Some(entry.entry.id)
-                    });
-                    ExternalAgentHistoryAnchor { tail }
-                })
-        });
+        let resume_anchor = if let Some(continuity) = &continuity {
+            continuity.resume_anchor.clone()
+        } else {
+            message_index.and_then(|index| {
+                // Failure notices attached after this same input are outside the
+                // native context. Preserve the original cut when retrying it, and
+                // skip any earlier failed/cancelled user messages that never
+                // committed a native round.
+                facts.entries[index + 1..]
+                    .iter()
+                    .all(|entry| {
+                        entry.entry.message_id == execution.message_id
+                            && matches!(entry.entry.payload, EntryPayload::Notice { .. })
+                    })
+                    .then(|| {
+                        let mut failed_users = BTreeSet::new();
+                        let tail = facts.entries[..index].iter().rev().find_map(|entry| {
+                            if matches!(entry.entry.payload, EntryPayload::Notice { .. })
+                                && failed_users.contains(&entry.entry.message_id)
+                            {
+                                return None;
+                            }
+                            if matches!(entry.entry.payload, EntryPayload::User { .. })
+                                && matches!(
+                                    entry.entry.execution_phase,
+                                    ExecutionPhase::Failed | ExecutionPhase::Cancelled
+                                )
+                            {
+                                failed_users.insert(entry.entry.id);
+                                return None;
+                            }
+                            Some(entry.entry.id)
+                        });
+                        ExternalAgentHistoryAnchor { tail }
+                    })
+            })
+        };
         Ok(Self {
             entries: facts
                 .entries
@@ -92,6 +101,7 @@ impl<'a> TurnInput<'a> {
             message: execution.message_id,
             document,
             resume_anchor,
+            continuity,
         })
     }
 
@@ -100,6 +110,9 @@ impl<'a> TurnInput<'a> {
     }
 
     pub(super) fn can_resume(&self, prior: &ExternalAgentResume) -> bool {
+        if let Some(continuity) = &self.continuity {
+            return continuity.can_resume_previous;
+        }
         let Some((current, history)) = self.entries.split_last() else {
             return false;
         };
@@ -124,6 +137,9 @@ impl<'a> TurnInput<'a> {
     }
 
     pub(super) fn can_resume_pending(&self, prior: &ExternalAgentPendingTurn) -> bool {
+        if let Some(continuity) = &self.continuity {
+            return continuity.can_resume_pending;
+        }
         let Some((current, history)) = self.entries.split_last() else {
             return false;
         };
@@ -157,10 +173,15 @@ impl<'a> TurnInput<'a> {
         round: RoundId,
         delivery: ExternalAgentPromptDelivery,
     ) -> Result<ExternalAgentPendingTurn, AppError> {
+        let input = if let Some(continuity) = &self.continuity {
+            continuity.pending_signature
+        } else {
+            signature(&self.entries, Some(&self.structured), Some(self.message))?
+        };
         Ok(ExternalAgentPendingTurn {
             message: self.message,
             round,
-            input: signature(&self.entries, Some(&self.structured), Some(self.message))?,
+            input,
             delivery,
         })
     }
@@ -171,17 +192,26 @@ impl<'a> TurnInput<'a> {
         round: RoundId,
         link: ExternalAgentLink,
     ) -> Result<ExternalAgentResume, AppError> {
+        let input = if let Some(continuity) = &self.continuity {
+            if link.incarnation.is_some() {
+                continuity.resume_signature_structured
+            } else {
+                continuity.resume_signature_unstructured
+            }
+        } else {
+            signature(
+                &self.entries,
+                link.incarnation.map(|_| &self.structured),
+                None,
+            )?
+        };
         Ok(ExternalAgentResume {
             session,
             cwd: link.cwd,
             round,
             native_id: link.native_id,
             incarnation: link.incarnation,
-            input: signature(
-                &self.entries,
-                link.incarnation.map(|_| &self.structured),
-                None,
-            )?,
+            input,
             message: self.message,
         })
     }
@@ -320,6 +350,9 @@ impl<'a> TurnInput<'a> {
     }
 
     pub(super) fn has_prior_turns(&self) -> bool {
+        if let Some(continuity) = &self.continuity {
+            return continuity.has_prior_turns;
+        }
         self.entries.iter().any(|entry| {
             entry.entry.id != self.message
                 && matches!(entry.entry.payload, EntryPayload::User { .. })

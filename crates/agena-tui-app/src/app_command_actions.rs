@@ -103,6 +103,7 @@ impl App {
             ClientCommandAction::InlineUi => self.open_inline_ui(args),
             ClientCommandAction::Side => self.handle_side_command(args),
             ClientCommandAction::Btw => self.open_btw(args),
+            ClientCommandAction::Dirs => self.handle_dirs_command(args),
         }
     }
 
@@ -530,6 +531,261 @@ impl App {
             return;
         };
         self.toggle_session_favorite(session_id, favorite);
+    }
+
+    pub(crate) fn handle_dirs_command(&mut self, args: &str) {
+        let Some(session_id) = self.current_or_selected_session_id() else {
+            self.flash_warning(ui_text::t(&self.i18n, "flash-command-requires-session"));
+            return;
+        };
+        let action = match parse_dirs_command_args(args) {
+            Ok(action) => action,
+            Err(reason) => {
+                self.flash_warning(format!(
+                    "/dirs [add <path> [readonly|readwrite|inherit] | remove <path>]: {reason}"
+                ));
+                return;
+            }
+        };
+        match action {
+            DirsCommandAction::List => {
+                self.dispatch_backend_operation(
+                    move |application| async move { application.working_directories(session_id).await },
+                    |app, result| match result {
+                        Ok(view) => {
+                            let mut parts = Vec::new();
+                            if let Some(primary) = view.primary {
+                                parts.push(format!("primary: {}", primary.display()));
+                            }
+                            if view.entries.is_empty() {
+                                parts.push("additional: none".to_owned());
+                            } else {
+                                let mounted = view
+                                    .entries
+                                    .iter()
+                                    .map(|entry| {
+                                        format!("{} [{}]", entry.path.display(), entry.access)
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
+                                parts.push(format!("additional: {mounted}"));
+                            }
+                            app.flash_success(parts.join(" · "));
+                        }
+                        Err(error) => app.flash_error(error.to_string()),
+                    },
+                );
+            }
+            DirsCommandAction::Add { path, access } => {
+                self.dispatch_backend_operation(
+                    move |application| async move {
+                        application
+                            .register_working_directory(session_id, path, access)
+                            .await
+                    },
+                    |app, result| match result {
+                        Ok(reg) => {
+                            let status = if reg.added {
+                                "Added"
+                            } else if reg.updated {
+                                "Updated"
+                            } else {
+                                "Already covered"
+                            };
+                            app.flash_success(format!(
+                                "{status} working directory: {} [{}] ({} mounted)",
+                                reg.directory.display(),
+                                reg.access,
+                                reg.entries.len()
+                            ));
+                        }
+                        Err(error) => app.flash_error(error.to_string()),
+                    },
+                );
+            }
+            DirsCommandAction::Remove { path } => {
+                self.dispatch_backend_operation(
+                    move |application| async move {
+                        application.remove_working_directory(session_id, path).await
+                    },
+                    |app, result| match result {
+                        Ok(removal) => {
+                            if removal.removed {
+                                app.flash_success(format!(
+                                    "Removed working directory: {} ({} remaining)",
+                                    removal.directory.display(),
+                                    removal.entries.len()
+                                ));
+                            } else {
+                                app.flash_warning(format!(
+                                    "Working directory was not mounted: {}",
+                                    removal.directory.display()
+                                ));
+                            }
+                        }
+                        Err(error) => app.flash_error(error.to_string()),
+                    },
+                );
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DirsCommandAction {
+    List,
+    Add {
+        path: std::path::PathBuf,
+        access: agena_domain::SessionWorkingDirectoryAccess,
+    },
+    Remove {
+        path: std::path::PathBuf,
+    },
+}
+
+fn split_dirs_tokens(raw: &str) -> Result<Vec<String>, String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+    let mut in_token = false;
+    for ch in raw.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            in_token = true;
+            continue;
+        }
+        match quote {
+            Some(q) if ch == q => {
+                quote = None;
+                in_token = true;
+            }
+            Some('"') if ch == '\\' => {
+                escaped = true;
+            }
+            Some(_) => {
+                current.push(ch);
+                in_token = true;
+            }
+            None => match ch {
+                '\\' => {
+                    escaped = true;
+                }
+                '\'' | '"' => {
+                    quote = Some(ch);
+                    in_token = true;
+                }
+                c if c.is_whitespace() => {
+                    if in_token {
+                        tokens.push(std::mem::take(&mut current));
+                        in_token = false;
+                    }
+                }
+                c => {
+                    current.push(c);
+                    in_token = true;
+                }
+            },
+        }
+    }
+    if escaped || quote.is_some() {
+        return Err("unterminated quote or escape".to_owned());
+    }
+    if in_token {
+        tokens.push(current);
+    }
+    Ok(tokens)
+}
+
+fn parse_dirs_command_args(raw: &str) -> Result<DirsCommandAction, String> {
+    use agena_domain::SessionWorkingDirectoryAccess;
+    let tokens = split_dirs_tokens(raw.trim())?;
+    if tokens.is_empty() || (tokens.len() == 1 && tokens[0].eq_ignore_ascii_case("list")) {
+        return Ok(DirsCommandAction::List);
+    }
+    let head = tokens[0].to_ascii_lowercase();
+    if matches!(head.as_str(), "remove" | "rm" | "del" | "delete") {
+        if tokens.len() != 2 || tokens[1].trim().is_empty() {
+            return Err("expected `remove <path>`".to_owned());
+        }
+        return Ok(DirsCommandAction::Remove {
+            path: std::path::PathBuf::from(&tokens[1]),
+        });
+    }
+    let slice = if head == "add" {
+        &tokens[1..]
+    } else {
+        &tokens[..]
+    };
+    if slice.is_empty() {
+        return Err("expected a directory path".to_owned());
+    }
+    let mut path: Option<String> = None;
+    let mut access = SessionWorkingDirectoryAccess::Inherit;
+    let mut idx = 0;
+    while idx < slice.len() {
+        let token = &slice[idx];
+        if token == "--access" {
+            let Some(val) = slice.get(idx + 1) else {
+                return Err("missing value for --access".to_owned());
+            };
+            access = val.parse()?;
+            idx += 2;
+        } else if let Some(val) = token.strip_prefix("--access=") {
+            access = val.parse()?;
+            idx += 1;
+        } else if path.is_none() {
+            path = Some(token.clone());
+            idx += 1;
+        } else {
+            access = token.parse()?;
+            idx += 1;
+        }
+    }
+    let Some(path) = path.filter(|p| !p.trim().is_empty()) else {
+        return Err("expected a directory path".to_owned());
+    };
+    Ok(DirsCommandAction::Add {
+        path: std::path::PathBuf::from(path),
+        access,
+    })
+}
+
+#[cfg(test)]
+mod dirs_command_tests {
+    use super::*;
+    use agena_domain::SessionWorkingDirectoryAccess;
+
+    #[test]
+    fn parses_list_add_shorthand_quoted_and_remove_forms() {
+        assert_eq!(parse_dirs_command_args("").unwrap(), DirsCommandAction::List);
+        assert_eq!(
+            parse_dirs_command_args("list").unwrap(),
+            DirsCommandAction::List
+        );
+        assert_eq!(
+            parse_dirs_command_args("add ../shared readonly").unwrap(),
+            DirsCommandAction::Add {
+                path: "../shared".into(),
+                access: SessionWorkingDirectoryAccess::ReadOnly,
+            }
+        );
+        assert_eq!(
+            parse_dirs_command_args("\"../my repo\" --access=rw").unwrap(),
+            DirsCommandAction::Add {
+                path: "../my repo".into(),
+                access: SessionWorkingDirectoryAccess::ReadWrite,
+            }
+        );
+        assert_eq!(
+            parse_dirs_command_args("remove \"../my repo\"").unwrap(),
+            DirsCommandAction::Remove {
+                path: "../my repo".into(),
+            }
+        );
+        assert!(parse_dirs_command_args("remove").is_err());
+        assert!(parse_dirs_command_args("add ../shared bogus").is_err());
     }
 }
 

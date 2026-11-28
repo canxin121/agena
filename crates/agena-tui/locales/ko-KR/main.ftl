@@ -2566,6 +2566,7 @@ timeline-label-trace = 추적 정보
 command-schedules-summary = 이 대화의 예약 작업 관리
 command-attach-summary = 파일 선택기를 열어 파일 첨부
 command-btw-summary = 대화는 계속하면서 별도로 질문합니다. 읽기 전용 도구이며 기본 대화에는 변경 사항을 적용하지 않습니다.
+command-dirs-summary = 이 프로젝트 세션의 추가 작업 디렉터리(readonly/readwrite/inherit)를 조회, 연결 또는 제거합니다.
 command-children-summary = 하위 세션 선택기 열기
 command-commands-summary = 명령 팔레트 열기
 command-commit-summary = 스테이징된 변경 사항으로 커밋 생성

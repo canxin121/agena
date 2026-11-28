@@ -99,6 +99,7 @@ client_command_actions! {
     InlineUi => "inline-ui", "/ui";
     Side => "side", "/side";
     Btw => "btw", "/btw";
+    Dirs => "dirs", "/dirs";
 }
 
 impl Serialize for ClientCommandAction {

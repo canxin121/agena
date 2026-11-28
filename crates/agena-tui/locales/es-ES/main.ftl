@@ -2738,6 +2738,7 @@ command-usage-summary = Abre las analíticas interactivas de tokens y costes
 command-schedules-summary = Gestionar las programaciones de la conversación
 command-plan-summary = Abre el visor del plan de la sesión actual
 command-btw-summary = Pregunta por separado mientras continúa la conversación principal. Solo herramientas de lectura; no modifica la conversación principal.
+command-dirs-summary = Listar, adjuntar (readonly/readwrite/inherit) o quitar directorios de trabajo adicionales de esta sesión de proyecto.
 
 provider-adapter-rule-api-anthropic-detail = Adaptador HTTP de Anthropic; usa base_url de autenticación del proveedor y permite listar modelos en borrador.
 provider-adapter-rule-api-gemini-detail = Adaptador HTTP de Gemini; usa base_url de autenticación del proveedor y permite listar modelos en borrador.

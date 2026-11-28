@@ -597,6 +597,38 @@ impl TuiBackend {
             .stream_content(session_id, id, after, 64 * 1024)
             .await?)
     }
+
+    pub(crate) async fn working_directories(
+        &self,
+        session_id: i64,
+    ) -> Result<agena_domain::SessionWorkingDirectoriesView> {
+        Ok(self.inner.client.working_directories(session_id).await?)
+    }
+
+    pub(crate) async fn register_working_directory(
+        &self,
+        session_id: i64,
+        path: PathBuf,
+        access: agena_domain::SessionWorkingDirectoryAccess,
+    ) -> Result<agena_domain::SessionWorkingDirectoryRegistration> {
+        Ok(self
+            .inner
+            .client
+            .register_working_directory_with_access(session_id, path, access)
+            .await?)
+    }
+
+    pub(crate) async fn remove_working_directory(
+        &self,
+        session_id: i64,
+        path: PathBuf,
+    ) -> Result<agena_domain::SessionWorkingDirectoryRemoval> {
+        Ok(self
+            .inner
+            .client
+            .remove_working_directory(session_id, path)
+            .await?)
+    }
     /// Pure in-memory transport fixture. Never handshakes with a real server.
     #[cfg(test)]
     pub(crate) fn isolated_test_backend(workspace_root: PathBuf) -> Self {

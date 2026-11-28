@@ -1620,6 +1620,27 @@ export default {
         failed: 'Failed',
       },
     },
+    workingDirectories: {
+      title: 'Working directories',
+      primary: 'Primary',
+      empty:
+        'No additional directories mounted. Add a directory below to grant read-only or read-write access for this session.',
+      pathPlaceholder: 'Relative or absolute directory path',
+      add: 'Add',
+      remove: 'Remove directory',
+      refresh: 'Refresh',
+      loadFailed: 'Could not load working directories',
+      accessLabel: 'Directory access',
+      accessInherit: 'Inherit',
+      accessReadonly: 'Read-only',
+      accessReadwrite: 'Read & write',
+      added: 'Mounted {path} ({access}).',
+      updated: 'Updated {path} access to {access}.',
+      removed: 'Removed {path}.',
+      alreadyCovered: '{path} is already covered by this session.',
+      notMounted: '{path} is not mounted on this session.',
+      countHint: 'Working directories (+{count})',
+    },
     sessionWork: {
       backToFiles: 'Back to files',
       moreDiff: 'Diff preview · load more',
@@ -3964,6 +3985,7 @@ export default {
   // text. Keys are flat because that is the key the server publishes.
 
   'command-schedules-summary': 'View and manage the conversation’s schedules',
+  'command-dirs-summary': 'List, add, or remove additional session working directories',
   'command-attach-summary': 'Attach a file through the interactive picker',
   'command-background-summary': 'Return to the session hub; the session keeps running',
   'command-children-summary': 'Open the child-session picker',

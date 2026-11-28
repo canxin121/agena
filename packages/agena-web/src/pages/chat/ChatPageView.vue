@@ -54,6 +54,7 @@ import { skillCatalogKey } from './skillReferences'
 
 const SessionOperationFooter = defineAsyncComponent(() => import('@/components/chat/SessionOperationFooter.vue'))
 const WorkspaceChangesSection = defineAsyncComponent(() => import('@/components/chat/WorkspaceChangesSection.vue'))
+const WorkingDirectoriesSection = defineAsyncComponent(() => import('@/components/chat/WorkingDirectoriesSection.vue'))
 const BtwSection = defineAsyncComponent(() => import('@/components/chat/BtwSection.vue'))
 const PlanSection = defineAsyncComponent(() => import('@/components/chat/PlanSection.vue'))
 const SessionBrowser = defineAsyncComponent(() => import('@/features/browser/SessionBrowser.vue'))
@@ -933,6 +934,14 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                     :session-id="chat.selectedSessionId"
                     :directory="sessionDirectory || ''"
                     :busy="currentPhase !== 'idle'"
+                  />
+                  <WorkingDirectoriesSection
+                    v-if="chat.selectedSessionId && sessionDirectory && !isBot"
+                    :key="chat.selectedSessionId + ':dirs'"
+                    v-model:open="ctx.workingDirectoriesOpen.value"
+                    :session-id="chat.selectedSessionId"
+                    :directory="sessionDirectory"
+                    :revision="ctx.workingDirectoriesRevision.value"
                   />
                   <BtwSection
                     v-if="chat.selectedSessionId && btw.sessions.has(chat.selectedSessionId)"

@@ -2077,6 +2077,7 @@ command-schedules-summary = Zeitpläne dieser Unterhaltung verwalten
 command-attach-summary = Datei über die interaktive Auswahl anhängen
 
 command-btw-summary = Separat fragen, während das Hauptgespräch weiterläuft. Nur lesende Tools; keine Änderungen am Hauptgespräch.
+command-dirs-summary = Zusätzliche Arbeitsverzeichnisse (readonly/readwrite/inherit) für diese Projektsitzung auflisten, hinzufügen oder entfernen.
 
 command-children-summary = Auswahl untergeordneter Sitzungen öffnen
 

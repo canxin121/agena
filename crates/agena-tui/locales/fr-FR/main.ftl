@@ -1121,6 +1121,7 @@ command-usage-summary = Ouvrir les statistiques interactives de jetons et de co�
 command-schedules-summary = Gérer les planifications de cette conversation
 command-plan-summary = Ouvrir l’afficheur de plan de la session actuelle
 command-btw-summary = Poser une question à part pendant que la conversation principale continue. Outils en lecture seule ; aucune modification de la conversation principale.
+command-dirs-summary = Lister, attacher (readonly/readwrite/inherit) ou retirer des répertoires de travail supplémentaires pour cette session projet.
 
 settings-mcp-public-url-updated = URL d’accès à Agena mise à jour.
 

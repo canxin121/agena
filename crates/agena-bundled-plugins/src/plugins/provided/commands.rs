@@ -388,6 +388,13 @@ const BUILT_IN_COMMANDS: &[BuiltInCommand] = &[
         usage: Some("[question]"),
         summary_key: "command-btw-summary",
     },
+    BuiltInCommand {
+        action: "dirs",
+        slash: "/dirs",
+        aliases: &["add-dir", "working-dirs"],
+        usage: Some("[add <path> [readonly|readwrite|inherit] | remove <path>]"),
+        summary_key: "command-dirs-summary",
+    },
 ];
 
 fn built_in_commands() -> Vec<CommandDefinition> {
@@ -448,7 +455,7 @@ fn built_in_summary_key_title(summary_key: &str) -> String {
 /// surface all mean the same thing in either conversation. A new built-in
 /// therefore defaults to both kinds; add it here only when it genuinely needs
 /// a project directory.
-const PROJECT_ONLY_BUILT_INS: &[&str] = &["new", "commit", "pr"];
+const PROJECT_ONLY_BUILT_INS: &[&str] = &["new", "commit", "pr", "dirs"];
 
 fn built_in_applies_to(action: &str) -> ApplicableSessions {
     if PROJECT_ONLY_BUILT_INS.contains(&action) {

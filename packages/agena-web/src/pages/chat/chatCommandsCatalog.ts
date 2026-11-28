@@ -54,6 +54,7 @@ export const CLIENT_COMMAND_ACTIONS = [
   'status',
   'usage',
   'schedules',
+  'dirs',
   'queue',
   'background',
   'plan',

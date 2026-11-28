@@ -222,6 +222,8 @@ export type ChatPageViewContext = {
   speedModeChipLabel: MaybeRef<string>
   composerBottomRightStatus: MaybeRef<string>
   schedulesOpen: Ref<boolean>
+  workingDirectoriesOpen: Ref<boolean>
+  workingDirectoriesRevision: Ref<number>
   agentParentId: ComputedRef<string | null>
   returnFromSide: () => void
   sideParentId: ComputedRef<string | null>

@@ -2237,6 +2237,7 @@ hub-page-next = → 下一页（第 { $page } 页）
 hub-page-previous = ← 上一页（第 { $page } 页）
 
 command-btw-summary = 主会话继续运行。可只读查询，结果单独显示，不写入主会话。
+command-dirs-summary = 查看、挂载（只读/读写/继承）或移除当前项目会话的额外工作目录。
 btw-title = BTW · 临时只读问答
 btw-description = 主会话继续运行。可只读查询，结果单独显示，不写入主会话。
 btw-send = 提问

@@ -1202,6 +1202,7 @@ command-usage-summary = トークンとコストの分析画面を開きます
 command-schedules-summary = この会話のスケジュールを管理する
 command-plan-summary = 現在のセッションのプランビューアーを開きます
 command-btw-summary = メインの会話を続けながら、別途質問します。読み取り専用ツールを使用し、メインの会話には変更を加えません。
+command-dirs-summary = このプロジェクトセッションの追加作業ディレクトリ（readonly/readwrite/inherit）を一覧表示・追加・削除します。
 
 settings-mcp-public-url-updated = Agena アクセス URL を更新しました。
 

@@ -2237,6 +2237,7 @@ hub-page-next = → Next page ({ $page })
 hub-page-previous = ← Previous page ({ $page })
 
 command-btw-summary = Ask separately while the main conversation continues. Read-only tools; no changes to the main conversation.
+command-dirs-summary = List, attach (readonly/readwrite/inherit), or remove additional working directories for this project session.
 btw-title = BTW · read-only question
 btw-description = Ask separately while the main conversation continues. Read-only tools; no changes to the main conversation.
 btw-send = Ask

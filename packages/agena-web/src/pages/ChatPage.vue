@@ -16,6 +16,11 @@ import { deferKeyboardFocus } from '@/lib/deferredKeyboardFocus'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { apiJson } from '@/lib/api'
 import { createSkillsClient } from '@/lib/skillsApi'
+import {
+  parseDirsSlashArgs,
+  registerSessionWorkingDirectory,
+  removeSessionWorkingDirectory,
+} from '@/lib/workingDirectoriesApi'
 import { promptForText } from '@/lib/appTextPrompt'
 import { readSessionIdFromFullPath, readSessionIdFromQuery } from '@/app/navigation/sessionQuery'
 import { useChatStore } from '@/stores/chat'
@@ -406,10 +411,13 @@ const composerBarRef = ref<HTMLElement | null>(null)
 const transcriptSearchInputRef = ref<HTMLInputElement | null>(null)
 const sideBusy = ref(false)
 const schedulesOpen = ref(false)
+const workingDirectoriesOpen = ref(false)
+const workingDirectoriesRevision = ref(0)
 watch(
   () => chat.selectedSessionId,
   () => {
     schedulesOpen.value = false
+    workingDirectoriesOpen.value = false
   },
 )
 const agentParentId = computed(() => {
@@ -1918,6 +1926,63 @@ async function executeBuiltInCommand(command: BuiltInCommand, rawArgs = ''): Pro
       }
       schedulesOpen.value = true
       return
+    case 'dirs': {
+      if (!sid) {
+        toasts.push('error', t('chat.toasts.sessionRequiredForCommand', { command: 'dirs' }))
+        return
+      }
+      if (bot.isBot.value || !sessionDirectory.value) {
+        toasts.push('error', t('chat.errors.sessionWorkspaceInvalid'))
+        return
+      }
+      const parsed = parseDirsSlashArgs(args)
+      if (parsed.kind === 'invalid') {
+        toasts.push('error', `Usage: ${commandUsage(command)}`)
+        return
+      }
+      if (parsed.kind === 'list') {
+        workingDirectoriesRevision.value += 1
+        workingDirectoriesOpen.value = true
+        return
+      }
+      if (parsed.kind === 'add') {
+        const result = await registerSessionWorkingDirectory(sid, parsed.path, parsed.access)
+        workingDirectoriesRevision.value += 1
+        workingDirectoriesOpen.value = true
+        const accessLabel = String(
+          t(
+            result.access === 'readonly'
+              ? 'chat.workingDirectories.accessReadonly'
+              : result.access === 'readwrite'
+                ? 'chat.workingDirectories.accessReadwrite'
+                : 'chat.workingDirectories.accessInherit',
+          ),
+        )
+        if (result.added) {
+          toasts.push(
+            'success',
+            String(t('chat.workingDirectories.added', { path: result.directory, access: accessLabel })),
+          )
+        } else if (result.updated) {
+          toasts.push(
+            'success',
+            String(t('chat.workingDirectories.updated', { path: result.directory, access: accessLabel })),
+          )
+        } else {
+          toasts.push('info', String(t('chat.workingDirectories.alreadyCovered', { path: result.directory })))
+        }
+        return
+      }
+      const removed = await removeSessionWorkingDirectory(sid, parsed.path)
+      workingDirectoriesRevision.value += 1
+      workingDirectoriesOpen.value = true
+      if (removed.removed) {
+        toasts.push('success', String(t('chat.workingDirectories.removed', { path: removed.directory })))
+      } else {
+        toasts.push('info', String(t('chat.workingDirectories.notMounted', { path: removed.directory })))
+      }
+      return
+    }
     case 'background':
       await chat.selectSession(null)
       return
@@ -2570,6 +2635,8 @@ const viewCtx = {
   composerStatusExtra,
   composerBottomRightStatus,
   schedulesOpen,
+  workingDirectoriesOpen,
+  workingDirectoriesRevision,
   agentParentId,
   returnFromSide,
   sideParentId,

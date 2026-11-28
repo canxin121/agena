@@ -1290,6 +1290,7 @@ command-usage-summary = 開啟互動式 token 與費用分析
 command-schedules-summary = 查看和管理目前工作階段的排程
 command-plan-summary = 開啟目前工作階段的計畫檢視器
 command-btw-summary = 在主要對話繼續進行時另行提問。僅使用唯讀工具；不會變更主要對話。
+command-dirs-summary = 查看、掛載（唯讀/讀寫/繼承）或移除目前專案會話的額外工作目錄。
 
 settings-mcp-public-url-updated = Agena 存取位址已更新。
 

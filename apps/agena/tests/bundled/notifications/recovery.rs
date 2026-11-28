@@ -49,6 +49,8 @@ async fn canonical_completions_and_failures_publish_without_a_connected_client()
                     session_id: session.id,
                     document: ComposerDocument(vec![ComposerNode::Text { text: marker.into() }]),
                     options: RunOptions::default(),
+                    prompt_command: None,
+                    literal_leading_slash: false,
                 }).await?;
                 let receipt = accepted.receipt.context("accepted attention run has no receipt")?;
                 step.observed().await?;

@@ -389,7 +389,7 @@ async fn code_previews_and_applies_structural_edits() -> TestResult {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn commands_manage_workspace_packages() -> TestResult {
     const DOCUMENT: &str = "---\nname: testkit-command\ndescription: A local command package regression.\naliases: [tk-command]\n---\n# Instructions\ncommand-instructions-marker\n";
-    fixture()
+    super::fixture_without_memory()
         .expect_plugin("agena.commands")
         .seed_file(
             "workspace/.agena/skills/testkit-command/reference.txt",

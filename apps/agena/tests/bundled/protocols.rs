@@ -3,6 +3,11 @@
 
 use agena_testkit::TestResult;
 
+mod claude_channels;
+mod claude_hooks;
+mod claude_lifecycle;
+mod codex_hooks;
+mod cordis;
 mod lsp;
 mod mcp;
 mod providers;

@@ -1,6 +1,16 @@
+mod apps;
 mod connections;
+mod deepseek_manager;
+mod imported_settings;
+mod memvault;
+mod sampling;
+mod skills;
+mod tool_loading;
 
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex},
+};
 
 use agena_testkit::{SettingsLayer, TestResult};
 use anyhow::{Context, ensure};
@@ -13,10 +23,11 @@ use axum::{
 };
 use serde_json::{Value, json};
 
-use super::super::{allow_permissions, fixture};
+use super::super::{allow_permissions, fixture, fixture_without_memory, native_fixture_address};
 
 const TOKEN: &str = "local-mcp-fixture-token";
 const SERVER: &str = "loopback-peer";
+const TASKS: &str = "io.modelcontextprotocol/tasks";
 
 #[derive(Clone, Debug)]
 struct RpcRequest {
@@ -164,11 +175,13 @@ async fn rpc(
 pub(super) async fn http_peer_handshake_discovery_and_calls() -> TestResult {
     let peer = Arc::new(Peer::default());
     let setup_peer = peer.clone();
-    fixture()
+    fixture_without_memory()
+        .env("AGENA_SANDBOX", "disabled")
         .expect_plugin("agena.mcp")
         .before_start(move |case| async move {
             let server = case
-                .serve_http(
+                .serve_http_on(
+                    native_fixture_address()?,
                     Router::new()
                         .route(
                             "/mcp",
@@ -311,4 +324,281 @@ pub(super) async fn http_peer_handshake_discovery_and_calls() -> TestResult {
             Ok(())
         })
         .await
+}
+
+async fn task_rpc(
+    State(peer): State<Arc<Peer>>,
+    headers: HeaderMap,
+    Json(request): Json<Value>,
+) -> Response {
+    let authorized = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        == Some("Bearer local-mcp-fixture-token");
+    let mut records = peer.requests.lock().unwrap();
+    records.push(RpcRequest {
+        headers,
+        body: request.clone(),
+    });
+    if !authorized {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
+    let params = &request["params"];
+    let task = json!({
+        "taskId": "job-1",
+        "createdAt": "2026-07-28T12:00:00Z",
+        "lastUpdatedAt": "2026-07-28T12:00:00Z",
+        "ttlMs": 60_000,
+        "pollIntervalMs": 20
+    });
+    let mut value = match request["method"].as_str() {
+        Some("server/discover") => json!({
+            "supportedVersions": ["2026-07-28"],
+            "capabilities": {"tools": {}, "extensions": {(TASKS): {}}},
+            "ttlMs": 0,
+            "cacheScope": "private"
+        }),
+        Some("tools/list") => json!({
+            "tools": [{
+                "name": "approve-job",
+                "inputSchema": {"type": "object", "properties": {}},
+                "annotations": {"readOnlyHint": true, "destructiveHint": false}
+            }],
+            "ttlMs": 0,
+            "cacheScope": "private"
+        }),
+        Some("tools/call")
+            if params["name"] == "approve-job"
+                && params["_meta"]["io.modelcontextprotocol/clientCapabilities"]["extensions"]
+                    [TASKS]
+                    .is_object() =>
+        {
+            let mut result = task;
+            result["resultType"] = json!("task");
+            result["status"] = json!("working");
+            return Json(json!({"jsonrpc":"2.0", "id":request["id"], "result":result}))
+                .into_response();
+        }
+        Some("tasks/get") if params["taskId"] == "job-1" => {
+            let mut result = task;
+            let answered = records
+                .iter()
+                .any(|entry| entry.body["method"] == "tasks/update");
+            if answered {
+                result["status"] = json!("completed");
+                result["result"] = json!({
+                    "content": [{"type":"text","text":"approved-task-result"}],
+                    "structuredContent": {"jobId":"job-1","approved":true}
+                });
+            } else {
+                result["status"] = json!("input_required");
+                result["inputRequests"] = json!({
+                    "approval": {
+                        "method": "elicitation/create",
+                        "params": {
+                            "mode": "form",
+                            "message": "Approve the fixture job?",
+                            "requestedSchema": {
+                                "type": "object",
+                                "properties": {"answer": {"type":"string", "enum":["Approve"]}},
+                                "required": ["answer"]
+                            }
+                        }
+                    }
+                });
+            }
+            result
+        }
+        Some("tasks/update")
+            if params["taskId"] == "job-1"
+                && params["inputResponses"]["approval"]
+                    == json!({"action":"accept","content":{"answer":"Approve"}}) =>
+        {
+            json!({})
+        }
+        _ => {
+            return Json(json!({
+                "jsonrpc":"2.0", "id":request["id"],
+                "error":{"code":-32602,"message":"Unexpected fixture task request"}
+            }))
+            .into_response();
+        }
+    };
+    value["resultType"] = json!("complete");
+    Json(json!({"jsonrpc":"2.0", "id":request["id"], "result":value})).into_response()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn imported_http_task_returns_to_the_model_after_user_input() -> TestResult {
+    const PLUGIN: &str = "claude.task-fixture";
+    let peer = Arc::new(Peer::default());
+    let setup_peer = Arc::clone(&peer);
+    fixture_without_memory()
+        .env("AGENA_SANDBOX", "disabled")
+        .builtin_plugin(
+            "agena.mcp",
+            json!({"runtime":{"reconnect":{"enabled":false}}}),
+        )
+        .expect_plugin(PLUGIN)
+        .before_start(move |case| async move {
+            let server = case
+                .serve_http_on(
+                    native_fixture_address()?,
+                    Router::new()
+                        .route("/mcp", post(task_rpc))
+                        .with_state(setup_peer),
+                )
+                .await?;
+            let package = case.paths().root.join("task-plugin");
+            let manifest = package.join(".claude-plugin");
+            tokio::fs::create_dir_all(&manifest).await?;
+            tokio::fs::create_dir_all(package.join("hooks")).await?;
+            tokio::fs::write(
+                manifest.join("plugin.json"),
+                br#"{"name":"task-fixture","version":"1.0.0"}"#,
+            )
+            .await?;
+            tokio::fs::write(
+                package.join("hooks/hooks.json"),
+                br#"{"modules":["notifications.mjs"]}"#,
+            )
+            .await?;
+            tokio::fs::write(
+                package.join("hooks/notifications.mjs"),
+                r#"
+export function register(on) {
+    on('classic.Notification', async ($, event) => {
+        if (['elicitation_dialog', 'elicitation_response'].includes(event.notification_type)) {
+            await $.tool.call({
+                tool: 'agena.fs.write',
+                path: 'mcp-notification-' + event.notification_type + '.json',
+                content: JSON.stringify(event),
+            });
+        }
+        return {};
+    });
+}
+"#,
+            )
+            .await?;
+            tokio::fs::write(
+                package.join(".mcp.json"),
+                serde_json::to_vec(&json!({"mcpServers":{"jobs":{
+                    "type":"http",
+                    "url":server.url("/mcp"),
+                    "headers":{"Authorization":format!("Bearer {TOKEN}")}
+                }}}))?,
+            )
+            .await?;
+            let mut config: Value =
+                serde_json::from_slice(&tokio::fs::read(&case.paths().global_config).await?)?;
+            config["plugins"]["list"][PLUGIN] = json!({
+                "enabled":true, "package":{"kind":"agent_plugin","path":package,"enable_hooks":true}
+            });
+            case.write_config(SettingsLayer::Global, config).await
+        })
+        .run(move |case| async move {
+            let user = case.user().new_session().await?;
+            allow_permissions(&user).await?;
+            let catalog = user
+                .call_tool("mcp.tools.search", json!({"query":"approve-job"}))
+                .await?;
+            catalog.assert_succeeded()?;
+            let data = catalog.data()?;
+            let server = data["results"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|entry| entry["name"] == "approve-job")
+                .and_then(|entry| entry["server"].as_str())
+                .with_context(|| {
+                    let requests = peer.requests.lock().unwrap();
+                    let calls: Vec<_> = requests
+                        .iter()
+                        .map(|request| {
+                            (
+                                request.body["method"].as_str(),
+                                request.headers.contains_key("authorization"),
+                            )
+                        })
+                        .collect();
+                    format!(
+                        "the imported job was missing from the MCP catalog, observed RPCs {calls:?}"
+                    )
+                })?;
+            let job = user
+                .start_tool(
+                    "mcp.tools.call",
+                    json!({"server":server,"name":"approve-job"}),
+                )
+                .await?;
+            let pending = job.wait_user_input().await?;
+            let request = pending
+                .request
+                .request
+                .as_user_input()
+                .context("expected a task form")?;
+            ensure!(
+                request.questions[0]
+                    .question
+                    .contains("Approve the fixture job?")
+            );
+            let dialog = wait_for_mcp_notification(case.workspace(), "elicitation_dialog").await?;
+            ensure!(dialog["title"] == "MCP server needs your input");
+            pending
+                .answer(BTreeMap::from([("0".into(), vec!["Approve".into()])]))
+                .await?;
+            let output = job.wait_settled().await?;
+            output.assert_succeeded()?;
+            output.assert_text_contains("approved-task-result")?;
+            ensure!(output.data()?["structured_content"]["approved"] == true);
+            let response = wait_for_mcp_notification(case.workspace(), "elicitation_response").await?;
+            ensure!(response["message"] == "MCP elicitation accepted");
+            ensure!(response.get("content").is_none(), "elicitation answers are private");
+
+            let requests = peer.requests.lock().unwrap();
+            let methods: Vec<_> = requests
+                .iter()
+                .filter_map(|request| request.body["method"].as_str())
+                .filter(|method| matches!(*method, "tools/call" | "tasks/get" | "tasks/update"))
+                .collect();
+            ensure!(
+                methods == ["tools/call", "tasks/get", "tasks/update", "tasks/get"],
+                "Unexpected job request sequence: {methods:?}"
+            );
+            for request in requests.iter().filter(|request| {
+                request.body["method"]
+                    .as_str()
+                    .is_some_and(|method| methods.contains(&method))
+            }) {
+                ensure!(
+                    request
+                        .headers
+                        .get("mcp-protocol-version")
+                        .and_then(|value| value.to_str().ok())
+                        == Some("2026-07-28")
+                );
+            }
+            Ok(())
+        })
+        .await
+}
+
+async fn wait_for_mcp_notification(
+    workspace: &std::path::Path,
+    kind: &str,
+) -> anyhow::Result<Value> {
+    let path = workspace.join(format!("mcp-notification-{kind}.json"));
+    Ok(tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        loop {
+            if let Ok(text) = tokio::fs::read_to_string(&path).await
+                && let Ok(notice) = serde_json::from_str::<Value>(&text)
+                && notice["notification_type"] == kind
+            {
+                return notice;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    }).await?)
 }

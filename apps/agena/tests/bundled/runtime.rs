@@ -578,6 +578,25 @@ async fn agent_runs_messages_follows_up_and_cancels_a_real_child() -> TestResult
             ensure!(raw_tool_payload(&child, "agent.wait").await?["reason"] == "message");
             parent_wait.finished().await?;
             ensure!(raw_tool_payload(&user, "agent.message").await?["accepted"] == true);
+            // Tool discovery can add a model round between the scripted reply
+            // and the wait itself. Release the child after the wait is admitted.
+            tokio::time::timeout(Duration::from_secs(15), async {
+                loop {
+                    if user.parts().await?.iter().any(|part| {
+                        part.kind == "tool_call"
+                            && part.state == "running"
+                            && matches!(
+                                part.content["name"].as_str(),
+                                Some("agent.wait" | "agena.agent.wait")
+                            )
+                    }) {
+                        return Ok::<_, anyhow::Error>(());
+                    }
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+            })
+            .await
+            .context("parent agent.wait was not admitted")??;
             child_complete.release();
             child_followup.observed().await?;
             cancel.observed().await?;

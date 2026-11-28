@@ -89,6 +89,8 @@ import {
 } from '@/features/sessions/api/nativeAgentSessions'
 import { formatExternalAgentLabel, sessionStateIsBusy, type ExternalAgentCommand, type ExternalAgentOptions, type ExternalAgentSuggestion, type MessageFold } from '@/types/chat'
 import { isAcpSessionId, sessionApiPath } from '@/lib/acpSession'
+import { hasAcpViewBinding, recoverAcpView, updateAcpViewBindingTitle } from '@/lib/acpViewRecovery'
+import { sessionWasDeleted } from '@/stores/chat/sessionMutationSync'
 import type { JsonObject, JsonValue } from '@/types/json'
 import type { PluginCommandResult } from '@/lib/pluginOperations'
 import { useTranscriptPreferencesStore } from '@/stores/transcriptPreferences'
@@ -155,6 +157,61 @@ const bot = useBotConversation()
 const isAcp = computed(() => route.path === '/acp')
 const acpViewError = ref('')
 const acpViewLoaded = ref(false)
+const acpViewRecovering = ref(false)
+const attemptedAcpRecoverySids = new Set<string>()
+let acpRecoveryController: AbortController | null = null
+
+async function tryRecoverExpiredAcpView(expiredSid: string, isCurrent: () => boolean): Promise<boolean> {
+  const sid = String(expiredSid || '').trim()
+  if (
+    !isAcp.value ||
+    !isAcpSessionId(sid) ||
+    sessionWasDeleted(sid) ||
+    attemptedAcpRecoverySids.has(sid) ||
+    !hasAcpViewBinding(sid)
+  ) {
+    return false
+  }
+  attemptedAcpRecoverySids.add(sid)
+  acpRecoveryController?.abort()
+  const controller = new AbortController()
+  acpRecoveryController = controller
+  acpViewRecovering.value = true
+  acpViewError.value = ''
+  try {
+    const recovered = await recoverAcpView(sid, { signal: controller.signal })
+    if (!isCurrent() || controller.signal.aborted) return true
+    if (!recovered) {
+      acpViewRecovering.value = false
+      return false
+    }
+    const nextSid = recovered.sessionId
+    const pendingDraft = chat.getComposerDraft(sid)
+    if (pendingDraft && !chat.getComposerDraft(nextSid)) {
+      chat.setComposerDraft(nextSid, pendingDraft)
+      chat.setComposerDraft(sid, '')
+    }
+    for (const win of ui.workspaceWindows) {
+      if (win.mainTab === 'acp' && String(win.routeQuery?.sessionId || '').trim() === sid) {
+        ui.setWorkspaceWindowRoutePath(win.id, '/acp')
+        ui.setWorkspaceWindowRouteQuery(win.id, { ...win.routeQuery, sessionId: nextSid })
+        if (recovered.title && !win.title) ui.setWorkspaceWindowTitle(win.id, recovered.title)
+      }
+    }
+    if (readSessionIdFromQuery(route.query) === sid || readSessionIdFromFullPath(route.fullPath) === sid) {
+      await router.replace({
+        path: '/acp',
+        query: patchSessionIdInQuery(route.query, nextSid),
+      })
+    }
+    return true
+  } catch {
+    if (isCurrent()) acpViewRecovering.value = false
+    return false
+  } finally {
+    if (acpRecoveryController === controller) acpRecoveryController = null
+  }
+}
 function openAcpSidebar() {
   if (ui.isCompactLayout) ui.setSessionSwitcherOpen(true)
   else ui.setSidebarOpen(true, { preserveWidth: true })
@@ -206,8 +263,10 @@ async function openBotProjects() {
 watch(
   () => route.fullPath,
   (_path, _previous, onCleanup) => {
+    acpRecoveryController?.abort()
     acpViewError.value = ''
     acpViewLoaded.value = false
+    acpViewRecovering.value = false
     if (route.path !== '/chat' && !isAcp.value) return
     const sid = readSessionIdFromQuery(route.query) || readSessionIdFromFullPath(route.fullPath)
     if (!sid || isAcp.value !== isAcpSessionId(sid)) return
@@ -221,16 +280,52 @@ watch(
         isCurrent: () => current && bot.ownsConversation(),
       })
       .then(() => {
-        if (current && isAcp.value) acpViewLoaded.value = true
+        if (current && isAcp.value) {
+          acpViewLoaded.value = true
+          acpViewRecovering.value = false
+        }
       })
-      .catch((failure) => {
+      .catch(async (failure) => {
         if (!current || !isAcp.value) return
+        if (failure?.status === 404) {
+          const recovered = await tryRecoverExpiredAcpView(sid, () => current && isAcp.value)
+          if (recovered || !current || !isAcp.value) return
+        }
         acpViewError.value = failure?.status === 404
           ? t('chat.nativeAgent.viewExpired')
           : failure instanceof Error ? failure.message : String(failure)
       })
   },
   { immediate: true },
+)
+
+watch(
+  [
+    isAcp,
+    () => chat.selectedSessionId,
+    () => chat.selectedSession,
+    acpViewLoaded,
+    acpViewError,
+    acpViewRecovering,
+  ],
+  ([acp, sid, selected, loaded, err, recovering]) => {
+    if (!acp || !sid || !isAcpSessionId(sid) || !loaded || selected || err || recovering) return
+    if (sessionWasDeleted(sid)) return
+    void tryRecoverExpiredAcpView(sid, () => isAcp.value && chat.selectedSessionId === sid).then((recovered) => {
+      if (!recovered && isAcp.value && chat.selectedSessionId === sid && !chat.selectedSession) {
+        acpViewError.value = String(t('chat.nativeAgent.viewExpired'))
+      }
+    })
+  },
+)
+
+watch(
+  [isAcp, () => chat.selectedSessionId, () => chat.selectedSession?.title],
+  ([acp, sid, title]) => {
+    if (acp && sid && isAcpSessionId(sid) && title) {
+      updateAcpViewBindingTitle(sid, title)
+    }
+  },
 )
 
 const orphanDraft = ref('')
@@ -1375,6 +1470,8 @@ const acpSessionStatus = useAcpSessionStatus({
   sessionId: computed(() => chat.selectedSessionId),
   externalAgent: computed(() => chat.selectedSession?.external_agent),
   isBusy: computed(
+  workspaceId: computed(() => chat.selectedSession?.workspace_id),
+  title: computed(() => chat.selectedSession?.title),
     () =>
       sending.value ||
       chat.selectedSessionState.kind === 'creating' ||
@@ -2913,6 +3010,8 @@ const viewCtx = {
 
 onBeforeUnmount(() => {
   // Transcript data is owned by the application-level chat store, not by a
+  acpRecoveryController?.abort()
+  acpRecoveryController = null
   // single pane.  A workspace split can unmount/recreate one ChatPage while
   // the other pane is still alive; clearing the shared cache here would make
   // the next focus change fetch the same transcript again and discard data
@@ -2936,9 +3035,9 @@ onBeforeUnmount(() => {
 <template>
   <div class="flex h-full min-h-0 flex-col">
     <AcpWelcome
-      v-if="isAcp && (!isAcpSessionId(chat.selectedSessionId) || acpViewError || !chat.selectedSession)"
-      :loading="isAcpSessionId(chat.selectedSessionId) && !acpViewError && !acpViewLoaded"
-      :error="acpViewError || (acpViewLoaded ? String(t('chat.nativeAgent.viewExpired')) : '')"
+      v-if="isAcp && (!isAcpSessionId(chat.selectedSessionId) || acpViewRecovering || acpViewError || !chat.selectedSession)"
+      :loading="acpViewRecovering || (isAcpSessionId(chat.selectedSessionId) && !acpViewError && !acpViewLoaded)"
+      :error="acpViewRecovering ? '' : acpViewError || (acpViewLoaded ? String(t('chat.nativeAgent.viewExpired')) : '')"
       @open-sidebar="openAcpSidebar"
     />
     <ChatPageView v-else-if="bot.ready.value" :ctx="viewCtx" />

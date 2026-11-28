@@ -5,6 +5,7 @@ import { isMainTabId, mainTabPath, normalizeMainTabPath, type MainTabId } from '
 import { getLocalJson, getLocalString, setLocalJson, setLocalString } from '@/lib/persist'
 import { localStorageKeys } from '@/lib/persistence/storageKeys'
 import { isAcpSessionId } from '@/lib/acpSession'
+import { hasAcpViewBinding, subscribeAcpViewBindings } from '@/lib/acpViewRecovery'
 
 export type MainTab = MainTabId
 export type WorkspaceDockPanel = 'chat' | 'git' | 'files' | 'terminal' | 'preview'
@@ -367,10 +368,13 @@ export const useUiStore = defineStore('ui', () => {
     const mainTabRaw = String(source.mainTab || '').trim()
     if (!isMainTabId(mainTabRaw)) return null
     const mainTab: MainTab = mainTabRaw
-    const title = mainTab === 'acp' ? '' : String(source.title || '').trim()
     const routePath = normalizeMainTabPath(mainTab, String(source.routePath || ''))
     const routeQuery = normalizeRouteQueryRecord(source.routeQuery)
-    if (mainTab === 'acp' || isAcpSessionId(routeQuery.sessionId)) delete routeQuery.sessionId
+    const acpSid = String(routeQuery.sessionId || '').trim()
+    const recoverableAcp = mainTab === 'acp' && isAcpSessionId(acpSid) && hasAcpViewBinding(acpSid)
+    const title = mainTab === 'acp' && !recoverableAcp ? '' : String(source.title || '').trim()
+    if (mainTab === 'acp' && !recoverableAcp) delete routeQuery.sessionId
+    if (mainTab !== 'acp' && isAcpSessionId(routeQuery.sessionId)) delete routeQuery.sessionId
     // A chat workspace is a persisted view of a real session. Chat tabs without
     // a session id are invalid persisted workspace state and are discarded.
     if (mainTab === 'chat' && !readMatchQueryValue(routeQuery, 'sessionId')) return null
@@ -649,9 +653,14 @@ export const useUiStore = defineStore('ui', () => {
     globalSelectionByWindow.value = next
   }
 
+  const acpBindingVersion = ref(0)
+  subscribeAcpViewBindings(() => {
+    acpBindingVersion.value++
+  })
+
   watch(
-    workspaceWindows,
-    (list) => {
+    [workspaceWindows, acpBindingVersion],
+    ([list]) => {
       ensureWorkspaceWindows()
       if (workspaceWindowDragId.value && !list.some((item) => item.id === workspaceWindowDragId.value)) {
         workspaceWindowDragId.value = ''
@@ -660,6 +669,10 @@ export const useUiStore = defineStore('ui', () => {
       let keptAcpPlaceholder = false
       const persistedWindows = list.flatMap((tab) => {
         if (tab.mainTab !== 'acp') return [tab]
+        const acpSid = String(tab.routeQuery?.sessionId || '').trim()
+        if (isAcpSessionId(acpSid) && hasAcpViewBinding(acpSid)) {
+          return [{ ...tab, routeQuery: { sessionId: acpSid }, routeHash: '' }]
+        }
         if (keptAcpPlaceholder) return []
         keptAcpPlaceholder = true
         return [{ ...tab, title: undefined, routeQuery: {}, routeHash: '' }]

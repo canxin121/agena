@@ -6,6 +6,7 @@ import {
   type NativeSessionStatus,
 } from '@/features/sessions/api/nativeAgentSessions'
 import { isAcpSessionId } from '@/lib/acpSession'
+import { rememberAcpViewBinding } from '@/lib/acpViewRecovery'
 import type { ExternalAgent } from '@/types/chat'
 import {
   acpCanForkSession,
@@ -20,6 +21,8 @@ import {
 export function useAcpSessionStatus(options: {
   sessionId: ComputedRef<string | null>
   externalAgent: ComputedRef<ExternalAgent | undefined>
+  workspaceId?: ComputedRef<number | null | undefined>
+  title?: ComputedRef<string | undefined>
   isBusy: ComputedRef<boolean>
 }) {
   const catalog = useExternalAgentCatalog()
@@ -63,6 +66,15 @@ export function useAcpSessionStatus(options: {
       if (disposed || revision !== generation || activeSessionId.value !== sid) return null
       if (result.kind === 'status') {
         status.value = result
+        if (result.session?.native_id && options.externalAgent.value) {
+          rememberAcpViewBinding({
+            sessionId: sid,
+            workspaceId: options.workspaceId?.value,
+            agent: options.externalAgent.value,
+            nativeId: result.session.native_id,
+            title: result.session.title || options.title?.value,
+          })
+        }
         return result
       }
       return null

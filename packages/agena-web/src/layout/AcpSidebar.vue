@@ -40,6 +40,11 @@ import AddDirectoryDialog from '@/layout/chatSidebar/components/AddDirectoryDial
 import SidebarSectionSkeleton from '@/layout/chatSidebar/components/SidebarSectionSkeleton.vue'
 import { isMissingAcpCommandError } from '@/lib/acpInstallGuide'
 import { isAcpSessionId } from '@/lib/acpSession'
+import {
+  forgetAcpViewBinding,
+  forgetAcpViewBindingsByNative,
+  rememberAcpViewBinding,
+} from '@/lib/acpViewRecovery'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { vKeyboardCollection } from '@/lib/keyboardCollection'
 import { getLocalJson, getLocalString, setLocalJson, setLocalString } from '@/lib/persist'
@@ -674,6 +679,13 @@ async function openRow(row: AcpConversationRowModel, options: { forceReload?: bo
     if (lifetime.signal.aborted) return
     const sid = String(id)
     linkNativeSession(sid, row.nativeId)
+    rememberAcpViewBinding({
+      sessionId: sid,
+      workspaceId: row.workspaceId,
+      agent: row.agent,
+      nativeId: row.nativeId,
+      title: row.title,
+    })
     // If reloading replaced the ephemeral ACP view ID of an already-open tab,
     // retarget that tab in place instead of leaving the stale expired view open.
     if (options.forceReload && previousSid && previousSid !== sid) {
@@ -714,6 +726,18 @@ async function inspectSessionStatus(sessionId: string, force = false): Promise<N
     statusBySessionId.value = nextStatus
     if (result.session?.native_id) {
       linkNativeSession(sessionId, result.session.native_id)
+      const sessionMeta = chat.getSessionById(sessionId)
+      const wsId = sessionMeta?.workspace_id ?? null
+      const extAgent = sessionMeta?.external_agent || agent.value
+      if (wsId && extAgent) {
+        rememberAcpViewBinding({
+          sessionId,
+          workspaceId: wsId,
+          agent: extAgent,
+          nativeId: result.session.native_id,
+          title: result.session.title || sessionMeta?.title,
+        })
+      }
       draftSessions.value = draftSessions.value.filter((item) => item.sessionId !== sessionId)
     }
     return result
@@ -784,6 +808,7 @@ async function deleteRow(row: AcpConversationRowModel) {
   busyRowKey.value = row.key
   try {
     if (row.kind === 'draft' && effectiveSessionId) {
+      forgetAcpViewBinding(effectiveSessionId)
       await chat.deleteSession(effectiveSessionId)
       unlinkSession(effectiveSessionId)
       const openTab = findOpenTabForSession(effectiveSessionId)
@@ -795,6 +820,8 @@ async function deleteRow(row: AcpConversationRowModel) {
       return
     }
     if (row.nativeId) {
+      if (effectiveSessionId) forgetAcpViewBinding(effectiveSessionId)
+      forgetAcpViewBindingsByNative(row.workspaceId, row.agent, row.nativeId)
       await deleteNativeAgentSession(row.workspaceId, row.agent, row.nativeId)
       toasts.push('success', String(t('chat.nativeAgent.deletedToast')))
       if (effectiveSessionId) unlinkSession(effectiveSessionId)

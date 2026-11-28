@@ -144,4 +144,19 @@ describe('tool input wire forms reach the transcript', () => {
     const markdown = structuredValueMarkdown({ command, nested: { scripts: [command] } })
     expect(renderedCodeBlocks(markdown)).toEqual([`${command}\n`, `${command}\n`])
   })
+
+  test('external ACP raw_input.CommandLine renders a live shell command block when running', () => {
+    const acpInput = {
+      agent: 'antigravity',
+      name: 'run_command',
+      kind: 'execute',
+      raw_input: {
+        CommandLine: 'echo acp_live_cmd',
+        toolSummary: 'Run live echo',
+      },
+    }
+    const { display } = projectTool({ name: 'Antigravity · echo acp_live_cmd', input: acpInput }, 'running')
+    const operation = operationPresentation(display)
+    expect(operation.commandMarkdown).toBe('```sh\necho acp_live_cmd\n```\n')
+  })
 })

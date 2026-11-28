@@ -227,10 +227,7 @@ impl Transcript {
                 self.tools.insert(key, None);
                 return Ok(());
             }
-            let title = update["title"]
-                .as_str()
-                .filter(|title| !title.trim().is_empty())
-                .unwrap_or("Tool call");
+            let title = native_tool_title(update).unwrap_or("Tool call");
             let child_label = child.map(|child| self.child_label(child).unwrap_or(child));
             let label = match child_label {
                 Some(child) => format!("{} · {child}", turn.agent.label()),
@@ -284,9 +281,11 @@ impl Transcript {
             && [
                 "content",
                 "title",
+                "name",
                 "kind",
                 "locations",
                 "rawInput",
+                "args",
                 "rawOutput",
             ]
             .into_iter()
@@ -565,13 +564,31 @@ impl NativeToolBody {
     }
 
     fn patch(&mut self, update: &Value) {
-        if let Some(title) = update["title"].as_str() {
+        if let Some(title) = update["title"]
+            .as_str()
+            .map(str::trim)
+            .filter(|title| !title.is_empty())
+        {
             self.title = format!("{} · {}", self.label, bounded(title, TITLE_BYTES));
+        } else if self.title == format!("{} · Tool call", self.label)
+            && let Some(fallback) = native_tool_title(update)
+        {
+            self.title = format!("{} · {}", self.label, bounded(fallback, TITLE_BYTES));
+        }
+        if let Some(name) = extract_acp_tool_name(update)
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        {
+            self.input["name"] = json!(bounded(name, 160));
         }
         if let Some(kind) = update["kind"].as_str() {
             self.input["kind"] = json!(bounded(kind, 80));
         }
-        if let Some(value) = update.get("rawInput") {
+        if let Some(value) = update
+            .get("rawInput")
+            .filter(|value| !value.is_null())
+            .or_else(|| update.get("args").filter(|value| !value.is_null()))
+        {
             self.input["raw_input"] = bounded_json_value(value);
         }
         if let Some(locations) = update.get("locations") {
@@ -909,6 +926,26 @@ async fn publish_media_reply(turn: &ExternalTurn, media: NativeMedia) -> Result<
         .await
         .map_err(kernel_error)?;
     Ok(())
+}
+
+fn native_tool_title(update: &Value) -> Option<&str> {
+    update["title"]
+        .as_str()
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .or_else(|| {
+            update
+                .pointer("/rawInput/toolSummary")
+                .or_else(|| update.pointer("/args/toolSummary"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|summary| !summary.is_empty())
+        })
+        .or_else(|| {
+            extract_acp_tool_name(update)
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+        })
 }
 
 fn bounded_json_value(value: &Value) -> Value {

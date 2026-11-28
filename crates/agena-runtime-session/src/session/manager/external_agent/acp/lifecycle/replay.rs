@@ -889,6 +889,7 @@ impl ReplayTool {
             "status",
             "locations",
             "rawInput",
+            "args",
             "rawOutput",
         ] {
             if let Some(value) = update.get(key).filter(|value| !value.is_null()) {
@@ -915,17 +916,30 @@ impl ReplayTool {
         media_allowed: bool,
     ) -> Result<ExternalAgentHistoryPart, AppError> {
         let fields = Value::Object(self.fields);
-        let title = bounded_string(&fields["title"], 512).unwrap_or_else(|| "Tool call".into());
+        let title = bounded_string(&fields["title"], 512)
+            .or_else(|| {
+                bounded_string(
+                    fields
+                        .pointer("/rawInput/toolSummary")
+                        .or_else(|| fields.pointer("/args/toolSummary"))
+                        .unwrap_or(&Value::Null),
+                    512,
+                )
+            })
+            .or_else(|| bounded_string(&fields["name"], 512))
+            .unwrap_or_else(|| "Tool call".into());
         let mut input = json!({"agent": projection.agent});
-        for (wire, stored) in [
-            ("kind", "kind"),
-            ("name", "name"),
-            ("locations", "locations"),
-            ("rawInput", "raw_input"),
-        ] {
+        for (wire, stored) in [("kind", "kind"), ("name", "name"), ("locations", "locations")] {
             if let Some(value) = fields.get(wire) {
                 input[stored] = value.clone();
             }
+        }
+        if let Some(value) = fields
+            .get("rawInput")
+            .filter(|value| !value.is_null())
+            .or_else(|| fields.get("args").filter(|value| !value.is_null()))
+        {
+            input["raw_input"] = value.clone();
         }
         let mut raw = RawOutput::default();
         let mut blobs = Vec::new();

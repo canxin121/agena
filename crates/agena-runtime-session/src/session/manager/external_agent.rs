@@ -943,18 +943,63 @@ fn permission_choices(options: &[Value]) -> Vec<PermissionChoice<'_>> {
 }
 
 pub(super) fn extract_acp_tool_name(tool_call: &Value) -> Option<&str> {
-    tool_call["name"].as_str().or_else(|| {
-        tool_call
-            .pointer("/_meta/claudeCode/toolName")
-            .and_then(Value::as_str)
-    })
+    tool_call["name"]
+        .as_str()
+        .or_else(|| {
+            tool_call
+                .pointer("/_meta/claudeCode/toolName")
+                .and_then(Value::as_str)
+        })
+        .or_else(|| {
+            tool_call["title"]
+                .as_str()
+                .and_then(|title| title.strip_prefix("Run "))
+                .filter(|name| !name.is_empty() && !name.contains(char::is_whitespace))
+        })
+}
+
+fn is_agena_mcp_disambiguation_tag(tag: &str) -> bool {
+    !tag.is_empty() && tag.len() <= 16 && tag.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn is_injected_agena_mcp_server_name(server: &str) -> bool {
+    if server == "agena" {
+        return true;
+    }
+    server
+        .strip_prefix("agena_")
+        .or_else(|| server.strip_prefix("agena-"))
+        .is_some_and(is_agena_mcp_disambiguation_tag)
 }
 
 pub(super) fn is_injected_agena_mcp_tool_name(name: &str) -> bool {
-    let suffix = name
-        .strip_prefix("mcp__agena__")
-        .or_else(|| name.strip_prefix("mcp_agena_"));
-    suffix.is_some_and(|tool| agena_domain::ToolApiFunction::from_function_name(tool).is_some())
+    if let Some(rest) = name.strip_prefix("mcp__") {
+        let Some((server, tool)) = rest.split_once("__") else {
+            return false;
+        };
+        return is_injected_agena_mcp_server_name(server)
+            && agena_domain::ToolApiFunction::from_function_name(tool).is_some();
+    }
+    if let Some(rest) = name.strip_prefix("mcp_agena_") {
+        if agena_domain::ToolApiFunction::from_function_name(rest).is_some() {
+            return true;
+        }
+        return rest
+            .split_once('_')
+            .is_some_and(|(tag, tool)| {
+                is_agena_mcp_disambiguation_tag(tag)
+                    && agena_domain::ToolApiFunction::from_function_name(tool).is_some()
+            });
+    }
+    if let Some(rest) = name.strip_prefix("mcp_agena-") {
+        return rest
+            .split_once('_')
+            .is_some_and(|(tag, tool)| {
+                is_agena_mcp_disambiguation_tag(tag)
+                    && agena_domain::ToolApiFunction::from_function_name(tool).is_some()
+            });
+    }
+    false
 }
 
 fn auto_approve_agena_mcp_permission(params: &Value) -> Option<&str> {
@@ -981,16 +1026,27 @@ mod permission_tests {
             "mcp_agena_tools_list",
             "mcp_agena_tools_help",
             "mcp_agena_tools_call",
+            "mcp_agena_62af60cf_plugins_list",
+            "mcp_agena_62af60cf_tools_list",
+            "mcp_agena_62af60cf_tools_help",
+            "mcp_agena_62af60cf_tools_call",
+            "mcp_agena-62af60cf_plugins_list",
             "mcp__agena__plugins_list",
             "mcp__agena__tools_list",
             "mcp__agena__tools_help",
             "mcp__agena__tools_call",
+            "mcp__agena_62af60cf__plugins_list",
+            "mcp__agena-62af60cf__tools_call",
         ] {
             assert!(is_injected_agena_mcp_tool_name(valid), "expected {valid}");
         }
         for invalid in [
             "mcp_agena_exec_shell",
+            "mcp_agena_62af60cf_exec_shell",
+            "mcp_agena_github_tools_call",
+            "mcp_agena_0123456789abcdef0_tools_call",
             "mcp__agena__custom",
+            "mcp__agena_github__tools_call",
             "mcp_github_plugins_list",
             "plugins_list",
             "run_command",

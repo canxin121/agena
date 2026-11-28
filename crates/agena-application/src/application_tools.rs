@@ -187,6 +187,540 @@ fn deduplicate_tool_document_summary(
     document
 }
 
+fn is_external_agent_native_tool(
+    content: &agena_runtime_contracts::part_content::ToolCallContent,
+) -> bool {
+    content.plugin.is_none()
+        && content.tool_api_call.is_none()
+        && content
+            .input
+            .get("agent")
+            .and_then(serde_json::Value::as_str)
+            .is_some()
+        && !content.name.starts_with("external_agent_")
+}
+
+struct ParsedAgyCommandOutput {
+    exit_code: Option<i32>,
+    stdout: String,
+    matched: bool,
+}
+
+fn parse_agy_command_output(text: &str) -> ParsedAgyCommandOutput {
+    let normalized = text.replace("\r\n", "\n");
+    let trimmed = normalized.trim_start();
+    if !(trimmed.starts_with("Created At:")
+        || trimmed.starts_with("Completed At:")
+        || trimmed.starts_with("Command exited with code "))
+    {
+        return ParsedAgyCommandOutput {
+            exit_code: None,
+            stdout: text.to_owned(),
+            matched: false,
+        };
+    }
+    let mut exit_code = None;
+    let mut lines = trimmed.lines().peekable();
+    while let Some(line) = lines.peek().copied() {
+        let line_trimmed = line.trim();
+        if line_trimmed.starts_with("Created At:") || line_trimmed.starts_with("Completed At:") {
+            lines.next();
+            continue;
+        }
+        if let Some(rest) = line_trimmed.strip_prefix("Command exited with code ") {
+            if let Ok(code) = rest.trim_end_matches('.').trim().parse::<i32>() {
+                exit_code = Some(code);
+            }
+            lines.next();
+            continue;
+        }
+        if line_trimmed.is_empty() {
+            lines.next();
+            continue;
+        }
+        if matches!(line_trimmed, "Command output:" | "Output:") {
+            lines.next();
+        }
+        break;
+    }
+    let stdout = lines
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim_end_matches(['\n', '\r'])
+        .to_owned();
+    ParsedAgyCommandOutput {
+        exit_code,
+        stdout,
+        matched: true,
+    }
+}
+
+fn parse_injected_agena_mcp_function(name: &str) -> Option<agena_domain::ToolApiFunction> {
+    let is_hex_tag = |tag: &str| {
+        !tag.is_empty() && tag.len() <= 16 && tag.bytes().all(|byte| byte.is_ascii_hexdigit())
+    };
+    if let Some(rest) = name.strip_prefix("mcp__") {
+        let (server, tool) = rest.split_once("__")?;
+        let valid_server = server == "agena"
+            || server
+                .strip_prefix("agena_")
+                .or_else(|| server.strip_prefix("agena-"))
+                .is_some_and(is_hex_tag);
+        if valid_server {
+            return agena_domain::ToolApiFunction::from_function_name(tool);
+        }
+    }
+    if let Some(rest) = name.strip_prefix("mcp_agena_") {
+        if let Some(function) = agena_domain::ToolApiFunction::from_function_name(rest) {
+            return Some(function);
+        }
+        if let Some((tag, tool)) = rest.split_once('_')
+            && is_hex_tag(tag)
+        {
+            return agena_domain::ToolApiFunction::from_function_name(tool);
+        }
+    }
+    if let Some(rest) = name.strip_prefix("mcp_agena-")
+        && let Some((tag, tool)) = rest.split_once('_')
+        && is_hex_tag(tag)
+    {
+        return agena_domain::ToolApiFunction::from_function_name(tool);
+    }
+    None
+}
+
+fn strip_external_agent_prefix<'a>(
+    content: &'a agena_runtime_contracts::part_content::ToolCallContent,
+) -> (Option<&'a str>, &'a str) {
+    let raw_name = content.name.trim();
+    let agent_label = serde_json::from_value::<agena_domain::ExternalAgent>(
+        content.input.get("agent").cloned().unwrap_or_default(),
+    )
+    .ok()
+    .map(|agent| agent.label().to_owned());
+    let without_agent = agent_label
+        .as_deref()
+        .and_then(|label| {
+            raw_name
+                .strip_prefix(label)
+                .and_then(|rest| rest.strip_prefix(" · "))
+        })
+        .map(str::trim)
+        .filter(|rest| !rest.is_empty())
+        .unwrap_or(raw_name);
+    if content
+        .input
+        .get("session_id")
+        .and_then(serde_json::Value::as_str)
+        .is_some()
+        && let Some((child, rest)) = without_agent.split_once(" · ")
+        && !child.trim().is_empty()
+        && !rest.trim().is_empty()
+    {
+        return (Some(child.trim()), rest.trim());
+    }
+    (None, without_agent)
+}
+
+fn raw_input_str<'a>(
+    raw_input: Option<&'a serde_json::Map<String, serde_json::Value>>,
+    keys: &[&str],
+) -> Option<&'a str> {
+    let map = raw_input?;
+    keys.iter().find_map(|key| {
+        map.get(*key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    })
+}
+
+fn raw_input_u64(
+    raw_input: Option<&serde_json::Map<String, serde_json::Value>>,
+    keys: &[&str],
+) -> Option<u64> {
+    let map = raw_input?;
+    keys.iter().find_map(|key| {
+        map.get(*key)
+            .and_then(|value| {
+                value
+                    .as_u64()
+                    .or_else(|| value.as_str().and_then(|text| text.trim().parse().ok()))
+            })
+            .filter(|value| *value > 0)
+    })
+}
+
+fn compact_path_display(path: &str) -> String {
+    let path = path.trim();
+    if path.starts_with('/') {
+        let mut parts = path.rsplit('/').filter(|segment| !segment.is_empty());
+        let file = parts.next().unwrap_or(path);
+        return file.to_owned();
+    }
+    path.to_owned()
+}
+
+fn first_meaningful_line(text: &str) -> Option<String> {
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(agena_tool::normalize_tool_summary)
+        .filter(|line| !line.is_empty())
+}
+
+fn humanize_snake_identifier(name: &str) -> String {
+    let words = name
+        .split(['_', '-'])
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
+    if words.is_empty() {
+        return name.to_owned();
+    }
+    let mut title = words.join(" ");
+    if let Some(first) = title.get_mut(0..1) {
+        first.make_ascii_uppercase();
+    }
+    title
+}
+
+fn external_agent_state_suffix(state: agena_domain::ToolResultState) -> Option<&'static str> {
+    match state {
+        agena_domain::ToolResultState::PolicyDenied => Some("permission denied"),
+        agena_domain::ToolResultState::UserDeclined => Some("declined"),
+        agena_domain::ToolResultState::CapabilityUnavailable
+        | agena_domain::ToolResultState::ToolUnavailable => Some("unavailable"),
+        agena_domain::ToolResultState::Failed => Some("failed"),
+        agena_domain::ToolResultState::Cancelled => Some("cancelled"),
+        agena_domain::ToolResultState::Pending
+        | agena_domain::ToolResultState::Running
+        | agena_domain::ToolResultState::Completed => None,
+    }
+}
+
+fn append_status_suffix(title: String, state: agena_domain::ToolResultState) -> String {
+    let Some(suffix) = external_agent_state_suffix(state) else {
+        return title;
+    };
+    if title.to_ascii_lowercase().contains(suffix) {
+        title
+    } else {
+        agena_tool::compose_tool_title(title, suffix)
+    }
+}
+
+fn render_external_agent_tool_presentation(
+    content: &agena_runtime_contracts::part_content::ToolCallContent,
+    stored_summary: Option<&str>,
+    mut blocks: Vec<agena_domain::ViewBlock>,
+    mut output_blocks: Vec<agena_domain::ViewBlock>,
+) -> agena_domain::PartDocument {
+    use agena_domain::{PartDocument, ToolResultState, ViewBlock};
+    use agena_runtime_tools::tool::human_view::BuiltinHumanRenderer;
+
+    let raw_input = content
+        .input
+        .get("raw_input")
+        .and_then(serde_json::Value::as_object);
+    let tool_name_hint = content
+        .input
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty());
+    let tool_kind = content
+        .input
+        .get("kind")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim);
+    let tool_summary_hint = raw_input_str(raw_input, &["toolSummary", "description"]);
+    let (child_prefix, stripped_title) = strip_external_agent_prefix(content);
+
+    let output_text = content.output.as_ref().and_then(|output| {
+        let text = output.text_content();
+        if !text.trim().is_empty() {
+            Some(text.to_owned())
+        } else {
+            output
+                .payload
+                .as_ref()
+                .and_then(|payload| payload.pointer("/external_agent/output"))
+                .and_then(BuiltinHumanRenderer::external_agent_output_text)
+        }
+    });
+
+    let mcp_function = tool_name_hint
+        .and_then(parse_injected_agena_mcp_function)
+        .or_else(|| {
+            stripped_title
+                .strip_prefix("Run ")
+                .and_then(parse_injected_agena_mcp_function)
+        });
+    if let Some(function) = mcp_function {
+        let mut title = match function {
+            agena_domain::ToolApiFunction::Call => {
+                if let Some(target) = raw_input_str(raw_input, &["tool"]) {
+                    agena_tool::compose_tool_title("Call tool", target)
+                } else {
+                    function.function_name().to_owned()
+                }
+            }
+            agena_domain::ToolApiFunction::Help => {
+                if let Some(target) = raw_input_str(raw_input, &["tool"]) {
+                    agena_tool::compose_tool_title(function.function_name(), target)
+                } else {
+                    function.function_name().to_owned()
+                }
+            }
+            _ => function.function_name().to_owned(),
+        };
+        if let Some(child) = child_prefix {
+            title = agena_tool::compose_tool_title(child, title);
+        }
+        title = append_status_suffix(title, content.state);
+        blocks.extend(output_blocks);
+        let summary = output_text
+            .as_deref()
+            .and_then(first_meaningful_line)
+            .unwrap_or_default();
+        return PartDocument {
+            title,
+            summary,
+            blocks,
+        };
+    }
+
+    let command = raw_input_str(raw_input, &["CommandLine", "command", "cmd", "script"]);
+    let is_command = command.is_some()
+        || matches!(
+            tool_name_hint,
+            Some("run_command" | "bash" | "shell" | "Bash" | "execute_command")
+        );
+    if let Some(command) = command
+        && is_command
+    {
+        let parsed = output_text.as_deref().map(parse_agy_command_output);
+        let exit_code = parsed.as_ref().and_then(|p| p.exit_code).or_else(|| {
+            content.output.as_ref().and_then(|output| {
+                output
+                    .payload
+                    .as_ref()?
+                    .pointer("/external_agent/output/exit_code")
+                    .and_then(serde_json::Value::as_i64)
+                    .and_then(|code| i32::try_from(code).ok())
+            })
+        });
+        let clean_stdout = match parsed {
+            Some(parsed) => parsed.stdout,
+            None => String::new(),
+        };
+        let cwd = raw_input_str(raw_input, &["Cwd", "cwd", "workdir"]).map(str::to_owned);
+        let has_command_block = blocks
+            .iter()
+            .chain(output_blocks.iter())
+            .any(|block| matches!(block, ViewBlock::Command { .. }));
+        if !has_command_block {
+            if !clean_stdout.is_empty() || output_text.is_some() {
+                output_blocks.retain(|block| {
+                    !matches!(block.block_id(), Some("acp-result" | "acp-raw-result"))
+                });
+            }
+            blocks.push(ViewBlock::Command {
+                id: Some("acp-command".into()),
+                command: command.to_owned(),
+                cwd,
+                exit_code,
+                stdout: clean_stdout.clone(),
+                stderr: String::new(),
+            });
+        }
+        blocks.extend(output_blocks);
+
+        let mut title = agena_tool::compose_tool_title("Run command", command);
+        if let Some(child) = child_prefix {
+            title = agena_tool::compose_tool_title(child, title);
+        }
+        if !matches!(
+            content.state,
+            ToolResultState::Pending | ToolResultState::Running
+        ) {
+            if let Some(code) = exit_code {
+                let fragment = if code == 0 {
+                    "passed".to_owned()
+                } else {
+                    format!("failed · exit {code}")
+                };
+                title = agena_tool::compose_tool_title(title, fragment);
+            } else {
+                title = append_status_suffix(title, content.state);
+            }
+        }
+        let summary = first_meaningful_line(&clean_stdout)
+            .or_else(|| {
+                tool_summary_hint
+                    .filter(|hint| *hint != command)
+                    .map(agena_tool::normalize_tool_summary)
+            })
+            .unwrap_or_default();
+        return PartDocument {
+            title,
+            summary,
+            blocks,
+        };
+    }
+
+    let line_range = match (
+        raw_input_u64(raw_input, &["StartLine", "start_line"]),
+        raw_input_u64(raw_input, &["EndLine", "end_line"]),
+    ) {
+        (Some(start), Some(end)) => Some(format!("L{start}-L{end}")),
+        (Some(start), None) => Some(format!("L{start}+")),
+        _ => None,
+    };
+    let raw_path = raw_input_str(
+        raw_input,
+        &["Path", "TargetFile", "file_path", "path", "AbsolutePath"],
+    );
+
+    let mut base_title = match tool_name_hint {
+        Some("read_file" | "view_file" | "Read") => {
+            let target = stripped_title
+                .strip_prefix("File ")
+                .map(str::trim)
+                .filter(|target| !target.is_empty())
+                .map(str::to_owned)
+                .or_else(|| raw_path.map(compact_path_display))
+                .unwrap_or_else(|| stripped_title.to_owned());
+            let action = agena_tool::normalize_tool_title(format!("Read {target}"));
+            match &line_range {
+                Some(range) => agena_tool::compose_tool_title(action, range),
+                None => action,
+            }
+        }
+        Some("write_file" | "write_to_file" | "Write") => {
+            let target = raw_path
+                .map(compact_path_display)
+                .or_else(|| {
+                    stripped_title
+                        .strip_prefix("File ")
+                        .map(str::trim)
+                        .filter(|target| !target.is_empty())
+                        .map(str::to_owned)
+                })
+                .unwrap_or_else(|| stripped_title.to_owned());
+            agena_tool::normalize_tool_title(format!("Write {target}"))
+        }
+        Some(
+            "edit_file" | "replace_file_content" | "multi_replace_file_content" | "Edit"
+            | "MultiEdit",
+        ) => {
+            let target = raw_path
+                .map(compact_path_display)
+                .or_else(|| {
+                    stripped_title
+                        .strip_prefix("File ")
+                        .map(str::trim)
+                        .filter(|target| !target.is_empty())
+                        .map(str::to_owned)
+                })
+                .unwrap_or_else(|| stripped_title.to_owned());
+            agena_tool::normalize_tool_title(format!("Edit {target}"))
+        }
+        Some("search_web" | "web_search" | "WebSearch") => {
+            if let Some(query) = raw_input_str(raw_input, &["query", "Query", "q"]) {
+                agena_tool::compose_tool_title("Search web", query)
+            } else {
+                "Search web".to_owned()
+            }
+        }
+        _ if tool_kind == Some("read") && stripped_title.starts_with("File ") => {
+            let target = stripped_title
+                .strip_prefix("File ")
+                .map(str::trim)
+                .filter(|target| !target.is_empty())
+                .unwrap_or(stripped_title);
+            let action = agena_tool::normalize_tool_title(format!("Read {target}"));
+            match &line_range {
+                Some(range) => agena_tool::compose_tool_title(action, range),
+                None => action,
+            }
+        }
+        _ => {
+            if let Some(hint) = tool_name_hint
+                && stripped_title == hint
+                && (hint.contains('_') || hint.contains('-'))
+            {
+                let label = humanize_snake_identifier(hint);
+                match tool_summary_hint {
+                    Some(summary) => agena_tool::compose_tool_title(label, summary),
+                    None => agena_tool::normalize_tool_title(label),
+                }
+            } else {
+                agena_tool::normalize_tool_title(stripped_title)
+            }
+        }
+    };
+
+    if let Some(child) = child_prefix {
+        base_title = agena_tool::compose_tool_title(child, base_title);
+    }
+    let title = append_status_suffix(base_title, content.state);
+
+    if let Some(range) = &line_range {
+        let mut updated_location = false;
+        for block in &mut output_blocks {
+            if let ViewBlock::Table { id, rows, .. } = block
+                && id.as_deref() == Some("acp-locations")
+                && rows.len() == 1
+                && rows[0].get(1).is_some_and(serde_json::Value::is_null)
+            {
+                rows[0][1] = serde_json::Value::String(range.clone());
+                updated_location = true;
+            }
+        }
+        if !updated_location
+            && let Some(path) = raw_path
+            && !output_blocks
+                .iter()
+                .any(|block| block.block_id() == Some("acp-locations"))
+        {
+            output_blocks.push(ViewBlock::Table {
+                id: Some("acp-locations".into()),
+                columns: vec!["Path".into(), "Line".into()],
+                rows: vec![vec![
+                    serde_json::Value::String(path.to_owned()),
+                    serde_json::Value::String(range.clone()),
+                ]],
+            });
+        }
+    }
+
+    blocks.extend(output_blocks);
+
+    let cleaned_output_line = output_text.as_deref().and_then(|text| {
+        let parsed = parse_agy_command_output(text);
+        if parsed.matched {
+            first_meaningful_line(&parsed.stdout)
+        } else {
+            first_meaningful_line(text)
+        }
+    });
+    let summary = cleaned_output_line
+        .or_else(|| {
+            stored_summary
+                .map(str::trim)
+                .filter(|summary| !summary.is_empty() && *summary != "No output")
+                .map(agena_tool::normalize_tool_summary)
+        })
+        .unwrap_or_default();
+
+    PartDocument {
+        title,
+        summary,
+        blocks,
+    }
+}
+
 #[cfg(test)]
 mod tool_document_summary_tests {
     use super::*;
@@ -460,6 +994,144 @@ mod failure_presentation_tests {
     }
 }
 
+#[cfg(test)]
+mod external_agent_presentation_tests {
+    use super::*;
+    use agena_domain::{RawOutput, ToolResultState, ViewBlock};
+    use agena_runtime_contracts::part_content::ToolCallContent;
+    use agena_runtime_tools::tool::human_view::BuiltinHumanRenderer;
+    use serde_json::json;
+
+    #[test]
+    fn antigravity_run_command_renders_clean_command_block_without_mangled_title_or_timestamps() {
+        let output = RawOutput {
+            payload: Some(json!({
+                "text": "",
+                "external_agent": {
+                    "content": [],
+                    "locations": null,
+                    "output": {
+                        "output": "Created At: 2026-11-29T00:04:32+08:00\nCompleted At: 2026-11-29T00:04:34+08:00\nCommand exited with code 0.\n\nCommand output:\n162:pub(super) struct AcpClient {\n"
+                    }
+                }
+            })),
+            ..Default::default()
+        };
+        let content = ToolCallContent {
+            name: "Antigravity · rg -n 'struct AcpClient' crates/acp.rs".into(),
+            state: ToolResultState::Completed,
+            input: json!({
+                "agent": "antigravity",
+                "name": "run_command",
+                "kind": "execute",
+                "raw_input": {
+                    "CommandLine": "rg -n 'struct AcpClient' crates/acp.rs",
+                    "toolSummary": "Find AcpClient struct"
+                }
+            }),
+            output: Some(output.clone()),
+            ..Default::default()
+        };
+        let output_blocks = BuiltinHumanRenderer::external_agent_blocks(&output).unwrap();
+        let doc = render_external_agent_tool_presentation(&content, None, Vec::new(), output_blocks);
+
+        assert!(doc.title.starts_with("Run command · rg -n 'struct AcpClient' crates/acp.rs"));
+        assert!(doc.title.ends_with(" · passed"));
+        assert!(!doc.title.contains("Created At"));
+        assert!(!doc.title.starts_with("Rs"));
+        assert_eq!(doc.summary, "162:pub(super) struct AcpClient {");
+        assert_eq!(doc.blocks.len(), 1);
+        match &doc.blocks[0] {
+            ViewBlock::Command {
+                command,
+                exit_code,
+                stdout,
+                ..
+            } => {
+                assert_eq!(command, "rg -n 'struct AcpClient' crates/acp.rs");
+                assert_eq!(*exit_code, Some(0));
+                assert_eq!(stdout, "162:pub(super) struct AcpClient {");
+            }
+            other => panic!("expected Command block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn antigravity_read_file_preserves_filename_line_range_and_omits_no_output() {
+        let output = RawOutput {
+            payload: Some(json!({
+                "text": "",
+                "external_agent": {
+                    "content": [],
+                    "locations": [{"path": "/repo/Cargo.toml", "line": null}],
+                    "output": null
+                }
+            })),
+            ..Default::default()
+        };
+        let content = ToolCallContent {
+            name: "Antigravity · File Cargo.toml".into(),
+            state: ToolResultState::Completed,
+            input: json!({
+                "agent": "antigravity",
+                "name": "read_file",
+                "kind": "read",
+                "locations": [{"path": "/repo/Cargo.toml", "line": null}],
+                "raw_input": {
+                    "Path": "/repo/Cargo.toml",
+                    "StartLine": 1,
+                    "EndLine": 3
+                }
+            }),
+            output: Some(output.clone()),
+            ..Default::default()
+        };
+        let output_blocks = BuiltinHumanRenderer::external_agent_blocks(&output).unwrap();
+        let doc = render_external_agent_tool_presentation(&content, None, Vec::new(), output_blocks);
+
+        assert_eq!(doc.title, "Read Cargo.toml · L1-L3");
+        assert_eq!(doc.summary, "");
+        assert!(matches!(
+            doc.blocks.as_slice(),
+            [ViewBlock::Table { rows, .. }] if rows == &vec![vec![json!("/repo/Cargo.toml"), json!("L1-L3")]]
+        ));
+    }
+
+    #[test]
+    fn replayed_injected_agena_mcp_tools_strip_mcp_and_hex_prefixes() {
+        let output = RawOutput {
+            payload: Some(json!({
+                "text": "",
+                "external_agent": {
+                    "content": [],
+                    "locations": null,
+                    "output": {"output": "agena.fs\nagena.shell\n"}
+                }
+            })),
+            ..Default::default()
+        };
+        let content = ToolCallContent {
+            name: "Antigravity · Run mcp_agena_62af60cf_plugins_list".into(),
+            state: ToolResultState::Completed,
+            input: json!({
+                "agent": "antigravity",
+                "name": "mcp_agena_62af60cf_plugins_list"
+            }),
+            output: Some(output.clone()),
+            ..Default::default()
+        };
+        let output_blocks = BuiltinHumanRenderer::external_agent_blocks(&output).unwrap();
+        let doc = render_external_agent_tool_presentation(&content, None, Vec::new(), output_blocks);
+
+        assert_eq!(doc.title, "plugins_list");
+        assert_eq!(doc.summary, "agena.fs");
+        assert!(matches!(
+            doc.blocks.as_slice(),
+            [ViewBlock::Text { text, .. }] if text == "agena.fs\nagena.shell\n"
+        ));
+    }
+}
+
 /// Shared by list, detail and live reads. No client or transport dimension.
 /// Entries share initialization and cache only bounded semantic documents.
 #[derive(Default)]
@@ -688,6 +1360,32 @@ impl Application {
                     .map_or(agena_domain::ContentFormat::Plain, |field| field.format),
             }
         }));
+        if is_external_agent_native_tool(content) {
+            let output_blocks = match content.output.as_ref() {
+                Some(output) => {
+                    if let Some(acp_blocks) =
+                        agena_runtime_tools::tool::human_view::BuiltinHumanRenderer::external_agent_blocks(output)
+                    {
+                        acp_blocks
+                    } else {
+                        self.render_tool_result(&invocation, output)
+                            .await
+                            .human
+                            .blocks
+                            .into_iter()
+                            .filter(|block| block.text_value() != Some("No output."))
+                            .collect()
+                    }
+                }
+                None => Vec::new(),
+            };
+            return Some(render_external_agent_tool_presentation(
+                content,
+                summary,
+                blocks,
+                output_blocks,
+            ));
+        }
         let Some(output) = content.output.as_ref() else {
             return Some(PartDocument {
                 title: agena_tool::tool_title_for_state(&invocation, content.state),

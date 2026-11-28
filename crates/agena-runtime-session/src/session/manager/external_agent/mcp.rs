@@ -86,11 +86,111 @@ pub(super) enum Kind {
     Acp,
 }
 
+type ActiveBackendSlot = Arc<std::sync::RwLock<Option<Backend>>>;
+
+/// Long-lived local HTTP MCP endpoint owned by a warm `AcpClient`.
+///
+/// Reusing the exact same `127.0.0.1:<port>/mcp` URL and `Authorization` header
+/// across warm-reclaimed turns prevents `agy` from seeing a colliding `"agena"`
+/// MCP server config and spawning suffixed duplicates (`agena_<8hex>`), while
+/// per-turn revocation clears `active` so idle requests receive `401 Unauthorized`.
+pub(super) struct PersistentHttp {
+    descriptor: Value,
+    active: ActiveBackendSlot,
+    shutdown: CancellationToken,
+    server: JoinHandle<std::io::Result<()>>,
+}
+
+impl PersistentHttp {
+    async fn start() -> Result<Self, AppError> {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+        let origin = format!("http://{}", listener.local_addr()?);
+        let authorization = format!("Bearer {}", uuid::Uuid::new_v4());
+        let shutdown = CancellationToken::new();
+        let active: ActiveBackendSlot = Arc::new(std::sync::RwLock::new(None));
+        let config = rmcp::transport::StreamableHttpServerConfig::default()
+            .with_json_response(true)
+            .with_allowed_origins([origin.clone()])
+            .with_cancellation_token(shutdown.clone());
+        let service = agena_mcp_server::streamable_http_service(
+            SwitchableBackend(active.clone()),
+            config,
+        );
+        let descriptor = json!({
+            "type": "http", "name": "agena", "url": format!("{origin}/mcp"),
+            "headers": [{"name": "Authorization", "value": authorization}]
+        });
+        let app = Router::new().route_service("/mcp", service).layer(
+            middleware::from_fn_with_state(
+                (shutdown.clone(), active.clone(), authorization, origin),
+                authorize_persistent,
+            ),
+        );
+        let server_shutdown = shutdown.clone();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(server_shutdown.cancelled_owned())
+                .await
+        });
+        Ok(Self {
+            descriptor,
+            active,
+            shutdown,
+            server,
+        })
+    }
+
+    fn attach(&self, backend: Backend) -> PersistentLease {
+        *self.active.write().unwrap_or_else(|e| e.into_inner()) = Some(backend);
+        PersistentLease {
+            descriptor: self.descriptor.clone(),
+            active: self.active.clone(),
+        }
+    }
+
+    pub(super) async fn close(mut self) {
+        *self.active.write().unwrap_or_else(|e| e.into_inner()) = None;
+        self.shutdown.cancel();
+        if tokio::time::timeout(Duration::from_millis(500), &mut self.server)
+            .await
+            .is_err()
+        {
+            self.server.abort();
+        }
+    }
+}
+
+impl Drop for PersistentHttp {
+    fn drop(&mut self) {
+        *self.active.write().unwrap_or_else(|e| e.into_inner()) = None;
+        self.shutdown.cancel();
+        self.server.abort();
+    }
+}
+
+struct PersistentLease {
+    descriptor: Value,
+    active: ActiveBackendSlot,
+}
+
+impl PersistentLease {
+    fn detach(&self) {
+        *self.active.write().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+
+impl Drop for PersistentLease {
+    fn drop(&mut self) {
+        self.detach();
+    }
+}
+
 enum Transport {
     Local {
         descriptor: Value,
         server: JoinHandle<std::io::Result<()>>,
     },
+    PersistentLocal(PersistentLease),
     Acp(AcpEndpoint),
 }
 
@@ -182,6 +282,7 @@ impl Bridge {
         turn: Arc<ExternalTurn>,
         kind: Kind,
         relay_socket: Option<&std::path::Path>,
+        persistent_http: &mut Option<PersistentHttp>,
     ) -> Result<Self, AppError> {
         let catalog = super::super::tool_api::catalog(&turn.executor).await;
         let scope = Scope {
@@ -199,7 +300,17 @@ impl Bridge {
                 id: uuid::Uuid::new_v4().to_string(),
                 backend,
             }),
-            Kind::Http => Self::http(&scope, backend, false).await?,
+            Kind::Http => {
+                if persistent_http.is_none() {
+                    *persistent_http = Some(PersistentHttp::start().await?);
+                }
+                Transport::PersistentLocal(
+                    persistent_http
+                        .as_ref()
+                        .expect("persistent HTTP MCP endpoint started")
+                        .attach(backend),
+                )
+            }
             Kind::Sse => Self::http(&scope, backend, true).await?,
             Kind::Stdio { typed } => stdio::start(&scope, backend, typed, relay_socket).await?,
         };
@@ -251,13 +362,14 @@ impl Bridge {
                 json!({"type": "acp", "name": "agena", "serverId": endpoint.id})
             }
             Transport::Local { descriptor, .. } => descriptor.clone(),
+            Transport::PersistentLocal(lease) => lease.descriptor.clone(),
         }
     }
 
     pub(super) fn acp_endpoint(&self) -> Option<AcpEndpoint> {
         match &self.transport {
             Transport::Acp(endpoint) => Some(endpoint.clone()),
-            Transport::Local { .. } => None,
+            Transport::Local { .. } | Transport::PersistentLocal(_) => None,
         }
     }
 
@@ -275,14 +387,52 @@ impl Bridge {
         // If the child exits early, cancel and drain accepted effects before
         // the attempt loses ownership. A dropped HTTP waiter cannot skip this.
         drop(self.scope.calls.write().await);
-        if let Transport::Local { server, .. } = &mut self.transport
-            && tokio::time::timeout(Duration::from_millis(500), &mut *server)
-                .await
-                .is_err()
-        {
-            server.abort();
+        match &mut self.transport {
+            Transport::Local { server, .. } => {
+                if tokio::time::timeout(Duration::from_millis(500), &mut *server)
+                    .await
+                    .is_err()
+                {
+                    server.abort();
+                }
+            }
+            Transport::PersistentLocal(lease) => {
+                lease.detach();
+            }
+            Transport::Acp(_) => {}
         }
     }
+}
+
+async fn authorize_persistent(
+    State((shutdown, active, authorization, origin)): State<(
+        CancellationToken,
+        ActiveBackendSlot,
+        String,
+        String,
+    )>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let has_active_turn = active.read().unwrap_or_else(|e| e.into_inner()).is_some();
+    if shutdown.is_cancelled()
+        || !has_active_turn
+        || request
+            .headers()
+            .get(header::AUTHORIZATION)
+            .map(|value| value.as_bytes())
+            != Some(authorization.as_bytes())
+    {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if request
+        .headers()
+        .get(header::ORIGIN)
+        .is_some_and(|value| value.as_bytes() != origin.as_bytes())
+    {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    next.run(request).await
 }
 
 async fn authorize(
@@ -307,6 +457,36 @@ async fn authorize(
         return StatusCode::FORBIDDEN.into_response();
     }
     next.run(request).await
+}
+
+#[derive(Clone)]
+struct SwitchableBackend(ActiveBackendSlot);
+
+#[async_trait::async_trait]
+impl McpServerBackend for SwitchableBackend {
+    async fn list_tools(&self) -> Result<Vec<ToolDescriptor>, McpServerError> {
+        Ok(tool_api_descriptors())
+    }
+
+    async fn call_tool(&self, params: CallToolParams) -> Result<CallToolResult, McpServerError> {
+        let backend = self.0.read().unwrap_or_else(|e| e.into_inner()).clone();
+        match backend {
+            Some(backend) => backend.call_tool_scoped(params, None).await,
+            None => Ok(text_error("The Agena turn has ended.")),
+        }
+    }
+
+    async fn call_tool_with_cancellation(
+        &self,
+        params: CallToolParams,
+        cancel: CancellationToken,
+    ) -> Result<CallToolResult, McpServerError> {
+        let backend = self.0.read().unwrap_or_else(|e| e.into_inner()).clone();
+        match backend {
+            Some(backend) => backend.call_tool_scoped(params, Some(cancel)).await,
+            None => Ok(text_error("The Agena turn has ended.")),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -351,8 +531,23 @@ impl Backend {
         if self.scope.closing.is_cancelled() {
             return Ok(text_error("The Agena turn has ended."));
         }
+        let tool_name = params.name.clone();
+        let tool_input = params
+            .arguments
+            .clone()
+            .filter(Value::is_object)
+            .unwrap_or_else(|| json!({}));
         let request = match dispatch_tool_api(&self.catalog, params)? {
-            ToolApiAction::Respond(response) => return Ok(text_result(response.output_text)),
+            ToolApiAction::Respond(response) => {
+                let output_text = response.output_text.clone();
+                if let Err(error) = turn
+                    .record_protocol_response(tool_name, tool_input, response)
+                    .await
+                {
+                    tracing::warn!(%error, "failed to record ACP MCP protocol tool call");
+                }
+                return Ok(text_result(output_text));
+            }
             ToolApiAction::Execute(request) => request,
         };
         let target = self
@@ -400,6 +595,16 @@ impl Backend {
 }
 
 impl ExternalTurn {
+    async fn record_protocol_response(
+        &self,
+        name: String,
+        input: Value,
+        response: agena_tool_api::ToolApiResponse,
+    ) -> Result<(), AppError> {
+        let tool = self.begin_tool(name, input).await?;
+        super::super::tool_api::complete_protocol_response(tool, Ok(response)).await
+    }
+
     pub(super) async fn invoke_tool(
         &self,
         invocation: ToolInvocation,

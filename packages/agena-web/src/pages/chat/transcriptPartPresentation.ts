@@ -361,7 +361,7 @@ export function operationAttachmentPresentation(block: JsonRecord): AttachmentPr
   )
 }
 
-const COMMAND_INPUT_KEYS = ['command', 'cmd', 'script'] as const
+const COMMAND_INPUT_KEYS = ['command', 'CommandLine', 'cmd', 'script'] as const
 
 /**
  * The durable invocation already carries the command, but the collapsed
@@ -379,6 +379,10 @@ function commandMarkdownFromInput(input: JsonValue | null): string {
   for (const key of COMMAND_INPUT_KEYS) {
     const command = stringValue(record[key])
     if (command.trim()) return fencedCodeBlock(command, 'sh')
+  }
+  const rawInput = record.raw_input
+  if (rawInput && typeof rawInput === 'object' && !Array.isArray(rawInput)) {
+    return commandMarkdownFromInput(rawInput)
   }
   return ''
 }

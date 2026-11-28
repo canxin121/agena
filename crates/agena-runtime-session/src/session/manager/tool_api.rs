@@ -314,7 +314,7 @@ fn tool_help_required_response(
     )
 }
 
-async fn complete_protocol_response(
+pub(super) async fn complete_protocol_response(
     tool: ToolHandle,
     response: Result<ToolApiResponse, ToolApiError>,
 ) -> Result<(), AppError> {

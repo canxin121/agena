@@ -5003,6 +5003,44 @@ impl BuiltinHumanRenderer {
         blocks
     }
 
+    /// Extract plain text from an ACP `rawOutput` value when it represents a
+    /// string, a single-field text wrapper (`{"output": "..."}` as emitted by
+    /// Antigravity), or MCP-style text content items.
+    pub fn external_agent_output_text(value: &Value) -> Option<String> {
+        match value {
+            Value::String(text) => (!text.trim().is_empty()).then(|| text.clone()),
+            Value::Object(map) => {
+                if map.len() == 1 {
+                    for key in ["output", "text", "result", "stdout"] {
+                        if let Some(text) = map
+                            .get(key)
+                            .and_then(Value::as_str)
+                            .filter(|text| !text.trim().is_empty())
+                        {
+                            return Some(text.to_owned());
+                        }
+                    }
+                }
+                if let Some(items) = map.get("content").and_then(Value::as_array) {
+                    let parts = items
+                        .iter()
+                        .filter_map(|item| {
+                            (item["type"] == "text")
+                                .then(|| item["text"].as_str())
+                                .flatten()
+                                .filter(|text| !text.trim().is_empty())
+                        })
+                        .collect::<Vec<_>>();
+                    if !parts.is_empty() {
+                        return Some(parts.join("\n"));
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
     pub fn external_agent_blocks(raw: &RawOutput) -> Option<Vec<ViewBlock>> {
         let result = raw
             .payload
@@ -5011,11 +5049,19 @@ impl BuiltinHumanRenderer {
             .filter(|value| value.is_object())?;
         let mut blocks = Vec::new();
         let text = raw.text_content();
+        let mut has_result_text = false;
         if !text.is_empty() {
             blocks.push(ViewBlock::Text {
                 id: Some("acp-result".into()),
                 text: text.to_owned(),
             });
+            has_result_text = true;
+        } else if let Some(output_text) = Self::external_agent_output_text(&result["output"]) {
+            blocks.push(ViewBlock::Text {
+                id: Some("acp-result".into()),
+                text: output_text,
+            });
+            has_result_text = true;
         }
         let locations = result["locations"]
             .as_array()
@@ -5145,7 +5191,7 @@ impl BuiltinHumanRenderer {
                 _ => {}
             }
         }
-        if blocks.is_empty() && !result["output"].is_null() {
+        if !has_result_text && blocks.is_empty() && !result["output"].is_null() {
             blocks.push(ViewBlock::Json {
                 id: Some("acp-raw-result".into()),
                 value: result["output"].clone(),

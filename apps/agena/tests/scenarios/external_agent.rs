@@ -1135,12 +1135,15 @@ async fn claude_code_loads_sessions_and_projects_native_tools_and_composer_input
             let mcp = user.send("read fixture").await?.wait_settled().await?;
             mcp.assert_succeeded()?;
             mcp.assert_assistant_text("MCP returned the file contents")?;
+            let tool_names = mcp
+                .parts
+                .iter()
+                .filter(|part| part.kind == "tool_call")
+                .filter_map(|part| part.content["name"].as_str())
+                .collect::<Vec<_>>();
             ensure!(
-                mcp.parts
-                    .iter()
-                    .filter(|part| part.kind == "tool_call")
-                    .count()
-                    == 1
+                tool_names == ["tools_help", "agena.fs.read"],
+                "unexpected MCP tool calls: {tool_names:?}"
             );
 
             read_policy(&user, case.workspace().join("acp-image.png"), "readonly").await?;

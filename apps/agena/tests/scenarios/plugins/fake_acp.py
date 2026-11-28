@@ -233,9 +233,11 @@ for line in sys.stdin:
         resumed = method != "session/new"
         loaded = method == "session/load"
         if resumed:
+            was_cold = session is None
             session = params["sessionId"]
             assert Path(f".acp-{session}").is_file()
-            assert authorization_digest != Path(f".acp-{session}").read_text()
+            if was_cold:
+                assert authorization_digest != Path(f".acp-{session}").read_text()
         else:
             session = uuid.uuid4().hex
         Path(f".acp-{session}").write_text(authorization_digest)

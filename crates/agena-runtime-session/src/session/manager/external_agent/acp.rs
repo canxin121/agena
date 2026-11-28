@@ -183,6 +183,7 @@ pub(super) struct AcpClient {
     initialization: Option<Value>,
     mcp: Option<mcp::AcpEndpoint>,
     mcp_activity: Option<mcp::ToolProgress>,
+    persistent_http_mcp: Option<mcp::PersistentHttp>,
     native_work: Option<cancellation::Connection>,
     opening_turn: Weak<ExternalTurn>,
     opening_replies: PeerReplies,
@@ -739,6 +740,7 @@ impl AcpClient {
             initialization: None,
             mcp: None,
             mcp_activity: None,
+            persistent_http_mcp: None,
             native_work: None,
             opening_turn: Weak::new(),
             opening_replies: JoinSet::new(),
@@ -1116,7 +1118,8 @@ impl AcpClient {
             .isolation
             .as_ref()
             .map(isolation::Isolation::relay_socket);
-        let bridge = mcp::Bridge::start(turn, kind, relay).await?;
+        let bridge =
+            mcp::Bridge::start(turn, kind, relay, &mut self.persistent_http_mcp).await?;
         self.mcp = bridge.acp_endpoint();
         self.mcp_activity = Some(bridge.tool_progress());
         Ok(Some(bridge))
@@ -3012,6 +3015,9 @@ impl AcpClient {
     pub(super) async fn close(mut self) {
         self.native_work = None;
         self.live_auth = None;
+        if let Some(http) = self.persistent_http_mcp.take() {
+            http.close().await;
+        }
         self.abandon_request().await;
         while self.opening_replies.join_next().await.is_some() {}
         drop(self.stderr.take());

@@ -94,18 +94,23 @@ pub(crate) fn install(args: &ServerArgs) -> Result<PathBuf> {
         (host, hosted_arguments)
     };
 
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    let path_env = service_path_env();
+
     #[cfg(target_os = "macos")]
     let contents = launchd_plist(
         executable.as_os_str(),
         arguments.as_slice(),
         log_path.as_path(),
         args.password.as_deref(),
+        path_env.as_deref(),
     )?;
     #[cfg(target_os = "linux")]
     let contents = systemd_unit(
         executable.as_os_str(),
         arguments.as_slice(),
         args.password.as_deref(),
+        path_env.as_deref(),
     )?;
     #[cfg(target_os = "windows")]
     let contents = windows_task_xml(
@@ -323,12 +328,60 @@ fn write_private_file(path: &Path, contents: &[u8]) -> Result<()> {
     result
 }
 
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn service_path_env() -> Option<String> {
+    build_service_path(std::env::var_os("PATH").as_deref(), home_dir().ok().as_deref())
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn build_service_path(inherited: Option<&OsStr>, home: Option<&Path>) -> Option<String> {
+    let mut entries = Vec::new();
+    if let Some(existing) = inherited {
+        for entry in std::env::split_paths(existing) {
+            if !entry.as_os_str().is_empty() && !entries.contains(&entry) {
+                entries.push(entry);
+            }
+        }
+    }
+    if let Some(home) = home {
+        for extra in [
+            home.join(".local").join("bin"),
+            home.join(".gemini").join("antigravity-cli").join("bin"),
+            home.join(".bun").join("bin"),
+            home.join(".cargo").join("bin"),
+        ] {
+            if extra.is_dir() && !entries.contains(&extra) {
+                entries.push(extra);
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    for extra in [
+        PathBuf::from("/opt/homebrew/bin"),
+        PathBuf::from("/opt/homebrew/sbin"),
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/usr/local/sbin"),
+    ] {
+        if extra.is_dir() && !entries.contains(&extra) {
+            entries.push(extra);
+        }
+    }
+    if entries.is_empty() {
+        return None;
+    }
+    std::env::join_paths(entries)
+        .ok()
+        .and_then(|joined| joined.into_string().ok())
+        .filter(|value| !value.trim().is_empty())
+}
+
 #[cfg(target_os = "macos")]
 fn launchd_plist(
     executable: &OsStr,
     arguments: &[OsString],
     log_path: &Path,
     server_password: Option<&str>,
+    path_env: Option<&str>,
 ) -> Result<String> {
     let mut program_arguments = Vec::with_capacity(arguments.len() + 1);
     program_arguments.push(os_text(executable, "Agena executable")?);
@@ -336,6 +389,9 @@ fn launchd_plist(
         program_arguments.push(os_text(argument.as_os_str(), "service argument")?);
     }
     let mut environment = Vec::new();
+    if let Some(path) = path_env.filter(|path| !path.trim().is_empty()) {
+        environment.push(("PATH", path.to_owned()));
+    }
     if let Some(password) = server_password.filter(|password| !password.trim().is_empty()) {
         environment.push(("AGENA_SERVER_PASSWORD", password.to_owned()));
     }
@@ -408,6 +464,7 @@ fn systemd_unit(
     executable: &OsStr,
     arguments: &[OsString],
     server_password: Option<&str>,
+    path_env: Option<&str>,
 ) -> Result<String> {
     let mut command = vec![systemd_quote(
         os_text(executable, "Agena executable")?.as_str(),
@@ -418,12 +475,23 @@ fn systemd_unit(
         )?);
     }
     let mut environment = Vec::new();
+    if let Some(path) = path_env.filter(|path| !path.trim().is_empty()) {
+        environment.push(format!(
+            "Environment={}",
+            systemd_quote(format!("PATH={path}").as_str())?
+        ));
+    }
     if let Some(password) = server_password.filter(|password| !password.trim().is_empty()) {
         environment.push(format!(
             "Environment={}",
             systemd_quote(format!("AGENA_SERVER_PASSWORD={password}").as_str())?
         ));
     }
+    let environment_block = if environment.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", environment.join("\n"))
+    };
     Ok(format!(
         "[Unit]\n\
 Description=Agena server\n\
@@ -431,13 +499,12 @@ After=network-online.target\n\
 Wants=network-online.target\n\n\
 [Service]\n\
 Type=simple\n\
-{}\n\
+{environment_block}\
 ExecStart={}\n\
 Restart=on-failure\n\
 RestartSec=2\n\n\
 [Install]\n\
 WantedBy=default.target\n",
-        environment.join("\n"),
         command.join(" ")
     ))
 }
@@ -792,4 +859,65 @@ fn run_command(command: &mut Command, description: &str) -> Result<()> {
         bail!("{description} failed with status {status}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    #[test]
+    fn build_service_path_preserves_order_and_appends_existing_user_bins() {
+        let home = tempfile::tempdir().unwrap();
+        let local_bin = home.path().join(".local").join("bin");
+        let bun_bin = home.path().join(".bun").join("bin");
+        fs::create_dir_all(&local_bin).unwrap();
+        fs::create_dir_all(&bun_bin).unwrap();
+
+        let inherited = std::env::join_paths([
+            PathBuf::from("/custom/first"),
+            PathBuf::from("/usr/bin"),
+            PathBuf::from("/custom/first"),
+        ])
+        .unwrap();
+        let built = build_service_path(Some(inherited.as_os_str()), Some(home.path())).unwrap();
+        let entries: Vec<PathBuf> = std::env::split_paths(&built).collect();
+
+        assert_eq!(entries[0], PathBuf::from("/custom/first"));
+        assert_eq!(entries[1], PathBuf::from("/usr/bin"));
+        assert!(entries.contains(&local_bin));
+        assert!(entries.contains(&bun_bin));
+        assert_eq!(
+            entries.iter().filter(|p| *p == &PathBuf::from("/custom/first")).count(),
+            1
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn systemd_unit_persists_path_and_password() {
+        let unit = systemd_unit(
+            OsStr::new("/home/user/.local/share/agena/bin/agena"),
+            &[OsString::from("server")],
+            Some("secret"),
+            Some("/home/user/.local/bin:/usr/bin"),
+        )
+        .unwrap();
+        assert!(unit.contains("Environment=\"PATH=/home/user/.local/bin:/usr/bin\"\n"));
+        assert!(unit.contains("Environment=\"AGENA_SERVER_PASSWORD=secret\"\n"));
+        assert!(unit.contains("ExecStart=\"/home/user/.local/share/agena/bin/agena\" \"server\"\n"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn systemd_unit_omits_blank_environment_line_when_empty() {
+        let unit = systemd_unit(
+            OsStr::new("/usr/bin/agena"),
+            &[OsString::from("server")],
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(unit.contains("Type=simple\nExecStart=\"/usr/bin/agena\" \"server\"\n"));
+    }
 }

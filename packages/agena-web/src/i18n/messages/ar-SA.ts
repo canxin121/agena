@@ -916,6 +916,11 @@ export default {
       removeDirectoryAction: "إزالة المجلد",
       noAdditionalDirectories: "لم تُضف أي مجلدات إضافية بعد.",
       directoriesHint: "تتطلب المسارات إذن القراءة وتسري بدءًا من الجولة التالية.",
+      reloadHistory: "إعادة التحميل من الوكيل",
+      sidebarDirectories: "المجلدات",
+      sidebarAccount: "الحساب",
+      sidebarProviders: "المزودون",
+      sidebarToolsNeedSession: "افتح أو ابدأ محادثة أولاً لإدارة هذه اللوحة.",
       installGuide: {
         notInstalledBadge: "غير مثبت",
         clickForGuide: "انقر لعرض خطوات التثبيت",

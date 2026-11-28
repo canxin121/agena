@@ -1683,6 +1683,11 @@ export default {
       removeDirectoryAction: "Remove directory",
       noAdditionalDirectories: "No additional directories added.",
       directoriesHint: "Paths require read access and apply to the next turn.",
+      reloadHistory: "Reload from agent",
+      sidebarDirectories: "Directories",
+      sidebarAccount: "Account",
+      sidebarProviders: "Providers",
+      sidebarToolsNeedSession: "Open or start a conversation first to manage this panel.",
       installGuide: {
         notInstalledBadge: "Not installed",
         clickForGuide: "Click for installation steps",

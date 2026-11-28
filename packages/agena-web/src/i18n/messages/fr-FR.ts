@@ -1299,6 +1299,11 @@ export default {
       removeDirectoryAction: "Retirer le dossier",
       noAdditionalDirectories: "Aucun dossier supplémentaire ajouté.",
       directoriesHint: "Les chemins nécessitent un accès en lecture et s’appliquent au prochain tour.",
+      reloadHistory: "Recharger depuis l’agent",
+      sidebarDirectories: "Dossiers",
+      sidebarAccount: "Compte",
+      sidebarProviders: "Fournisseurs",
+      sidebarToolsNeedSession: "Ouvrez ou démarrez une conversation pour gérer ce panneau.",
       installGuide: {
         notInstalledBadge: "Non installé",
         clickForGuide: "Cliquer pour les étapes d’installation",

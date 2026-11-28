@@ -19,6 +19,7 @@ import { apiJson } from '@/lib/api'
 import { createSkillsClient } from '@/lib/skillsApi'
 import { promptForText } from '@/lib/appTextPrompt'
 import { patchSessionIdInQuery, readSessionIdFromFullPath, readSessionIdFromQuery } from '@/app/navigation/sessionQuery'
+import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
 import { isEmbeddedWorkspacePaneContext } from '@/app/windowScope'
 import { useChatStore } from '@/stores/chat'
 import { useBtwStore } from '@/stores/btw'
@@ -146,6 +147,7 @@ const directoryStore = useDirectoryStore()
 const directorySessions = useDirectorySessionStore()
 const settings = useSettingsStore()
 const ui = useUiStore()
+const workspaceNavigation = useWorkspaceNavigation()
 const toasts = useToastsStore()
 const bots = useBotsStore()
 const { t } = useI18n()
@@ -437,11 +439,29 @@ const workspaceChatTabTitle = computed(() => {
   return String(t('nav.chat'))
 })
 
+const workspaceAcpTabTitle = computed(() => {
+  const title = String(sessionTitle.value || '').trim()
+  if (title) return title
+  if (isAcpSessionId(chat.selectedSessionId) && externalAgentLabel.value) return externalAgentLabel.value
+  return String(t('nav.acp'))
+})
+
 watch(
-  () => [route.path, route.query, workspaceChatTabTitle.value, bot.name.value] as const,
-  ([path, _query, title, botName]) => {
-    if (path !== '/chat' && path !== '/bot') return
-    ui.setWorkspaceWindowTitleFromRoute(route.query, path === '/bot' ? botName || String(t('bot.title')) : title)
+  () => [route.path, route.query, workspaceChatTabTitle.value, workspaceAcpTabTitle.value, bot.name.value] as const,
+  ([path, _query, chatTitle, acpTitle, botName]) => {
+    if (path !== '/chat' && path !== '/bot' && path !== '/acp') return
+    const nextTitle =
+      path === '/bot'
+        ? botName || String(t('bot.title'))
+        : path === '/acp'
+          ? acpTitle
+          : chatTitle
+    const scopedWindowId = String(workspacePane?.windowId.value || '').trim()
+    if (scopedWindowId) {
+      ui.setWorkspaceWindowTitle(scopedWindowId, nextTitle)
+    } else {
+      ui.setWorkspaceWindowTitleFromRoute(route.query, nextTitle)
+    }
   },
   { immediate: true, deep: true },
 )
@@ -1373,11 +1393,21 @@ async function forkAcpSession() {
     if (result.kind !== 'forked') return
     const newId = String(result.session_id)
     const isEmbeddedWorkspacePane = isEmbeddedWorkspacePaneContext(route.query)
-    await router.replace({
-      path: '/acp',
-      query: isEmbeddedWorkspacePane ? patchSessionIdInQuery(route.query, newId) : { sessionId: newId },
-    })
-    await chat.selectSession(newId)
+    if (isEmbeddedWorkspacePane) {
+      await router.replace({
+        path: '/acp',
+        query: patchSessionIdInQuery(route.query, newId),
+      })
+      await chat.selectSession(newId)
+    } else {
+      await workspaceNavigation.openWorkspaceLocation('acp', {
+        path: '/acp',
+        query: { sessionId: newId },
+        title: sessionTitle.value || externalAgentLabel.value || undefined,
+        matchKeys: ['sessionId'],
+        reuseExisting: true,
+      })
+    }
     await nextTick()
     scrollToBottom('auto')
     toasts.push('success', String(t('chat.nativeAgent.forkedToast')))
@@ -2554,7 +2584,7 @@ onMounted(async () => {
   await transcriptPreferences.refresh()
   if (pageDisposed) return
   // MainLayout already refreshes these, but keep Chat resilient on direct navigation.
-  if (!chat.sessions.length) await chat.refreshSessions().catch(() => {})
+  if (!isAcp.value && !chat.sessions.length) await chat.refreshSessions().catch(() => {})
 
   if (pageDisposed) return
   const sid = (chat.selectedSessionId || '').trim()
@@ -2562,11 +2592,13 @@ onMounted(async () => {
     requestInitialScroll(sid)
   }
 
-  await modelSelection.loadProvidersAndModels()
-  if (pageDisposed) return
-  modelSelection.applySessionSelection()
-  await loadCommands()
-  if (pageDisposed) return
+  if (!isAcp.value) {
+    await modelSelection.loadProvidersAndModels()
+    if (pageDisposed) return
+    modelSelection.applySessionSelection()
+    await loadCommands()
+    if (pageDisposed) return
+  }
   navIndex.value = Math.max(0, navigableMessageIds.value.length - 1)
 
   commandPointerHandler = (event: MouseEvent | TouchEvent) => {
@@ -2646,6 +2678,7 @@ onMounted(async () => {
 watch(
   () => sessionDirectory.value,
   () => {
+    if (isAcp.value) return
     void loadCommands()
     void modelSelection.loadProvidersAndModels()
   },

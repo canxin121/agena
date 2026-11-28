@@ -103,7 +103,7 @@ async function recheckAgents() {
   if (recheckingAgents.value) return
   recheckingAgents.value = true
   try {
-    await listExternalAgents(lifetime.signal)
+    await listExternalAgents(lifetime.signal, { force: true })
   } catch {
     // Keep existing catalog entries when refresh fails.
   } finally {
@@ -129,11 +129,23 @@ async function startWithAgent(agentId: ExternalAgent) {
       autoTitle: true,
     })
     if (lifetime.signal.aborted) return
-    await navigation.openMainTab('acp', {
-      path: '/acp',
-      query: { sessionId: String(session.id) },
-      replace: true,
-    })
+    const sid = String(session.id)
+    const tabTitle = session.title?.trim() || formatExternalAgentLabel(agentId, agents.value)
+    const active = ui.activeWorkspaceWindow
+    if (active && active.mainTab === 'acp' && !String(active.routeQuery?.sessionId || '').trim()) {
+      ui.setWorkspaceWindowRoutePath(active.id, '/acp')
+      ui.setWorkspaceWindowRouteQuery(active.id, { sessionId: sid })
+      ui.setWorkspaceWindowTitle(active.id, tabTitle)
+      await navigation.navigateToWorkspaceWindow(active.id, true)
+    } else {
+      await navigation.openWorkspaceLocation('acp', {
+        path: '/acp',
+        query: { sessionId: sid },
+        title: tabTitle,
+        matchKeys: ['sessionId'],
+        reuseExisting: true,
+      })
+    }
   } catch (failure) {
     if (!lifetime.signal.aborted) {
       launchError.value = failure instanceof Error ? failure.message : String(failure)

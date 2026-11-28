@@ -48,7 +48,7 @@ import Button from '@/components/ui/Button.vue'
 import OptionMenu from '@/components/ui/OptionMenu.vue'
 import ToolbarChipButton from '@/components/ui/ToolbarChipButton.vue'
 import ContextUsageChip from '@/components/chat/ContextUsageChip.vue'
-import ExternalAgentOptionsChip from '@/components/chat/ExternalAgentOptionsChip.vue'
+import ExternalAgentComposerChips from '@/components/chat/ExternalAgentComposerChips.vue'
 import ExternalAgentDetailsChip from '@/components/chat/ExternalAgentDetailsChip.vue'
 import AgentProfileChip from '@/components/settings/AgentProfileChip.vue'
 import type { ChatPageViewContext } from './chatPageViewContext'
@@ -883,18 +883,16 @@ const openMobileSidebar = () => ui.setSessionSwitcherOpen(true)
                       </button>
                       <span class="text-muted-foreground/50">|</span>
                     </template>
-                    <ExternalAgentOptionsChip
+                    <ExternalAgentComposerChips
                       v-if="externalAgentLabel && chat.selectedSessionId"
                       :key="`${authVersion}:${chat.selectedSessionId}`"
                       :session-id="chat.selectedSessionId"
                       :label="externalAgentLabel"
                       :agent="chat.selectedSession?.external_agent"
                       :live-options="chat.selectedSessionExecution?.external_agent_options"
-                      :supports-directories="ctx.acpSupportsDirectories.value"
-                      :additional-directories="ctx.acpAdditionalDirectories.value"
-                      :directories-saving="ctx.acpDirectoriesSaving.value"
-                      :update-directories="ctx.updateAcpDirectories"
-                      @refresh-status="ctx.refreshAcpStatus()"
+                      :execution-ready="Boolean(chat.selectedSessionExecution)"
+                      :model-chip-text-class="modelChipTextClass"
+                      :mode-chip-text-class="modeChipTextClass"
                     />
                     <button
                       v-else

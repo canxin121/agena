@@ -2056,6 +2056,11 @@ export default {
       removeDirectoryAction: "निर्देशिका हटाएँ",
       noAdditionalDirectories: "कोई अतिरिक्त निर्देशिका नहीं जोड़ी गई है।",
       directoriesHint: "पथों के लिए पढ़ने की अनुमति आवश्यक है और वे अगले टर्न से लागू होते हैं।",
+      reloadHistory: "एजेंट से पुनः लोड करें",
+      sidebarDirectories: "निर्देशिकाएँ",
+      sidebarAccount: "खाता",
+      sidebarProviders: "प्रदाता",
+      sidebarToolsNeedSession: "इस पैनल को प्रबंधित करने के लिए पहले कोई बातचीत खोलें या शुरू करें।",
       installGuide: {
         notInstalledBadge: "इंस्टॉल नहीं है",
         clickForGuide: "इंस्टॉल करने के चरण देखने के लिए क्लिक करें",

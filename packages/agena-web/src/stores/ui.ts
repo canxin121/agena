@@ -146,6 +146,7 @@ function readMatchQueryValue(record: Record<string, string> | null | undefined, 
 
 function defaultMatchKeysForMainTab(tab: MainTab): string[] {
   if (tab === 'chat') return ['sessionId']
+  if (tab === 'acp') return ['sessionId']
   if (tab === 'bot') return ['botId']
   if (tab === 'plugins') return ['sessionId']
   return []
@@ -656,14 +657,14 @@ export const useUiStore = defineStore('ui', () => {
         workspaceWindowDragId.value = ''
       }
       retainGlobalSelectionsForWindows(list.map((item) => item.id))
-      setLocalJson(
-        STORAGE_WORKSPACE_WINDOWS,
-        list.map((tab) =>
-          tab.mainTab === 'acp'
-            ? { ...tab, title: undefined, routeQuery: {}, routeHash: '' }
-            : tab,
-        ),
-      )
+      let keptAcpPlaceholder = false
+      const persistedWindows = list.flatMap((tab) => {
+        if (tab.mainTab !== 'acp') return [tab]
+        if (keptAcpPlaceholder) return []
+        keptAcpPlaceholder = true
+        return [{ ...tab, title: undefined, routeQuery: {}, routeHash: '' }]
+      })
+      setLocalJson(STORAGE_WORKSPACE_WINDOWS, persistedWindows)
     },
     { deep: true },
   )

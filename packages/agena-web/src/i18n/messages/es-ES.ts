@@ -1886,6 +1886,11 @@ export default {
       removeDirectoryAction: "Quitar directorio",
       noAdditionalDirectories: "No se han añadido directorios adicionales.",
       directoriesHint: "Las rutas requieren permiso de lectura y se aplican en el siguiente turno.",
+      reloadHistory: "Recargar desde el agente",
+      sidebarDirectories: "Directorios",
+      sidebarAccount: "Cuenta",
+      sidebarProviders: "Proveedores",
+      sidebarToolsNeedSession: "Abre o inicia una conversación para gestionar este panel.",
       installGuide: {
         notInstalledBadge: "No instalado",
         clickForGuide: "Haz clic para ver los pasos de instalación",

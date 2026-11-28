@@ -10,6 +10,7 @@ import {
   RiGitBranchLine,
   RiInboxArchiveLine,
   RiInboxUnarchiveLine,
+  RiRefreshLine,
 } from '@remixicon/vue'
 
 import { readSessionIdFromQuery } from '@/app/navigation/sessionQuery'
@@ -55,6 +56,8 @@ import { formatExternalAgentLabel, type ExternalAgent } from '@/types/chat'
 import AcpConversationRow from './acpSidebar/AcpConversationRow.vue'
 import AcpProjectRow from './acpSidebar/AcpProjectRow.vue'
 import AcpSidebarHeader from './acpSidebar/AcpSidebarHeader.vue'
+import AcpSidebarToolsPanel from './acpSidebar/AcpSidebarToolsPanel.vue'
+import { acpSupportsAdditionalDirectories, normalizeAdditionalDirectories } from '@/pages/chat/acpSessionControls'
 import {
   invalidateCachedAcpProject,
   readCachedAcpProject,
@@ -258,7 +261,49 @@ function upsertDraft(draft: AcpDraftSession) {
   }
 }
 
-function rowsForProject(workspaceId: string, filterQuery = query.value): AcpConversationRowModel[] {
+const unfilteredRowsByProjectId = computed<Record<string, AcpConversationRowModel[]>>(() => {
+  const map: Record<string, AcpConversationRowModel[]> = {}
+  for (const dir of projects.value) {
+    const st = projectStates[dir.id]
+    map[dir.id] = mergeProjectConversations({
+      workspaceId: Number(dir.id),
+      agent: agent.value,
+      nativeSessions: st?.sessions ?? [],
+      capabilities: st?.capabilities ?? null,
+      drafts: draftSessions.value,
+      sessionIdByNativeId: sessionIdByNativeId.value,
+      nativeIdBySessionId: nativeIdBySessionId.value,
+      query: '',
+    })
+  }
+  return map
+})
+
+const rowsByProjectId = computed<Record<string, AcpConversationRowModel[]>>(() => {
+  const trimmed = query.value.trim()
+  if (!trimmed) return unfilteredRowsByProjectId.value
+  const map: Record<string, AcpConversationRowModel[]> = {}
+  for (const dir of projects.value) {
+    const st = projectStates[dir.id]
+    map[dir.id] = mergeProjectConversations({
+      workspaceId: Number(dir.id),
+      agent: agent.value,
+      nativeSessions: st?.sessions ?? [],
+      capabilities: st?.capabilities ?? null,
+      drafts: draftSessions.value,
+      sessionIdByNativeId: sessionIdByNativeId.value,
+      nativeIdBySessionId: nativeIdBySessionId.value,
+      query: trimmed,
+    })
+  }
+  return map
+})
+
+function rowsForProject(workspaceId: string, filterQuery?: string): AcpConversationRowModel[] {
+  if (filterQuery === '') return unfilteredRowsByProjectId.value[workspaceId] ?? []
+  if (filterQuery === undefined || filterQuery === query.value) {
+    return rowsByProjectId.value[workspaceId] ?? []
+  }
   const st = projectStates[workspaceId]
   return mergeProjectConversations({
     workspaceId: Number(workspaceId),
@@ -396,9 +441,9 @@ function toggleProjectArchived(workspaceId: string) {
   void loadProject(workspaceId, false)
 }
 
-async function loadAgents() {
+async function loadAgents(force = false) {
   try {
-    const items = await listExternalAgents(lifetime.signal)
+    const items = await listExternalAgents(lifetime.signal, { force })
     if (lifetime.signal.aborted) return
     if (items.length && !items.some((entry) => entry.id === agent.value)) {
       agent.value = items[0].id
@@ -412,7 +457,7 @@ async function recheckActiveAgent() {
   if (recheckingAgent.value) return
   recheckingAgent.value = true
   try {
-    await listExternalAgents(lifetime.signal)
+    await listExternalAgents(lifetime.signal, { force: true })
     if (!lifetime.signal.aborted && !isAgentUnavailable.value) {
       for (const dir of projects.value) {
         if (isDirectoryExpanded(dir.id)) {
@@ -470,7 +515,7 @@ async function loadProjects(options: { loadExpanded?: boolean } = {}) {
 }
 
 async function refreshAll() {
-  await Promise.all([loadAgents(), loadProjects({ loadExpanded: false })])
+  await Promise.all([loadAgents(true), loadProjects({ loadExpanded: false })])
   if (!isAgentUnavailable.value) {
     for (const dir of projects.value) {
       if (isDirectoryExpanded(dir.id)) {
@@ -511,14 +556,63 @@ function openAcpSettings() {
   }
 }
 
-async function navigateToSession(sessionId?: string | number) {
+function findOpenTabForSession(sessionId: string) {
+  const sid = String(sessionId || '').trim()
+  if (!sid) return null
+  return (
+    ui.workspaceWindows.find(
+      (win) => win.mainTab === 'acp' && String(win.routeQuery?.sessionId || '').trim() === sid,
+    ) ?? null
+  )
+}
+
+async function openBlankAcpTab() {
   if (lifetime.signal.aborted) return
-  await navigation.openMainTab('acp', {
+  await navigation.openWorkspaceLocation('acp', {
     path: '/acp',
-    query: sessionId ? { sessionId: String(sessionId) } : {},
-    replace: true,
+    query: {},
+    matchKeys: ['sessionId'],
+    reuseExisting: true,
   })
-  if (sessionId) ui.setSessionSwitcherOpen(false)
+}
+
+async function navigateToSession(sessionId?: string | number, title?: string) {
+  if (lifetime.signal.aborted) return
+  const sid = sessionId != null ? String(sessionId).trim() : ''
+  if (!sid) {
+    await openBlankAcpTab()
+    return
+  }
+
+  const normalizedTitle = title?.trim() || undefined
+  const existing = findOpenTabForSession(sid)
+  if (existing) {
+    if (normalizedTitle) ui.setWorkspaceWindowTitle(existing.id, normalizedTitle)
+    await navigation.navigateToWorkspaceWindow(existing.id)
+    ui.setSessionSwitcherOpen(false)
+    return
+  }
+
+  // Promote an active blank /acp welcome tab so we don't leave an empty welcome
+  // tab behind when opening the first ACP session.
+  const active = ui.activeWorkspaceWindow
+  if (active && active.mainTab === 'acp' && !String(active.routeQuery?.sessionId || '').trim()) {
+    ui.setWorkspaceWindowRoutePath(active.id, '/acp')
+    ui.setWorkspaceWindowRouteQuery(active.id, { sessionId: sid })
+    if (normalizedTitle) ui.setWorkspaceWindowTitle(active.id, normalizedTitle)
+    await navigation.navigateToWorkspaceWindow(active.id, true)
+    ui.setSessionSwitcherOpen(false)
+    return
+  }
+
+  await navigation.openWorkspaceLocation('acp', {
+    path: '/acp',
+    query: { sessionId: sid },
+    title: normalizedTitle,
+    matchKeys: ['sessionId'],
+    reuseExisting: true,
+  })
+  ui.setSessionSwitcherOpen(false)
 }
 
 async function newSessionInProject(directory: DirectoryEntry) {
@@ -533,17 +627,18 @@ async function newSessionInProject(directory: DirectoryEntry) {
     })
     if (lifetime.signal.aborted) return
     const sid = String(created.id)
+    const draftTitle = created.title || agentLabel(agent.value)
     upsertDraft({
       sessionId: sid,
       workspaceId: Number(directory.id),
       agent: agent.value,
-      title: created.title || agentLabel(agent.value),
+      title: draftTitle,
       updatedAtMs: Date.now(),
     })
     if (!isDirectoryExpanded(directory.id)) {
       setDirectoryExpanded(directory.id, true)
     }
-    await navigateToSession(sid)
+    await navigateToSession(sid, draftTitle)
   } catch (failure) {
     toasts.push('error', failure instanceof Error ? failure.message : String(failure))
   } finally {
@@ -551,20 +646,48 @@ async function newSessionInProject(directory: DirectoryEntry) {
   }
 }
 
-async function openRow(row: AcpConversationRowModel) {
+async function openRow(row: AcpConversationRowModel, options: { forceReload?: boolean } = {}) {
   if (openingRowKey.value || busyRowKey.value) return
   if (row.kind === 'draft' && row.sessionId) {
-    await navigateToSession(row.sessionId)
+    await navigateToSession(row.sessionId, row.title)
     return
   }
   if (!row.nativeId) return
+
+  // Instant 0ms tab activation when this native conversation is already open
+  // in an ACP workspace tab (unless the user explicitly requested a reload).
+  if (!options.forceReload) {
+    const existingSid = row.sessionId || sessionIdByNativeId.value.get(row.nativeId) || ''
+    if (existingSid) {
+      const existingTab = findOpenTabForSession(existingSid)
+      if (existingTab) {
+        await navigateToSession(existingSid, row.title)
+        return
+      }
+    }
+  }
+
   openingRowKey.value = row.key
   try {
+    const previousSid = row.sessionId || sessionIdByNativeId.value.get(row.nativeId) || ''
     const id = await openNativeAgentSession(row.workspaceId, row.agent, row.nativeId, lifetime.signal)
     if (lifetime.signal.aborted) return
     const sid = String(id)
     linkNativeSession(sid, row.nativeId)
-    await navigateToSession(sid)
+    // If reloading replaced the ephemeral ACP view ID of an already-open tab,
+    // retarget that tab in place instead of leaving the stale expired view open.
+    if (options.forceReload && previousSid && previousSid !== sid) {
+      const staleTab = findOpenTabForSession(previousSid)
+      if (staleTab) {
+        ui.setWorkspaceWindowRoutePath(staleTab.id, '/acp')
+        ui.setWorkspaceWindowRouteQuery(staleTab.id, { sessionId: sid })
+        if (row.title) ui.setWorkspaceWindowTitle(staleTab.id, row.title)
+        await navigation.navigateToWorkspaceWindow(staleTab.id, true)
+        ui.setSessionSwitcherOpen(false)
+        return
+      }
+    }
+    await navigateToSession(sid, row.title)
   } catch (failure) {
     if (!lifetime.signal.aborted) {
       toasts.push('error', failure instanceof Error ? failure.message : String(failure))
@@ -663,7 +786,10 @@ async function deleteRow(row: AcpConversationRowModel) {
     if (row.kind === 'draft' && effectiveSessionId) {
       await chat.deleteSession(effectiveSessionId)
       unlinkSession(effectiveSessionId)
-      if (currentId.value === effectiveSessionId) {
+      const openTab = findOpenTabForSession(effectiveSessionId)
+      if (openTab) {
+        ui.closeWorkspaceWindow(openTab.id)
+      } else if (currentId.value === effectiveSessionId) {
         await navigateToSession()
       }
       return
@@ -673,7 +799,10 @@ async function deleteRow(row: AcpConversationRowModel) {
       toasts.push('success', String(t('chat.nativeAgent.deletedToast')))
       if (effectiveSessionId) unlinkSession(effectiveSessionId)
       await loadProject(String(row.workspaceId), false)
-      if (effectiveSessionId && currentId.value === effectiveSessionId) {
+      const openTab = effectiveSessionId ? findOpenTabForSession(effectiveSessionId) : null
+      if (openTab) {
+        ui.closeWorkspaceWindow(openTab.id)
+      } else if (effectiveSessionId && currentId.value === effectiveSessionId) {
         await navigateToSession()
       }
     }
@@ -726,6 +855,15 @@ const menuGroups = computed<OptionMenuGroup[]>(() => {
       id: 'open',
       label: String(t('common.open')),
       icon: RiArrowRightUpLine,
+    })
+  }
+
+  if (row.kind === 'native' && row.nativeId) {
+    items.push({
+      id: 'reload',
+      label: String(t('chat.nativeAgent.reloadHistory')),
+      icon: RiRefreshLine,
+      disabled: isBusy,
     })
   }
 
@@ -798,6 +936,11 @@ async function runRowAction(item: OptionMenuItem) {
     return
   }
 
+  if (item.id === 'reload') {
+    await openRow(row, { forceReload: true })
+    return
+  }
+
   if (item.id === 'rename') {
     startRenameRow(row)
     return
@@ -827,7 +970,7 @@ async function runRowAction(item: OptionMenuItem) {
       if (result.kind === 'forked') {
         toasts.push('success', String(t('chat.nativeAgent.forkedToast')))
         await loadProject(String(row.workspaceId), false)
-        await navigateToSession(result.session_id)
+        await navigateToSession(result.session_id, row.title)
       }
     } catch (failure) {
       toasts.push('error', failure instanceof Error ? failure.message : String(failure))
@@ -863,11 +1006,15 @@ async function saveRename() {
         title: nextTitle,
         updatedAtMs: Date.now(),
       })
+      const openTab = findOpenTabForSession(effectiveSessionId)
+      if (openTab) ui.setWorkspaceWindowTitle(openTab.id, nextTitle)
     } else if (row.nativeId) {
       const saved = await renameNativeAgentSession(row.workspaceId, row.agent, row.nativeId, nextTitle)
       if (effectiveSessionId) {
         const cached = chat.getSessionById(effectiveSessionId)
         if (cached) cached.title = saved.title
+        const openTab = findOpenTabForSession(effectiveSessionId)
+        if (openTab) ui.setWorkspaceWindowTitle(openTab.id, saved.title)
       }
       await loadProject(String(row.workspaceId), false)
     }
@@ -968,6 +1115,71 @@ watch(
     }
   },
 )
+
+// Active ACP session context for the sidebar tools panel (directories, account, providers).
+const activeToolsDirectoriesSaving = ref(false)
+const activeToolsSessionId = computed(() => {
+  if (isAcpSessionId(currentId.value)) {
+    const sess = current.value
+    if (!sess?.external_agent || sess.external_agent === agent.value) {
+      return currentId.value
+    }
+  }
+  for (const win of ui.workspaceWindows) {
+    if (win.mainTab !== 'acp') continue
+    const sid = String(win.routeQuery?.sessionId || '').trim()
+    if (!isAcpSessionId(sid)) continue
+    const sess = chat.getSessionById(sid)
+    if (!sess?.external_agent || sess.external_agent === agent.value) {
+      return sid
+    }
+  }
+  return ''
+})
+
+const activeToolsStatus = computed(() =>
+  activeToolsSessionId.value ? (statusBySessionId.value.get(activeToolsSessionId.value) ?? null) : null,
+)
+const activeToolsSupportsDirectories = computed(() => acpSupportsAdditionalDirectories(activeToolsStatus.value))
+const activeToolsDirectories = computed(() => activeToolsStatus.value?.additional_directories ?? [])
+
+watch(
+  activeToolsSessionId,
+  (sid) => {
+    if (sid && !statusBySessionId.value.has(sid) && !isAgentUnavailable.value) {
+      void inspectSessionStatus(sid)
+    }
+  },
+  { immediate: true },
+)
+
+async function updateActiveToolsDirectories(directories: string[]): Promise<string[]> {
+  const sid = activeToolsSessionId.value
+  if (!sid) return []
+  const normalized = normalizeAdditionalDirectories(directories)
+  activeToolsDirectoriesSaving.value = true
+  try {
+    const result = await manageNativeAgentSession(sid, {
+      action: 'set_directories',
+      directories: normalized,
+    })
+    if (result.kind === 'directories') {
+      const existing = statusBySessionId.value.get(sid)
+      if (existing) {
+        const nextStatus = new Map(statusBySessionId.value)
+        nextStatus.set(sid, {
+          ...existing,
+          additional_directories: result.directories,
+        })
+        statusBySessionId.value = nextStatus
+      }
+      return result.directories
+    }
+    return activeToolsDirectories.value
+  } finally {
+    activeToolsDirectoriesSaving.value = false
+  }
+}
 
 const unsubscribeAuth = subscribeServerAuthTokenVersion(() => {
   if (!lifetime.signal.aborted) {
@@ -1208,5 +1420,16 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
+
+    <AcpSidebarToolsPanel
+      v-if="!isAgentUnavailable"
+      :session-id="activeToolsSessionId"
+      :agent="agent"
+      :agent-label="agentLabel(agent)"
+      :supports-directories="activeToolsSupportsDirectories"
+      :additional-directories="activeToolsDirectories"
+      :directories-saving="activeToolsDirectoriesSaving"
+      :update-directories="updateActiveToolsDirectories"
+    />
   </aside>
 </template>

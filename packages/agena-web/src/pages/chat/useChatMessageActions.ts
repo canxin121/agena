@@ -5,6 +5,7 @@ import type { RouteLocationNormalizedLoaded, Router } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 
 import { patchSessionIdInQuery } from '@/app/navigation/sessionQuery'
+import { useWorkspaceNavigation } from '@/app/navigation/useWorkspaceNavigation'
 import { isEmbeddedWorkspacePaneContext } from '@/app/windowScope'
 import { isAcpSessionId } from '@/lib/acpSession'
 import type { JsonValue } from '@/types/json'
@@ -141,11 +142,23 @@ export function useChatMessageActions(opts: {
     const isEmbeddedWorkspacePane = isEmbeddedWorkspacePaneContext(route.query)
     const isAcpBranch = isAcpSessionId(newId) || route.path === '/acp'
     if (isAcpBranch) {
-      await router.replace({
-        path: '/acp',
-        query: isEmbeddedWorkspacePane ? patchSessionIdInQuery(route.query, newId) : { sessionId: newId },
-      })
-    } else if (isEmbeddedWorkspacePane) {
+      if (isEmbeddedWorkspacePane) {
+        await router.replace({
+          path: '/acp',
+          query: patchSessionIdInQuery(route.query, newId),
+        })
+        await chat.selectSession(newId)
+      } else {
+        await useWorkspaceNavigation().openWorkspaceLocation('acp', {
+          path: '/acp',
+          query: { sessionId: newId },
+          matchKeys: ['sessionId'],
+          reuseExisting: true,
+        })
+      }
+      return
+    }
+    if (isEmbeddedWorkspacePane) {
       await router.replace({ path: '/chat', query: patchSessionIdInQuery(route.query, newId) })
     } else {
       await router.replace({ path: '/chat' })

@@ -1227,6 +1227,11 @@ export default {
       removeDirectoryAction: "Remover diretório",
       noAdditionalDirectories: "Nenhum diretório adicional adicionado.",
       directoriesHint: "Os caminhos exigem permissão de leitura e valem a partir do próximo turno.",
+      reloadHistory: "Recarregar do agente",
+      sidebarDirectories: "Diretórios",
+      sidebarAccount: "Conta",
+      sidebarProviders: "Provedores",
+      sidebarToolsNeedSession: "Abra ou inicie uma conversa para gerenciar este painel.",
       installGuide: {
         notInstalledBadge: "Não instalado",
         clickForGuide: "Clique para ver as etapas de instalação",

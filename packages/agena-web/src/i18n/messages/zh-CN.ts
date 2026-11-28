@@ -1655,6 +1655,11 @@ export default {
       removeDirectoryAction: "移除目录",
       noAdditionalDirectories: "尚未添加额外工作区目录。",
       directoriesHint: "目录需具备读取权限，并将从下一轮对话起生效。",
+      reloadHistory: "重新加载历史",
+      sidebarDirectories: "目录",
+      sidebarAccount: "账号",
+      sidebarProviders: "路由",
+      sidebarToolsNeedSession: "请先打开或新建一个会话以查看或配置此项。",
       installGuide: {
         notInstalledBadge: "未安装",
         clickForGuide: "点击查看安装指引",

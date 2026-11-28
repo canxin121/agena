@@ -164,6 +164,7 @@ async function copyTerminalOutput(key: string, output: string) {
 
 <template>
   <SessionChip
+    v-if="hasAnyContent || runningCount > 0 || open"
     v-model:open="open"
     :title="`${label} · ${t('chat.externalAgentDetails.activity', 'Activity')}`"
     :label="amount || t('chat.externalAgentDetails.activity', 'Activity')"

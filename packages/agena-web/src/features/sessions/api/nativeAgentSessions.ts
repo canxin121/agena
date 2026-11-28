@@ -14,12 +14,34 @@ export function useExternalAgentCatalog() {
   return externalAgentCatalog
 }
 
-export async function listExternalAgents(signal?: AbortSignal): Promise<ExternalAgentCatalogEntry[]> {
-  const entries = await apiJson<ExternalAgentCatalogEntry[]>('/api/v1/acp/agents', { signal })
-  if (Array.isArray(entries)) {
-    externalAgentCatalog.value = entries
+const AGENT_CATALOG_TTL_MS = 5000
+let catalogInFlight: Promise<ExternalAgentCatalogEntry[]> | null = null
+let catalogFetchedAt = 0
+
+export async function listExternalAgents(
+  signal?: AbortSignal,
+  options?: { force?: boolean },
+): Promise<ExternalAgentCatalogEntry[]> {
+  if (signal?.aborted) throw abortError()
+  const force = options?.force === true
+  if (!force && catalogFetchedAt > 0 && Date.now() - catalogFetchedAt < AGENT_CATALOG_TTL_MS) {
+    return externalAgentCatalog.value
   }
-  return externalAgentCatalog.value
+  if (force || !catalogInFlight) {
+    const request = apiJson<ExternalAgentCatalogEntry[]>('/api/v1/acp/agents').then((entries) => {
+      if (Array.isArray(entries)) {
+        externalAgentCatalog.value = entries
+      }
+      catalogFetchedAt = Date.now()
+      return externalAgentCatalog.value
+    })
+    catalogInFlight = request.finally(() => {
+      if (catalogInFlight === request) {
+        catalogInFlight = null
+      }
+    })
+  }
+  return raceWithSignal(catalogInFlight, signal)
 }
 
 export type NativeAgentSession = {
@@ -227,7 +249,7 @@ export function getExternalAgentProviders(id: string, signal?: AbortSignal) {
   return apiJson<ExternalAgentProviders>(`${sessionApiPath(id)}/agent-providers`, { signal })
 }
 
-const STATUS_SHORT_CACHE_MS = 2000
+const STATUS_SHORT_CACHE_MS = 5000
 const statusInFlight = new Map<string, Promise<NativeSessionResult>>()
 const statusShortCache = new Map<string, { value: NativeSessionResult; cachedAt: number }>()
 
